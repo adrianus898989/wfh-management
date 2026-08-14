@@ -1,5 +1,95 @@
-import React,{useState} from 'react'
-import {useNavigate} from 'react-router-dom'
-import {supabase,configured} from '../lib/supabase'
-import AuthShell from '../components/AuthShell'
-export default function AdminLoginPage(){const[email,setEmail]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[loading,setLoading]=useState(false);const navigate=useNavigate();const submit=async e=>{e.preventDefault();setError('');if(!configured)return setError('Supabase 尚未连接');setLoading(true);const{data,error}=await supabase.auth.signInWithPassword({email:email.trim().toLowerCase(),password});if(error){setLoading(false);return setError('邮箱或密码错误')}const{data:access,error:ae}=await supabase.from('user_access').select('backend_enabled,active,otp_required,data_scope').eq('auth_user_id',data.user.id).single();setLoading(false);if(ae||!access){await supabase.auth.signOut();return setError('找不到后台账号权限配置')}if(!access.active){await supabase.auth.signOut();return setError('后台账号已停用')}if(!access.backend_enabled){await supabase.auth.signOut();return setError('此账号没有后台管理权限')}navigate('/admin')};return <AuthShell portal="admin" title="后台登录" subtitle="仅 Founder、主管、组长、培训老师、助理等已授权后台账号可登录。"><form onSubmit={submit} className="auth-form"><label>后台账号邮箱<input type="email" value={email} onChange={e=>setEmail(e.target.value)} required/></label><label>密码<input type="password" value={password} onChange={e=>setPassword(e.target.value)} required/></label>{error&&<div className="error-box">{error}</div>}<button className="primary-btn full" disabled={loading}>{loading?'登录中...':'进入后台'}</button><div className="helper">后台账号不能自行注册，由 Founder 或有权限的后台人员创建。</div></form></AuthShell>}
+import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { supabase, configured } from '../lib/supabase'
+
+export default function AdminLoginPage() {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const navigate = useNavigate()
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+
+    if (!configured) {
+      return setError('暂时无法登录')
+    }
+
+    setLoading(true)
+
+    const { data, error } = await supabase.functions.invoke('admin-login', {
+      body: {
+        username: username.trim().toLowerCase(),
+        password,
+      },
+    })
+
+    if (error || !data?.access_token || !data?.refresh_token) {
+      setLoading(false)
+      return setError(data?.error || '用户名或密码错误')
+    }
+
+    const { error: sessionError } = await supabase.auth.setSession({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+    })
+
+    setLoading(false)
+
+    if (sessionError) {
+      return setError('登录失败，请重试')
+    }
+
+    navigate('/admin')
+  }
+
+  return (
+    <div className="simple-login-page">
+      <div className="simple-login-shell">
+        <div className="simple-brand">
+          <div className="simple-mark">W</div>
+          <span>WFH</span>
+        </div>
+
+        <div className="simple-login-card">
+          <h1>登录</h1>
+
+          <form onSubmit={submit} className="simple-login-form">
+            <label>
+              用户名
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck="false"
+                required
+              />
+            </label>
+
+            <label>
+              密码
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </label>
+
+            {error && <div className="simple-login-error">{error}</div>}
+
+            <button disabled={loading}>
+              {loading ? '登录中...' : '登录'}
+            </button>
+          </form>
+        </div>
+
+        <div className="simple-login-foot">© WFH</div>
+      </div>
+    </div>
+  )
+}
