@@ -1,10 +1,9 @@
-# Home Staff Management System V3
+# WFH Management V4
 
-已加入真实 Supabase：
-- 邮箱 + 密码登录
-- 员工自助注册：邮箱 + 密码 + 激活码
-- 激活码自动绑定后台员工ID
-- 后台员工列表生成激活码
-- Google Authenticator / TOTP 绑定页
-
-下一步：配置 GitHub Secrets 的 VITE_SUPABASE_URL 与 VITE_SUPABASE_PUBLISHABLE_KEY。
+- 后台登录：/admin/login
+- 员工登录：/staff/login
+- 员工注册：/staff/register
+- GitHub Pages base：/wfh-management/
+- 后台账号不能自行注册
+- 普通员工仍使用激活码注册并绑定 Employee ID
+- 下一步：后台创建账号 / 重置密码 / 停用 / 删除 / 权限勾选

@@ -1,0 +1,2 @@
+import React from 'react'
+export default function AdminUsersPage(){return <div className="content-page"><div className="page-head"><div><p className="eyebrow">后台 · 用户与权限</p><h1>后台账号管理</h1><p>这里专门创建 Founder / 主管 / 组长 / 培训老师 / 助理后台账号。</p></div></div><div className="panel"><div className="helper"><b>下一步接真实功能：</b><br/>选择已有员工 → 邮箱 → 临时密码 → 角色 → 后台权限 → 数据范围 → 查看/编辑/审批/敏感权限勾选。<br/><br/>后台账号不会通过员工激活码注册。</div></div></div>}
