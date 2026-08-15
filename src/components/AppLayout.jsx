@@ -1,4 +1,63 @@
 import React from 'react'
-import {Link,useNavigate} from 'react-router-dom'
-import {supabase} from '../lib/supabase'
-export default function AppLayout({mode,children}){const navigate=useNavigate();const logout=async()=>{await supabase.auth.signOut();navigate(mode==='admin'?'/admin/login':'/staff/login')};return <div className="app-shell"><aside className={'sidebar '+(mode==='staff'?'staff-sidebar':'')}><div className="brand"><div className="brand-mark">HS</div><div><strong>{mode==='admin'?'后台管理端':'员工自助中心'}</strong><small>{mode==='admin'?'BACK OFFICE':'EMPLOYEE PORTAL'}</small></div></div><nav><Link to={mode==='admin'?'/admin':'/staff'}>首页</Link>{mode==='admin'&&<><Link to="/admin/employees">员工管理</Link><Link to="/admin/users">用户与权限</Link></>}{mode==='staff'&&<><Link to="/staff/schedule">我的排班</Link><Link to="/staff/attendance">我的出勤</Link><Link to="/staff/payroll">我的工资</Link><Link to="/staff/exams">我的考试</Link><Link to="/staff/requests">我的申请</Link></>}<Link to={mode==='admin'?'/admin/security/mfa':'/staff/security/mfa'}>Google Authenticator</Link></nav><button className="logout-btn" onClick={logout}>退出登录</button></aside><main className="main">{children}</main></div>}
+import { NavLink, useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
+
+const ADMIN_NAV = [
+  ['/admin', '首页'],
+  ['/admin/employees', '员工管理'],
+  ['/admin/schedule', '排班与考勤'],
+  ['/admin/daily', '每日工作'],
+  ['/admin/training', '培训与考试'],
+  ['/admin/payroll', '工资中心'],
+  ['/admin/reports', '统计报表'],
+  ['/admin/users', '用户与权限'],
+]
+
+const STAFF_NAV = [
+  ['/staff', '首页'],
+  ['/staff/schedule', '我的排班'],
+  ['/staff/attendance', '我的出勤'],
+  ['/staff/payroll', '我的工资'],
+  ['/staff/exams', '我的考试'],
+  ['/staff/requests', '我的申请'],
+]
+
+export default function AppLayout({ mode, children }) {
+  const navigate = useNavigate()
+  const nav = mode === 'admin' ? ADMIN_NAV : STAFF_NAV
+
+  const logout = async () => {
+    await supabase.auth.signOut()
+    navigate(mode === 'admin' ? '/admin/login' : '/staff/login')
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="sidebar-logo">W</div>
+          <div className="sidebar-brand-copy">
+            <strong>WFH</strong>
+            <small>{mode === 'admin' ? 'MANAGEMENT' : 'STAFF'}</small>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav">
+          {nav.map(([to, label]) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/admin' || to === '/staff'}
+              className={({ isActive }) => isActive ? 'active' : ''}
+            >
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <button className="sidebar-logout" onClick={logout}>退出</button>
+      </aside>
+      <main className="main">{children}</main>
+    </div>
+  )
+}

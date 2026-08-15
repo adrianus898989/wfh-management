@@ -1,13 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
-function normalizeStatus(value) {
-  return String(value || '').trim().toLowerCase()
-}
+const inactiveStatuses = ['left', 'resigned', 'inactive', 'terminated', '离职', '停用']
 
-function isActiveEmployee(row) {
-  const s = normalizeStatus(row?.status)
-  return !['left', 'resigned', 'inactive', 'terminated', '离职', '停用'].includes(s)
+function isActive(row) {
+  return !inactiveStatuses.includes(String(row?.status || '').trim().toLowerCase())
 }
 
 function groupCount(rows, getter) {
@@ -30,376 +27,183 @@ export const AdminHome = () => {
     let alive = true
 
     ;(async () => {
-      try {
-        const { data, error } = await supabase.functions.invoke('admin-accounts', {
-          body: { action: 'bootstrap' }
-        })
+      const { data, error } = await supabase.functions.invoke('admin-accounts', {
+        body: { action: 'bootstrap' },
+      })
 
-        if (error || data?.error) {
-          throw new Error(data?.error || error?.message || '读取失败')
-        }
+      if (!alive) return
 
-        if (alive) setData(data)
-      } catch (e) {
-        if (alive) setError(e.message || '读取失败')
-      } finally {
-        if (alive) setLoading(false)
+      if (error || data?.error) {
+        setError(data?.error || error?.message || '读取失败')
+      } else {
+        setData(data)
       }
+      setLoading(false)
     })()
 
     return () => { alive = false }
   }, [])
 
-  const dashboard = useMemo(() => {
+  const view = useMemo(() => {
     const employees = data?.employees || []
-    const activeEmployees = employees.filter(isActiveEmployee)
+    const active = employees.filter(isActive)
+    const staffAccounts = data?.employee_accounts || []
     const backendAccounts = data?.backend_accounts || []
-    const employeeAccounts = data?.employee_accounts || []
-
-    const staffAccountIds = new Set(
-      employeeAccounts
-        .map(x => x.employee_id)
-        .filter(Boolean)
-    )
-
-    const teamRows = groupCount(activeEmployees, e => e?.teams?.name)
-    const positionRows = groupCount(activeEmployees, e => e?.positions?.name)
+    const staffIds = new Set(staffAccounts.map(x => x.employee_id).filter(Boolean))
 
     return {
       total: employees.length,
-      active: activeEmployees.length,
-      teams: teamRows.length,
+      active: active.length,
+      teams: groupCount(active, e => e?.teams?.name),
+      positions: groupCount(active, e => e?.positions?.name),
+      staffAccounts: staffAccounts.length,
       backendAccounts: backendAccounts.length,
-      staffAccounts: employeeAccounts.length,
-      pendingStaffAccounts: Math.max(
-        0,
-        activeEmployees.filter(e => !staffAccountIds.has(e.id)).length
-      ),
-      teamRows,
-      positionRows
+      pendingAccounts: active.filter(e => !staffIds.has(e.id)).length,
     }
   }, [data])
 
-  if (loading) {
-    return (
-      <div className="dash-page">
-        <DashboardStyles />
-        <div className="dash-loading">读取中...</div>
-      </div>
-    )
-  }
-
   return (
-    <div className="dash-page">
-      <DashboardStyles />
-
-      <div className="dash-head">
+    <div className="content-page dashboard-page">
+      <div className="dashboard-head">
         <div>
-          <div className="dash-kicker">Dashboard</div>
+          <div className="dashboard-kicker">DASHBOARD</div>
           <h1>员工总览</h1>
         </div>
-        <div className="dash-date">
+        <div className="dashboard-date">
           {new Intl.DateTimeFormat('zh-CN', {
             year: 'numeric',
             month: '2-digit',
-            day: '2-digit'
+            day: '2-digit',
           }).format(new Date())}
         </div>
       </div>
 
-      {error && (
-        <div className="dash-error">
-          {error}
-        </div>
-      )}
+      {error && <div className="page-error">{error}</div>}
 
-      <div className="dash-cards">
-        <Metric label="员工总数" value={dashboard.total} />
-        <Metric label="在职员工" value={dashboard.active} />
-        <Metric label="团队数量" value={dashboard.teams} />
-        <Metric label="员工账号" value={dashboard.staffAccounts} />
-        <Metric label="后台账号" value={dashboard.backendAccounts} />
-        <Metric label="待开通账号" value={dashboard.pendingStaffAccounts} />
+      <div className="kpi-grid">
+        <Kpi label="员工总数" value={loading ? '—' : view.total} />
+        <Kpi label="在职员工" value={loading ? '—' : view.active} />
+        <Kpi label="今日在岗" value="—" />
+        <Kpi label="请假 / 公休" value="—" />
+        <Kpi label="回家" value="—" />
+        <Kpi label="缺席" value="—" />
+        <Kpi label="待审批" value="—" />
+        <Kpi label="后台账号" value={loading ? '—' : view.backendAccounts} />
       </div>
 
-      <div className="dash-grid">
-        <Section title="团队人数分布">
-          {dashboard.teamRows.length === 0
-            ? <Empty />
-            : <Bars rows={dashboard.teamRows} total={dashboard.active || 1} />
-          }
-        </Section>
+      <div className="dashboard-grid">
+        <DashboardCard title="团队人数分布">
+          <BarList rows={view.teams} total={view.active || 1} />
+        </DashboardCard>
 
-        <Section title="岗位分布">
-          {dashboard.positionRows.length === 0
-            ? <Empty />
-            : <Bars rows={dashboard.positionRows} total={dashboard.active || 1} />
-          }
-        </Section>
-      </div>
+        <DashboardCard title="岗位分布">
+          <BarList rows={view.positions} total={view.active || 1} />
+        </DashboardCard>
 
-      <div className="dash-grid bottom">
-        <Section title="账号概况">
-          <div className="account-summary">
-            <SummaryLine label="员工前端已开通" value={dashboard.staffAccounts} />
-            <SummaryLine label="待开通员工账号" value={dashboard.pendingStaffAccounts} />
-            <SummaryLine label="后台管理账号" value={dashboard.backendAccounts} />
-          </div>
-        </Section>
+        <DashboardCard title="今日出勤">
+          <CompactStats rows={[
+            ['正常', '—'],
+            ['请假', '—'],
+            ['公休', '—'],
+            ['回家', '—'],
+            ['缺席', '—'],
+          ]} />
+        </DashboardCard>
 
-        <Section title="人员概况">
-          <div className="account-summary">
-            <SummaryLine label="全部员工档案" value={dashboard.total} />
-            <SummaryLine label="当前在职" value={dashboard.active} />
-            <SummaryLine label="已设置团队" value={dashboard.active - (dashboard.teamRows.find(x => x.name === '未设置')?.count || 0)} />
-          </div>
-        </Section>
+        <DashboardCard title="待处理">
+          <CompactStats rows={[
+            ['请假审批', '—'],
+            ['资料修改', '—'],
+            ['收款资料修改', '—'],
+            ['投诉 / 申诉', '—'],
+            ['待发布工资', '—'],
+          ]} />
+        </DashboardCard>
+
+        <DashboardCard title="账号概况">
+          <CompactStats rows={[
+            ['员工账号', loading ? '—' : view.staffAccounts],
+            ['待开通账号', loading ? '—' : view.pendingAccounts],
+            ['后台账号', loading ? '—' : view.backendAccounts],
+          ]} />
+        </DashboardCard>
+
+        <DashboardCard title="人员动态">
+          <CompactStats rows={[
+            ['今日入职', '—'],
+            ['最近离职', '—'],
+            ['培训 / 考试异常', '—'],
+          ]} />
+        </DashboardCard>
       </div>
     </div>
   )
 }
 
-function Metric({ label, value }) {
+function Kpi({ label, value }) {
   return (
-    <div className="metric-card">
-      <div className="metric-label">{label}</div>
-      <div className="metric-value">{Number(value || 0).toLocaleString()}</div>
+    <div className="kpi-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   )
 }
 
-function Section({ title, children }) {
+function DashboardCard({ title, children }) {
   return (
-    <section className="dash-section">
-      <div className="dash-section-head">
-        <h2>{title}</h2>
-      </div>
+    <section className="dashboard-card">
+      <h2>{title}</h2>
       {children}
     </section>
   )
 }
 
-function Bars({ rows, total }) {
+function BarList({ rows, total }) {
+  if (!rows?.length) return <div className="empty-state compact">暂无数据</div>
+
   return (
     <div className="bar-list">
-      {rows.slice(0, 8).map(row => {
-        const pct = Math.max(3, Math.round((row.count / total) * 100))
-        return (
-          <div className="bar-row" key={row.name}>
-            <div className="bar-meta">
-              <span>{row.name}</span>
-              <strong>{row.count}</strong>
-            </div>
-            <div className="bar-track">
-              <div className="bar-fill" style={{ width: `${pct}%` }} />
-            </div>
+      {rows.slice(0, 8).map(row => (
+        <div className="bar-row" key={row.name}>
+          <div className="bar-meta"><span>{row.name}</span><strong>{row.count}</strong></div>
+          <div className="bar-track">
+            <div className="bar-fill" style={{ width: `${Math.max(3, Math.round(row.count / total * 100))}%` }} />
           </div>
-        )
-      })}
+        </div>
+      ))}
     </div>
   )
 }
 
-function SummaryLine({ label, value }) {
+function CompactStats({ rows }) {
   return (
-    <div className="summary-line">
-      <span>{label}</span>
-      <strong>{Number(value || 0).toLocaleString()}</strong>
+    <div className="compact-stats">
+      {rows.map(([label, value]) => (
+        <div className="compact-stat" key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
     </div>
   )
-}
-
-function Empty() {
-  return <div className="dash-empty">暂无数据</div>
 }
 
 export const StaffHome = () => (
   <div className="content-page">
-    <div className="page-head">
-      <div>
-        <h1>我的首页</h1>
-      </div>
-    </div>
-
-    <div className="card-grid">
-      <div className="module-card"><strong>我的排班</strong></div>
-      <div className="module-card"><strong>我的出勤</strong></div>
-      <div className="module-card"><strong>我的工资</strong></div>
-      <div className="module-card"><strong>我的考试</strong></div>
-      <div className="module-card"><strong>我的申请</strong></div>
+    <div className="page-toolbar"><h1>我的首页</h1></div>
+    <div className="staff-home-grid">
+      {['我的排班', '我的出勤', '我的工资', '我的考试', '我的申请'].map(x => (
+        <div className="staff-home-card" key={x}>{x}</div>
+      ))}
     </div>
   </div>
 )
 
 export const ComingSoon = ({ title }) => (
   <div className="content-page">
-    <div className="page-head">
-      <div><h1>{title}</h1></div>
+    <div className="page-toolbar"><h1>{title}</h1></div>
+    <div className="data-card">
+      <div className="empty-state">暂无数据</div>
     </div>
   </div>
 )
-
-function DashboardStyles() {
-  return (
-    <style>{`
-      .dash-page{
-        padding:30px;
-        max-width:1600px;
-        margin:0 auto;
-      }
-      .dash-head{
-        display:flex;
-        justify-content:space-between;
-        align-items:flex-end;
-        margin-bottom:22px;
-      }
-      .dash-kicker{
-        color:#7c8ca3;
-        font-size:11px;
-        font-weight:800;
-        letter-spacing:.12em;
-        text-transform:uppercase;
-        margin-bottom:5px;
-      }
-      .dash-head h1{
-        margin:0;
-        font-size:30px;
-        letter-spacing:-.04em;
-      }
-      .dash-date{
-        color:#8b98aa;
-        font-size:12px;
-      }
-      .dash-error{
-        background:#fff2f2;
-        color:#bd4141;
-        border:1px solid #f0cece;
-        border-radius:10px;
-        padding:10px 12px;
-        margin-bottom:14px;
-        font-size:12px;
-      }
-      .dash-cards{
-        display:grid;
-        grid-template-columns:repeat(6,minmax(0,1fr));
-        gap:12px;
-        margin-bottom:14px;
-      }
-      .metric-card{
-        background:#fff;
-        border:1px solid #e3e9f1;
-        border-radius:14px;
-        padding:17px 16px;
-        box-shadow:0 5px 18px rgba(35,53,80,.035);
-      }
-      .metric-label{
-        color:#7d8b9f;
-        font-size:11px;
-        font-weight:700;
-      }
-      .metric-value{
-        color:#17243b;
-        font-size:27px;
-        font-weight:850;
-        letter-spacing:-.04em;
-        margin-top:7px;
-      }
-      .dash-grid{
-        display:grid;
-        grid-template-columns:1fr 1fr;
-        gap:14px;
-        margin-top:14px;
-      }
-      .dash-grid.bottom{
-        grid-template-columns:1fr 1fr;
-      }
-      .dash-section{
-        background:#fff;
-        border:1px solid #e3e9f1;
-        border-radius:14px;
-        padding:18px;
-        min-height:260px;
-      }
-      .dash-section-head{
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        margin-bottom:16px;
-      }
-      .dash-section h2{
-        margin:0;
-        font-size:14px;
-        letter-spacing:-.01em;
-      }
-      .bar-list{
-        display:flex;
-        flex-direction:column;
-        gap:13px;
-      }
-      .bar-row{
-        min-width:0;
-      }
-      .bar-meta{
-        display:flex;
-        justify-content:space-between;
-        gap:10px;
-        font-size:12px;
-        margin-bottom:6px;
-      }
-      .bar-meta span{
-        color:#5f6f84;
-        overflow:hidden;
-        text-overflow:ellipsis;
-        white-space:nowrap;
-      }
-      .bar-meta strong{
-        color:#24324a;
-      }
-      .bar-track{
-        height:7px;
-        border-radius:999px;
-        background:#edf1f6;
-        overflow:hidden;
-      }
-      .bar-fill{
-        height:100%;
-        border-radius:999px;
-        background:linear-gradient(90deg,#2d66d7,#5884e8);
-      }
-      .account-summary{
-        display:flex;
-        flex-direction:column;
-      }
-      .summary-line{
-        display:flex;
-        justify-content:space-between;
-        align-items:center;
-        padding:14px 0;
-        border-bottom:1px solid #eef2f6;
-        font-size:13px;
-      }
-      .summary-line:last-child{
-        border-bottom:0;
-      }
-      .summary-line span{
-        color:#68778b;
-      }
-      .summary-line strong{
-        font-size:16px;
-      }
-      .dash-empty,.dash-loading{
-        color:#97a3b3;
-        font-size:12px;
-        padding:25px 0;
-      }
-      @media(max-width:1200px){
-        .dash-cards{grid-template-columns:repeat(3,1fr)}
-      }
-      @media(max-width:800px){
-        .dash-page{padding:18px}
-        .dash-cards{grid-template-columns:repeat(2,1fr)}
-        .dash-grid,.dash-grid.bottom{grid-template-columns:1fr}
-      }
-    `}</style>
-  )
-}

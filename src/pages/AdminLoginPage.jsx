@@ -5,6 +5,7 @@ import { supabase, configured } from '../lib/supabase'
 export default function AdminLoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
@@ -13,12 +14,9 @@ export default function AdminLoginPage() {
     e.preventDefault()
     setError('')
 
-    if (!configured) {
-      return setError('暂时无法登录')
-    }
+    if (!configured) return setError('暂时无法登录')
 
     setLoading(true)
-
     const { data, error } = await supabase.functions.invoke('admin-login', {
       body: {
         username: username.trim().toLowerCase(),
@@ -38,27 +36,24 @@ export default function AdminLoginPage() {
 
     setLoading(false)
 
-    if (sessionError) {
-      return setError('登录失败，请重试')
-    }
-
-    navigate('/admin')
+    if (sessionError) return setError('登录失败，请重试')
+    navigate('/admin', { replace: true })
   }
 
   return (
-    <div className="simple-login-page">
-      <div className="simple-login-shell">
-        <div className="simple-brand">
-          <div className="simple-mark">W</div>
+    <div className="login-page">
+      <div className="login-shell">
+        <div className="login-brand">
+          <div className="login-logo">W</div>
           <span>WFH</span>
         </div>
 
-        <div className="simple-login-card">
-          <h1>登录</h1>
+        <form className="login-card" onSubmit={submit}>
+          <div className="login-title">登录</div>
 
-          <form onSubmit={submit} className="simple-login-form">
-            <label>
-              用户名
+          <label className="login-field">
+            用户名
+            <div className="login-input">
               <input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -67,28 +62,31 @@ export default function AdminLoginPage() {
                 spellCheck="false"
                 required
               />
-            </label>
+            </div>
+          </label>
 
-            <label>
-              密码
+          <label className="login-field">
+            密码
+            <div className="login-input">
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
                 required
               />
-            </label>
+              <button type="button" onClick={() => setShowPassword(v => !v)}>
+                {showPassword ? '隐藏' : '显示'}
+              </button>
+            </div>
+          </label>
 
-            {error && <div className="simple-login-error">{error}</div>}
+          {error && <div className="login-error">{error}</div>}
 
-            <button disabled={loading}>
-              {loading ? '登录中...' : '登录'}
-            </button>
-          </form>
-        </div>
-
-        <div className="simple-login-foot">© WFH</div>
+          <button className="login-submit" disabled={loading}>
+            {loading ? '登录中...' : '登录'}
+          </button>
+        </form>
       </div>
     </div>
   )

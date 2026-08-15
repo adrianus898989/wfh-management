@@ -1,9 +1,133 @@
-import React,{useEffect,useState} from 'react'
-import {supabase} from '../lib/supabase'
-export default function AdminEmployeesPage(){
- const [rows,setRows]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[generated,setGenerated]=useState(null)
- const load=async()=>{setLoading(true);const {data,error}=await supabase.from('employees').select('id,employee_no,full_name,status,teams(name),positions(name),user_access(auth_user_id,login_email,active)').order('employee_no').limit(200);if(error)setError(error.message);else setRows(data||[]);setLoading(false)}
- useEffect(()=>{load()},[])
- const gen=async no=>{setError('');setGenerated(null);const {data,error}=await supabase.rpc('generate_employee_activation_code',{p_employee_no:no,p_valid_hours:72});if(error)return setError(error.message);setGenerated(data?.[0]||null)}
- return <div className="content-page"><div className="page-head"><div><p className="eyebrow">人员与团队</p><h1>在职员工 / 账号开通</h1><p>为对应员工生成专属激活码。</p></div></div>{generated&&<div className="activation-card"><div><span>员工</span><strong>{generated.employee_no} · {generated.employee_name}</strong></div><div><span>激活码</span><strong className="code-big">{generated.activation_code}</strong></div><button className="primary-btn" onClick={()=>navigator.clipboard.writeText(generated.activation_code)}>复制激活码</button></div>}{error&&<div className="error-box">{error}</div>}<div className="panel">{loading?'读取中...':<table><thead><tr><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>账号</th><th>操作</th></tr></thead><tbody>{rows.map(r=>{const a=Array.isArray(r.user_access)?r.user_access[0]:r.user_access;return <tr key={r.id}><td>{r.employee_no}</td><td>{r.full_name}</td><td>{r.teams?.name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{a?'已注册':'未注册'}</td><td>{!a?<button className="link-action" onClick={()=>gen(r.employee_no)}>生成激活码</button>:a.login_email}</td></tr>})}</tbody></table>}</div></div>
+import React, { useEffect, useMemo, useState } from 'react'
+import { supabase } from '../lib/supabase'
+
+export default function AdminEmployeesPage() {
+  const [rows, setRows] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [query, setQuery] = useState('')
+  const [generated, setGenerated] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    setError('')
+
+    const { data, error } = await supabase.functions.invoke('admin-accounts', {
+      body: { action: 'bootstrap' },
+    })
+
+    if (error || data?.error) {
+      setError(data?.error || error?.message || '读取失败')
+    } else {
+      setRows(data?.employees || [])
+      setAccounts(data?.employee_accounts || [])
+    }
+
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const opened = useMemo(
+    () => new Set(accounts.map(a => a.employee_id).filter(Boolean)),
+    [accounts]
+  )
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter(r =>
+      `${r.employee_no} ${r.full_name} ${r.teams?.name || ''} ${r.positions?.name || ''}`
+        .toLowerCase()
+        .includes(q)
+    )
+  }, [rows, query])
+
+  const generateCode = async (employeeNo) => {
+    setError('')
+    setGenerated(null)
+
+    const { data, error } = await supabase.rpc('generate_employee_activation_code', {
+      p_employee_no: employeeNo,
+      p_valid_hours: 72,
+    })
+
+    if (error) return setError(error.message)
+    setGenerated(data?.[0] || null)
+  }
+
+  return (
+    <div className="content-page">
+      <div className="page-toolbar">
+        <h1>员工管理</h1>
+        <input
+          className="table-search"
+          placeholder="搜索员工ID / 姓名 / 团队"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+        />
+      </div>
+
+      {generated && (
+        <div className="activation-banner">
+          <div>
+            <span>{generated.employee_no} · {generated.employee_name}</span>
+            <strong>{generated.activation_code}</strong>
+          </div>
+          <button onClick={() => navigator.clipboard.writeText(generated.activation_code)}>
+            复制
+          </button>
+        </div>
+      )}
+
+      {error && <div className="page-error">{error}</div>}
+
+      <div className="data-card">
+        {loading ? (
+          <div className="empty-state">读取中...</div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">暂无员工资料</div>
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>员工ID</th>
+                  <th>姓名</th>
+                  <th>团队</th>
+                  <th>岗位</th>
+                  <th>状态</th>
+                  <th>员工账号</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(r => {
+                  const hasAccount = opened.has(r.id)
+                  return (
+                    <tr key={r.id}>
+                      <td><strong>{r.employee_no}</strong></td>
+                      <td>{r.full_name}</td>
+                      <td>{r.teams?.name || '-'}</td>
+                      <td>{r.positions?.name || '-'}</td>
+                      <td><span className="status-chip">{r.status || '在职'}</span></td>
+                      <td>{hasAccount ? '已开通' : '未开通'}</td>
+                      <td>
+                        {!hasAccount && (
+                          <button className="table-action" onClick={() => generateCode(r.employee_no)}>
+                            生成激活码
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
