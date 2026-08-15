@@ -40,28 +40,31 @@ const STAFF_NAV = [
 export default function AppLayout({ mode, children }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const activeParent = ADMIN_NAV.find(x => x.children && location.pathname.startsWith(x.to))?.to || null
-  const [openGroup,setOpenGroup] = useState(activeParent)
 
-  useEffect(() => {
-    if (activeParent && openGroup !== null && openGroup !== activeParent) setOpenGroup(activeParent)
-  }, [location.pathname])
+  const pathGroup = ADMIN_NAV.find(x => x.children && location.pathname.startsWith(x.to))?.to || null
+  const [openGroup,setOpenGroup] = useState(pathGroup)
 
-  const logout = async () => {
+  useEffect(()=>{
+    // 切到另一个模块时，只展开当前模块；用户手动收起当前模块时不强制弹回。
+    if (pathGroup && openGroup && openGroup !== pathGroup) setOpenGroup(pathGroup)
+    if (!pathGroup && openGroup) setOpenGroup(null)
+  },[location.pathname])
+
+  const logout = async()=>{
     await supabase.auth.signOut()
-    navigate(mode === 'admin' ? '/admin/login' : '/staff/login')
+    navigate(mode==='admin'?'/admin/login':'/staff/login')
   }
 
   const activeTab = new URLSearchParams(location.search).get('tab')
 
-  const clickParent = item => {
+  const clickParent = item=>{
     const active = location.pathname.startsWith(item.to)
-    if (active && openGroup === item.to) {
-      setOpenGroup(null) // 再点一次：正常收回
-      return
+    if (active) {
+      setOpenGroup(openGroup===item.to ? null : item.to)
+    } else {
+      setOpenGroup(item.to)
+      navigate(item.to)
     }
-    setOpenGroup(item.to)
-    if (!active) navigate(item.to)
   }
 
   return (
@@ -72,24 +75,32 @@ export default function AppLayout({ mode, children }) {
           <div className="sidebar-brand-copy"><strong>WFH</strong><small>{mode==='admin'?'MANAGEMENT':'STAFF'}</small></div>
         </div>
 
-        {mode === 'admin' ? <nav className="sidebar-nav sidebar-nav-pro">
-          {ADMIN_NAV.map(item => {
-            const active = item.to === '/admin' ? location.pathname === '/admin' : location.pathname.startsWith(item.to)
-            const expanded = openGroup === item.to
-            if (!item.children) return (
+        {mode==='admin' ? <nav className="sidebar-nav sidebar-nav-pro">
+          {ADMIN_NAV.map(item=>{
+            const active = item.to==='/admin' ? location.pathname==='/admin' : location.pathname.startsWith(item.to)
+            const expanded = openGroup===item.to
+
+            if(!item.children) return (
               <NavLink key={item.to} to={item.to} end={item.to==='/admin'} className={({isActive})=>isActive?'active nav-parent':'nav-parent'}>
-                <span className="nav-icon">{item.icon}</span><span className="nav-parent-label">{item.label}</span>
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-parent-label">{item.label}</span>
               </NavLink>
             )
+
             return <div className={`nav-group ${active?'active-group':''}`} key={item.to}>
-              <button className={`nav-parent nav-parent-button ${active?'active':''}`} onClick={()=>clickParent(item)}>
-                <span className="nav-icon">{item.icon}</span><span className="nav-parent-label">{item.label}</span><span className="nav-chevron">{expanded?'⌄':'›'}</span>
+              <button type="button" className={`nav-parent nav-parent-button ${active?'active':''}`} onClick={()=>clickParent(item)}>
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-parent-label">{item.label}</span>
+                <span className="nav-chevron">{expanded?'⌄':'›'}</span>
               </button>
+
               {expanded && <div className="nav-children">
                 {item.children.map(([label,to],index)=>{
                   const targetTab = new URL(to,'https://wfh.local').searchParams.get('tab')
                   const childActive = active && (activeTab ? activeTab===targetTab : index===0)
-                  return <NavLink key={label} to={to} className={childActive?'active-child':''}><span className="child-dot"/>{label}</NavLink>
+                  return <NavLink key={label} to={to} className={childActive?'active-child':''}>
+                    <span className="child-dot"/>{label}
+                  </NavLink>
                 })}
               </div>}
             </div>
