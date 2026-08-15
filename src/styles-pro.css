@@ -312,3 +312,35 @@
   .table-pagination{align-items:flex-start;flex-direction:column}
   .info-row{grid-template-columns:110px minmax(0,1fr)}
 }
+
+/* ===== Employee Module V12 ===== */
+.employee-notice{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.employee-notice button{border:0;background:transparent;color:inherit;font-size:18px}
+.compact-select,.compact-date{height:40px;border:1px solid #d9e2ec;border-radius:9px;background:#fff;color:#4a5f78;padding:0 10px;font-size:10px;font-weight:700}
+.lifecycle-table{min-width:1180px}
+.event-chip{display:inline-flex;align-items:center;min-height:23px;padding:0 8px;border-radius:999px;font-size:9px;font-weight:800}
+.event-join{background:#eaf7ef;color:#3f8157}.event-resign{background:#fff0ef;color:#b45450}.event-reactivate{background:#eaf1ff;color:#4773c5}.event-profile_update{background:#f1f3f6;color:#6f7e91}
+.drawer-head-actions{display:flex;align-items:center;gap:7px}
+.edit-outline,.danger-outline{height:32px;padding:0 10px;border-radius:8px;background:#fff;font-size:10px;font-weight:800}
+.edit-outline{border:1px solid #cfdaea;color:#446182}.danger-outline{border:1px solid #efcfcc;color:#a44f4a}
+.danger-action{height:40px;padding:0 14px;border:0;border-radius:9px;background:#b85751;color:#fff;font-weight:800}
+.employee-form-mask{align-items:flex-start;overflow:auto;padding:30px 20px}
+.employee-form-modal{width:min(1000px,96vw);max-height:none;padding:0;overflow:hidden}
+.employee-form-head{position:sticky;top:0;z-index:4;margin:0;padding:19px 21px;border-bottom:1px solid #e4eaf1;background:#fff}
+.employee-form-head>div>span,.modal-kicker{display:block;margin-bottom:4px;color:#7790b1;font-size:8px;font-weight:850;letter-spacing:.14em}
+.employee-form-head h2{margin:0}
+.employee-form-section{padding:18px 21px;border-bottom:1px solid #edf1f5}
+.employee-form-section-head{margin-bottom:13px}.employee-form-section-head h3{margin:0;color:#2c3f57;font-size:12px}.employee-form-section-head p{margin:5px 0 0;color:#8c99aa;font-size:9px;line-height:1.5}
+.employee-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.form-field{display:block;color:#687b91;font-size:10px;font-weight:750}.form-field>span{display:block;margin-bottom:6px}
+.form-field input,.form-field select,.form-field textarea{width:100%;border:1px solid #d9e2ec;border-radius:9px;background:#fff;color:#2c4058;outline:0}
+.form-field input,.form-field select{height:39px;padding:0 10px}.form-field textarea{min-height:78px;padding:10px;resize:vertical}
+.form-field input:focus,.form-field select:focus,.form-field textarea:focus{border-color:#4d78d4;box-shadow:0 0 0 3px rgba(77,120,212,.07)}
+.form-field input:disabled{background:#f3f5f8;color:#8794a5}
+.form-wide{grid-column:1/-1}
+.employee-form-actions{position:sticky;bottom:0;margin:0;padding:14px 21px;background:rgba(255,255,255,.97);border-top:1px solid #e4eaf1;backdrop-filter:blur(12px)}
+.resign-modal{width:min(620px,94vw)}.resign-modal .modal-head p{margin:5px 0 0;color:#8a98a9;font-size:10px}
+.checkbox-row{display:flex!important;align-items:center;gap:9px;padding:10px 0;color:#596e86!important;font-size:10px!important}.checkbox-row input{width:15px!important;height:15px!important;margin:0!important}
+.employee-detail-v12{width:min(720px,96vw)}
+@media(max-width:1000px){.employee-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:680px){.employee-form-grid{grid-template-columns:1fr}.form-wide{grid-column:auto}.drawer-head-actions{flex-wrap:wrap;justify-content:flex-end}.history-tools .data-page-control-right{align-items:stretch}}
