@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { DataPageControls, Pagination } from '../components/DataPageControls'
+import { Pagination } from '../components/DataPageControls'
 
 const text = v => String(v ?? '').trim()
 const statusName = s => ({active:'在职',inactive:'停用',resigned:'离职'}[s] || s || '-')
@@ -146,7 +146,7 @@ export default function AdminEmployeesPage(){
   const [generated,setGenerated]=useState(null)
   const [showFilters,setShowFilters]=useState(true)
   const [filters,setFilters]=useState({
-    keyword:'',team:'',position:'',country:'',status:'active',
+    employee_no:'',full_name:'',work_tg:'',backend_account:'',team:'',position:'',country:'',status:'active',
     employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
   })
 
@@ -170,9 +170,11 @@ export default function AdminEmployeesPage(){
   const [peopleAnalytics,setPeopleAnalytics]=useState({
     loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[],
   })
-  const [analysisFilters,setAnalysisFilters]=useState({keyword:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
+  const [analysisFilters,setAnalysisFilters]=useState({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
   const [analysisDetail,setAnalysisDetail]=useState(null)
   const [analysisDetailLoading,setAnalysisDetailLoading]=useState(false)
+  const [resignationAnalytics,setResignationAnalytics]=useState({loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[]})
+  const [resignationAnalyticsFilters,setResignationAnalyticsFilters]=useState({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 
   const [history,setHistory]=useState([])
   const [historyPermissions,setHistoryPermissions]=useState({can_edit:false,can_restore:false})
@@ -180,7 +182,7 @@ export default function AdminEmployeesPage(){
   const [historyPage,setHistoryPage]=useState(1)
   const [historyPageSize,setHistoryPageSizeState]=useState(()=>Number(localStorage.getItem('wfh_history_page_size'))||20)
   const [historyLoading,setHistoryLoading]=useState(false)
-  const [historyFilters,setHistoryFilters]=useState({keyword:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
+  const [historyFilters,setHistoryFilters]=useState({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 
   const [teamKeyword,setTeamKeyword]=useState('')
   const [teamPageSize,setTeamPageSize]=useState(20)
@@ -224,6 +226,19 @@ export default function AdminEmployeesPage(){
       setPeopleAnalytics({...data,loading:false})
     }catch(e){
       setPeopleAnalytics(v=>({...v,loading:false}))
+      setError(e.message)
+    }
+  }
+
+  const loadResignationAnalytics=async(nextFilters=resignationAnalyticsFilters)=>{
+    setResignationAnalytics(v=>({...v,loading:true}))
+    try{
+      const d=new Date()
+      const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+      const data=await invoke({action:'analytics',today,filters:nextFilters})
+      setResignationAnalytics({...data,loading:false})
+    }catch(e){
+      setResignationAnalytics(v=>({...v,loading:false}))
       setError(e.message)
     }
   }
@@ -272,6 +287,12 @@ export default function AdminEmployeesPage(){
     const t=setTimeout(()=>loadPeopleAnalytics(analysisFilters),220)
     return()=>clearTimeout(t)
   },[tab,JSON.stringify(analysisFilters)])
+
+  useEffect(()=>{
+    if(tab!=='人员分析') return
+    const t=setTimeout(()=>loadResignationAnalytics(resignationAnalyticsFilters),260)
+    return()=>clearTimeout(t)
+  },[tab,JSON.stringify(resignationAnalyticsFilters)])
 
   useEffect(()=>{
     const handler=e=>{
@@ -351,7 +372,7 @@ export default function AdminEmployeesPage(){
   }
 
   const clearEmployeeFilters=()=>({
-    keyword:'',team:'',position:'',country:'',status:'active',
+    employee_no:'',full_name:'',work_tg:'',backend_account:'',team:'',position:'',country:'',status:'active',
     employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
   })
 
@@ -361,11 +382,12 @@ export default function AdminEmployeesPage(){
     setTab('员工档案')
   }
 
-  const openAnalysisDetail=async({title,event_type='all',dimension='',value='',date_from='',date_to=''})=>{
+  const openAnalysisDetail=async({title,event_type='all',dimension='',value='',date_from='',date_to='',filters:detailFilters})=>{
+    const sourceFilters=detailFilters||analysisFilters
     setAnalysisDetail({title,event_type,dimension,value,date_from,date_to,rows:[],total:0})
     setAnalysisDetailLoading(true)
     try{
-      const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:1500,filters:analysisFilters})
+      const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:2000,filters:sourceFilters})
       setAnalysisDetail(v=>({...v,...data,title}))
     }catch(e){ setError(e.message); setAnalysisDetail(null) }
     finally{ setAnalysisDetailLoading(false) }
@@ -480,23 +502,21 @@ export default function AdminEmployeesPage(){
       <div className="archive-compact-head">
         <div><h2>员工档案</h2><span>当前在职 {meta.active||0} · 全部档案 {meta.total||0}</span></div>
       </div>
-      <div className="filter-card archive-filter-card">
-        <DataPageControls
-          keyword={filters.keyword}
-          onKeyword={v=>setFilters({...filters,keyword:v})}
-          placeholder="搜索员工ID / 姓名 / 工作账号 / TG"
-          right={<>
-            <button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button>
-            <button className="secondary-action" onClick={clear}>重置</button>
-          </>}
-        />
-        {showFilters&&<div className="filter-grid employee-filter-grid">
-          <label>团队<FilterCombo value={filters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队" listId="employee-team-filter"/></label>
-          <label>岗位<FilterCombo value={filters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位" listId="employee-position-filter"/></label>
-          <label>国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部国家" listId="employee-country-filter"/></label>
+      <div className="filter-card archive-filter-card v24-filter-card">
+        <div className="field-search-grid employee-core-search-grid">
+          <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={filters.employee_no} onChange={e=>setFilters({...filters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
+          <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={filters.full_name} onChange={e=>setFilters({...filters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
+          <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={filters.work_tg} onChange={e=>setFilters({...filters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>
+          <label className="pro-filter-field"><span>后台账号</span><div className="pro-input-shell"><i>⌕</i><input value={filters.backend_account} onChange={e=>setFilters({...filters,backend_account:e.target.value})} placeholder="输入后台账号"/></div></label>
+          <div className="filter-toolbar-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="secondary-action" onClick={clear}>重置</button></div>
+        </div>
+        {showFilters&&<div className="filter-grid employee-filter-grid v24-advanced-filter-grid">
+          <label>团队<FilterCombo value={filters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="employee-team-filter"/></label>
+          <label>岗位<FilterCombo value={filters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位 / 输入搜索" listId="employee-position-filter"/></label>
+          <label>员工国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="employee-country-filter"/></label>
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
-          <label>班次<FilterCombo value={filters.shift_name} options={(analytics.shifts||[]).map(x=>x.name).length?(analytics.shifts||[]).map(x=>x.name):(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次" listId="employee-shift-filter"/></label>
-          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人" listId="employee-leader-filter"/></label>
+          <label>班次<FilterCombo value={filters.shift_name} options={(analytics.shifts||[]).map(x=>x.name).length?(analytics.shifts||[]).map(x=>x.name):(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="employee-shift-filter"/></label>
+          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人 / 输入搜索" listId="employee-leader-filter"/></label>
           <label>状态<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">全部</option><option value="active">在职</option><option value="inactive">停用</option><option value="resigned">离职</option></select></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
@@ -508,7 +528,7 @@ export default function AdminEmployeesPage(){
       <div className="data-card">
         {loading?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
-            <thead><tr><th>员工ID</th><th>姓名</th><th>国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
+            <thead><tr><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=><tr key={r.id}>
               <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td>{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
@@ -527,30 +547,22 @@ export default function AdminEmployeesPage(){
         <div className="analysis-badge">实时数据</div>
       </div>
 
-      <div className="analytics-filter-panel">
-        <div className="analytics-filter-primary">
-          <div className="analytics-search-box">
-            <span>⌕</span>
-            <input value={analysisFilters.keyword} onChange={e=>setAnalysisFilters({...analysisFilters,keyword:e.target.value})} placeholder="搜索员工ID / 姓名 / TG"/>
-          </div>
-          <div className="analysis-date-filter">
-            <span>分析日期</span>
-            <input type="date" value={analysisFilters.date_from} onChange={e=>setAnalysisFilters({...analysisFilters,date_from:e.target.value})}/>
-            <b>至</b>
-            <input type="date" value={analysisFilters.date_to} onChange={e=>setAnalysisFilters({...analysisFilters,date_to:e.target.value})}/>
-          </div>
-          {Object.values(analysisFilters).some(Boolean)&&<button className="secondary-action compact-clear" onClick={()=>setAnalysisFilters({keyword:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})}>清除筛选</button>}
-        </div>
-        <div className="analytics-filter-secondary">
-          <FilterCombo value={analysisFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/>
-          <FilterCombo value={analysisFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/>
-          <FilterCombo value={analysisFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部国家 / 输入搜索" listId="analysis-country"/>
-          <FilterCombo value={analysisFilters.shift_name} options={(analytics.shifts||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/>
+      <div className="analytics-filter-panel v24-analytics-filter-panel">
+        <div className="people-filter-grid">
+          <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.employee_no} onChange={e=>setAnalysisFilters({...analysisFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
+          <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.full_name} onChange={e=>setAnalysisFilters({...analysisFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
+          <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.work_tg} onChange={e=>setAnalysisFilters({...analysisFilters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>
+          <label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>
+          <label className="pro-filter-field"><span>岗位</span><FilterCombo value={analysisFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/></label>
+          <label className="pro-filter-field"><span>员工国家</span><FilterCombo value={analysisFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="analysis-country"/></label>
+          <label className="pro-filter-field"><span>班次</span><FilterCombo value={analysisFilters.shift_name} options={(analytics.shifts||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/></label>
+          <label className="pro-filter-field people-date-range-field"><span>分析日期区间</span><div className="pro-date-range"><input type="date" value={analysisFilters.date_from} onChange={e=>setAnalysisFilters({...analysisFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={analysisFilters.date_to} onChange={e=>setAnalysisFilters({...analysisFilters,date_to:e.target.value})}/></div></label>
+          <div className="filter-toolbar-actions people-filter-actions"><button className="secondary-action" onClick={()=>setAnalysisFilters({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})}>重置</button></div>
         </div>
       </div>
 
       <div className="module-summary-grid employee-summary-grid employee-kpi-grid people-analysis-kpis">
-        <MetricSummary label="在职员工" value={peopleAnalytics.kpis?.active??meta.active} hint={`员工档案 ${(peopleAnalytics.kpis?.total_profiles ?? meta.total ?? 0)}`} onClick={()=>drillToEmployees({status:'active',keyword:analysisFilters.keyword,team:analysisFilters.team,position:analysisFilters.position,country:analysisFilters.country,shift_name:analysisFilters.shift_name})}/>
+        <MetricSummary label="在职员工" value={peopleAnalytics.kpis?.active??meta.active} hint={`员工档案 ${(peopleAnalytics.kpis?.total_profiles ?? meta.total ?? 0)}`} onClick={()=>drillToEmployees({status:'active',employee_no:analysisFilters.employee_no,full_name:analysisFilters.full_name,work_tg:analysisFilters.work_tg,team:analysisFilters.team,position:analysisFilters.position,country:analysisFilters.country,shift_name:analysisFilters.shift_name})}/>
         {peopleAnalytics.period?.active?<>
           <MetricSummary label="区间入职" value={peopleAnalytics.period.join??0} hint={`${peopleAnalytics.period.from} → ${peopleAnalytics.period.to}`} onClick={()=>openAnalysisDetail({title:`${peopleAnalytics.period.label} · 入职人员`,event_type:'join',date_from:peopleAnalytics.period.from,date_to:peopleAnalytics.period.to})}/>
           <MetricSummary label="区间离职" value={peopleAnalytics.period.resign??0} hint={`${peopleAnalytics.period.from} → ${peopleAnalytics.period.to}`} inverse onClick={()=>openAnalysisDetail({title:`${peopleAnalytics.period.label} · 离职人员`,event_type:'resign',date_from:peopleAnalytics.period.from,date_to:peopleAnalytics.period.to})}/>
@@ -576,9 +588,18 @@ export default function AdminEmployeesPage(){
         onDay={date=>openAnalysisDetail({title:`${date} · 人员流动`,event_type:'all',date_from:date,date_to:date})}
       />
 
-      <ResignationAnalyticsPanel
+      <CountryPeopleAnalytics
         analytics={peopleAnalytics}
         onOpen={args=>openAnalysisDetail(args)}
+        onCountry={name=>drillToEmployees({country:name})}
+      />
+
+      <ResignationAnalyticsPanel
+        analytics={resignationAnalytics}
+        filters={resignationAnalyticsFilters}
+        setFilters={setResignationAnalyticsFilters}
+        options={analytics}
+        onOpen={args=>openAnalysisDetail({...args,filters:resignationAnalyticsFilters})}
       />
     </>}
 
@@ -622,38 +643,23 @@ export default function AdminEmployeesPage(){
         <span>{historyTotal} 人</span>
       </div>
 
-      <div className="resignation-filter-panel">
-        <label className="resign-filter-field resign-person-search">
-          <span>员工</span>
-          <div className="compact-search-field"><i>⌕</i><input value={historyFilters.keyword} onChange={e=>setHistoryFilters({...historyFilters,keyword:e.target.value})} placeholder="员工ID / 姓名"/></div>
-        </label>
-        <label className="resign-filter-field">
-          <span>团队</span>
-          <FilterCombo value={historyFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/>
-        </label>
-        <label className="resign-filter-field">
-          <span>岗位</span>
-          <FilterCombo value={historyFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="history-position"/>
-        </label>
-        <label className="resign-filter-field">
-          <span>国家</span>
-          <FilterCombo value={historyFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,country:v})} placeholder="全部国家 / 输入搜索" listId="history-country"/>
-        </label>
-        <label className="resign-filter-field resign-reason-filter">
-          <span>离职原因</span>
-          <input value={historyFilters.reason} onChange={e=>setHistoryFilters({...historyFilters,reason:e.target.value})} placeholder="输入原因关键字"/>
-        </label>
-        <label className="resign-filter-field resign-date-filter">
-          <span>离职日期</span>
-          <div className="date-pair"><input className="compact-date" aria-label="离职日期起" type="date" value={historyFilters.date_from} onChange={e=>setHistoryFilters({...historyFilters,date_from:e.target.value})}/><b>—</b><input className="compact-date" aria-label="离职日期止" type="date" value={historyFilters.date_to} onChange={e=>setHistoryFilters({...historyFilters,date_to:e.target.value})}/></div>
-        </label>
-        <div className="resign-filter-actions">
-          <button className="secondary-action" onClick={()=>setHistoryFilters({keyword:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})}>重置</button>
+      <div className="resignation-filter-panel v24-resignation-filter-panel">
+        <div className="resignation-filter-row primary-row">
+          <label className="resign-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={historyFilters.employee_no} onChange={e=>setHistoryFilters({...historyFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
+          <label className="resign-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={historyFilters.full_name} onChange={e=>setHistoryFilters({...historyFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
+          <label className="resign-filter-field"><span>团队</span><FilterCombo value={historyFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/></label>
+          <label className="resign-filter-field"><span>岗位</span><FilterCombo value={historyFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="history-position"/></label>
+          <label className="resign-filter-field"><span>员工国家</span><FilterCombo value={historyFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="history-country"/></label>
+        </div>
+        <div className="resignation-filter-row secondary-row">
+          <label className="resign-filter-field resign-reason-filter"><span>离职原因</span><input value={historyFilters.reason} onChange={e=>setHistoryFilters({...historyFilters,reason:e.target.value})} placeholder="输入离职原因关键字"/></label>
+          <label className="resign-filter-field resign-date-filter"><span>离职日期区间</span><div className="pro-date-range"><input aria-label="离职日期起" type="date" value={historyFilters.date_from} onChange={e=>setHistoryFilters({...historyFilters,date_from:e.target.value})}/><b>—</b><input aria-label="离职日期止" type="date" value={historyFilters.date_to} onChange={e=>setHistoryFilters({...historyFilters,date_to:e.target.value})}/></div></label>
+          <div className="resign-filter-actions"><button className="secondary-action" onClick={()=>setHistoryFilters({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})}>重置</button></div>
         </div>
       </div>
 
       {historyLoading?<div className="empty-state">读取离职记录...</div>:<div className="table-scroll"><table className="data-table lifecycle-table resignation-table-pro">
-        <thead><tr><th>离职日期</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>团队</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作记录</th><th>操作</th></tr></thead>
+        <thead><tr><th>离职日期</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>员工国家</th><th>团队</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作记录</th><th>操作</th></tr></thead>
         <tbody>{history.map(r=>{
           const s=r.snapshot||{}
           return <tr key={r.id}>
@@ -885,15 +891,48 @@ function ResignModal({state,setState,onClose,onSave}){
 }
 
 function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
+  const [detailFilters,setDetailFilters]=useState({employee_no:'',full_name:'',team:'',position:'',country:'',reason:''})
+  const [detailPage,setDetailPage]=useState(1)
+  const [detailPageSize,setDetailPageSize]=useState(20)
+  const options=useMemo(()=>({
+    teams:Array.from(new Set((state.rows||[]).map(x=>text(x.team)).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'zh-CN')),
+    positions:Array.from(new Set((state.rows||[]).map(x=>text(x.position)).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'zh-CN')),
+    countries:Array.from(new Set((state.rows||[]).map(x=>text(x.country)).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'zh-CN')),
+  }),[state.rows])
+  const filteredRows=useMemo(()=>{
+    const contains=(a,b)=>!text(b)||text(a).toLowerCase().includes(text(b).toLowerCase())
+    return (state.rows||[]).filter(r=>
+      contains(r.employee_no,detailFilters.employee_no)&&
+      contains(r.full_name,detailFilters.full_name)&&
+      contains(r.team,detailFilters.team)&&
+      contains(r.position,detailFilters.position)&&
+      contains(r.country,detailFilters.country)&&
+      contains(r.reason,detailFilters.reason)
+    )
+  },[state.rows,detailFilters])
+  const pages=Math.max(1,Math.ceil(filteredRows.length/detailPageSize))
+  const pageRows=filteredRows.slice((detailPage-1)*detailPageSize,detailPage*detailPageSize)
+  useEffect(()=>setDetailPage(1),[JSON.stringify(detailFilters),detailPageSize,state.title])
+  useEffect(()=>{if(detailPage>pages)setDetailPage(pages)},[detailPage,pages])
+
   return <div className="modal-mask analytics-detail-mask" onMouseDown={onClose}><div className="analytics-detail-dialog" onMouseDown={e=>e.stopPropagation()}>
     <div className="analytics-detail-head">
-      <div><span className="modal-kicker">PEOPLE DETAIL</span><h2>{state.title}</h2><p>{state.total||0} 条人员记录 · 点击“查看档案”可继续查看，关闭档案后会回到这里。</p></div>
+      <div><span className="modal-kicker">PEOPLE DETAIL</span><h2>{state.title}</h2><p>{filteredRows.length} 条符合条件 · 原始 {state.total||0} 条 · 可继续筛选并查看完整员工档案。</p></div>
       <button className="drawer-close" onClick={onClose}>×</button>
     </div>
-    {loading?<div className="empty-state">读取人员明细...</div>:!state.rows?.length?<div className="empty-state">这个条件下暂无人员记录</div>:<div className="analytics-detail-table-wrap"><table className="data-table analytics-detail-table">
-      <thead><tr><th>入 / 离职日期</th><th>类型</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>国家</th><th>班次</th><th>离职原因</th><th>操作</th></tr></thead>
-      <tbody>{state.rows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.date||'—'}</strong><small>{r.event_type==='resign'?'离职日期':'入职日期'}</small></div></td><td><span className={`event-chip ${r.event_type==='resign'?'resign':'join'}`}>{r.event_type==='resign'?'离职':'入职'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td><td className="analytics-reason">{r.reason||'—'}</td><td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
-    </table></div>}
+    <div className="analytics-detail-filterbar">
+      <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={detailFilters.employee_no} onChange={e=>setDetailFilters({...detailFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
+      <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={detailFilters.full_name} onChange={e=>setDetailFilters({...detailFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
+      <label className="pro-filter-field"><span>团队</span><FilterCombo value={detailFilters.team} options={options.teams} onChange={v=>setDetailFilters({...detailFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="detail-team"/></label>
+      <label className="pro-filter-field"><span>岗位</span><FilterCombo value={detailFilters.position} options={options.positions} onChange={v=>setDetailFilters({...detailFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="detail-position"/></label>
+      <label className="pro-filter-field"><span>员工国家</span><FilterCombo value={detailFilters.country} options={options.countries} onChange={v=>setDetailFilters({...detailFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="detail-country"/></label>
+      <label className="pro-filter-field"><span>离职原因</span><input className="pro-plain-input" value={detailFilters.reason} onChange={e=>setDetailFilters({...detailFilters,reason:e.target.value})} placeholder="输入离职原因"/></label>
+      <div className="filter-toolbar-actions"><button className="secondary-action" onClick={()=>setDetailFilters({employee_no:'',full_name:'',team:'',position:'',country:'',reason:''})}>重置</button></div>
+    </div>
+    {loading?<div className="empty-state">读取人员明细...</div>:!filteredRows.length?<div className="empty-state">这个条件下暂无人员记录</div>:<div className="analytics-detail-content"><div className="analytics-detail-table-wrap"><table className="data-table analytics-detail-table">
+      <thead><tr><th>入 / 离职日期</th><th>类型</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>员工国家</th><th>班次</th><th>离职原因</th><th>操作</th></tr></thead>
+      <tbody>{pageRows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.date||'—'}</strong><small>{r.event_type==='resign'?'离职日期':'入职日期'}</small></div></td><td><span className={`event-chip ${r.event_type==='resign'?'resign':'join'}`}>{r.event_type==='resign'?'离职':'入职'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td><td className="analytics-reason">{r.reason||'—'}</td><td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
+    </table></div><Pagination page={detailPage} pages={pages} total={filteredRows.length} pageSize={detailPageSize} loading={loading} onPage={setDetailPage} onPageSize={n=>{setDetailPageSize(n);setDetailPage(1)}}/></div>}
   </div></div>
 }
 
@@ -1001,7 +1040,7 @@ function EmployeeAnalyticsOverview({analytics,onTeam,onPosition,onCountry,onShif
         <TrendBars rows={analytics.trend||[]} onSelectDay={onDay}/>
       </section>
       <section className="analysis-overview-card country-card-pro">
-        <div className="analysis-card-head"><div><h3>国家人员与离职</h3><p>{analytics.period?.active?`当前人数 / ${analytics.period.label}离职`:'当前人数 / 近30天离职'}</p></div></div>
+        <div className="analysis-card-head"><div><h3>员工国家概览</h3><p>{analytics.period?.active?`当前人数 / ${analytics.period.label}离职`:'当前人数 / 近30天离职'}</p></div></div>
         <div className="country-analysis-list">{countries.map(x=><div className="country-analysis-row country-click-row" key={x.name}>
           <button type="button" onClick={()=>onCountry?.(x.name)}><strong>{x.name}</strong><span>{x.count} 人 · {pctText(x.share)}</span></button>
           <button type="button" className="country-resign-link" onClick={()=>onResign?.('country',x.name)}><span>{analytics.period?.active?'区间离职':'30天离职'}</span><strong>{analytics.period?.active?(x.period_resign||0):(x.resign_30d||0)}</strong><em>{pctText(analytics.period?.active?(x.period_resign_rate||0):(x.resign_rate_30||0))}</em></button>
@@ -1025,6 +1064,53 @@ function EmployeeAnalyticsOverview({analytics,onTeam,onPosition,onCountry,onShif
   </div>
 }
 
+
+function CountryPeopleAnalytics({analytics,onOpen,onCountry}){
+  if(analytics.loading) return null
+  const rows=analytics.countries||[]
+  if(!rows.length) return null
+  const asOf=analytics.as_of
+  const today=asOf
+  const start7=isoAdd(asOf,-6)
+  const start30=isoAdd(asOf,-29)
+  const monthFrom=analytics.resignation?.month_from||String(asOf||'').slice(0,7)+'-01'
+  const biggest=[...rows].sort((a,b)=>(b.count||0)-(a.count||0))[0]
+  const joinTop=[...rows].sort((a,b)=>(b.join_30d||0)-(a.join_30d||0))[0]
+  const resignTop=[...rows].sort((a,b)=>(b.resign_30d||0)-(a.resign_30d||0))[0]
+  const rateTop=[...rows].filter(x=>(x.count||0)+(x.resign_30d||0)>=5).sort((a,b)=>(b.resign_rate_30||0)-(a.resign_rate_30||0))[0]
+  const open=(title,event_type,date_from,date_to,name)=>onOpen?.({title,event_type,date_from,date_to,dimension:'country',value:name})
+  return <section className="country-intelligence-section">
+    <div className="analysis-head-row country-intelligence-heading">
+      <div><h2>员工国家分析</h2><p>当前人数、入职、离职、净增与离职率按员工国家拆分；人数可直接下钻到具体员工。</p></div>
+      <div className="analysis-badge">{rows.length} 个员工国家</div>
+    </div>
+    <div className="country-summary-grid">
+      <MetricSummary label="人数最多国家" value={biggest?.count||0} hint={`${biggest?.name||'—'} · ${pctText(biggest?.share||0)}`} onClick={()=>biggest&&onCountry?.(biggest.name)}/>
+      <MetricSummary label="30天入职最多" value={joinTop?.join_30d||0} hint={joinTop?.name||'—'} onClick={()=>joinTop&&open(`${joinTop.name} · 近30天入职人员`,'join',start30,today,joinTop.name)}/>
+      <MetricSummary label="30天离职最多" value={resignTop?.resign_30d||0} hint={resignTop?.name||'—'} inverse onClick={()=>resignTop&&open(`${resignTop.name} · 近30天离职人员`,'resign',start30,today,resignTop.name)}/>
+      <MetricSummary label="30天离职率最高" value={pctText(rateTop?.resign_rate_30||0)} hint={rateTop?.name||'—'} inverse onClick={()=>rateTop&&open(`${rateTop.name} · 近30天离职人员`,'resign',start30,today,rateTop.name)}/>
+    </div>
+    <div className="analysis-overview-card country-flow-card">
+      <div className="analysis-card-head"><div><h3>各员工国家人员流动</h3><p>今日、近7天、近30天的入职 / 离职与对比；点击人数查看对应员工。</p></div></div>
+      <div className="country-flow-table-wrap"><table className="country-flow-table">
+        <thead><tr><th>员工国家</th><th>在职</th><th>占比</th><th>今日入职</th><th>今日离职</th><th>近7天入职</th><th>近7天离职</th><th>7天净增</th><th>近30天入职</th><th>近30天离职</th><th>30天净增</th><th>30天离职率</th><th>本月入职</th><th>本月离职</th><th>入职月环比</th><th>离职月环比</th><th>累计离职</th></tr></thead>
+        <tbody>{rows.map(x=><tr key={x.name}>
+          <td><button className="dimension-name-button" onClick={()=>onCountry?.(x.name)}>{x.name}</button></td>
+          <td><button className="number-link" onClick={()=>onCountry?.(x.name)}>{x.count||0}</button></td><td>{pctText(x.share||0)}</td>
+          <td><button className="number-link join-number-link" onClick={()=>open(`${x.name} · 今日入职`, 'join',today,today,x.name)}>{x.today_join||0}</button><JoinCompare value={x.today_join_delta_pct}/></td>
+          <td><button className="number-link" onClick={()=>open(`${x.name} · 今日离职`, 'resign',today,today,x.name)}>{x.today_resign||0}</button><ResignCompare value={x.today_resign_delta_pct}/></td>
+          <td><button className="number-link join-number-link" onClick={()=>open(`${x.name} · 近7天入职`, 'join',start7,today,x.name)}>{x.join_7d||0}</button><JoinCompare value={x.join_7d_delta_pct}/></td>
+          <td><button className="number-link" onClick={()=>open(`${x.name} · 近7天离职`, 'resign',start7,today,x.name)}>{x.resign_7d||0}</button><ResignCompare value={x.resign_7d_delta_pct}/></td>
+          <td className={(x.net_7d||0)>=0?'positive-number':'negative-number'}>{signed(x.net_7d||0)}</td>
+          <td><button className="number-link join-number-link" onClick={()=>open(`${x.name} · 近30天入职`, 'join',start30,today,x.name)}>{x.join_30d||0}</button></td>
+          <td><button className="number-link" onClick={()=>open(`${x.name} · 近30天离职`, 'resign',start30,today,x.name)}>{x.resign_30d||0}</button></td>
+          <td className={(x.net_30d||0)>=0?'positive-number':'negative-number'}>{signed(x.net_30d||0)}</td><td>{pctText(x.resign_rate_30||0)}</td><td><button className="number-link join-number-link" onClick={()=>open(`${x.name} · 本月入职`, 'join',monthFrom,today,x.name)}>{x.month_join||0}</button></td><td><button className="number-link" onClick={()=>open(`${x.name} · 本月离职`, 'resign',monthFrom,today,x.name)}>{x.month_resign||0}</button></td><td><JoinCompare value={x.month_join_delta_pct}/></td><td><ResignCompare value={x.month_resign_delta_pct}/></td><td>{x.resign_total||0}</td>
+        </tr>)}</tbody>
+      </table></div>
+    </div>
+  </section>
+}
+
 function resignCompareText(v){
   const n=Number(v)||0
   if(n===0) return '0%'
@@ -1035,7 +1121,12 @@ function ResignCompare({value}){
   const cls=n>0?'worse':n<0?'better':'flat'
   return <span className={`resign-compare ${cls}`}>{resignCompareText(n)}</span>
 }
-function ResignationAnalyticsPanel({analytics,onOpen}){
+function JoinCompare({value}){
+  const n=Number(value)||0
+  const cls=n>0?'better':n<0?'worse':'flat'
+  return <span className={`resign-compare ${cls}`}>{resignCompareText(n)}</span>
+}
+function ResignationAnalyticsPanel({analytics,filters,setFilters,options,onOpen}){
   if(analytics.loading) return null
   const k=analytics.kpis||{}
   const r=analytics.resignation||{}
@@ -1059,6 +1150,25 @@ function ResignationAnalyticsPanel({analytics,onOpen}){
       </div>
       <div className="analysis-badge">截至 {asOf||'—'}</div>
     </div>
+
+    <div className="resignation-analysis-filterbar">
+      <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={filters.employee_no} onChange={e=>setFilters({...filters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
+      <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={filters.full_name} onChange={e=>setFilters({...filters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
+      <label className="pro-filter-field"><span>团队</span><FilterCombo value={filters.team} options={(options.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="resign-analysis-team"/></label>
+      <label className="pro-filter-field"><span>岗位</span><FilterCombo value={filters.position} options={(options.positions||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位 / 输入搜索" listId="resign-analysis-position"/></label>
+      <label className="pro-filter-field"><span>员工国家</span><FilterCombo value={filters.country} options={(options.countries||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="resign-analysis-country"/></label>
+      <label className="pro-filter-field"><span>离职原因</span><input className="pro-plain-input" value={filters.reason} onChange={e=>setFilters({...filters,reason:e.target.value})} placeholder="输入离职原因"/></label>
+      <label className="pro-filter-field resign-analysis-date"><span>离职日期区间</span><div className="pro-date-range"><input type="date" value={filters.date_from} onChange={e=>setFilters({...filters,date_from:e.target.value})}/><b>—</b><input type="date" value={filters.date_to} onChange={e=>setFilters({...filters,date_to:e.target.value})}/></div></label>
+      <div className="filter-toolbar-actions"><button className="secondary-action" onClick={()=>setFilters({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})}>重置</button></div>
+    </div>
+
+    {analytics.period?.active&&<div className="resignation-period-strip">
+      <div><span>所选区间</span><strong>{analytics.period.label}</strong></div>
+      <div><span>区间离职</span><strong>{analytics.period.resign||0}</strong></div>
+      <div><span>区间入职</span><strong>{analytics.period.join||0}</strong></div>
+      <div><span>区间净增</span><strong>{signed(analytics.period.net||0)}</strong></div>
+      <div><span>区间离职率</span><strong>{pctText(analytics.period.resign_rate||0)}</strong></div>
+    </div>}
 
     <div className="resignation-kpi-grid">
       <button type="button" className="resign-kpi-card" onClick={()=>open('今日离职人员',today,today)}>
@@ -1132,7 +1242,7 @@ function ResignationAnalyticsPanel({analytics,onOpen}){
         </button>)}</div>
       </div>
       <div className="analysis-overview-card resignation-ranking-card">
-        <div className="analysis-card-head"><div><h3>国家离职排行</h3><p>本月离职 / 上月同期 / 累计</p></div></div>
+        <div className="analysis-card-head"><div><h3>员工国家离职排行</h3><p>本月离职 / 上月同期 / 累计</p></div></div>
         <div className="resign-ranking-list">{countries.map(x=><button type="button" key={x.name} onClick={()=>open(`${x.name} · 本月离职人员`,monthFrom,today,'country',x.name)}>
           <span>{x.name}</span><strong>{x.month_resign||0} 人</strong><em>上月同期 {x.prev_month_resign||0} · 累计 {x.resign_total||0}</em><ResignCompare value={x.month_resign_delta_pct}/>
         </button>)}</div>
