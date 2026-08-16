@@ -739,3 +739,83 @@
   .structure-select-wrap{width:100%;max-width:none}
   .analytics-detail-drawer{width:96vw}
 }
+
+
+/* ===== Employee Module V22 — polished searchable filters / centered drill-down / context return ===== */
+.pro-employee-page{--soft:#f6f8fb;--line:#dde5ef;--ink:#20334d;--muted:#78899e}
+.pro-employee-page .module-title-row{margin-bottom:10px}
+.pro-employee-page .module-tabs{border-radius:12px;padding:4px 6px;box-shadow:0 3px 12px rgba(31,55,83,.025)}
+.pro-employee-page .module-tabs button{min-height:34px;border-radius:8px;padding:0 16px}
+.pro-employee-page .archive-filter-card{padding:12px 14px;border-radius:13px}
+.pro-employee-page .data-page-controls{gap:12px}
+.pro-employee-page .data-page-search{min-height:42px;border-radius:10px;background:#fbfcfe}
+.pro-employee-page .data-page-search input{font-size:10px}
+.pro-employee-page .employee-filter-grid{gap:10px 12px;margin-top:10px;padding-top:11px;border-top:1px solid #edf1f6}
+.pro-employee-page .employee-filter-grid>label{gap:5px;font-size:8px;color:#72849a;font-weight:800}
+.pro-employee-page .employee-filter-grid input,.pro-employee-page .employee-filter-grid select{height:39px;border-radius:9px}
+
+.smart-filter-combo{position:relative;width:100%;min-width:0}
+.smart-filter-combo>input{width:100%!important;height:39px!important;padding:0 38px 0 11px!important;border:1px solid #d8e2ed!important;border-radius:9px!important;background:#fff!important;color:#2c425f!important;font-size:9.5px!important;box-shadow:none!important;outline:none;transition:.15s ease}
+.smart-filter-combo>input:focus{border-color:#7aa5f7!important;box-shadow:0 0 0 3px rgba(68,122,230,.09)!important}
+.smart-combo-toggle{position:absolute;right:3px;top:3px;width:32px;height:33px;border:0;background:transparent;color:#6d8199;font-size:15px;border-radius:7px;cursor:pointer}
+.smart-combo-toggle:hover{background:#f0f4fa;color:#315fbd}
+.smart-combo-menu{position:absolute;z-index:80;left:0;right:0;top:calc(100% + 6px);max-height:260px;overflow:auto;padding:6px;border:1px solid #dbe4ef;border-radius:11px;background:#fff;box-shadow:0 16px 38px rgba(27,47,72,.16)}
+.smart-combo-menu button{display:block;width:100%;min-height:34px;padding:7px 10px;border:0;border-radius:7px;background:#fff;text-align:left;color:#334962;font-size:9.5px;cursor:pointer}
+.smart-combo-menu button:hover{background:#f2f6fc;color:#285fbf}
+.smart-combo-menu button.active{background:#eaf2ff;color:#245fc8;font-weight:850}
+.smart-combo-empty{padding:12px 10px;color:#8b98a9;font-size:8.5px;line-height:1.45}
+
+.analytics-filter-panel{margin:0 0 12px;border:1px solid var(--line);border-radius:13px;background:#fff;box-shadow:0 4px 16px rgba(38,63,92,.035);overflow:visible}
+.analytics-filter-primary{display:grid;grid-template-columns:minmax(330px,1fr) auto auto;gap:10px;align-items:center;padding:11px 12px;border-bottom:1px solid #edf1f5}
+.analytics-filter-secondary{display:grid;grid-template-columns:repeat(4,minmax(170px,1fr));gap:10px;padding:10px 12px}
+.analytics-filter-primary .analytics-search-box{height:40px;margin:0;border-radius:9px}
+.analysis-date-filter{display:flex;align-items:center;gap:7px;height:40px;padding:0 9px;border:1px solid #d8e2ed;border-radius:9px;background:#fbfcfe;white-space:nowrap}
+.analysis-date-filter>span{font-size:8px;font-weight:850;color:#73859a;margin-right:2px}
+.analysis-date-filter>b{font-size:8px;font-weight:700;color:#9aa7b6}
+.analysis-date-filter input{width:132px;height:30px!important;border:0!important;background:transparent!important;padding:0 4px!important;font-size:9px!important;box-shadow:none!important}
+.analytics-filter-panel .compact-clear{height:40px;white-space:nowrap;border-radius:9px}
+
+.people-analysis-kpis .metric-summary-card{min-height:88px;padding:14px 14px 12px}
+.people-analysis-kpis .metric-summary-card>strong{font-size:18px;line-height:1.15}
+.people-analysis-kpis .metric-summary-card>span{font-size:8.5px}
+.metric-drill-cue{font-size:7.5px!important;color:#5878a9!important}
+.compact-trend-card{min-height:326px}
+.trend-bars-pro .trend-bars-body{min-height:230px;padding:8px 5px 0}
+.trend-bars-pro .trend-day>span{font-size:7.5px;color:#8291a4}
+.trend-value-pair{font-size:7px!important}
+
+.structure-select-wrap{width:min(420px,48%);max-width:420px;min-width:280px}
+.structure-filter-toolbar{padding:10px 12px}
+.structure-toolbar-actions select{height:39px}
+.structure-analysis-card{border-radius:13px}
+
+.operation-record{display:flex;flex-direction:column;align-items:flex-start;gap:5px;min-width:110px}
+.operation-record small{font-size:7.5px;color:#7d8da1;white-space:nowrap}
+.operator-chip{max-width:145px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.resignation-table-pro th:nth-last-child(2){min-width:190px}
+.resignation-table-pro .history-row-actions{flex-wrap:nowrap}
+
+.analytics-detail-mask{align-items:center!important;justify-content:center!important;padding:28px!important;background:rgba(31,45,62,.46)!important;backdrop-filter:blur(3px)}
+.analytics-detail-dialog{width:min(1260px,calc(100vw - 90px));height:min(760px,calc(100vh - 90px));display:flex;flex-direction:column;overflow:hidden;border:1px solid #dce5ee;border-radius:16px;background:#fff;box-shadow:0 28px 80px rgba(22,37,56,.24)}
+.analytics-detail-head{min-height:82px;padding:16px 20px;background:#fff;border-bottom:1px solid #e6ecf3}
+.analytics-detail-head h2{font-size:18px;margin:3px 0 3px}
+.analytics-detail-head p{font-size:8.5px;color:#7d8da1}
+.analytics-detail-table-wrap{flex:1;overflow:auto;background:#fff}
+.analytics-detail-table{min-width:1100px}
+.analytics-detail-table th{top:0;background:#f7f9fc;font-size:8px}
+.analytics-detail-table td{height:49px;font-size:8.5px}
+.analytics-detail-table tr:hover td{background:#fbfdff}
+.primary-mini-action{border-color:#b9cff7!important;background:#f5f9ff!important;color:#2f67cd!important;font-weight:800!important}
+
+.employee-detail-drawer .back-outline{height:34px;padding:0 12px;border:1px solid #c7d7ee;border-radius:8px;background:#f6f9ff;color:#315fbb;font-size:8.5px;font-weight:850;cursor:pointer}
+.employee-detail-drawer .back-outline:hover{background:#eaf2ff;border-color:#aac4ee}
+
+@media(max-width:1200px){
+  .analytics-filter-primary{grid-template-columns:1fr auto}.analytics-filter-primary .compact-clear{grid-column:2}.analysis-date-filter{grid-column:1/-1;width:max-content}
+  .analytics-filter-secondary{grid-template-columns:1fr 1fr}
+}
+@media(max-width:760px){
+  .analytics-filter-primary,.analytics-filter-secondary{grid-template-columns:1fr}
+  .analysis-date-filter{width:100%;overflow:auto}.analytics-detail-mask{padding:8px!important}.analytics-detail-dialog{width:100%;height:94vh;border-radius:12px}
+  .structure-select-wrap{width:100%;max-width:none;min-width:0}
+}

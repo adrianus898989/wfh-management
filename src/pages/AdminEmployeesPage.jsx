@@ -170,7 +170,7 @@ export default function AdminEmployeesPage(){
   const [peopleAnalytics,setPeopleAnalytics]=useState({
     loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[],
   })
-  const [analysisFilters,setAnalysisFilters]=useState({keyword:'',team:'',position:'',country:'',shift_name:''})
+  const [analysisFilters,setAnalysisFilters]=useState({keyword:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
   const [analysisDetail,setAnalysisDetail]=useState(null)
   const [analysisDetailLoading,setAnalysisDetailLoading]=useState(false)
 
@@ -449,14 +449,14 @@ export default function AdminEmployeesPage(){
 
   const filteredTeams=useMemo(()=>{
     const q=teamKeyword.trim()
-    return (analytics.teams||[]).filter(t=>!q||text(t.name)===q)
+    return (analytics.teams||[]).filter(t=>!q||text(t.name).toLowerCase().includes(q.toLowerCase()))
   },[analytics.teams,teamKeyword])
   const teamPages=Math.max(1,Math.ceil(filteredTeams.length/teamPageSize))
   const teamSlice=filteredTeams.slice((teamPage-1)*teamPageSize,teamPage*teamPageSize)
 
   const filteredPositions=useMemo(()=>{
     const q=positionKeyword.trim()
-    return (analytics.positions||[]).filter(p=>!q||text(p.name)===q)
+    return (analytics.positions||[]).filter(p=>!q||text(p.name).toLowerCase().includes(q.toLowerCase()))
   },[analytics.positions,positionKeyword])
   const positionPages=Math.max(1,Math.ceil(filteredPositions.length/positionPageSize))
   const positionSlice=filteredPositions.slice((positionPage-1)*positionPageSize,positionPage*positionPageSize)
@@ -529,33 +529,43 @@ export default function AdminEmployeesPage(){
         <div className="analysis-badge">实时数据</div>
       </div>
 
-      <div className="analytics-filter-bar">
-        <div className="analytics-search-box">
-          <span>⌕</span>
-          <input value={analysisFilters.keyword} onChange={e=>setAnalysisFilters({...analysisFilters,keyword:e.target.value})} placeholder="搜索员工ID / 姓名 / TG"/>
+      <div className="analytics-filter-panel">
+        <div className="analytics-filter-primary">
+          <div className="analytics-search-box">
+            <span>⌕</span>
+            <input value={analysisFilters.keyword} onChange={e=>setAnalysisFilters({...analysisFilters,keyword:e.target.value})} placeholder="搜索员工ID / 姓名 / TG"/>
+          </div>
+          <div className="analysis-date-filter">
+            <span>分析日期</span>
+            <input type="date" value={analysisFilters.date_from} onChange={e=>setAnalysisFilters({...analysisFilters,date_from:e.target.value})}/>
+            <b>至</b>
+            <input type="date" value={analysisFilters.date_to} onChange={e=>setAnalysisFilters({...analysisFilters,date_to:e.target.value})}/>
+          </div>
+          {Object.values(analysisFilters).some(Boolean)&&<button className="secondary-action compact-clear" onClick={()=>setAnalysisFilters({keyword:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})}>清除筛选</button>}
         </div>
-        <select value={analysisFilters.team} onChange={e=>setAnalysisFilters({...analysisFilters,team:e.target.value})}>
-          <option value="">全部团队</option>{(analytics.teams||[]).map(x=><option key={x.name} value={x.name}>{x.name}</option>)}
-        </select>
-        <select value={analysisFilters.position} onChange={e=>setAnalysisFilters({...analysisFilters,position:e.target.value})}>
-          <option value="">全部岗位</option>{(analytics.positions||[]).map(x=><option key={x.name} value={x.name}>{x.name}</option>)}
-        </select>
-        <select value={analysisFilters.country} onChange={e=>setAnalysisFilters({...analysisFilters,country:e.target.value})}>
-          <option value="">全部国家</option>{(analytics.countries||[]).map(x=><option key={x.name} value={x.name}>{x.name}</option>)}
-        </select>
-        <select value={analysisFilters.shift_name} onChange={e=>setAnalysisFilters({...analysisFilters,shift_name:e.target.value})}>
-          <option value="">全部班次</option>{(analytics.shifts||[]).map(x=><option key={x.name} value={x.name}>{x.name}</option>)}
-        </select>
-        {Object.values(analysisFilters).some(Boolean)&&<button className="secondary-action compact-clear" onClick={()=>setAnalysisFilters({keyword:'',team:'',position:'',country:'',shift_name:''})}>清除</button>}
+        <div className="analytics-filter-secondary">
+          <FilterCombo value={analysisFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/>
+          <FilterCombo value={analysisFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/>
+          <FilterCombo value={analysisFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部国家 / 输入搜索" listId="analysis-country"/>
+          <FilterCombo value={analysisFilters.shift_name} options={(analytics.shifts||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/>
+        </div>
       </div>
 
       <div className="module-summary-grid employee-summary-grid employee-kpi-grid people-analysis-kpis">
         <MetricSummary label="在职员工" value={peopleAnalytics.kpis?.active??meta.active} hint={`员工档案 ${(peopleAnalytics.kpis?.total_profiles ?? meta.total ?? 0)}`} onClick={()=>drillToEmployees({status:'active',keyword:analysisFilters.keyword,team:analysisFilters.team,position:analysisFilters.position,country:analysisFilters.country,shift_name:analysisFilters.shift_name})}/>
-        <MetricSummary label="今日入职" value={peopleAnalytics.kpis?.today_join??'—'} compare={peopleAnalytics.kpis?.today_join_delta} compareLabel="较昨日" onClick={()=>openAnalysisDetail({title:'今日入职人员',event_type:'join',date_from:peopleAnalytics.as_of,date_to:peopleAnalytics.as_of})}/>
-        <MetricSummary label="今日离职" value={peopleAnalytics.kpis?.today_resign??'—'} compare={peopleAnalytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse onClick={()=>openAnalysisDetail({title:'今日离职人员',event_type:'resign',date_from:peopleAnalytics.as_of,date_to:peopleAnalytics.as_of})}/>
-        <MetricSummary label="近7天入职" value={peopleAnalytics.kpis?.join_7d??'—'} compare={peopleAnalytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare onClick={()=>openAnalysisDetail({title:'近7天入职人员',event_type:'join',date_from:isoAdd(peopleAnalytics.as_of,-6),date_to:peopleAnalytics.as_of})}/>
-        <MetricSummary label="近7天离职" value={peopleAnalytics.kpis?.resign_7d??'—'} compare={peopleAnalytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(peopleAnalytics.as_of,-6),date_to:peopleAnalytics.as_of})}/>
-        <MetricSummary label="近30天净增" value={peopleAnalytics.kpis?.net_30d??'—'} hint={`入 ${peopleAnalytics.kpis?.join_30d??'—'} / 离 ${peopleAnalytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.as_of})}/>
+        {peopleAnalytics.period?.active?<>
+          <MetricSummary label="区间入职" value={peopleAnalytics.period.join??0} hint={`${peopleAnalytics.period.from} → ${peopleAnalytics.period.to}`} onClick={()=>openAnalysisDetail({title:`${peopleAnalytics.period.label} · 入职人员`,event_type:'join',date_from:peopleAnalytics.period.from,date_to:peopleAnalytics.period.to})}/>
+          <MetricSummary label="区间离职" value={peopleAnalytics.period.resign??0} hint={`${peopleAnalytics.period.from} → ${peopleAnalytics.period.to}`} inverse onClick={()=>openAnalysisDetail({title:`${peopleAnalytics.period.label} · 离职人员`,event_type:'resign',date_from:peopleAnalytics.period.from,date_to:peopleAnalytics.period.to})}/>
+          <MetricSummary label="区间净增" value={signed(peopleAnalytics.period.net??0)} hint={`入 ${peopleAnalytics.period.join??0} / 离 ${peopleAnalytics.period.resign??0}`} onClick={()=>openAnalysisDetail({title:`${peopleAnalytics.period.label} · 人员流动`,event_type:'all',date_from:peopleAnalytics.period.from,date_to:peopleAnalytics.period.to})}/>
+          <MetricSummary label="区间离职率" value={pctText(peopleAnalytics.period.resign_rate??0)} hint="按当前筛选人员口径"/>
+          <MetricSummary label="区间天数" value={peopleAnalytics.period.days??1} hint={peopleAnalytics.period.label||'所选日期'}/>
+        </>:<>
+          <MetricSummary label="今日入职" value={peopleAnalytics.kpis?.today_join??'—'} compare={peopleAnalytics.kpis?.today_join_delta} compareLabel="较昨日" onClick={()=>openAnalysisDetail({title:'今日入职人员',event_type:'join',date_from:peopleAnalytics.as_of,date_to:peopleAnalytics.as_of})}/>
+          <MetricSummary label="今日离职" value={peopleAnalytics.kpis?.today_resign??'—'} compare={peopleAnalytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse onClick={()=>openAnalysisDetail({title:'今日离职人员',event_type:'resign',date_from:peopleAnalytics.as_of,date_to:peopleAnalytics.as_of})}/>
+          <MetricSummary label="近7天入职" value={peopleAnalytics.kpis?.join_7d??'—'} compare={peopleAnalytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare onClick={()=>openAnalysisDetail({title:'近7天入职人员',event_type:'join',date_from:isoAdd(peopleAnalytics.as_of,-6),date_to:peopleAnalytics.as_of})}/>
+          <MetricSummary label="近7天离职" value={peopleAnalytics.kpis?.resign_7d??'—'} compare={peopleAnalytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(peopleAnalytics.as_of,-6),date_to:peopleAnalytics.as_of})}/>
+          <MetricSummary label="近30天净增" value={peopleAnalytics.kpis?.net_30d??'—'} hint={`入 ${peopleAnalytics.kpis?.join_30d??'—'} / 离 ${peopleAnalytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.as_of})}/>
+        </>}
       </div>
 
       <EmployeeAnalyticsOverview
@@ -564,7 +574,7 @@ export default function AdminEmployeesPage(){
         onPosition={name=>drillToEmployees({position:name})}
         onCountry={name=>drillToEmployees({country:name})}
         onShift={name=>drillToEmployees({shift_name:name})}
-        onResign={(dimension,value)=>openAnalysisDetail({title:`${value} · 近30天离职人员`,event_type:'resign',dimension,value,date_from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.as_of})}
+        onResign={(dimension,value)=>openAnalysisDetail({title:`${value} · ${peopleAnalytics.period?.active?peopleAnalytics.period.label:'近30天'}离职人员`,event_type:'resign',dimension,value,date_from:peopleAnalytics.period?.active?peopleAnalytics.period.from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.period?.active?peopleAnalytics.period.to:peopleAnalytics.as_of})}
         onDay={date=>openAnalysisDetail({title:`${date} · 人员流动`,event_type:'all',date_from:date,date_to:date})}
       />
     </>}
@@ -577,7 +587,7 @@ export default function AdminEmployeesPage(){
       <TeamAnalysisSummary analytics={analytics}/>
       <div className="data-card analysis-list-card">
         <div className="structure-filter-toolbar">
-          <div className="structure-select-wrap"><span>查看团队</span><select value={teamKeyword} onChange={e=>{setTeamKeyword(e.target.value);setTeamPage(1)}}><option value="">全部团队</option>{(analytics.teams||[]).map(t=><option key={t.name} value={t.name}>{t.name} · {t.count}人</option>)}</select></div>
+          <div className="structure-select-wrap"><span>查看团队</span><FilterCombo value={teamKeyword} options={(analytics.teams||[]).map(t=>t.name)} onChange={v=>{setTeamKeyword(v);setTeamPage(1)}} placeholder="全部团队 / 输入名称搜索" listId="team-manager-filter"/></div>
           <div className="structure-toolbar-actions"><button className="secondary-action" onClick={()=>{setTeamKeyword('');setTeamPage(1)}}>全部</button><select value={teamPageSize} onChange={e=>{setTeamPageSize(Number(e.target.value));setTeamPage(1)}}><option value="10">每页 10</option><option value="20">每页 20</option></select></div>
         </div>
         <div className="analysis-card-list">{teamSlice.map(t=><TeamAnalysisCard key={t.name} item={t} onPeople={()=>drillToEmployees({team:t.name})} onResign={()=>openAnalysisDetail({title:`${t.name} · 近30天离职人员`,event_type:'resign',dimension:'team',value:t.name,date_from:isoAdd(analytics.as_of,-29),date_to:analytics.as_of})} onPosition={name=>drillToEmployees({team:t.name,position:name})}/>)}</div>
@@ -594,7 +604,7 @@ export default function AdminEmployeesPage(){
       <PositionAnalysisSummary analytics={analytics}/>
       <div className="data-card analysis-list-card">
         <div className="structure-filter-toolbar">
-          <div className="structure-select-wrap"><span>查看岗位</span><select value={positionKeyword} onChange={e=>{setPositionKeyword(e.target.value);setPositionPage(1)}}><option value="">全部岗位</option>{(analytics.positions||[]).map(p=><option key={p.name} value={p.name}>{p.name} · {p.count}人</option>)}</select></div>
+          <div className="structure-select-wrap"><span>查看岗位</span><FilterCombo value={positionKeyword} options={(analytics.positions||[]).map(p=>p.name)} onChange={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="全部岗位 / 输入名称搜索" listId="position-manager-filter"/></div>
           <div className="structure-toolbar-actions"><button className="secondary-action" onClick={()=>{setPositionKeyword('');setPositionPage(1)}}>全部</button><select value={positionPageSize} onChange={e=>{setPositionPageSize(Number(e.target.value));setPositionPage(1)}}><option value="10">每页 10</option><option value="20">每页 20</option></select></div>
         </div>
         <div className="analysis-card-list">{positionSlice.map(p=><PositionAnalysisCard key={p.name} item={p} onPeople={()=>drillToEmployees({position:p.name})} onResign={()=>openAnalysisDetail({title:`${p.name} · 近30天离职人员`,event_type:'resign',dimension:'position',value:p.name,date_from:isoAdd(analytics.as_of,-29),date_to:analytics.as_of})} onTeam={name=>drillToEmployees({position:p.name,team:name})}/>)}</div>
@@ -624,7 +634,7 @@ export default function AdminEmployeesPage(){
         />
       </div>
       {historyLoading?<div className="empty-state">读取离职记录...</div>:<div className="table-scroll"><table className="data-table lifecycle-table resignation-table-pro">
-        <thead><tr><th>离职日期</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>团队</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作账号</th><th>操作</th><th>操作时间</th></tr></thead>
+        <thead><tr><th>离职日期</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>团队</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作记录</th><th>操作</th></tr></thead>
         <tbody>{history.map(r=>{
           const s=r.snapshot||{}
           return <tr key={r.id}>
@@ -637,22 +647,21 @@ export default function AdminEmployeesPage(){
             <td>{r.position_name||s.position||'-'}</td>
             <td className="reason-cell">{r.reason||'-'}</td>
             <td>{r.source_label||r.source_sheet||r.source||'-'}</td>
-            <td><span className="operator-chip">{r.operator_account||'—'}</span></td>
+            <td><div className="operation-record"><span className="operator-chip">{r.operator_account||'—'}</span><small>{formatDateTime(r.operation_time||r.created_at)}</small></div></td>
             <td><div className="row-actions history-row-actions">
               <button className="table-action" onClick={()=>openHistoryDetail(r)}>查看</button>
               {historyPermissions.can_edit&&<button className="table-action edit-history-action" onClick={()=>setEditResignModal({event_id:r.id,employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date||'',reason:r.reason||''})}>编辑</button>}
               {historyPermissions.can_restore&&<button className="table-action restore-action" onClick={()=>setRestoreModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,restore_portal:true})}>恢复在职</button>}
             </div></td>
-            <td className="operation-time-cell">{formatDateTime(r.operation_time||r.created_at)}</td>
           </tr>
         })}</tbody>
       </table></div>}
       <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize)}}/>
     </div>}
 
-    {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={row=>{setAnalysisDetail(null);openHistoryDetail(row)}}/>}
+    {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={row=>openHistoryDetail(row)}/>}
 
-    {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})} onCancelHire={()=>setCancelHireModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,confirm_text:''})}/>}
+    {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} returnToAnalysis={Boolean(analysisDetail)} onReturn={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})} onCancelHire={()=>setCancelHireModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,confirm_text:''})}/>}
     {employeeModal&&<EmployeeFormModal state={employeeModal} setState={setEmployeeModal} meta={meta} onClose={()=>setEmployeeModal(null)} onSave={saveEmployee}/>}
     {resignModal&&<ResignModal state={resignModal} setState={setResignModal} onClose={()=>setResignModal(null)} onSave={submitResign}/>}
     {editResignModal&&<EditResignationModal state={editResignModal} setState={setEditResignModal} onClose={()=>setEditResignModal(null)} onSave={submitResignEdit}/>}
@@ -798,7 +807,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
   </div></div>
 }
 
-function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire}){
+function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn}){
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
@@ -810,6 +819,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire}){
       <div className="employee-avatar">{text(e.full_name).slice(0,1).toUpperCase()||'E'}</div>
       <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span></div></div>
       <div className="drawer-head-actions">
+        {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
         {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
         {e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
         {detail.actions?.can_cancel_hire&&<button className="cancel-hire-outline" onClick={onCancelHire}>撤销入职</button>}
@@ -856,14 +866,14 @@ function ResignModal({state,setState,onClose,onSave}){
 }
 
 function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
-  return <div className="modal-mask analytics-detail-mask" onMouseDown={onClose}><div className="analytics-detail-drawer" onMouseDown={e=>e.stopPropagation()}>
+  return <div className="modal-mask analytics-detail-mask" onMouseDown={onClose}><div className="analytics-detail-dialog" onMouseDown={e=>e.stopPropagation()}>
     <div className="analytics-detail-head">
-      <div><span className="modal-kicker">PEOPLE DETAIL</span><h2>{state.title}</h2><p>{state.total||0} 条人员记录</p></div>
+      <div><span className="modal-kicker">PEOPLE DETAIL</span><h2>{state.title}</h2><p>{state.total||0} 条人员记录 · 点击“查看档案”可继续查看，关闭档案后会回到这里。</p></div>
       <button className="drawer-close" onClick={onClose}>×</button>
     </div>
     {loading?<div className="empty-state">读取人员明细...</div>:!state.rows?.length?<div className="empty-state">这个条件下暂无人员记录</div>:<div className="analytics-detail-table-wrap"><table className="data-table analytics-detail-table">
-      <thead><tr><th>日期</th><th>类型</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>国家</th><th>班次</th><th>离职原因</th><th></th></tr></thead>
-      <tbody>{state.rows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td>{r.date||'—'}</td><td><span className={`event-chip ${r.event_type==='resign'?'resign':'join'}`}>{r.event_type==='resign'?'离职':'入职'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td><td className="analytics-reason">{r.reason||'—'}</td><td>{r.employee_id&&<button className="table-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
+      <thead><tr><th>日期</th><th>类型</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>国家</th><th>班次</th><th>离职原因</th><th>操作</th></tr></thead>
+      <tbody>{state.rows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td>{r.date||'—'}</td><td><span className={`event-chip ${r.event_type==='resign'?'resign':'join'}`}>{r.event_type==='resign'?'离职':'入职'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td><td className="analytics-reason">{r.reason||'—'}</td><td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
     </table></div>}
   </div></div>
 }
@@ -968,14 +978,14 @@ function EmployeeAnalyticsOverview({analytics,onTeam,onPosition,onCountry,onShif
   return <div className="people-analysis-layout">
     <div className="people-analysis-main">
       <section className="analysis-overview-card trend-card compact-trend-card">
-        <div className="analysis-card-head"><div><h3>近14天人员流动</h3><p>柱顶数字就是当天人数；点击日期查看当天人员。</p></div><span>30天净增 {signed(analytics.kpis?.net_30d||0)}</span></div>
+        <div className="analysis-card-head"><div><h3>{analytics.period?.active?`${analytics.period.label} 人员流动`:'近14天人员流动'}</h3><p>柱顶直接显示入职 / 离职人数；点击日期查看当天人员。</p></div><span>{analytics.period?.active?`区间净增 ${signed(analytics.period.net||0)}`:`30天净增 ${signed(analytics.kpis?.net_30d||0)}`}</span></div>
         <TrendBars rows={analytics.trend||[]} onSelectDay={onDay}/>
       </section>
       <section className="analysis-overview-card country-card-pro">
-        <div className="analysis-card-head"><div><h3>国家人员与离职</h3><p>当前人数 / 近30天离职</p></div></div>
+        <div className="analysis-card-head"><div><h3>国家人员与离职</h3><p>{analytics.period?.active?`当前人数 / ${analytics.period.label}离职`:'当前人数 / 近30天离职'}</p></div></div>
         <div className="country-analysis-list">{countries.map(x=><div className="country-analysis-row country-click-row" key={x.name}>
           <button type="button" onClick={()=>onCountry?.(x.name)}><strong>{x.name}</strong><span>{x.count} 人 · {pctText(x.share)}</span></button>
-          <button type="button" className="country-resign-link" onClick={()=>onResign?.('country',x.name)}><span>30天离职</span><strong>{x.resign_30d||0}</strong><em>{pctText(x.resign_rate_30||0)}</em></button>
+          <button type="button" className="country-resign-link" onClick={()=>onResign?.('country',x.name)}><span>{analytics.period?.active?'区间离职':'30天离职'}</span><strong>{analytics.period?.active?(x.period_resign||0):(x.resign_30d||0)}</strong><em>{pctText(analytics.period?.active?(x.period_resign_rate||0):(x.resign_rate_30||0))}</em></button>
         </div>)}</div>
       </section>
     </div>
@@ -1054,10 +1064,32 @@ function SelectValue({value,options,onChange}){
 }
 
 function FilterCombo({value,options,onChange,placeholder,listId}){
-  return <>
-    <input list={listId} value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder||'全部'}/>
-    <datalist id={listId}>{(options||[]).map(x=><option key={x} value={x}/>)}</datalist>
-  </>
+  const [open,setOpen]=useState(false)
+  const root=useRef(null)
+  const values=useMemo(()=>Array.from(new Set((options||[]).map(text).filter(Boolean))),[JSON.stringify(options||[])])
+  const q=text(value).toLowerCase()
+  const filtered=useMemo(()=>values.filter(x=>!q||x.toLowerCase().includes(q)).slice(0,80),[values,q])
+  useEffect(()=>{
+    const close=e=>{ if(root.current&&!root.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown',close)
+    return()=>document.removeEventListener('mousedown',close)
+  },[])
+  return <div className={`smart-filter-combo ${open?'is-open':''}`} ref={root} data-combo={listId}>
+    <input
+      value={value||''}
+      onChange={e=>{onChange(e.target.value);setOpen(true)}}
+      onFocus={()=>setOpen(true)}
+      onKeyDown={e=>{if(e.key==='Escape')setOpen(false);if(e.key==='Enter'&&filtered.length===1){onChange(filtered[0]);setOpen(false)}}}
+      placeholder={placeholder||'全部 / 输入搜索'}
+      autoComplete="off"
+    />
+    <button type="button" className="smart-combo-toggle" onMouseDown={e=>e.preventDefault()} onClick={()=>setOpen(v=>!v)} aria-label="展开选项">⌄</button>
+    {open&&<div className="smart-combo-menu">
+      <button type="button" className={!value?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange('');setOpen(false)}}>{placeholder?.split('/')[0]?.trim()||'全部'}</button>
+      {filtered.map(x=><button type="button" key={x} className={text(value)===x?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange(x);setOpen(false)}}>{x}</button>)}
+      {!filtered.length&&<div className="smart-combo-empty">没有完全匹配项，可继续手动输入筛选</div>}
+    </div>}
+  </div>
 }
 
 function FormSection({title,subtitle,children}){ return <section className="employee-form-section"><div className="employee-form-section-head"><h3>{title}</h3>{subtitle&&<p>{subtitle}</p>}</div><div className="employee-form-grid">{children}</div></section> }
