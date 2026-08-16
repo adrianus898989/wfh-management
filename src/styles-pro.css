@@ -1058,3 +1058,89 @@
 /* Center analytics drilldowns inside the admin content area (sidebar is 246px on desktop). */
 @media(min-width:1451px){.analytics-detail-mask{padding:26px 26px 26px 272px!important}}
 @media(min-width:761px) and (max-width:1450px){.analytics-detail-mask{padding:22px 22px 22px 242px!important}}
+
+/* ===== Employee Module V25 — aligned filters, modal-first drilldown, country tenure matrix ===== */
+.v25-resignation-filter-panel{
+  width:100%!important;
+  display:grid!important;
+  grid-template-columns:150px 190px repeat(3,minmax(180px,1fr))!important;
+  gap:10px 12px!important;
+  align-items:end!important;
+  padding:13px 14px 14px!important;
+  margin:0!important;
+  background:#fbfcfe!important;
+}
+.v25-resignation-filter-panel>*{min-width:0!important;margin:0!important}
+.v25-resignation-filter-panel .v25-resign-reason{grid-column:1/3}
+.v25-resignation-filter-panel .v25-resign-date{grid-column:3/5}
+.v25-resignation-filter-panel .v25-resign-actions{grid-column:5/6;align-self:end;justify-content:flex-end}
+.v25-resignation-filter-panel .resign-filter-field>input,
+.v25-resignation-filter-panel .smart-filter-combo>input{height:40px!important;font-size:10.5px!important}
+.v25-resignation-filter-panel .pro-date-range{width:100%;min-width:0}
+
+.analytics-detail-filterbar.active-detail-filterbar{
+  grid-template-columns:minmax(135px,.7fr) minmax(180px,.9fr) repeat(3,minmax(160px,.85fr)) auto;
+}
+.event-chip.active{background:#eaf4ff;color:#316cb5;border-color:#cee1f6}
+
+.country-tenure-section{margin-top:16px}
+.country-tenure-heading{margin:0 0 9px;align-items:flex-end}
+.country-tenure-heading h2{margin:0;color:#263b55;font-size:15px}
+.country-tenure-heading p{margin:4px 0 0;color:#7d8da1;font-size:9px;line-height:1.5}
+.country-tenure-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.country-tenure-summary span{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 10px;border:1px solid #dce6f0;border-radius:8px;background:#fff;color:#7c8ca1;font-size:9px;font-weight:750}
+.country-tenure-summary strong{color:#2c425e;font-size:11px}
+.country-tenure-card{padding:0!important;overflow:hidden}
+.country-tenure-table-wrap{width:100%;overflow:auto}
+.country-tenure-table{width:100%;min-width:1180px;border-collapse:separate;border-spacing:0}
+.country-tenure-table th{height:40px;padding:0 11px;background:#f7f9fc;border-bottom:1px solid #e4ebf3;color:#718298;font-size:9px;text-align:left;white-space:nowrap}
+.country-tenure-table td{height:50px;padding:0 11px;border-bottom:1px solid #edf1f5;color:#40546d;font-size:10.5px;white-space:nowrap}
+.country-tenure-table tr:last-child td{border-bottom:0}
+.country-tenure-table tr:hover td{background:#fbfdff}
+.tenure-number-link{min-width:30px;padding:4px 7px;border:0;border-radius:6px;background:transparent;color:#3269bd;font-size:10.5px;font-weight:850;cursor:pointer}
+.tenure-number-link:hover{background:#eef5ff;color:#2458ac}
+.tenure-number-link.total{color:#2c557f}
+.tenure-number-link.resign{color:#bd5149}
+.tenure-rate{color:#b14b45;font-size:10.5px}
+.tenure-missing-note{display:block;margin-top:3px;color:#c17a38;font-size:7.5px;font-weight:700}
+
+/* Analysis cards now behave like drill-down dashboards: counts open centered detail modals. */
+.structure-title-button,.ratio-clickable,.dimension-name-button,.number-link,.metric-summary-card.is-clickable{cursor:pointer}
+
+@media(max-width:1450px){
+  .v25-resignation-filter-panel{grid-template-columns:repeat(3,minmax(180px,1fr))!important}
+  .v25-resignation-filter-panel .v25-resign-reason{grid-column:1/2}
+  .v25-resignation-filter-panel .v25-resign-date{grid-column:2/4}
+  .v25-resignation-filter-panel .v25-resign-actions{grid-column:3/4}
+  .analytics-detail-filterbar.active-detail-filterbar{grid-template-columns:repeat(3,minmax(170px,1fr)) auto}
+}
+@media(max-width:1050px){
+  .v25-resignation-filter-panel{grid-template-columns:1fr 1fr!important}
+  .v25-resignation-filter-panel .v25-resign-reason,.v25-resignation-filter-panel .v25-resign-date,.v25-resignation-filter-panel .v25-resign-actions{grid-column:auto}
+  .v25-resignation-filter-panel .v25-resign-date{grid-column:1/-1}
+  .country-tenure-summary{justify-content:flex-start}
+  .analytics-detail-filterbar.active-detail-filterbar{grid-template-columns:1fr 1fr}
+}
+@media(max-width:680px){
+  .v25-resignation-filter-panel{grid-template-columns:1fr!important}
+  .v25-resignation-filter-panel .v25-resign-date{grid-column:auto}
+  .analytics-detail-filterbar.active-detail-filterbar{grid-template-columns:1fr}
+}
+
+/* V25 detail modal gained a dedicated shift filter. */
+.analytics-detail-filterbar{
+  grid-template-columns:minmax(125px,.68fr) minmax(165px,.82fr) repeat(4,minmax(145px,.78fr)) minmax(175px,.95fr) auto!important;
+}
+.analytics-detail-filterbar.active-detail-filterbar{
+  grid-template-columns:minmax(125px,.68fr) minmax(165px,.82fr) repeat(4,minmax(145px,.78fr)) auto!important;
+}
+@media(max-width:1450px){
+  .analytics-detail-filterbar,.analytics-detail-filterbar.active-detail-filterbar{grid-template-columns:repeat(4,minmax(160px,1fr))!important}
+}
+@media(max-width:1050px){
+  .analytics-detail-filterbar,.analytics-detail-filterbar.active-detail-filterbar{grid-template-columns:1fr 1fr!important}
+  .analytics-detail-filterbar .filter-toolbar-actions{grid-column:1/-1;justify-content:flex-start}
+}
+@media(max-width:680px){
+  .analytics-detail-filterbar,.analytics-detail-filterbar.active-detail-filterbar{grid-template-columns:1fr!important}
+}
