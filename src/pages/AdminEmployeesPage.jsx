@@ -157,6 +157,16 @@ export default function AdminEmployeesPage(){
   const [restoreModal,setRestoreModal]=useState(null)
   const [cancelHireModal,setCancelHireModal]=useState(null)
 
+  const [analytics,setAnalytics]=useState({
+    loading:true,
+    kpis:{},
+    trend:[],
+    teams:[],
+    positions:[],
+    countries:[],
+    shifts:[],
+  })
+
   const [history,setHistory]=useState([])
   const [historyTotal,setHistoryTotal]=useState(0)
   const [historyPage,setHistoryPage]=useState(1)
@@ -184,6 +194,19 @@ export default function AdminEmployeesPage(){
     try{ setMeta(await invoke({action:'meta'})) }catch(e){ setError(e.message) }
   }
 
+  const loadAnalytics=async()=>{
+    setAnalytics(v=>({...v,loading:true}))
+    try{
+      const d=new Date()
+      const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+      const data=await invoke({action:'analytics',today})
+      setAnalytics({...data,loading:false})
+    }catch(e){
+      setAnalytics(v=>({...v,loading:false}))
+      setError(e.message)
+    }
+  }
+
   const loadList=async(nextPage=page,nextSize=pageSize)=>{
     setLoading(true); setError('')
     try{
@@ -202,7 +225,7 @@ export default function AdminEmployeesPage(){
     finally{ setHistoryLoading(false) }
   }
 
-  useEffect(()=>{ loadMeta() },[])
+  useEffect(()=>{ loadMeta(); loadAnalytics() },[])
   useEffect(()=>{
     if(first.current){ first.current=false; loadList(1,pageSize); return }
     const t=setTimeout(()=>{ setPage(1); loadList(1,pageSize) },260)
@@ -281,7 +304,7 @@ export default function AdminEmployeesPage(){
       }
       const data=await invoke(payload)
       setEmployeeModal(null)
-      await Promise.all([loadMeta(),loadList(mode==='create'?1:page,pageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadList(mode==='create'?1:page,pageSize)])
       if(mode==='edit'&&employee_id){
         setSelected(await invoke({action:'detail',employee_id}))
       }
@@ -297,7 +320,7 @@ export default function AdminEmployeesPage(){
     try{
       const data=await invoke({action:'resign_employee',...resignModal})
       setResignModal(null); setSelected(null)
-      await Promise.all([loadMeta(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
       if(data?.sync?.skipped) setError('离职已保存；Google Sheet 双向同步尚未完成配置。')
     }catch(e){ setError(e.message) }
   }
@@ -312,7 +335,7 @@ export default function AdminEmployeesPage(){
       })
       setRestoreModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
       if(data?.sync?.skipped) setError('已恢复在职；Google Sheet 双向同步尚未完成配置。')
     }catch(e){ setError(e.message) }
   }
@@ -330,7 +353,7 @@ export default function AdminEmployeesPage(){
       })
       setCancelHireModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
       if(data?.sheet_warning) setError(data.sheet_warning)
     }catch(e){ setError(e.message) }
   }
@@ -351,17 +374,15 @@ export default function AdminEmployeesPage(){
 
   const filteredTeams=useMemo(()=>{
     const q=teamKeyword.trim().toLowerCase()
-    const source=(meta.schedule?.team_stats||[]).map((x,i)=>({id:`schedule-team-${i}`,name:x.name,count:x.count}))
-    return source.filter(t=>!q||text(t.name).toLowerCase().includes(q))
-  },[meta.schedule,teamKeyword])
+    return (analytics.teams||[]).filter(t=>!q||text(t.name).toLowerCase().includes(q))
+  },[analytics.teams,teamKeyword])
   const teamPages=Math.max(1,Math.ceil(filteredTeams.length/teamPageSize))
   const teamSlice=filteredTeams.slice((teamPage-1)*teamPageSize,teamPage*teamPageSize)
 
   const filteredPositions=useMemo(()=>{
     const q=positionKeyword.trim().toLowerCase()
-    const source=(meta.schedule?.position_stats||[]).map((x,i)=>({id:`schedule-position-${i}`,name:x.name,count:x.count}))
-    return source.filter(p=>!q||text(p.name).toLowerCase().includes(q))
-  },[meta.schedule,positionKeyword])
+    return (analytics.positions||[]).filter(p=>!q||text(p.name).toLowerCase().includes(q))
+  },[analytics.positions,positionKeyword])
   const positionPages=Math.max(1,Math.ceil(filteredPositions.length/positionPageSize))
   const positionSlice=filteredPositions.slice((positionPage-1)*positionPageSize,positionPage*positionPageSize)
 
@@ -378,17 +399,19 @@ export default function AdminEmployeesPage(){
       {tabs.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}
     </div>
 
-    <div className="module-summary-grid employee-summary-grid">
-      <Summary label="当前员工档案" value={meta.total}/>
-      <Summary label="在职员工" value={meta.active}/>
-      <Summary label="当前团队" value={meta.schedule?.teams?.length||meta.teams?.length||0}/>
-      <Summary label="未匹配团队" value={meta.no_team}/>
-      <Summary label="待补正式ID" value={meta.official_id_pending}/>
+    <div className="module-summary-grid employee-summary-grid employee-kpi-grid">
+      <MetricSummary label="在职员工" value={analytics.kpis?.active??meta.active} hint={`员工档案 ${meta.total||0}`}/>
+      <MetricSummary label="今日入职" value={analytics.kpis?.today_join??'—'} compare={analytics.kpis?.today_join_delta} compareLabel="较昨日"/>
+      <MetricSummary label="今日离职" value={analytics.kpis?.today_resign??'—'} compare={analytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse/>
+      <MetricSummary label="近7天入职" value={analytics.kpis?.join_7d??'—'} compare={analytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare/>
+      <MetricSummary label="近7天离职" value={analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse/>
+      <MetricSummary label="近30天净增" value={analytics.kpis?.net_30d??'—'} hint={`入 ${analytics.kpis?.join_30d??'—'} / 离 ${analytics.kpis?.resign_30d??'—'}`}/>
     </div>
 
     {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
 
     {tab==='员工档案'&&<>
+      <EmployeeAnalyticsOverview analytics={analytics}/>
       <div className="filter-card">
         <DataPageControls
           keyword={filters.keyword}
@@ -402,12 +425,12 @@ export default function AdminEmployeesPage(){
           </>}
         />
         {showFilters&&<div className="filter-grid employee-filter-grid">
-          <label>团队<FilterCombo value={filters.team} options={meta.schedule?.teams||[]} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队" listId="employee-team-filter"/></label>
-          <label>岗位<FilterCombo value={filters.position} options={meta.schedule?.positions||[]} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位" listId="employee-position-filter"/></label>
+          <label>团队<FilterCombo value={filters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队" listId="employee-team-filter"/></label>
+          <label>岗位<FilterCombo value={filters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位" listId="employee-position-filter"/></label>
           <label>国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部国家" listId="employee-country-filter"/></label>
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
-          <label>班次<FilterCombo value={filters.shift_name} options={meta.schedule?.shifts?.length?meta.schedule.shifts:(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次" listId="employee-shift-filter"/></label>
-          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.schedule?.leaders?.length?meta.schedule.leaders:(meta.options?.leaders||[])} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人" listId="employee-leader-filter"/></label>
+          <label>班次<FilterCombo value={filters.shift_name} options={(analytics.shifts||[]).map(x=>x.name).length?(analytics.shifts||[]).map(x=>x.name):(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次" listId="employee-shift-filter"/></label>
+          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人" listId="employee-leader-filter"/></label>
           <label>状态<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">全部</option><option value="active">在职</option><option value="inactive">停用</option><option value="resigned">离职</option></select></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
@@ -421,7 +444,7 @@ export default function AdminEmployeesPage(){
           <table className="data-table employee-master-table">
             <thead><tr><th>员工ID</th><th>姓名</th><th>国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=><tr key={r.id}>
-              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.schedule_live?.team||r.teams?.name||'-'}</td><td>{r.schedule_live?.leader||r.leader_name||'-'}</td><td>{r.schedule_live?.position||r.positions?.name||'-'}</td><td>{r.schedule_live?.shift||r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td>{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
+              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td>{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
               <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
               <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" onClick={()=>generateCode(r.employee_no)}>激活码</button>}</div></td>
@@ -432,19 +455,33 @@ export default function AdminEmployeesPage(){
       </div>
     </>}
 
-    {tab==='团队管理'&&<div className="data-card">
-      <div className="section-head"><div><h2>团队管理</h2></div><span>{filteredTeams.length} 条</span></div>
-      <div className="inner-tools"><DataPageControls keyword={teamKeyword} onKeyword={v=>{setTeamKeyword(v);setTeamPage(1)}} placeholder="搜索团队" pageSize={teamPageSize} onPageSize={n=>{setTeamPageSize(n);setTeamPage(1)}}/></div>
-      <div className="table-scroll"><table className="data-table"><thead><tr><th>团队</th><th>当前人数</th><th>资料来源</th></tr></thead><tbody>{teamSlice.map(t=><tr key={t.id}><td><strong>{t.name}</strong></td><td>{t.count||0}</td><td><span className="live-source-chip">居家排班表</span></td></tr>)}</tbody></table></div>
-      <Pagination page={teamPage} pages={teamPages} total={filteredTeams.length} pageSize={teamPageSize} loading={false} onPage={setTeamPage}/>
-    </div>}
+    {tab==='团队管理'&&<>
+      <div className="analysis-head-row">
+        <div><h2>团队结构分析</h2><p>团队人数、占全体比例、人员流动和团队内部岗位构成。</p></div>
+        <div className="analysis-badge">{analytics.teams?.length||0} 个团队</div>
+      </div>
+      <TeamAnalysisSummary analytics={analytics}/>
+      <div className="data-card analysis-list-card">
+        <div className="inner-tools"><DataPageControls keyword={teamKeyword} onKeyword={v=>{setTeamKeyword(v);setTeamPage(1)}} placeholder="搜索团队" pageSize={teamPageSize} onPageSize={n=>{setTeamPageSize(n);setTeamPage(1)}}/></div>
+        <div className="analysis-card-list">{teamSlice.map(t=><TeamAnalysisCard key={t.name} item={t}/>)}</div>
+        {!analytics.loading&&!teamSlice.length&&<div className="empty-state">暂无团队数据</div>}
+        <Pagination page={teamPage} pages={teamPages} total={filteredTeams.length} pageSize={teamPageSize} loading={analytics.loading} onPage={setTeamPage}/>
+      </div>
+    </>}
 
-    {tab==='岗位管理'&&<div className="data-card">
-      <div className="section-head"><div><h2>岗位管理</h2></div><span>{filteredPositions.length} 条</span></div>
-      <div className="inner-tools"><DataPageControls keyword={positionKeyword} onKeyword={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="搜索岗位" pageSize={positionPageSize} onPageSize={n=>{setPositionPageSize(n);setPositionPage(1)}}/></div>
-      <div className="table-scroll"><table className="data-table"><thead><tr><th>岗位</th><th>当前人数</th><th>资料来源</th></tr></thead><tbody>{positionSlice.map(p=><tr key={p.id}><td><strong>{p.name}</strong></td><td>{p.count||0}</td><td><span className="live-source-chip">居家排班表</span></td></tr>)}</tbody></table></div>
-      <Pagination page={positionPage} pages={positionPages} total={filteredPositions.length} pageSize={positionPageSize} loading={false} onPage={setPositionPage}/>
-    </div>}
+    {tab==='岗位管理'&&<>
+      <div className="analysis-head-row">
+        <div><h2>岗位结构分析</h2><p>岗位人数、占全体比例、人员流动和岗位在各团队的分布。</p></div>
+        <div className="analysis-badge">{analytics.positions?.length||0} 个岗位</div>
+      </div>
+      <PositionAnalysisSummary analytics={analytics}/>
+      <div className="data-card analysis-list-card">
+        <div className="inner-tools"><DataPageControls keyword={positionKeyword} onKeyword={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="搜索岗位" pageSize={positionPageSize} onPageSize={n=>{setPositionPageSize(n);setPositionPage(1)}}/></div>
+        <div className="analysis-card-list">{positionSlice.map(p=><PositionAnalysisCard key={p.name} item={p}/>)}</div>
+        {!analytics.loading&&!positionSlice.length&&<div className="empty-state">暂无岗位数据</div>}
+        <Pagination page={positionPage} pages={positionPages} total={filteredPositions.length} pageSize={positionPageSize} loading={analytics.loading} onPage={setPositionPage}/>
+      </div>
+    </>}
 
     {tab==='离职记录'&&<div className="data-card">
       <div className="section-head"><div><h2>离职记录</h2></div><span>{historyTotal} 人</span></div>
@@ -554,7 +591,10 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
     </FormSection>
 
     <FormSection title="组织与工作">
-      <Field label="盘口岗位"><SelectValue value={e.market_position} options={selectOptions(platformOptions,e.market_position)} onChange={v=>setEmployee('market_position',v)}/></Field>
+      <Field label="盘口岗位">
+        <input list="employee-market-position-options" value={e.market_position||''} onChange={x=>setEmployee('market_position',x.target.value)} placeholder="可直接输入新盘口 / 组合盘口"/>
+        <datalist id="employee-market-position-options">{platformOptions.map(x=><option key={x} value={x}/>)}</datalist>
+      </Field>
       <Field label="团队 / 系列"><div className="readonly-choice">{derivedSeries||'—'}</div></Field>
       <Field label="盘口国家"><div className="readonly-choice">{derivedMarketCountry||'—'}</div></Field>
       <Field label="工作TG"><input value={e.work_tg} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
@@ -623,7 +663,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire}){
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
       <div className="employee-avatar">{text(e.full_name).slice(0,1).toUpperCase()||'E'}</div>
-      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.schedule_live?.team||e.teams?.name||'未匹配团队'}</span><span>{e.schedule_live?.position||e.positions?.name||'未设置岗位'}</span></div></div>
+      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span></div></div>
       <div className="drawer-head-actions">
         {e.status!=='resigned'?<button className="danger-outline" onClick={onResign}>办理离职</button>:<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
         {detail.actions?.can_cancel_hire&&<button className="cancel-hire-outline" onClick={onCancelHire}>撤销入职</button>}
@@ -634,7 +674,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire}){
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <div className="detail-sections detail-sections-v11">
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
-        <InfoPanel title="组织与排班" rows={[['团队',e.schedule_live?.team||e.teams?.name],['岗位',e.schedule_live?.position||e.positions?.name],['班次',e.schedule_live?.shift||e.shift_name],['负责人 / 组长',e.schedule_live?.leader||e.leader_name],['培训老师',e.schedule_live?.trainer||e.trainer_name],['盘口',e.schedule_live?.platform||e.platform_scope],['工作内容',e.schedule_live?.work_content||e.work_content]]}/>
+        <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['岗位',e.positions?.name],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
           ? (comp.base_salary!==null && comp.base_salary!==undefined && comp.base_salary!==''
@@ -687,6 +727,134 @@ function RestoreModal({state,setState,onClose,onSave}){
     <label className="checkbox-row"><input type="checkbox" checked={state.restore_portal!==false} onChange={e=>setState({...state,restore_portal:e.target.checked})}/><span>如有员工 Portal，同时恢复登录</span></label>
     <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" onClick={onSave}>确认恢复</button></div>
   </div></div>
+}
+
+
+function signed(v){
+  const n=Number(v)
+  if(!Number.isFinite(n)) return '—'
+  if(n>0) return `+${n}`
+  return String(n)
+}
+function pctText(v){
+  const n=Number(v)
+  if(!Number.isFinite(n)) return '0%'
+  return `${n.toFixed(n>=10?1:2).replace(/\.0$/,'')}%`
+}
+function MetricSummary({label,value,compare,compareLabel,hint,percentCompare,inverse}){
+  const n=Number(compare)
+  const hasCompare=compare!==undefined&&compare!==null&&Number.isFinite(n)
+  const cls=hasCompare?(n===0?'flat':((inverse?n<0:n>0)?'good':'bad')):''
+  return <div className="summary-card metric-summary-card">
+    <span>{label}</span>
+    <strong>{value??'—'}</strong>
+    {hasCompare?<small className={`metric-compare ${cls}`}>{compareLabel} {signed(n)}{percentCompare?'%':''}</small>:hint?<small className="metric-hint">{hint}</small>:null}
+  </div>
+}
+function RatioBar({name,count,share,sub}){
+  const width=Math.max(0,Math.min(100,Number(share)||0))
+  return <div className="ratio-row">
+    <div className="ratio-row-head"><span title={name}>{name||'未分类'}</span><strong>{count||0}<em>{pctText(share)}</em></strong></div>
+    <div className="ratio-track"><i style={{width:`${width}%`}}/></div>
+    {sub&&<small>{sub}</small>}
+  </div>
+}
+function MiniFlow({join7,resign7,join30,resign30,net30}){
+  return <div className="mini-flow-grid">
+    <div><span>7天入职</span><strong>{join7||0}</strong></div>
+    <div><span>7天离职</span><strong>{resign7||0}</strong></div>
+    <div><span>30天入职</span><strong>{join30||0}</strong></div>
+    <div><span>30天离职</span><strong>{resign30||0}</strong></div>
+    <div className={(net30||0)>=0?'flow-net positive':'flow-net negative'}><span>30天净增</span><strong>{signed(net30||0)}</strong></div>
+  </div>
+}
+function TrendBars({rows=[]}){
+  const max=Math.max(1,...rows.flatMap(x=>[Number(x.join)||0,Number(x.resign)||0]))
+  return <div className="trend-bars">
+    <div className="trend-legend"><span><i className="join-dot"/>入职</span><span><i className="resign-dot"/>离职</span></div>
+    <div className="trend-bars-body">{rows.map(x=><div className="trend-day" key={x.date} title={`${x.date} 入职 ${x.join||0} / 离职 ${x.resign||0}`}>
+      <div className="trend-columns"><i className="join-col" style={{height:`${Math.max(3,(Number(x.join)||0)/max*100)}%`}}/><i className="resign-col" style={{height:`${Math.max(3,(Number(x.resign)||0)/max*100)}%`}}/></div>
+      <span>{String(x.date||'').slice(5)}</span>
+    </div>)}</div>
+  </div>
+}
+function EmployeeAnalyticsOverview({analytics}){
+  if(analytics.loading) return <div className="analysis-overview-card"><div className="empty-state compact-empty">正在计算人员结构...</div></div>
+  const countries=(analytics.countries||[]).slice(0,8)
+  const teams=(analytics.teams||[]).slice(0,8)
+  const positions=(analytics.positions||[]).slice(0,8)
+  return <div className="employee-analytics-grid">
+    <section className="analysis-overview-card trend-card">
+      <div className="analysis-card-head"><div><h3>近14天人员流动</h3><p>按有效入职 / 离职日期统计</p></div><span>30天净增 {signed(analytics.kpis?.net_30d||0)}</span></div>
+      <TrendBars rows={analytics.trend||[]}/>
+    </section>
+    <section className="analysis-overview-card">
+      <div className="analysis-card-head"><div><h3>团队人数占比</h3><p>占当前全部在职员工</p></div></div>
+      <div className="ratio-list">{teams.map(x=><RatioBar key={x.name} {...x}/>)}</div>
+    </section>
+    <section className="analysis-overview-card">
+      <div className="analysis-card-head"><div><h3>岗位人数占比</h3><p>占当前全部在职员工</p></div></div>
+      <div className="ratio-list">{positions.map(x=><RatioBar key={x.name} {...x}/>)}</div>
+    </section>
+    <section className="analysis-overview-card">
+      <div className="analysis-card-head"><div><h3>国家人员与离职</h3><p>当前人数 / 30天离职</p></div></div>
+      <div className="country-analysis-list">{countries.map(x=><div className="country-analysis-row" key={x.name}>
+        <div><strong>{x.name}</strong><span>{x.count} 人 · {pctText(x.share)}</span></div>
+        <div><span>30天离职</span><strong>{x.resign_30d||0}</strong><em>{pctText(x.resign_rate_30||0)}</em></div>
+      </div>)}</div>
+    </section>
+  </div>
+}
+function TeamAnalysisSummary({analytics}){
+  const rows=analytics.teams||[]
+  const largest=rows[0]
+  const resignTop=[...rows].sort((a,b)=>(b.resign_30d||0)-(a.resign_30d||0))[0]
+  const avg=rows.length?Math.round((analytics.kpis?.active||0)/rows.length):0
+  return <div className="analysis-summary-strip">
+    <MetricSummary label="当前团队" value={rows.length}/>
+    <MetricSummary label="最大团队" value={largest?.count||0} hint={largest?.name||'—'}/>
+    <MetricSummary label="平均团队人数" value={avg}/>
+    <MetricSummary label="30天离职最多" value={resignTop?.resign_30d||0} hint={resignTop?.name||'—'}/>
+  </div>
+}
+function PositionAnalysisSummary({analytics}){
+  const rows=analytics.positions||[]
+  const largest=rows[0]
+  const resignTop=[...rows].sort((a,b)=>(b.resign_30d||0)-(a.resign_30d||0))[0]
+  return <div className="analysis-summary-strip">
+    <MetricSummary label="当前岗位" value={rows.length}/>
+    <MetricSummary label="最大岗位" value={largest?.count||0} hint={largest?.name||'—'}/>
+    <MetricSummary label="最大岗位占比" value={largest?pctText(largest.share):'—'}/>
+    <MetricSummary label="30天离职最多" value={resignTop?.resign_30d||0} hint={resignTop?.name||'—'}/>
+  </div>
+}
+function TeamAnalysisCard({item}){
+  return <article className="structure-analysis-card">
+    <div className="structure-card-head">
+      <div><h3>{item.name}</h3><p>{item.count} 人 · 占全部在职 {pctText(item.share)}</p></div>
+      <div className="structure-rate"><span>30天离职率</span><strong>{pctText(item.resign_rate_30||0)}</strong></div>
+    </div>
+    <div className="overall-ratio"><div><span>团队占全体比例</span><strong>{pctText(item.share)}</strong></div><div className="ratio-track big"><i style={{width:`${Math.min(100,item.share||0)}%`}}/></div></div>
+    <MiniFlow join7={item.join_7d} resign7={item.resign_7d} join30={item.join_30d} resign30={item.resign_30d} net30={item.net_30d}/>
+    <div className="internal-breakdown">
+      <div className="breakdown-title"><strong>团队内部岗位比例</strong><span>分母：{item.name} 当前 {item.count} 人</span></div>
+      <div className="ratio-list compact">{(item.positions||[]).map(x=><RatioBar key={x.name} {...x}/>)}</div>
+    </div>
+  </article>
+}
+function PositionAnalysisCard({item}){
+  return <article className="structure-analysis-card">
+    <div className="structure-card-head">
+      <div><h3>{item.name}</h3><p>{item.count} 人 · 占全部在职 {pctText(item.share)}</p></div>
+      <div className="structure-rate"><span>30天离职率</span><strong>{pctText(item.resign_rate_30||0)}</strong></div>
+    </div>
+    <div className="overall-ratio"><div><span>岗位占全体比例</span><strong>{pctText(item.share)}</strong></div><div className="ratio-track big"><i style={{width:`${Math.min(100,item.share||0)}%`}}/></div></div>
+    <MiniFlow join7={item.join_7d} resign7={item.resign_7d} join30={item.join_30d} resign30={item.resign_30d} net30={item.net_30d}/>
+    <div className="internal-breakdown">
+      <div className="breakdown-title"><strong>该岗位在各团队的比例</strong><span>分母：{item.name} 当前 {item.count} 人</span></div>
+      <div className="ratio-list compact">{(item.teams||[]).map(x=><RatioBar key={x.name} {...x}/>)}</div>
+    </div>
+  </article>
 }
 
 function SelectValue({value,options,onChange}){

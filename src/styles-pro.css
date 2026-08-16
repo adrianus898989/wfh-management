@@ -406,3 +406,107 @@
 
 /* ===== Employee Module V18 ===== */
 .employee-form-modal{width:min(940px,95vw);border-radius:16px}.employee-form-head{padding:16px 20px}.employee-form-section{padding:15px 20px}.employee-form-section-head{margin-bottom:10px}.employee-form-section-head h3{font-size:13px;letter-spacing:.01em}.employee-form-grid{gap:10px 12px}.form-field{font-size:10.5px;line-height:1.25}.form-field>span{margin-bottom:5px}.form-field input,.form-field select{height:38px;font-size:11px}.readonly-choice{min-height:38px;font-size:10.5px}.live-assignment-note{color:#315b9a;background:#f2f7ff;border-color:#cbdcf8}.live-source-chip{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border:1px solid #d6e3f6;border-radius:999px;background:#f4f8ff;color:#486a9a;font-size:9.5px;font-weight:750}.cancel-hire-outline{border:1px solid #e4b8b8;background:#fff;color:#b14d4d;border-radius:8px;padding:7px 10px;font-weight:750;cursor:pointer}.cancel-hire-outline:hover{background:#fff4f4}.cancel-hire-warning{display:flex;flex-direction:column;gap:7px;margin:2px 0 15px;padding:13px 15px;border:1px solid #efd0d0;border-radius:10px;background:#fff7f7}.cancel-hire-warning strong{color:#8f3e3e;font-size:12px}.cancel-hire-warning span{color:#7b6a6a;font-size:10px;line-height:1.6}.employee-master-table th,.employee-master-table td{white-space:nowrap}.data-table th{font-size:10px}.data-table td{font-size:10.5px}
+
+
+/* ===== Employee Module V19 / People Analytics ===== */
+.employee-kpi-grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+.metric-summary-card{position:relative;min-height:88px}
+.metric-summary-card small{display:block;margin-top:7px;font-size:9px;font-weight:750}
+.metric-hint{color:#8b98aa}
+.metric-compare{width:max-content;padding:3px 7px;border-radius:999px;background:#f2f4f7;color:#77869a}
+.metric-compare.good{background:#eaf7ef;color:#43815a}
+.metric-compare.bad{background:#fff0ef;color:#b05852}
+.metric-compare.flat{background:#f2f4f7;color:#77869a}
+
+.employee-analytics-grid{display:grid;grid-template-columns:1.45fr 1fr 1fr;gap:12px;margin-bottom:14px}
+.analysis-overview-card{
+  min-width:0;padding:16px;border:1px solid #dde5ef;border-radius:14px;background:#fff;
+  box-shadow:0 7px 22px rgba(35,57,86,.035)
+}
+.analysis-overview-card.trend-card{grid-row:span 2}
+.analysis-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.analysis-card-head h3{margin:0;color:#263a53;font-size:13px}
+.analysis-card-head p{margin:4px 0 0;color:#8a99ac;font-size:9px}
+.analysis-card-head>span{color:#647a95;font-size:9px;font-weight:800}
+
+.ratio-list{display:flex;flex-direction:column;gap:10px}
+.ratio-list.compact{gap:8px}
+.ratio-row{min-width:0}
+.ratio-row-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px}
+.ratio-row-head>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#40536a;font-size:10px;font-weight:750}
+.ratio-row-head strong{display:flex;align-items:center;gap:7px;color:#253951;font-size:10px}
+.ratio-row-head em{font-style:normal;color:#8291a5;font-size:9px;font-weight:700}
+.ratio-track{height:7px;overflow:hidden;border-radius:999px;background:#edf2f7}
+.ratio-track i{display:block;height:100%;min-width:0;border-radius:999px;background:linear-gradient(90deg,#3974e8,#6a8ff0)}
+.ratio-track.big{height:9px}
+.ratio-row small{display:block;margin-top:4px;color:#96a2b1;font-size:8.5px}
+
+.country-analysis-list{display:flex;flex-direction:column;gap:7px}
+.country-analysis-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #eef2f6}
+.country-analysis-row:last-child{border-bottom:0}
+.country-analysis-row>div:first-child{min-width:0}
+.country-analysis-row>div:first-child strong{display:block;color:#344960;font-size:10px}
+.country-analysis-row>div:first-child span{display:block;margin-top:3px;color:#8998aa;font-size:8.5px}
+.country-analysis-row>div:last-child{display:grid;grid-template-columns:auto auto auto;align-items:center;gap:8px}
+.country-analysis-row>div:last-child span{color:#9aa6b5;font-size:8px}
+.country-analysis-row>div:last-child strong{color:#9e514c;font-size:10px}
+.country-analysis-row>div:last-child em{font-style:normal;color:#a87872;font-size:8.5px}
+
+.trend-bars{display:flex;flex-direction:column;height:100%;min-height:250px}
+.trend-legend{display:flex;gap:14px;justify-content:flex-end;margin-bottom:8px;color:#8391a4;font-size:8.5px}
+.trend-legend span{display:flex;align-items:center;gap:5px}
+.trend-legend i{width:7px;height:7px;border-radius:50%}
+.join-dot{background:#3974e8}.resign-dot{background:#e47a70}
+.trend-bars-body{display:grid;grid-template-columns:repeat(14,minmax(16px,1fr));align-items:end;gap:6px;flex:1;min-height:210px;padding-top:8px;border-bottom:1px solid #e7edf4}
+.trend-day{display:flex;flex-direction:column;align-items:center;height:100%;min-width:0}
+.trend-columns{display:flex;align-items:flex-end;justify-content:center;gap:3px;width:100%;height:calc(100% - 25px)}
+.trend-columns i{display:block;width:min(8px,42%);border-radius:4px 4px 1px 1px}
+.join-col{background:#3974e8}.resign-col{background:#e47a70}
+.trend-day>span{margin-top:7px;transform:rotate(-35deg);white-space:nowrap;color:#9aa6b4;font-size:7.5px}
+
+.analysis-head-row{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:3px 0 12px}
+.analysis-head-row h2{margin:0;color:#243850;font-size:17px}
+.analysis-head-row p{margin:5px 0 0;color:#8897aa;font-size:9.5px}
+.analysis-badge{padding:6px 10px;border:1px solid #dce5f1;border-radius:999px;background:#f7faff;color:#58749b;font-size:9px;font-weight:800}
+
+.analysis-summary-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.analysis-list-card{padding-top:0}
+.analysis-card-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px}
+.structure-analysis-card{min-width:0;border:1px solid #dde6f0;border-radius:13px;background:#fff;box-shadow:0 5px 16px rgba(35,57,86,.025)}
+.structure-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 15px 12px;border-bottom:1px solid #edf2f7}
+.structure-card-head h3{margin:0;color:#263b54;font-size:13px}
+.structure-card-head p{margin:5px 0 0;color:#8292a6;font-size:9px}
+.structure-rate{text-align:right}
+.structure-rate span{display:block;color:#9aa6b5;font-size:8px}
+.structure-rate strong{display:block;margin-top:4px;color:#9d514c;font-size:13px}
+.overall-ratio{padding:12px 15px 5px}
+.overall-ratio>div:first-child{display:flex;justify-content:space-between;margin-bottom:7px;color:#6f8197;font-size:9px;font-weight:750}
+.overall-ratio>div:first-child strong{color:#315b9a}
+.mini-flow-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;padding:10px 15px}
+.mini-flow-grid>div{padding:8px;border-radius:9px;background:#f7f9fc}
+.mini-flow-grid span{display:block;color:#8b99aa;font-size:7.5px}
+.mini-flow-grid strong{display:block;margin-top:4px;color:#334a63;font-size:11px}
+.mini-flow-grid .positive{background:#f0f9f3}.mini-flow-grid .positive strong{color:#44835a}
+.mini-flow-grid .negative{background:#fff3f2}.mini-flow-grid .negative strong{color:#ad5852}
+.internal-breakdown{padding:6px 15px 15px}
+.breakdown-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.breakdown-title strong{color:#3a5069;font-size:10px}
+.breakdown-title span{color:#96a3b2;font-size:8px}
+.compact-empty{min-height:180px}
+
+@media(max-width:1500px){
+  .employee-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .employee-analytics-grid{grid-template-columns:1.3fr 1fr}
+  .analysis-overview-card.trend-card{grid-row:span 2}
+}
+@media(max-width:1120px){
+  .employee-analytics-grid{grid-template-columns:1fr}
+  .analysis-overview-card.trend-card{grid-row:auto}
+  .analysis-card-list{grid-template-columns:1fr}
+  .analysis-summary-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:720px){
+  .employee-kpi-grid,.analysis-summary-strip{grid-template-columns:1fr 1fr}
+  .mini-flow-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .trend-bars-body{gap:3px}
+}
