@@ -371,3 +371,8 @@
   font-weight:700;
   line-height:1.55;
 }
+
+.history-date-range{display:flex;gap:8px;align-items:flex-end}
+.history-date-range label{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:700;color:#6f7f96}
+.history-date-range .compact-date{min-width:132px}
+.salary-fixed-choice{font-variant-numeric:tabular-nums;font-weight:800}
