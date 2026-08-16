@@ -180,7 +180,7 @@ export default function AdminEmployeesPage(){
   const [historyPage,setHistoryPage]=useState(1)
   const [historyPageSize,setHistoryPageSizeState]=useState(()=>Number(localStorage.getItem('wfh_history_page_size'))||20)
   const [historyLoading,setHistoryLoading]=useState(false)
-  const [historyFilters,setHistoryFilters]=useState({keyword:'',date_from:'',date_to:''})
+  const [historyFilters,setHistoryFilters]=useState({keyword:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 
   const [teamKeyword,setTeamKeyword]=useState('')
   const [teamPageSize,setTeamPageSize]=useState(20)
@@ -365,7 +365,7 @@ export default function AdminEmployeesPage(){
     setAnalysisDetail({title,event_type,dimension,value,date_from,date_to,rows:[],total:0})
     setAnalysisDetailLoading(true)
     try{
-      const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:200,filters:analysisFilters})
+      const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:1500,filters:analysisFilters})
       setAnalysisDetail(v=>({...v,...data,title}))
     }catch(e){ setError(e.message); setAnalysisDetail(null) }
     finally{ setAnalysisDetailLoading(false) }
@@ -485,8 +485,6 @@ export default function AdminEmployeesPage(){
           keyword={filters.keyword}
           onKeyword={v=>setFilters({...filters,keyword:v})}
           placeholder="搜索员工ID / 姓名 / 工作账号 / TG"
-          pageSize={pageSize}
-          onPageSize={setPageSize}
           right={<>
             <button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button>
             <button className="secondary-action" onClick={clear}>重置</button>
@@ -519,7 +517,7 @@ export default function AdminEmployeesPage(){
             </tr>)}</tbody>
           </table>
         </div>}
-        <Pagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={p=>{setPage(p);loadList(p,pageSize)}}/>
+        <Pagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={p=>{setPage(p);loadList(p,pageSize)}} onPageSize={setPageSize}/>
       </div>
     </>}
 
@@ -577,6 +575,11 @@ export default function AdminEmployeesPage(){
         onResign={(dimension,value)=>openAnalysisDetail({title:`${value} · ${peopleAnalytics.period?.active?peopleAnalytics.period.label:'近30天'}离职人员`,event_type:'resign',dimension,value,date_from:peopleAnalytics.period?.active?peopleAnalytics.period.from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.period?.active?peopleAnalytics.period.to:peopleAnalytics.as_of})}
         onDay={date=>openAnalysisDetail({title:`${date} · 人员流动`,event_type:'all',date_from:date,date_to:date})}
       />
+
+      <ResignationAnalyticsPanel
+        analytics={peopleAnalytics}
+        onOpen={args=>openAnalysisDetail(args)}
+      />
     </>}
 
     {tab==='团队管理'&&<>
@@ -588,11 +591,11 @@ export default function AdminEmployeesPage(){
       <div className="data-card analysis-list-card">
         <div className="structure-filter-toolbar">
           <div className="structure-select-wrap"><span>查看团队</span><FilterCombo value={teamKeyword} options={(analytics.teams||[]).map(t=>t.name)} onChange={v=>{setTeamKeyword(v);setTeamPage(1)}} placeholder="全部团队 / 输入名称搜索" listId="team-manager-filter"/></div>
-          <div className="structure-toolbar-actions"><button className="secondary-action" onClick={()=>{setTeamKeyword('');setTeamPage(1)}}>全部</button><select value={teamPageSize} onChange={e=>{setTeamPageSize(Number(e.target.value));setTeamPage(1)}}><option value="10">每页 10</option><option value="20">每页 20</option></select></div>
+          <div className="structure-toolbar-actions"><button className="secondary-action" onClick={()=>{setTeamKeyword('');setTeamPage(1)}}>重置</button></div>
         </div>
         <div className="analysis-card-list">{teamSlice.map(t=><TeamAnalysisCard key={t.name} item={t} onPeople={()=>drillToEmployees({team:t.name})} onResign={()=>openAnalysisDetail({title:`${t.name} · 近30天离职人员`,event_type:'resign',dimension:'team',value:t.name,date_from:isoAdd(analytics.as_of,-29),date_to:analytics.as_of})} onPosition={name=>drillToEmployees({team:t.name,position:name})}/>)}</div>
         {!analytics.loading&&!teamSlice.length&&<div className="empty-state">暂无团队数据</div>}
-        <Pagination page={teamPage} pages={teamPages} total={filteredTeams.length} pageSize={teamPageSize} loading={analytics.loading} onPage={setTeamPage}/>
+        <Pagination page={teamPage} pages={teamPages} total={filteredTeams.length} pageSize={teamPageSize} loading={analytics.loading} onPage={setTeamPage} onPageSize={n=>{setTeamPageSize(n);setTeamPage(1)}}/>
       </div>
     </>}
 
@@ -605,34 +608,50 @@ export default function AdminEmployeesPage(){
       <div className="data-card analysis-list-card">
         <div className="structure-filter-toolbar">
           <div className="structure-select-wrap"><span>查看岗位</span><FilterCombo value={positionKeyword} options={(analytics.positions||[]).map(p=>p.name)} onChange={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="全部岗位 / 输入名称搜索" listId="position-manager-filter"/></div>
-          <div className="structure-toolbar-actions"><button className="secondary-action" onClick={()=>{setPositionKeyword('');setPositionPage(1)}}>全部</button><select value={positionPageSize} onChange={e=>{setPositionPageSize(Number(e.target.value));setPositionPage(1)}}><option value="10">每页 10</option><option value="20">每页 20</option></select></div>
+          <div className="structure-toolbar-actions"><button className="secondary-action" onClick={()=>{setPositionKeyword('');setPositionPage(1)}}>重置</button></div>
         </div>
         <div className="analysis-card-list">{positionSlice.map(p=><PositionAnalysisCard key={p.name} item={p} onPeople={()=>drillToEmployees({position:p.name})} onResign={()=>openAnalysisDetail({title:`${p.name} · 近30天离职人员`,event_type:'resign',dimension:'position',value:p.name,date_from:isoAdd(analytics.as_of,-29),date_to:analytics.as_of})} onTeam={name=>drillToEmployees({position:p.name,team:name})}/>)}</div>
         {!analytics.loading&&!positionSlice.length&&<div className="empty-state">暂无岗位数据</div>}
-        <Pagination page={positionPage} pages={positionPages} total={filteredPositions.length} pageSize={positionPageSize} loading={analytics.loading} onPage={setPositionPage}/>
+        <Pagination page={positionPage} pages={positionPages} total={filteredPositions.length} pageSize={positionPageSize} loading={analytics.loading} onPage={setPositionPage} onPageSize={n=>{setPositionPageSize(n);setPositionPage(1)}}/>
       </div>
     </>}
 
     {tab==='离职记录'&&<div className="data-card resignation-card-pro">
       <div className="section-head resignation-section-head">
-        <div><h2>离职记录</h2><p>保留完整员工档案，可查看、按权限修改离职信息或恢复在职。</p></div>
+        <div><h2>离职记录</h2><p>完整保留离职员工档案；可按员工、团队、岗位、国家、原因和日期精确查询。</p></div>
         <span>{historyTotal} 人</span>
       </div>
-      <div className="inner-tools history-tools history-tools-pro">
-        <DataPageControls
-          keyword={historyFilters.keyword}
-          onKeyword={v=>setHistoryFilters({...historyFilters,keyword:v})}
-          placeholder="搜索员工ID / 姓名 / 离职原因"
-          pageSize={historyPageSize}
-          onPageSize={setHistoryPageSize}
-          right={<>
-            <div className="history-date-range">
-              <label><span>离职日期</span><div className="date-pair"><input className="compact-date" aria-label="离职日期起" type="date" value={historyFilters.date_from} onChange={e=>setHistoryFilters({...historyFilters,date_from:e.target.value})}/><b>—</b><input className="compact-date" aria-label="离职日期止" type="date" value={historyFilters.date_to} onChange={e=>setHistoryFilters({...historyFilters,date_to:e.target.value})}/></div></label>
-            </div>
-            {(historyFilters.keyword||historyFilters.date_from||historyFilters.date_to)&&<button className="secondary-action history-reset" onClick={()=>setHistoryFilters({keyword:'',date_from:'',date_to:''})}>清除</button>}
-          </>}
-        />
+
+      <div className="resignation-filter-panel">
+        <label className="resign-filter-field resign-person-search">
+          <span>员工</span>
+          <div className="compact-search-field"><i>⌕</i><input value={historyFilters.keyword} onChange={e=>setHistoryFilters({...historyFilters,keyword:e.target.value})} placeholder="员工ID / 姓名"/></div>
+        </label>
+        <label className="resign-filter-field">
+          <span>团队</span>
+          <FilterCombo value={historyFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/>
+        </label>
+        <label className="resign-filter-field">
+          <span>岗位</span>
+          <FilterCombo value={historyFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="history-position"/>
+        </label>
+        <label className="resign-filter-field">
+          <span>国家</span>
+          <FilterCombo value={historyFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setHistoryFilters({...historyFilters,country:v})} placeholder="全部国家 / 输入搜索" listId="history-country"/>
+        </label>
+        <label className="resign-filter-field resign-reason-filter">
+          <span>离职原因</span>
+          <input value={historyFilters.reason} onChange={e=>setHistoryFilters({...historyFilters,reason:e.target.value})} placeholder="输入原因关键字"/>
+        </label>
+        <label className="resign-filter-field resign-date-filter">
+          <span>离职日期</span>
+          <div className="date-pair"><input className="compact-date" aria-label="离职日期起" type="date" value={historyFilters.date_from} onChange={e=>setHistoryFilters({...historyFilters,date_from:e.target.value})}/><b>—</b><input className="compact-date" aria-label="离职日期止" type="date" value={historyFilters.date_to} onChange={e=>setHistoryFilters({...historyFilters,date_to:e.target.value})}/></div>
+        </label>
+        <div className="resign-filter-actions">
+          <button className="secondary-action" onClick={()=>setHistoryFilters({keyword:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})}>重置</button>
+        </div>
       </div>
+
       {historyLoading?<div className="empty-state">读取离职记录...</div>:<div className="table-scroll"><table className="data-table lifecycle-table resignation-table-pro">
         <thead><tr><th>离职日期</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>团队</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作记录</th><th>操作</th></tr></thead>
         <tbody>{history.map(r=>{
@@ -656,7 +675,7 @@ export default function AdminEmployeesPage(){
           </tr>
         })}</tbody>
       </table></div>}
-      <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize)}}/>
+      <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize)}} onPageSize={setHistoryPageSize}/>
     </div>}
 
     {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={row=>openHistoryDetail(row)}/>}
@@ -872,8 +891,8 @@ function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
       <button className="drawer-close" onClick={onClose}>×</button>
     </div>
     {loading?<div className="empty-state">读取人员明细...</div>:!state.rows?.length?<div className="empty-state">这个条件下暂无人员记录</div>:<div className="analytics-detail-table-wrap"><table className="data-table analytics-detail-table">
-      <thead><tr><th>日期</th><th>类型</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>国家</th><th>班次</th><th>离职原因</th><th>操作</th></tr></thead>
-      <tbody>{state.rows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td>{r.date||'—'}</td><td><span className={`event-chip ${r.event_type==='resign'?'resign':'join'}`}>{r.event_type==='resign'?'离职':'入职'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td><td className="analytics-reason">{r.reason||'—'}</td><td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
+      <thead><tr><th>入 / 离职日期</th><th>类型</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>国家</th><th>班次</th><th>离职原因</th><th>操作</th></tr></thead>
+      <tbody>{state.rows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.date||'—'}</strong><small>{r.event_type==='resign'?'离职日期':'入职日期'}</small></div></td><td><span className={`event-chip ${r.event_type==='resign'?'resign':'join'}`}>{r.event_type==='resign'?'离职':'入职'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td><td className="analytics-reason">{r.reason||'—'}</td><td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
     </table></div>}
   </div></div>
 }
@@ -1005,6 +1024,123 @@ function EmployeeAnalyticsOverview({analytics,onTeam,onPosition,onCountry,onShif
     </div>
   </div>
 }
+
+function resignCompareText(v){
+  const n=Number(v)||0
+  if(n===0) return '0%'
+  return `${n>0?'+':''}${n.toFixed(1)}%`
+}
+function ResignCompare({value}){
+  const n=Number(value)||0
+  const cls=n>0?'worse':n<0?'better':'flat'
+  return <span className={`resign-compare ${cls}`}>{resignCompareText(n)}</span>
+}
+function ResignationAnalyticsPanel({analytics,onOpen}){
+  if(analytics.loading) return null
+  const k=analytics.kpis||{}
+  const r=analytics.resignation||{}
+  const asOf=analytics.as_of
+  const today=asOf
+  const yesterday=isoAdd(asOf,-1)
+  const sevenFrom=isoAdd(asOf,-6)
+  const thirtyFrom=isoAdd(asOf,-29)
+  const historyFrom=r.history_from||'2000-01-01'
+  const monthFrom=r.month_from||String(asOf||'').slice(0,7)+'-01'
+  const teams=analytics.teams||[]
+  const positions=(analytics.positions||[]).slice().sort((a,b)=>(b.month_resign||0)-(a.month_resign||0)||(b.resign_total||0)-(a.resign_total||0)).slice(0,8)
+  const countries=(analytics.countries||[]).slice().sort((a,b)=>(b.month_resign||0)-(a.month_resign||0)||(b.resign_total||0)-(a.resign_total||0)).slice(0,8)
+  const open=(title,date_from,date_to,dimension='',value='')=>onOpen?.({title,event_type:'resign',date_from,date_to,dimension,value})
+
+  return <section className="resignation-analytics-section">
+    <div className="analysis-head-row resignation-analysis-heading">
+      <div>
+        <h2>离职分析</h2>
+        <p>按日、周、月和累计统计离职；环比上升用红色、下降用绿色。所有数字都可下钻到具体员工与离职原因。</p>
+      </div>
+      <div className="analysis-badge">截至 {asOf||'—'}</div>
+    </div>
+
+    <div className="resignation-kpi-grid">
+      <button type="button" className="resign-kpi-card" onClick={()=>open('今日离职人员',today,today)}>
+        <span>今日离职</span><strong>{k.today_resign||0}</strong>
+        <small>较昨日 <ResignCompare value={k.today_resign_delta_pct}/></small>
+      </button>
+      <button type="button" className="resign-kpi-card" onClick={()=>open('昨日离职人员',yesterday,yesterday)}>
+        <span>昨日离职</span><strong>{k.yesterday_resign||0}</strong>
+        <small>较前日 <ResignCompare value={k.yesterday_resign_delta_pct}/></small>
+      </button>
+      <button type="button" className="resign-kpi-card" onClick={()=>open('近7天离职人员',sevenFrom,today)}>
+        <span>近7天离职</span><strong>{k.resign_7d||0}</strong>
+        <small>较前7天 <ResignCompare value={k.resign_7d_delta_pct}/></small>
+      </button>
+      <button type="button" className="resign-kpi-card" onClick={()=>open('本月离职人员',monthFrom,today)}>
+        <span>本月离职</span><strong>{k.month_resign||0}</strong>
+        <small>较上月同期 <ResignCompare value={k.month_resign_delta_pct}/></small>
+      </button>
+      <button type="button" className="resign-kpi-card" onClick={()=>open('累计离职人员',historyFrom,today)}>
+        <span>累计离职</span><strong>{k.resign_total||0}</strong>
+        <small>{historyFrom} 至今</small>
+      </button>
+      <button type="button" className="resign-kpi-card" onClick={()=>open('近30天离职人员',thirtyFrom,today)}>
+        <span>近30天离职率</span><strong>{pctText(k.resign_rate_30||0)}</strong>
+        <small>近30天离职 {k.resign_30d||0} 人</small>
+      </button>
+    </div>
+
+    <div className="analysis-overview-card team-resignation-card">
+      <div className="analysis-card-head">
+        <div>
+          <h3>各团队离职明细</h3>
+          <p>今天 / 昨天、近7天 / 前7天、本月 / 上月同期、累计离职与离职率；点击人数或“查看人员”进入明细。</p>
+        </div>
+        <span>{teams.length} 个团队</span>
+      </div>
+      <div className="team-resignation-table-wrap">
+        <table className="team-resignation-table">
+          <thead><tr>
+            <th>团队</th><th>在职</th><th>今日</th><th>昨日</th><th>今日较昨</th><th>昨日较前日</th>
+            <th>近7天</th><th>前7天</th><th>周环比</th>
+            <th>本月</th><th>上月同期</th><th>月环比</th>
+            <th>累计离职</th><th>30天离职率</th><th>人员</th>
+          </tr></thead>
+          <tbody>{teams.map(x=><tr key={x.name}>
+            <td><button className="dimension-name-button" type="button" onClick={()=>open(`${x.name} · 累计离职人员`,historyFrom,today,'team',x.name)}>{x.name}</button></td>
+            <td><strong>{x.count||0}</strong></td>
+            <td><button className="number-link" onClick={()=>open(`${x.name} · 今日离职`,today,today,'team',x.name)}>{x.today_resign||0}</button></td>
+            <td><button className="number-link" onClick={()=>open(`${x.name} · 昨日离职`,yesterday,yesterday,'team',x.name)}>{x.yesterday_resign||0}</button></td>
+            <td><ResignCompare value={x.today_resign_delta_pct}/></td>
+            <td><ResignCompare value={x.yesterday_resign_delta_pct}/></td>
+            <td><button className="number-link" onClick={()=>open(`${x.name} · 近7天离职`,sevenFrom,today,'team',x.name)}>{x.resign_7d||0}</button></td>
+            <td>{x.prev_resign_7d||0}</td>
+            <td><ResignCompare value={x.resign_7d_delta_pct}/></td>
+            <td><button className="number-link" onClick={()=>open(`${x.name} · 本月离职`,monthFrom,today,'team',x.name)}>{x.month_resign||0}</button></td>
+            <td>{x.prev_month_resign||0}</td>
+            <td><ResignCompare value={x.month_resign_delta_pct}/></td>
+            <td><button className="number-link" onClick={()=>open(`${x.name} · 累计离职人员`,historyFrom,today,'team',x.name)}>{x.resign_total||0}</button></td>
+            <td>{pctText(x.resign_rate_30||0)}</td>
+            <td><button className="table-action primary-mini-action" onClick={()=>open(`${x.name} · 本月离职人员`,monthFrom,today,'team',x.name)}>查看人员</button></td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div className="resignation-ranking-grid">
+      <div className="analysis-overview-card resignation-ranking-card">
+        <div className="analysis-card-head"><div><h3>岗位离职排行</h3><p>本月离职 / 上月同期 / 累计</p></div></div>
+        <div className="resign-ranking-list">{positions.map(x=><button type="button" key={x.name} onClick={()=>open(`${x.name} · 本月离职人员`,monthFrom,today,'position',x.name)}>
+          <span>{x.name}</span><strong>{x.month_resign||0} 人</strong><em>上月同期 {x.prev_month_resign||0} · 累计 {x.resign_total||0}</em><ResignCompare value={x.month_resign_delta_pct}/>
+        </button>)}</div>
+      </div>
+      <div className="analysis-overview-card resignation-ranking-card">
+        <div className="analysis-card-head"><div><h3>国家离职排行</h3><p>本月离职 / 上月同期 / 累计</p></div></div>
+        <div className="resign-ranking-list">{countries.map(x=><button type="button" key={x.name} onClick={()=>open(`${x.name} · 本月离职人员`,monthFrom,today,'country',x.name)}>
+          <span>{x.name}</span><strong>{x.month_resign||0} 人</strong><em>上月同期 {x.prev_month_resign||0} · 累计 {x.resign_total||0}</em><ResignCompare value={x.month_resign_delta_pct}/>
+        </button>)}</div>
+      </div>
+    </div>
+  </section>
+}
+
 function TeamAnalysisSummary({analytics}){
   const rows=analytics.teams||[]
   const largest=rows[0]

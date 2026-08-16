@@ -819,3 +819,133 @@
   .analysis-date-filter{width:100%;overflow:auto}.analytics-detail-mask{padding:8px!important}.analytics-detail-dialog{width:100%;height:94vh;border-radius:12px}
   .structure-select-wrap{width:100%;max-width:none;min-width:0}
 }
+
+/* ===== Employee Module V23 — professional pagination + resignation intelligence ===== */
+.pro-employee-page{font-size:12px}
+.pro-employee-page .data-table th{font-size:10px;letter-spacing:.01em}
+.pro-employee-page .data-table td{font-size:10.5px}
+
+/* Pagination belongs at the bottom of each data set. */
+.professional-pagination{
+  min-height:58px;
+  padding:10px 14px;
+  gap:14px;
+  background:#fff;
+  border-top:1px solid #e7edf4;
+  flex-wrap:wrap;
+}
+.pagination-summary{display:flex;align-items:center;gap:10px;min-width:120px;color:#7d8ca0;font-size:10px}
+.pagination-summary strong{color:#344963;font-size:10.5px}
+.pagination-main{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex:1;flex-wrap:wrap}
+.pagination-main>button,.pagination-number-list button,.pagination-jump button{
+  height:31px;min-width:31px;padding:0 9px;border:1px solid #d9e3ee;border-radius:7px;background:#fff;color:#4b6079;font-size:9.5px;font-weight:750;cursor:pointer
+}
+.pagination-main>button:hover:not(:disabled),.pagination-number-list button:hover:not(:disabled),.pagination-jump button:hover:not(:disabled){border-color:#a9c2ef;background:#f4f8ff;color:#2c64c9}
+.pagination-main button:disabled{opacity:.35;cursor:not-allowed}
+.pagination-number-list{display:flex;align-items:center;gap:5px}
+.pagination-number-list button.active{border-color:#4c7ee8;background:#4c7ee8;color:#fff;box-shadow:0 3px 10px rgba(52,101,202,.18)}
+.pagination-size-control select{height:31px;padding:0 28px 0 9px;border:1px solid #d9e3ee;border-radius:7px;background:#fff;color:#4b6079;font-size:9.5px;font-weight:750;outline:0}
+.pagination-page-count{margin:0 3px;color:#7c8ca0;font-size:9.5px;white-space:nowrap}
+.pagination-jump{display:flex;align-items:center;gap:5px;color:#7c8ca0;font-size:9.5px;white-space:nowrap}
+.pagination-jump input{width:46px;height:31px;padding:0 6px;border:1px solid #d9e3ee;border-radius:7px;background:#fff;color:#344963;text-align:center;font-size:9.5px;outline:0}
+.pagination-jump input:focus{border-color:#7aa5f7;box-shadow:0 0 0 3px rgba(68,122,230,.08)}
+
+/* Compact, field-specific resignation filters. */
+.resignation-filter-panel{
+  display:grid;
+  grid-template-columns:minmax(230px,1.15fr) repeat(3,minmax(155px,.72fr)) minmax(190px,.85fr) minmax(300px,1.25fr) auto;
+  gap:10px;
+  align-items:end;
+  padding:12px 14px 13px;
+  border-bottom:1px solid #e8eef5;
+  background:#fbfcfe;
+}
+.resign-filter-field{display:flex;flex-direction:column;gap:5px;min-width:0;color:#72849a;font-size:8.5px;font-weight:850}
+.resign-filter-field>input{height:39px;padding:0 11px;border:1px solid #d8e2ed;border-radius:9px;background:#fff;color:#30465f;font-size:9.5px;outline:0}
+.resign-filter-field>input:focus{border-color:#7aa5f7;box-shadow:0 0 0 3px rgba(68,122,230,.08)}
+.compact-search-field{height:39px;display:flex;align-items:center;gap:7px;padding:0 10px;border:1px solid #d8e2ed;border-radius:9px;background:#fff}
+.compact-search-field:focus-within{border-color:#7aa5f7;box-shadow:0 0 0 3px rgba(68,122,230,.08)}
+.compact-search-field i{font-style:normal;color:#93a3b5;font-size:15px}
+.compact-search-field input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:#30465f;font-size:9.5px}
+.resign-date-filter .date-pair{height:39px;display:flex;align-items:center;gap:4px;padding:0 6px;border:1px solid #d8e2ed;border-radius:9px;background:#fff}
+.resign-date-filter .date-pair input{min-width:118px;height:31px!important;border:0!important;background:transparent!important;padding:0 4px!important;font-size:9px!important;box-shadow:none!important}
+.resign-date-filter .date-pair b{color:#9aa7b6;font-size:8px}
+.resign-filter-actions{display:flex;align-items:center;height:39px}
+.resign-filter-actions .secondary-action{height:39px;padding:0 14px;white-space:nowrap}
+.resignation-table-pro{min-width:1380px}
+.resignation-table-pro td{height:52px}
+.operation-record small{font-size:8.5px}
+
+/* Personnel analysis: search is intentionally compact; dimensions have their own controls. */
+.analytics-filter-primary{grid-template-columns:minmax(270px,370px) auto 1fr}
+.analytics-filter-primary .analytics-search-box{width:100%;max-width:370px}
+.analytics-filter-primary .compact-clear{justify-self:end}
+.analytics-search-box input{font-size:9.5px!important}
+
+/* Dedicated resignation intelligence area. */
+.resignation-analytics-section{margin-top:16px}
+.resignation-analysis-heading{margin:2px 0 9px}
+.resignation-analysis-heading h2{margin:0;color:#263b55;font-size:15px}
+.resignation-analysis-heading p{margin:4px 0 0;color:#7d8da1;font-size:9px;line-height:1.5}
+.resignation-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.resign-kpi-card{min-height:96px;padding:13px 14px;border:1px solid #dfe7f0;border-radius:13px;background:#fff;text-align:left;box-shadow:0 4px 16px rgba(31,55,83,.035);cursor:pointer;transition:.15s ease}
+.resign-kpi-card:hover{transform:translateY(-1px);border-color:#bfd0ea;box-shadow:0 8px 22px rgba(31,55,83,.07)}
+.resign-kpi-card>span{display:block;color:#7b8ba0;font-size:8.5px;font-weight:800}
+.resign-kpi-card>strong{display:block;margin:8px 0 7px;color:#263b55;font-size:21px;line-height:1;font-weight:850}
+.resign-kpi-card>small{display:flex;align-items:center;gap:5px;color:#8a98aa;font-size:8px}
+.resign-compare{display:inline-flex;align-items:center;min-height:20px;padding:0 6px;border-radius:999px;font-size:8px;font-style:normal;font-weight:850}
+.resign-compare.worse{background:#fff0ed;color:#c25049}
+.resign-compare.better{background:#ebf8ef;color:#31875a}
+.resign-compare.flat{background:#f1f4f8;color:#7a899c}
+.team-resignation-card{padding:0!important;overflow:hidden;margin-bottom:12px}
+.team-resignation-card .analysis-card-head{padding:14px 15px 12px;margin:0!important;border-bottom:1px solid #e7edf4}
+.team-resignation-table-wrap{overflow:auto;max-width:100%}
+.team-resignation-table{width:100%;min-width:1450px;border-collapse:separate;border-spacing:0}
+.team-resignation-table th{position:sticky;top:0;z-index:2;height:38px;padding:0 10px;background:#f7f9fc;border-bottom:1px solid #e4ebf3;color:#728399;font-size:8.5px;text-align:left;white-space:nowrap}
+.team-resignation-table td{height:48px;padding:0 10px;border-bottom:1px solid #edf1f5;color:#40546d;font-size:9.5px;white-space:nowrap}
+.team-resignation-table tr:last-child td{border-bottom:0}
+.team-resignation-table tr:hover td{background:#fbfdff}
+.dimension-name-button,.number-link{border:0;background:transparent;padding:0;color:#315eab;font:inherit;font-weight:800;cursor:pointer}
+.dimension-name-button:hover,.number-link:hover{text-decoration:underline;color:#2457b4}
+.resignation-ranking-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.resignation-ranking-card{padding:14px 15px!important}
+.resign-ranking-list{display:flex;flex-direction:column;gap:3px}
+.resign-ranking-list>button{display:grid;grid-template-columns:minmax(150px,1fr) 72px minmax(190px,1.15fr) 60px;gap:10px;align-items:center;min-height:40px;padding:0 8px;border:0;border-bottom:1px solid #eef2f6;background:#fff;color:#40546d;text-align:left;cursor:pointer}
+.resign-ranking-list>button:last-child{border-bottom:0}
+.resign-ranking-list>button:hover{background:#f8fbff}
+.resign-ranking-list span{font-size:9.5px;font-weight:800;color:#344a64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.resign-ranking-list strong{font-size:10px;color:#bd5149}
+.resign-ranking-list em{font-size:8.5px;font-style:normal;color:#8594a7}
+
+/* Larger centered people-detail modal. */
+.analytics-detail-mask{padding:22px!important}
+.analytics-detail-dialog{width:min(1480px,calc(100vw - 46px));height:min(840px,calc(100vh - 46px));border-radius:15px}
+.analytics-detail-head{min-height:92px;padding:18px 22px}
+.analytics-detail-head h2{font-size:21px;margin:4px 0 4px}
+.analytics-detail-head p{font-size:10px;line-height:1.5}
+.analytics-detail-table{min-width:1320px}
+.analytics-detail-table th{height:42px;padding:0 13px;font-size:9.5px;letter-spacing:.01em}
+.analytics-detail-table td{height:56px;padding:0 13px;font-size:10.5px;line-height:1.45}
+.analytics-detail-table .analytics-reason{max-width:300px;font-size:10px}
+.analytics-detail-table .event-chip{font-size:9px;min-width:42px;justify-content:center}
+.analytics-detail-table .primary-mini-action{min-height:32px;padding:0 11px;font-size:9.5px}
+.event-date-cell{display:flex;flex-direction:column;gap:3px;white-space:nowrap}
+.event-date-cell strong{font-size:10.5px;color:#344b68}
+.event-date-cell small{font-size:8px;color:#8b99aa}
+
+@media(max-width:1450px){
+  .resignation-filter-panel{grid-template-columns:repeat(4,minmax(160px,1fr))}
+  .resign-date-filter{grid-column:span 2}.resign-filter-actions{justify-content:flex-end}
+  .resignation-kpi-grid{grid-template-columns:repeat(3,1fr)}
+}
+@media(max-width:1100px){
+  .analytics-filter-primary{grid-template-columns:1fr auto}.analytics-filter-primary .analytics-search-box{max-width:none}.analytics-filter-primary .analysis-date-filter{grid-column:1/-1}.analytics-filter-primary .compact-clear{grid-column:auto;justify-self:start}
+  .resignation-ranking-grid{grid-template-columns:1fr}
+  .resignation-filter-panel{grid-template-columns:1fr 1fr}.resign-date-filter{grid-column:1/-1}.resign-filter-actions{justify-content:flex-start}
+}
+@media(max-width:760px){
+  .resignation-kpi-grid{grid-template-columns:1fr 1fr}
+  .resignation-filter-panel{grid-template-columns:1fr}.resign-date-filter{grid-column:auto}
+  .professional-pagination{align-items:flex-start}.pagination-main{justify-content:flex-start}
+  .analytics-detail-mask{padding:6px!important}.analytics-detail-dialog{width:100%;height:96vh;border-radius:11px}
+}
