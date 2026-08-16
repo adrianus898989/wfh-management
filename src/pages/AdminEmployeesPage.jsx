@@ -134,7 +134,8 @@ export default function AdminEmployeesPage(){
   const [meta,setMeta]=useState({
     teams:[],positions:[],total:0,active:0,no_team:0,official_id_pending:0,
     options:{countries:[],nationalities:[],employment_types:[],shifts:[],groups:[],leaders:[],trainers:[],market_countries:[],market_positions:[],platforms:[]},
-    platform_map:[]
+    platform_map:[],
+    schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]}
   })
   const [rows,setRows]=useState([])
   const [total,setTotal]=useState(0)
@@ -145,7 +146,7 @@ export default function AdminEmployeesPage(){
   const [generated,setGenerated]=useState(null)
   const [showFilters,setShowFilters]=useState(true)
   const [filters,setFilters]=useState({
-    keyword:'',team_id:'',position_id:'',country:'',status:'active',
+    keyword:'',team:'',position:'',country:'',status:'active',
     employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
   })
 
@@ -154,6 +155,7 @@ export default function AdminEmployeesPage(){
   const [employeeModal,setEmployeeModal]=useState(null) // {mode,employee_id,form}
   const [resignModal,setResignModal]=useState(null)
   const [restoreModal,setRestoreModal]=useState(null)
+  const [cancelHireModal,setCancelHireModal]=useState(null)
 
   const [history,setHistory]=useState([])
   const [historyTotal,setHistoryTotal]=useState(0)
@@ -315,6 +317,24 @@ export default function AdminEmployeesPage(){
     }catch(e){ setError(e.message) }
   }
 
+  const submitCancelHire=async()=>{
+    if(!cancelHireModal?.employee_id) return
+    if(text(cancelHireModal.confirm_text)!==text(cancelHireModal.employee_no)){
+      return setError('请输入完整员工ID确认撤销入职')
+    }
+    try{
+      const data=await invoke({
+        action:'cancel_new_hire',
+        employee_id:cancelHireModal.employee_id,
+        confirm_employee_no:cancelHireModal.confirm_text,
+      })
+      setCancelHireModal(null)
+      setSelected(null)
+      await Promise.all([loadMeta(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      if(data?.sheet_warning) setError(data.sheet_warning)
+    }catch(e){ setError(e.message) }
+  }
+
   const generateCode=async employeeNo=>{
     setGenerated(null); setError('')
     const {data,error}=await supabase.rpc('generate_employee_activation_code',{p_employee_no:employeeNo,p_valid_hours:72})
@@ -325,21 +345,23 @@ export default function AdminEmployeesPage(){
   const pages=Math.max(1,Math.ceil(total/pageSize))
   const historyPages=Math.max(1,Math.ceil(historyTotal/historyPageSize))
   const clear=()=>setFilters({
-    keyword:'',team_id:'',position_id:'',country:'',status:'active',
+    keyword:'',team:'',position:'',country:'',status:'active',
     employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
   })
 
   const filteredTeams=useMemo(()=>{
     const q=teamKeyword.trim().toLowerCase()
-    return (meta.teams||[]).filter(t=>!q||[t.name,t.code,t.country].some(v=>text(v).toLowerCase().includes(q)))
-  },[meta.teams,teamKeyword])
+    const source=(meta.schedule?.team_stats||[]).map((x,i)=>({id:`schedule-team-${i}`,name:x.name,count:x.count}))
+    return source.filter(t=>!q||text(t.name).toLowerCase().includes(q))
+  },[meta.schedule,teamKeyword])
   const teamPages=Math.max(1,Math.ceil(filteredTeams.length/teamPageSize))
   const teamSlice=filteredTeams.slice((teamPage-1)*teamPageSize,teamPage*teamPageSize)
 
   const filteredPositions=useMemo(()=>{
     const q=positionKeyword.trim().toLowerCase()
-    return (meta.positions||[]).filter(p=>!q||[p.name,p.code].some(v=>text(v).toLowerCase().includes(q)))
-  },[meta.positions,positionKeyword])
+    const source=(meta.schedule?.position_stats||[]).map((x,i)=>({id:`schedule-position-${i}`,name:x.name,count:x.count}))
+    return source.filter(p=>!q||text(p.name).toLowerCase().includes(q))
+  },[meta.schedule,positionKeyword])
   const positionPages=Math.max(1,Math.ceil(filteredPositions.length/positionPageSize))
   const positionSlice=filteredPositions.slice((positionPage-1)*positionPageSize,positionPage*positionPageSize)
 
@@ -359,7 +381,7 @@ export default function AdminEmployeesPage(){
     <div className="module-summary-grid employee-summary-grid">
       <Summary label="当前员工档案" value={meta.total}/>
       <Summary label="在职员工" value={meta.active}/>
-      <Summary label="团队记录" value={meta.teams?.length||0}/>
+      <Summary label="当前团队" value={meta.schedule?.teams?.length||meta.teams?.length||0}/>
       <Summary label="未匹配团队" value={meta.no_team}/>
       <Summary label="待补正式ID" value={meta.official_id_pending}/>
     </div>
@@ -371,7 +393,7 @@ export default function AdminEmployeesPage(){
         <DataPageControls
           keyword={filters.keyword}
           onKeyword={v=>setFilters({...filters,keyword:v})}
-          placeholder="搜索员工ID / 姓名 / 工作账号 / TG / 组长 / 培训 / 盘口"
+          placeholder="搜索员工ID / 姓名 / 工作账号 / TG"
           pageSize={pageSize}
           onPageSize={setPageSize}
           right={<>
@@ -380,12 +402,12 @@ export default function AdminEmployeesPage(){
           </>}
         />
         {showFilters&&<div className="filter-grid employee-filter-grid">
-          <label>团队<select value={filters.team_id} onChange={e=>setFilters({...filters,team_id:e.target.value})}><option value="">全部</option>{meta.teams?.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
-          <label>岗位<select value={filters.position_id} onChange={e=>setFilters({...filters,position_id:e.target.value})}><option value="">全部</option>{meta.positions?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+          <label>团队<FilterCombo value={filters.team} options={meta.schedule?.teams||[]} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队" listId="employee-team-filter"/></label>
+          <label>岗位<FilterCombo value={filters.position} options={meta.schedule?.positions||[]} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位" listId="employee-position-filter"/></label>
           <label>国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部国家" listId="employee-country-filter"/></label>
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
-          <label>班次<FilterCombo value={filters.shift_name} options={meta.options?.shifts||[]} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次" listId="employee-shift-filter"/></label>
-          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人" listId="employee-leader-filter"/></label>
+          <label>班次<FilterCombo value={filters.shift_name} options={meta.schedule?.shifts?.length?meta.schedule.shifts:(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次" listId="employee-shift-filter"/></label>
+          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.schedule?.leaders?.length?meta.schedule.leaders:(meta.options?.leaders||[])} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人" listId="employee-leader-filter"/></label>
           <label>状态<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">全部</option><option value="active">在职</option><option value="inactive">停用</option><option value="resigned">离职</option></select></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
@@ -399,7 +421,7 @@ export default function AdminEmployeesPage(){
           <table className="data-table employee-master-table">
             <thead><tr><th>员工ID</th><th>姓名</th><th>国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=><tr key={r.id}>
-              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td>{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
+              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.schedule_live?.team||r.teams?.name||'-'}</td><td>{r.schedule_live?.leader||r.leader_name||'-'}</td><td>{r.schedule_live?.position||r.positions?.name||'-'}</td><td>{r.schedule_live?.shift||r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td>{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
               <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
               <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" onClick={()=>generateCode(r.employee_no)}>激活码</button>}</div></td>
@@ -411,16 +433,16 @@ export default function AdminEmployeesPage(){
     </>}
 
     {tab==='团队管理'&&<div className="data-card">
-      <div className="section-head"><div><h2>团队管理</h2><p>搜索团队 / 编码 / 国家。</p></div><span>{filteredTeams.length} 条</span></div>
-      <div className="inner-tools"><DataPageControls keyword={teamKeyword} onKeyword={v=>{setTeamKeyword(v);setTeamPage(1)}} placeholder="搜索团队 / 编码 / 国家" pageSize={teamPageSize} onPageSize={n=>{setTeamPageSize(n);setTeamPage(1)}}/></div>
-      <div className="table-scroll"><table className="data-table"><thead><tr><th>团队</th><th>编码</th><th>国家</th><th>状态</th></tr></thead><tbody>{teamSlice.map(t=><tr key={t.id}><td><strong>{t.name}</strong></td><td>{t.code||'-'}</td><td>{t.country||'-'}</td><td>{t.status||'-'}</td></tr>)}</tbody></table></div>
+      <div className="section-head"><div><h2>团队管理</h2></div><span>{filteredTeams.length} 条</span></div>
+      <div className="inner-tools"><DataPageControls keyword={teamKeyword} onKeyword={v=>{setTeamKeyword(v);setTeamPage(1)}} placeholder="搜索团队" pageSize={teamPageSize} onPageSize={n=>{setTeamPageSize(n);setTeamPage(1)}}/></div>
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>团队</th><th>当前人数</th><th>资料来源</th></tr></thead><tbody>{teamSlice.map(t=><tr key={t.id}><td><strong>{t.name}</strong></td><td>{t.count||0}</td><td><span className="live-source-chip">居家排班表</span></td></tr>)}</tbody></table></div>
       <Pagination page={teamPage} pages={teamPages} total={filteredTeams.length} pageSize={teamPageSize} loading={false} onPage={setTeamPage}/>
     </div>}
 
     {tab==='岗位管理'&&<div className="data-card">
       <div className="section-head"><div><h2>岗位管理</h2></div><span>{filteredPositions.length} 条</span></div>
-      <div className="inner-tools"><DataPageControls keyword={positionKeyword} onKeyword={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="搜索岗位 / 编码" pageSize={positionPageSize} onPageSize={n=>{setPositionPageSize(n);setPositionPage(1)}}/></div>
-      <div className="table-scroll"><table className="data-table"><thead><tr><th>岗位</th><th>编码</th><th>状态</th></tr></thead><tbody>{positionSlice.map(p=><tr key={p.id}><td><strong>{p.name}</strong></td><td>{p.code||'-'}</td><td>{p.status||'-'}</td></tr>)}</tbody></table></div>
+      <div className="inner-tools"><DataPageControls keyword={positionKeyword} onKeyword={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="搜索岗位" pageSize={positionPageSize} onPageSize={n=>{setPositionPageSize(n);setPositionPage(1)}}/></div>
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>岗位</th><th>当前人数</th><th>资料来源</th></tr></thead><tbody>{positionSlice.map(p=><tr key={p.id}><td><strong>{p.name}</strong></td><td>{p.count||0}</td><td><span className="live-source-chip">居家排班表</span></td></tr>)}</tbody></table></div>
       <Pagination page={positionPage} pages={positionPages} total={filteredPositions.length} pageSize={positionPageSize} loading={false} onPage={setPositionPage}/>
     </div>}
 
@@ -449,10 +471,11 @@ export default function AdminEmployeesPage(){
       <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize)}}/>
     </div>}
 
-    {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})}/>}
+    {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})} onCancelHire={()=>setCancelHireModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,confirm_text:''})}/>}
     {employeeModal&&<EmployeeFormModal state={employeeModal} setState={setEmployeeModal} meta={meta} onClose={()=>setEmployeeModal(null)} onSave={saveEmployee}/>}
     {resignModal&&<ResignModal state={resignModal} setState={setResignModal} onClose={()=>setResignModal(null)} onSave={submitResign}/>}
     {restoreModal&&<RestoreModal state={restoreModal} setState={setRestoreModal} onClose={()=>setRestoreModal(null)} onSave={submitRestore}/>}
+    {cancelHireModal&&<CancelHireModal state={cancelHireModal} setState={setCancelHireModal} onClose={()=>setCancelHireModal(null)} onSave={submitCancelHire}/>}
   </div>
 }
 
@@ -531,13 +554,12 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
     </FormSection>
 
     <FormSection title="组织与工作">
-      <Field label="岗位"><select value={e.position_id} onChange={x=>setEmployee('position_id',x.target.value)}><option value="">请选择</option>{meta.positions?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
-      <Field label="班次"><SelectValue value={e.shift_name} options={selectOptions(opts.shifts,e.shift_name)} onChange={v=>setEmployee('shift_name',v)}/></Field>
       <Field label="盘口岗位"><SelectValue value={e.market_position} options={selectOptions(platformOptions,e.market_position)} onChange={v=>setEmployee('market_position',v)}/></Field>
-      <Field label="团队 / 系列（自动）"><div className="readonly-choice">{derivedSeries||'选择盘口岗位后自动匹配'}</div></Field>
-      <Field label="盘口国家（自动）"><div className="readonly-choice">{derivedMarketCountry||'选择盘口岗位后自动匹配'}</div></Field>
+      <Field label="团队 / 系列"><div className="readonly-choice">{derivedSeries||'—'}</div></Field>
+      <Field label="盘口国家"><div className="readonly-choice">{derivedMarketCountry||'—'}</div></Field>
       <Field label="工作TG"><input value={e.work_tg} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
       <Field label="后台账号"><input value={e.backend_accounts} onChange={x=>setEmployee('backend_accounts',x.target.value)}/></Field>
+      <Field label="当前排班"><div className="readonly-choice live-assignment-note">岗位 / 班次由居家排班表同步</div></Field>
     </FormSection>
 
     {typeName(e.employment_type)==='现场转居家'&&<FormSection title="现场转居家资料">
@@ -591,7 +613,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
   </div></div>
 }
 
-function EmployeeDrawer({detail,loading,onClose,onEdit,onResign}){
+function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire}){
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
@@ -601,14 +623,18 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign}){
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
       <div className="employee-avatar">{text(e.full_name).slice(0,1).toUpperCase()||'E'}</div>
-      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span></div></div>
-      <div className="drawer-head-actions">{e.status!=='resigned'?<button className="danger-outline" onClick={onResign}>办理离职</button>:<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}<button className="edit-outline" onClick={onEdit}>编辑</button><button className="drawer-close" onClick={onClose}>×</button></div>
+      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.schedule_live?.team||e.teams?.name||'未匹配团队'}</span><span>{e.schedule_live?.position||e.positions?.name||'未设置岗位'}</span></div></div>
+      <div className="drawer-head-actions">
+        {e.status!=='resigned'?<button className="danger-outline" onClick={onResign}>办理离职</button>:<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
+        {detail.actions?.can_cancel_hire&&<button className="cancel-hire-outline" onClick={onCancelHire}>撤销入职</button>}
+        <button className="edit-outline" onClick={onEdit}>编辑</button><button className="drawer-close" onClick={onClose}>×</button>
+      </div>
     </div>
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <div className="detail-sections detail-sections-v11">
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
-        <InfoPanel title="组织与排班（排班表匹配）" rows={[['团队',e.teams?.name],['岗位',e.positions?.name],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
+        <InfoPanel title="组织与排班" rows={[['团队',e.schedule_live?.team||e.teams?.name],['岗位',e.schedule_live?.position||e.positions?.name],['班次',e.schedule_live?.shift||e.shift_name],['负责人 / 组长',e.schedule_live?.leader||e.leader_name],['培训老师',e.schedule_live?.trainer||e.trainer_name],['盘口',e.schedule_live?.platform||e.platform_scope],['工作内容',e.schedule_live?.work_content||e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
           ? (comp.base_salary!==null && comp.base_salary!==undefined && comp.base_salary!==''
@@ -639,6 +665,15 @@ function ResignModal({state,setState,onClose,onSave}){
       <label className="checkbox-row form-wide"><input type="checkbox" checked={state.disable_portal} onChange={e=>setState({...state,disable_portal:e.target.checked})}/><span>同时停用员工 Portal 登录账号（员工历史资料不会删除）</span></label>
     </div>
     <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="danger-action" onClick={onSave}>确认离职</button></div>
+  </div></div>
+}
+
+function CancelHireModal({state,setState,onClose,onSave}){
+  return <div className="modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
+    <div className="modal-head"><div><span className="modal-kicker">CANCEL NEW HIRE</span><h2>撤销入职</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
+    <div className="cancel-hire-warning"><strong>只用于录错资料或新人临时取消上班。</strong><span>确认后会移除当前员工档案与 TEST Google Sheet 记录。已经建立员工登录账号的人员不能直接撤销。</span></div>
+    <div className="form-grid"><Field label={`输入员工ID ${state.employee_no} 确认`} wide><input value={state.confirm_text||''} onChange={e=>setState({...state,confirm_text:e.target.value.toUpperCase()})}/></Field></div>
+    <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="danger-action" onClick={onSave}>确认撤销入职</button></div>
   </div></div>
 }
 
