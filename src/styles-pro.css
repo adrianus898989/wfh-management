@@ -376,3 +376,30 @@
 .history-date-range label{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:700;color:#6f7f96}
 .history-date-range .compact-date{min-width:132px}
 .salary-fixed-choice{font-variant-numeric:tabular-nums;font-weight:800}
+
+.row-action.restore-action,
+.restore-outline{
+  border:1px solid #b7c8e7;
+  background:#fff;
+  color:#315b9a;
+  border-radius:8px;
+  padding:7px 10px;
+  font-weight:700;
+  cursor:pointer;
+}
+.row-action.restore-action:hover,
+.restore-outline:hover{
+  background:#f1f6ff;
+}
+.restore-confirm-copy{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  margin:4px 0 16px;
+  padding:14px 16px;
+  border:1px solid #d9e3f2;
+  background:#f7faff;
+  border-radius:10px;
+}
+.restore-confirm-copy strong{font-size:14px;color:#20334f}
+.restore-confirm-copy span{font-size:11px;line-height:1.6;color:#74849b}

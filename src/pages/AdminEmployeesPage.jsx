@@ -49,6 +49,12 @@ function defaultPaymentMode(type){
 function isPhpHome(type){
   return typeName(type)==='纯居家菲律宾'
 }
+function isOnsiteToHome(type){
+  return typeName(type)==='现场转居家'
+}
+function isOtherPureHome(type){
+  return typeName(type)==='纯居家（越南/缅甸/印尼等）'
+}
 
 function defaultCurrency(type){
   return isPhpHome(type)?'PHP':'USD'
@@ -147,6 +153,7 @@ export default function AdminEmployeesPage(){
   const [detailLoading,setDetailLoading]=useState(false)
   const [employeeModal,setEmployeeModal]=useState(null) // {mode,employee_id,form}
   const [resignModal,setResignModal]=useState(null)
+  const [restoreModal,setRestoreModal]=useState(null)
 
   const [history,setHistory]=useState([])
   const [historyTotal,setHistoryTotal]=useState(0)
@@ -211,6 +218,15 @@ export default function AdminEmployeesPage(){
     const t=setTimeout(()=>{ setHistoryPage(1); loadHistory(1,historyPageSize) },220)
     return()=>clearTimeout(t)
   },[tab,JSON.stringify(historyFilters)])
+
+  useEffect(()=>{
+    const handler=e=>{
+      const d=e.detail||{}
+      setRestoreModal({employee_id:d.employee_id,employee_no:d.employee_no,full_name:d.full_name,restore_portal:true})
+    }
+    window.addEventListener('wfh-restore-employee',handler)
+    return()=>window.removeEventListener('wfh-restore-employee',handler)
+  },[])
 
   const setTab=v=>{
     setTabState(v)
@@ -284,6 +300,21 @@ export default function AdminEmployeesPage(){
     }catch(e){ setError(e.message) }
   }
 
+  const submitRestore=async()=>{
+    if(!restoreModal?.employee_id) return
+    try{
+      const data=await invoke({
+        action:'undo_resignation',
+        employee_id:restoreModal.employee_id,
+        restore_portal:restoreModal.restore_portal!==false,
+      })
+      setRestoreModal(null)
+      setSelected(null)
+      await Promise.all([loadMeta(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      if(data?.sync?.skipped) setError('已恢复在职；Google Sheet 双向同步尚未完成配置。')
+    }catch(e){ setError(e.message) }
+  }
+
   const generateCode=async employeeNo=>{
     setGenerated(null); setError('')
     const {data,error}=await supabase.rpc('generate_employee_activation_code',{p_employee_no:employeeNo,p_valid_hours:72})
@@ -307,7 +338,7 @@ export default function AdminEmployeesPage(){
 
   const filteredPositions=useMemo(()=>{
     const q=positionKeyword.trim().toLowerCase()
-    return (meta.positions||[]).filter(p=>!q||[p.name,p.code,p.currency].some(v=>text(v).toLowerCase().includes(q)))
+    return (meta.positions||[]).filter(p=>!q||[p.name,p.code].some(v=>text(v).toLowerCase().includes(q)))
   },[meta.positions,positionKeyword])
   const positionPages=Math.max(1,Math.ceil(filteredPositions.length/positionPageSize))
   const positionSlice=filteredPositions.slice((positionPage-1)*positionPageSize,positionPage*positionPageSize)
@@ -317,7 +348,6 @@ export default function AdminEmployeesPage(){
       <div>
         <div className="module-kicker">PEOPLE & ORGANIZATION</div>
         <h1>员工管理</h1>
-        <p className="page-subtitle">员工档案、工资设置、离职记录和 Google Sheet 同步使用同一个员工 ID。</p>
       </div>
       {tab==='员工档案'&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
     </div>
@@ -352,10 +382,10 @@ export default function AdminEmployeesPage(){
         {showFilters&&<div className="filter-grid employee-filter-grid">
           <label>团队<select value={filters.team_id} onChange={e=>setFilters({...filters,team_id:e.target.value})}><option value="">全部</option>{meta.teams?.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
           <label>岗位<select value={filters.position_id} onChange={e=>setFilters({...filters,position_id:e.target.value})}><option value="">全部</option>{meta.positions?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-          <label>国家<input value={filters.country} onChange={e=>setFilters({...filters,country:e.target.value})} placeholder="例如 菲律宾"/></label>
-          <label>员工类型<input value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})} placeholder="例如 纯居家菲律宾"/></label>
-          <label>班次<input value={filters.shift_name} onChange={e=>setFilters({...filters,shift_name:e.target.value})} placeholder="例如 白班 Day"/></label>
-          <label>组长 / 负责人<input value={filters.leader} onChange={e=>setFilters({...filters,leader:e.target.value})} placeholder="输入姓名"/></label>
+          <label>国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部国家" listId="employee-country-filter"/></label>
+          <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
+          <label>班次<FilterCombo value={filters.shift_name} options={meta.options?.shifts||[]} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次" listId="employee-shift-filter"/></label>
+          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人" listId="employee-leader-filter"/></label>
           <label>状态<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">全部</option><option value="active">在职</option><option value="inactive">停用</option><option value="resigned">离职</option></select></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
@@ -388,14 +418,14 @@ export default function AdminEmployeesPage(){
     </div>}
 
     {tab==='岗位管理'&&<div className="data-card">
-      <div className="section-head"><div><h2>岗位管理</h2><p>搜索岗位 / 编码 / 币种。</p></div><span>{filteredPositions.length} 条</span></div>
-      <div className="inner-tools"><DataPageControls keyword={positionKeyword} onKeyword={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="搜索岗位 / 编码 / 币种" pageSize={positionPageSize} onPageSize={n=>{setPositionPageSize(n);setPositionPage(1)}}/></div>
-      <div className="table-scroll"><table className="data-table"><thead><tr><th>岗位</th><th>编码</th><th>工资封顶</th><th>币种</th><th>状态</th></tr></thead><tbody>{positionSlice.map(p=><tr key={p.id}><td><strong>{p.name}</strong></td><td>{p.code||'-'}</td><td>{p.salary_cap??'-'}</td><td>{p.currency||'-'}</td><td>{p.status||'-'}</td></tr>)}</tbody></table></div>
+      <div className="section-head"><div><h2>岗位管理</h2></div><span>{filteredPositions.length} 条</span></div>
+      <div className="inner-tools"><DataPageControls keyword={positionKeyword} onKeyword={v=>{setPositionKeyword(v);setPositionPage(1)}} placeholder="搜索岗位 / 编码" pageSize={positionPageSize} onPageSize={n=>{setPositionPageSize(n);setPositionPage(1)}}/></div>
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>岗位</th><th>编码</th><th>状态</th></tr></thead><tbody>{positionSlice.map(p=><tr key={p.id}><td><strong>{p.name}</strong></td><td>{p.code||'-'}</td><td>{p.status||'-'}</td></tr>)}</tbody></table></div>
       <Pagination page={positionPage} pages={positionPages} total={filteredPositions.length} pageSize={positionPageSize} loading={false} onPage={setPositionPage}/>
     </div>}
 
     {tab==='离职记录'&&<div className="data-card">
-      <div className="section-head"><div><h2>离职记录</h2><p>这里只显示离职员工；在职与新入职员工统一在「员工档案」查看。</p></div><span>{historyTotal} 人</span></div>
+      <div className="section-head"><div><h2>离职记录</h2></div><span>{historyTotal} 人</span></div>
       <div className="inner-tools history-tools">
         <DataPageControls
           keyword={historyFilters.keyword}
@@ -410,10 +440,10 @@ export default function AdminEmployeesPage(){
         />
       </div>
       {historyLoading?<div className="empty-state">读取离职记录...</div>:<div className="table-scroll"><table className="data-table lifecycle-table">
-        <thead><tr><th>离职日期</th><th>操作时间</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>岗位</th><th>离职原因</th><th>来源</th></tr></thead>
+        <thead><tr><th>离职日期</th><th>操作时间</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作</th></tr></thead>
         <tbody>{history.map(r=>{
           const s=r.snapshot||{}
-          return <tr key={r.id}><td>{r.effective_date||'—'}</td><td>{formatDateTime(r.created_at)}</td><td><strong>{r.employee_no}</strong></td><td>{r.full_name||'-'}</td><td>{r.employee_type||s.employment_type||'-'}</td><td>{r.employee_country||s.country||'-'}</td><td>{r.position_name||s.position||'-'}</td><td>{r.reason||'-'}</td><td>{r.source_sheet||r.source||'-'}</td></tr>
+          return <tr key={r.id}><td>{r.effective_date||'—'}</td><td>{formatDateTime(r.created_at)}</td><td><strong>{r.employee_no}</strong></td><td>{r.full_name||'-'}</td><td>{r.employee_type||s.employment_type||'-'}</td><td>{r.employee_country||s.country||'-'}</td><td>{r.position_name||s.position||'-'}</td><td>{r.reason||'-'}</td><td>{r.source_sheet||r.source||'-'}</td><td><button className="row-action restore-action" onClick={()=>setRestoreModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,restore_portal:true})}>恢复在职</button></td></tr>
         })}</tbody>
       </table></div>}
       <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize)}}/>
@@ -422,6 +452,7 @@ export default function AdminEmployeesPage(){
     {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})}/>}
     {employeeModal&&<EmployeeFormModal state={employeeModal} setState={setEmployeeModal} meta={meta} onClose={()=>setEmployeeModal(null)} onSave={saveEmployee}/>}
     {resignModal&&<ResignModal state={resignModal} setState={setResignModal} onClose={()=>setResignModal(null)} onSave={submitResign}/>}
+    {restoreModal&&<RestoreModal state={restoreModal} setState={setRestoreModal} onClose={()=>setRestoreModal(null)} onSave={submitRestore}/>}
   </div>
 }
 
@@ -499,10 +530,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
       <Field label="入职日期"><input type="date" value={e.hire_date} onChange={x=>setEmployee('hire_date',x.target.value)}/></Field>
     </FormSection>
 
-    <FormSection
-      title="组织与工作"
-      subtitle="盘口岗位、系列和盘口国家直接读取《居家排班表》W:Y 映射；新增站点后重新打开页面即可出现。负责人、线上组长、培训老师和工作内容仍按员工 ID 从排班表匹配。"
-    >
+    <FormSection title="组织与工作">
       <Field label="岗位"><select value={e.position_id} onChange={x=>setEmployee('position_id',x.target.value)}><option value="">请选择</option>{meta.positions?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
       <Field label="班次"><SelectValue value={e.shift_name} options={selectOptions(opts.shifts,e.shift_name)} onChange={v=>setEmployee('shift_name',v)}/></Field>
       <Field label="盘口岗位"><SelectValue value={e.market_position} options={selectOptions(platformOptions,e.market_position)} onChange={v=>setEmployee('market_position',v)}/></Field>
@@ -526,12 +554,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
       <Field label="WhatsApp / 手机"><input value={f.contact.whatsapp_phone} onChange={x=>setContact('whatsapp_phone',x.target.value)}/></Field>
     </FormSection>
 
-    {e.employment_type&&<FormSection
-      title="工资设置"
-      subtitle={phpHome
-        ? '纯居家菲律宾只有一种工资方式：月薪制 25,000 PHP 或日薪制 970 PHP，二选一；无绩效、无餐补。工资从入职日期开始。'
-        : 'USD 工资基线；工资从入职日期开始。'}
-    >
+    {e.employment_type&&<FormSection title="工资设置">
       {phpHome?<>
         <Field label="PHP 工资方式">
           <select value={f.compensation.salary_basis||phpSalaryBasis(f.compensation)} onChange={x=>setPhpSalaryBasis(x.target.value)}>
@@ -540,22 +563,17 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
             <option value="daily">日薪制 · 970 PHP / 天</option>
           </select>
         </Field>
-        {(f.compensation.salary_basis||phpSalaryBasis(f.compensation))&&
-          <Field label="当前工资标准"><div className="readonly-choice salary-fixed-choice">{(f.compensation.salary_basis||phpSalaryBasis(f.compensation))==='monthly'?'25,000 PHP / 月':'970 PHP / 天'}</div></Field>}
         {!f.compensation.salary_basis && f.compensation.base_salary && f.compensation.daily_rate &&
-          <Field label="旧资料状态" wide><div className="salary-warning">旧数据同时存在月薪和日薪，请选择员工实际采用的工资方式后再保存。</div></Field>}
+          <Field label="旧资料状态" wide><div className="salary-warning">旧资料同时有月薪和日薪，请选择实际工资方式后保存。</div></Field>}
       </>:<>
         <Field label="底薪（USD）"><input type="number" step="0.01" value={f.compensation.base_salary} onChange={x=>setComp('base_salary',x.target.value)}/></Field>
         <Field label="默认绩效（USD）"><input type="number" step="0.01" value={f.compensation.performance_default} onChange={x=>setComp('performance_default',x.target.value)}/></Field>
-        <Field label="餐补（USD）"><input type="number" step="0.01" value={f.compensation.meal_allowance} onChange={x=>setComp('meal_allowance',x.target.value)}/></Field>
+        {isOnsiteToHome(e.employment_type)&&<Field label="餐补（USD）"><input type="number" step="0.01" value={f.compensation.meal_allowance} onChange={x=>setComp('meal_allowance',x.target.value)}/></Field>}
       </>}
       <Field label="备注" wide><input value={f.compensation.note} onChange={x=>setComp('note',x.target.value)}/></Field>
     </FormSection>}
 
-    {e.employment_type&&<FormSection
-      title="收款资料"
-      subtitle={paymentMode==='usdt'?'当前员工类型自动使用 USDT。':'当前员工类型自动使用银行卡 / 钱包。'}
-    >
+    {e.employment_type&&<FormSection title="收款资料">
       <Field label="收款方式"><div className="readonly-choice">{paymentMode==='usdt'?'USDT':'银行卡 / 钱包'}</div></Field>
       {paymentMode==='usdt'?<>
         <Field label="USDT 地址" wide><input value={f.payment.usdt_address} onChange={x=>setPayment('usdt_address',x.target.value)}/></Field>
@@ -584,7 +602,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign}){
     <div className="employee-hero">
       <div className="employee-avatar">{text(e.full_name).slice(0,1).toUpperCase()||'E'}</div>
       <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span></div></div>
-      <div className="drawer-head-actions">{e.status!=='resigned'&&<button className="danger-outline" onClick={onResign}>办理离职</button>}<button className="edit-outline" onClick={onEdit}>编辑</button><button className="drawer-close" onClick={onClose}>×</button></div>
+      <div className="drawer-head-actions">{e.status!=='resigned'?<button className="danger-outline" onClick={onResign}>办理离职</button>:<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}<button className="edit-outline" onClick={onEdit}>编辑</button><button className="drawer-close" onClick={onClose}>×</button></div>
     </div>
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
@@ -593,12 +611,14 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign}){
         <InfoPanel title="组织与排班（排班表匹配）" rows={[['团队',e.teams?.name],['岗位',e.positions?.name],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
-          ? (comp.base_salary && !comp.daily_rate
+          ? (comp.base_salary!==null && comp.base_salary!==undefined && comp.base_salary!==''
               ? [['工资方式','月薪制'],['月薪',money(comp.base_salary,'PHP')],['备注',comp.note]]
-              : comp.daily_rate && !comp.base_salary
+              : comp.daily_rate!==null && comp.daily_rate!==undefined && comp.daily_rate!==''
                 ? [['工资方式','日薪制'],['日薪',money(comp.daily_rate,'PHP')],['备注',comp.note]]
-                : [['工资方式','待确认'],['旧月薪资料',money(comp.base_salary,'PHP')],['旧日薪资料',money(comp.daily_rate,'PHP')],['备注',comp.note]])
-          : [['底薪',money(comp.base_salary,'USD')],['默认绩效',money(comp.performance_default,'USD')],['餐补',money(comp.meal_allowance,'USD')],['备注',comp.note]]
+                : [['工资方式','待确认'],['备注',comp.note]])
+          : isOnsiteToHome(e.employment_type)
+            ? [['底薪',money(comp.base_salary,'USD')],['默认绩效',money(comp.performance_default,'USD')],['餐补',money(comp.meal_allowance,'USD')],['备注',comp.note]]
+            : [['底薪',money(comp.base_salary,'USD')],['默认绩效',money(comp.performance_default,'USD')],['备注',comp.note]]
         }/>
         <section className="detail-panel payment-panel-v11">
           <div className="detail-panel-head"><div><h3>{paymentTitle}</h3><p>{full?'你有敏感资料查看权限，显示完整值。':'完整号码不下发到浏览器，仅显示首尾，中间 **** 隐藏。'}</p></div><span className={full?'access-full':'access-masked'}>{full?'完整可见':'部分隐藏'}</span></div>
@@ -622,11 +642,30 @@ function ResignModal({state,setState,onClose,onSave}){
   </div></div>
 }
 
+function RestoreModal({state,setState,onClose,onSave}){
+  return <div className="modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
+    <div className="modal-head"><div><span className="modal-kicker">RESTORE EMPLOYEE</span><h2>恢复在职</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
+    <div className="restore-confirm-copy">
+      <strong>撤销这次离职记录？</strong>
+      <span>员工会恢复为在职，离职日期与离职原因会从当前 TEST Google Sheet 清除。</span>
+    </div>
+    <label className="checkbox-row"><input type="checkbox" checked={state.restore_portal!==false} onChange={e=>setState({...state,restore_portal:e.target.checked})}/><span>如有员工 Portal，同时恢复登录</span></label>
+    <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" onClick={onSave}>确认恢复</button></div>
+  </div></div>
+}
+
 function SelectValue({value,options,onChange}){
   return <select value={value||''} onChange={e=>onChange(e.target.value)}>
     <option value="">请选择</option>
     {(options||[]).map(x=><option key={x} value={x}>{x}</option>)}
   </select>
+}
+
+function FilterCombo({value,options,onChange,placeholder,listId}){
+  return <>
+    <input list={listId} value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder||'全部'}/>
+    <datalist id={listId}>{(options||[]).map(x=><option key={x} value={x}/>)}</datalist>
+  </>
 }
 
 function FormSection({title,subtitle,children}){ return <section className="employee-form-section"><div className="employee-form-section-head"><h3>{title}</h3>{subtitle&&<p>{subtitle}</p>}</div><div className="employee-form-grid">{children}</div></section> }
