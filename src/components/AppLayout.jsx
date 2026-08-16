@@ -10,7 +10,7 @@ const ADMIN_NAV = [
     ['员工档案', `/admin/employees?tab=${enc('员工档案')}`],
     ['团队管理', `/admin/employees?tab=${enc('团队管理')}`],
     ['岗位管理', `/admin/employees?tab=${enc('岗位管理')}`],
-    ['入离职记录', `/admin/employees?tab=${enc('入离职记录')}`],
+    ['离职记录', `/admin/employees?tab=${enc('离职记录')}`],
   ]},
   { to:'/admin/schedule', label:'排班与考勤', icon:'班', children:[
     ['排班表', `/admin/schedule?tab=${enc('排班表')}`],
