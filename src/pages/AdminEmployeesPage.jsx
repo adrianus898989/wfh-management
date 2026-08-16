@@ -6,17 +6,29 @@ import { DataPageControls, Pagination } from '../components/DataPageControls'
 const text = v => String(v ?? '').trim()
 const statusName = s => ({active:'在职',inactive:'停用',resigned:'离职'}[s] || s || '-')
 const typeOptions = [
-  '纯居家菲律宾','纯居家印尼','纯居家越南','纯居家缅甸','纯居家马来',
-  '现场转居家','现场人员','排班补录'
+  '纯居家菲律宾',
+  '现场转居家',
+  '纯居家（越南/缅甸/印尼等）'
 ]
-const legacyType = {home_ph:'纯居家菲律宾',onsite_to_home:'现场转居家',home_vn:'纯居家越南',home_id:'纯居家印尼',home_mm:'纯居家缅甸'}
+const legacyType = {
+  home_ph:'纯居家菲律宾',
+  onsite_to_home:'现场转居家',
+  home_vn:'纯居家（越南/缅甸/印尼等）',
+  home_id:'纯居家（越南/缅甸/印尼等）',
+  home_mm:'纯居家（越南/缅甸/印尼等）',
+  '纯居家越南':'纯居家（越南/缅甸/印尼等）',
+  '纯居家印尼':'纯居家（越南/缅甸/印尼等）',
+  '纯居家缅甸':'纯居家（越南/缅甸/印尼等）',
+  '纯居家马来':'纯居家（越南/缅甸/印尼等）',
+  '纯居家马来西亚':'纯居家（越南/缅甸/印尼等）',
+}
 const typeName = v => legacyType[text(v)] || text(v) || '-'
 const eventLabel = v => ({join:'入职',resign:'离职',reactivate:'复职',profile_update:'资料修改'}[v] || v || '-')
 
 function defaultPaymentMode(type){
   const t=typeName(type)
   if(t==='现场转居家') return 'usdt'
-  if(['纯居家印尼','纯居家越南','纯居家缅甸','纯居家马来','纯居家马来西亚'].includes(t)) return 'usdt'
+  if(t==='纯居家（越南/缅甸/印尼等）') return 'usdt'
   if(t==='纯居家菲律宾') return 'bank_wallet'
   return ''
 }
@@ -27,6 +39,14 @@ function isPhpHome(type){
 
 function defaultCurrency(type){
   return isPhpHome(type)?'PHP':'USD'
+}
+
+function phpSalaryBasis(comp){
+  const hasMonthly = text(comp?.base_salary) !== ''
+  const hasDaily = text(comp?.daily_rate) !== ''
+  if(hasMonthly && !hasDaily) return 'monthly'
+  if(hasDaily && !hasMonthly) return 'daily'
+  return ''
 }
 
 function mergeOptions(options,current){
@@ -44,7 +64,7 @@ function emptyForm(){
       work_tg:'',backend_accounts:'',hire_date:'',last_location:'',return_date:'',home_date:'',
     },
     contact:{work_email:'',telegram_username:'',zoom_email:'',facebook:'',whatsapp_phone:''},
-    compensation:{base_salary:'',daily_rate:'',performance_default:'',meal_allowance:'',currency:'USD',note:''},
+    compensation:{base_salary:'',daily_rate:'',performance_default:'',meal_allowance:'',currency:'USD',note:'',salary_basis:''},
     payment:{mode:'unknown',transfer_using:'',bank_wallet_account:'',account_name:'',usdt_address:'',contact_phone:'',whatsapp_number:'',employee_address:''},
   }
 }
@@ -71,6 +91,7 @@ function bundleToForm(detail){
     compensation:{
       base_salary:comp.base_salary??'',daily_rate:comp.daily_rate??'',performance_default:comp.performance_default??'',meal_allowance:comp.meal_allowance??'',
       currency:comp.currency||defaultCurrency(e.employment_type),note:comp.note||'',
+      salary_basis:isPhpHome(e.employment_type)?phpSalaryBasis(comp):'',
     },
     payment:{
       mode:p.mode||defaultPaymentMode(e.employment_type),
@@ -407,14 +428,19 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
         compensation={
           ...compensation,
           currency:'PHP',
-          base_salary:compensation.base_salary||'25000',
-          daily_rate:compensation.daily_rate||'970',
+          base_salary:'',
+          daily_rate:'',
+          salary_basis:'',
           performance_default:'',
           meal_allowance:'',
         }
       }else{
-        compensation={...compensation,currency:'USD',daily_rate:''}
+        compensation={...compensation,currency:'USD',daily_rate:'',salary_basis:''}
       }
+    }
+
+    if(k==='country'){
+      next.nationality=v
     }
 
     setState({...state,form:{...f,employee:next,payment,compensation}})
@@ -422,6 +448,14 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
 
   const setContact=(k,v)=>setState({...state,form:{...f,contact:{...f.contact,[k]:v}}})
   const setComp=(k,v)=>setState({...state,form:{...f,compensation:{...f.compensation,[k]:v}}})
+  const setPhpSalaryBasis=(basis)=>{
+    const compensation = basis==='monthly'
+      ? {...f.compensation,salary_basis:'monthly',currency:'PHP',base_salary:'25000',daily_rate:'',performance_default:'',meal_allowance:''}
+      : basis==='daily'
+        ? {...f.compensation,salary_basis:'daily',currency:'PHP',base_salary:'',daily_rate:'970',performance_default:'',meal_allowance:''}
+        : {...f.compensation,salary_basis:'',currency:'PHP',base_salary:'',daily_rate:'',performance_default:'',meal_allowance:''}
+    setState({...state,form:{...f,compensation}})
+  }
   const setPayment=(k,v)=>setState({...state,form:{...f,payment:{...f.payment,[k]:v}}})
 
   const opts=meta.options||{}
@@ -433,25 +467,22 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
     <FormSection title="基本资料">
       <Field label="员工ID"><input disabled={state.mode==='edit'} value={e.employee_no} onChange={x=>setEmployee('employee_no',x.target.value.toUpperCase())}/></Field>
       <Field label="姓名"><input value={e.full_name} onChange={x=>setEmployee('full_name',x.target.value)}/></Field>
-      <Field label="国家"><SelectValue value={e.country} options={selectOptions(opts.countries,e.country)} onChange={v=>setEmployee('country',v)}/></Field>
-      <Field label="国籍"><SelectValue value={e.nationality} options={selectOptions(opts.nationalities,e.nationality)} onChange={v=>setEmployee('nationality',v)}/></Field>
-      <Field label="员工类型"><SelectValue value={e.employment_type} options={selectOptions(typeOptions,e.employment_type)} onChange={v=>setEmployee('employment_type',v)}/></Field>
+      <Field label="员工国家"><SelectValue value={e.country} options={selectOptions(opts.countries,e.country)} onChange={v=>setEmployee('country',v)}/></Field>
+      <Field label="员工类型"><SelectValue value={typeName(e.employment_type)==='纯居家（越南/缅甸/印尼等）'?'纯居家（越南/缅甸/印尼等）':e.employment_type} options={selectOptions(typeOptions,typeName(e.employment_type))} onChange={v=>setEmployee('employment_type',v)}/></Field>
       <Field label="入职日期"><input type="date" value={e.hire_date} onChange={x=>setEmployee('hire_date',x.target.value)}/></Field>
     </FormSection>
 
-    <FormSection title="组织与工作">
+    <FormSection
+      title="组织与工作"
+      subtitle="这里只填写员工主档需要的资料。组别、负责人、线上组长、培训老师、实际盘口与工作内容由《居家排班表》按员工 ID 匹配，不在这里重复填写。"
+    >
       <Field label="团队"><select value={e.team_id} onChange={x=>setEmployee('team_id',x.target.value)}><option value="">请选择</option>{meta.teams?.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>
       <Field label="岗位"><select value={e.position_id} onChange={x=>setEmployee('position_id',x.target.value)}><option value="">请选择</option>{meta.positions?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
       <Field label="班次"><SelectValue value={e.shift_name} options={selectOptions(opts.shifts,e.shift_name)} onChange={v=>setEmployee('shift_name',v)}/></Field>
-      <Field label="组别"><SelectValue value={e.group_name} options={selectOptions(opts.groups,e.group_name)} onChange={v=>setEmployee('group_name',v)}/></Field>
-      <Field label="组长 / 负责人"><SelectValue value={e.leader_name} options={selectOptions(opts.leaders,e.leader_name)} onChange={v=>setEmployee('leader_name',v)}/></Field>
-      <Field label="培训老师"><SelectValue value={e.trainer_name} options={selectOptions(opts.trainers,e.trainer_name)} onChange={v=>setEmployee('trainer_name',v)}/></Field>
       <Field label="盘口国家"><SelectValue value={e.market_country} options={selectOptions(opts.market_countries,e.market_country)} onChange={v=>setEmployee('market_country',v)}/></Field>
       <Field label="盘口岗位"><SelectValue value={e.market_position} options={selectOptions(opts.market_positions,e.market_position)} onChange={v=>setEmployee('market_position',v)}/></Field>
-      <Field label="盘口 / 平台"><SelectValue value={e.platform_scope} options={selectOptions(opts.platforms,e.platform_scope)} onChange={v=>setEmployee('platform_scope',v)}/></Field>
       <Field label="工作TG"><input value={e.work_tg} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
       <Field label="后台账号"><input value={e.backend_accounts} onChange={x=>setEmployee('backend_accounts',x.target.value)}/></Field>
-      <Field label="工作内容" wide><textarea value={e.work_content} onChange={x=>setEmployee('work_content',x.target.value)}/></Field>
     </FormSection>
 
     {typeName(e.employment_type)==='现场转居家'&&<FormSection title="现场转居家资料">
@@ -471,12 +502,23 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
     {e.employment_type&&<FormSection
       title="工资设置"
       subtitle={phpHome
-        ? '纯居家菲律宾：PHP 月薪 + 日薪规则；无绩效、无餐补。工资起算日直接使用员工入职日期。'
-        : 'USD 工资基线；工资起算日直接使用员工入职日期。'}
+        ? '纯居家菲律宾只有一种工资方式：月薪制 25,000 PHP 或日薪制 970 PHP，二选一；无绩效、无餐补。工资从入职日期开始。'
+        : 'USD 工资基线；工资从入职日期开始。'}
     >
       {phpHome?<>
-        <Field label="月薪（PHP）"><input type="number" step="0.01" value={f.compensation.base_salary||'25000'} onChange={x=>setComp('base_salary',x.target.value)}/></Field>
-        <Field label="日薪（PHP）"><input type="number" step="0.01" value={f.compensation.daily_rate||'970'} onChange={x=>setComp('daily_rate',x.target.value)}/></Field>
+        <Field label="PHP 工资方式">
+          <select value={f.compensation.salary_basis||phpSalaryBasis(f.compensation)} onChange={x=>setPhpSalaryBasis(x.target.value)}>
+            <option value="">请选择</option>
+            <option value="monthly">月薪制 · 25,000 PHP / 月</option>
+            <option value="daily">日薪制 · 970 PHP / 天</option>
+          </select>
+        </Field>
+        {(f.compensation.salary_basis||phpSalaryBasis(f.compensation))==='monthly'&&
+          <Field label="月薪（PHP）"><input type="number" step="0.01" value={f.compensation.base_salary||'25000'} onChange={x=>setComp('base_salary',x.target.value)}/></Field>}
+        {(f.compensation.salary_basis||phpSalaryBasis(f.compensation))==='daily'&&
+          <Field label="日薪（PHP）"><input type="number" step="0.01" value={f.compensation.daily_rate||'970'} onChange={x=>setComp('daily_rate',x.target.value)}/></Field>}
+        {!f.compensation.salary_basis && f.compensation.base_salary && f.compensation.daily_rate &&
+          <Field label="旧资料状态" wide><div className="salary-warning">旧数据同时存在月薪和日薪，请选择员工实际采用的工资方式后再保存。</div></Field>}
       </>:<>
         <Field label="底薪（USD）"><input type="number" step="0.01" value={f.compensation.base_salary} onChange={x=>setComp('base_salary',x.target.value)}/></Field>
         <Field label="默认绩效（USD）"><input type="number" step="0.01" value={f.compensation.performance_default} onChange={x=>setComp('performance_default',x.target.value)}/></Field>
@@ -522,11 +564,15 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign}){
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <div className="detail-sections detail-sections-v11">
-        <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['国家',e.country],['国籍',e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
-        <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['岗位',e.positions?.name],['班次',e.shift_name],['组别',e.group_name],['组长 / 负责人',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
+        <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
+        <InfoPanel title="组织与排班（排班表匹配）" rows={[['团队',e.teams?.name],['岗位',e.positions?.name],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
-          ? [['月薪',money(comp.base_salary,'PHP')],['日薪',money(comp.daily_rate,'PHP')],['备注',comp.note]]
+          ? (comp.base_salary && !comp.daily_rate
+              ? [['工资方式','月薪制'],['月薪',money(comp.base_salary,'PHP')],['备注',comp.note]]
+              : comp.daily_rate && !comp.base_salary
+                ? [['工资方式','日薪制'],['日薪',money(comp.daily_rate,'PHP')],['备注',comp.note]]
+                : [['工资方式','待确认'],['旧月薪资料',money(comp.base_salary,'PHP')],['旧日薪资料',money(comp.daily_rate,'PHP')],['备注',comp.note]])
           : [['底薪',money(comp.base_salary,'USD')],['默认绩效',money(comp.performance_default,'USD')],['餐补',money(comp.meal_allowance,'USD')],['备注',comp.note]]
         }/>
         <section className="detail-panel payment-panel-v11">

@@ -359,3 +359,15 @@
   font-size:11px;
   font-weight:750;
 }
+
+.salary-warning{
+  width:100%;
+  padding:11px 12px;
+  border:1px solid #efd3a7;
+  border-radius:9px;
+  background:#fff8ed;
+  color:#9b652b;
+  font-size:10px;
+  font-weight:700;
+  line-height:1.55;
+}
