@@ -510,3 +510,102 @@
   .mini-flow-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .trend-bars-body{gap:3px}
 }
+
+
+/* ===== Employee Module V20 — clean archive / compact analytics / resignation ops ===== */
+.pro-employee-page{padding-bottom:26px}
+.archive-compact-head{
+  display:flex;align-items:center;justify-content:space-between;
+  margin:0 0 10px;padding:0 2px;
+}
+.archive-compact-head h2{margin:0;color:#243850;font-size:15px}
+.archive-compact-head span{display:block;margin-top:4px;color:#8a99ab;font-size:9px;font-weight:650}
+.archive-filter-card{margin-bottom:10px}
+.archive-filter-card .data-page-search{height:40px}
+.archive-filter-card .filter-grid{padding-top:12px;padding-bottom:12px}
+
+.people-analysis-title{margin-top:2px}
+.people-analysis-kpis{margin-bottom:12px}
+.people-analysis-layout{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
+.people-analysis-main{
+  display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,.72fr);gap:12px;
+}
+.people-analysis-breakdowns{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;
+}
+.people-analysis-layout .analysis-overview-card{padding:14px 15px}
+.people-analysis-layout .analysis-card-head{margin-bottom:10px}
+.compact-trend-card{min-height:260px}
+.compact-trend-card .trend-bars{min-height:190px;height:190px}
+.compact-trend-card .trend-bars-body{min-height:160px}
+.country-card-pro{min-height:260px}
+.country-card-pro .country-analysis-row{padding:7px 0}
+.people-analysis-breakdowns .analysis-overview-card{min-height:250px}
+.people-analysis-breakdowns .ratio-list{gap:8px}
+.people-analysis-breakdowns .ratio-track{height:6px}
+.people-analysis-layout .analysis-overview-card.trend-card{grid-row:auto}
+.people-analysis-layout .trend-day>span{font-size:7px}
+.people-analysis-layout .trend-columns i{max-width:7px}
+
+.resignation-card-pro{overflow:hidden}
+.resignation-section-head{padding:14px 16px 12px}
+.resignation-section-head h2{font-size:15px}
+.resignation-section-head p{margin:4px 0 0;color:#8b99aa;font-size:9px;font-weight:500}
+.history-tools-pro{padding:11px 16px;background:#fbfcfe}
+.history-tools-pro .data-page-controls{justify-content:space-between;gap:12px}
+.history-tools-pro .data-page-search{
+  flex:0 1 520px;max-width:520px;min-width:300px;height:40px;background:#fff;
+}
+.history-tools-pro .data-page-control-right{flex:1;justify-content:flex-end;align-items:center}
+.history-tools-pro .page-size-control{height:38px}
+.history-date-range{align-items:center}
+.history-date-range label{gap:4px}
+.history-date-range label>span{font-size:8px;color:#8b99aa;text-transform:uppercase;letter-spacing:.04em}
+.date-pair{
+  height:38px;display:flex;align-items:center;gap:5px;padding:0 6px;
+  border:1px solid #d9e2ec;border-radius:9px;background:#fff;
+}
+.date-pair b{font-weight:500;color:#a4afbc}
+.history-date-range .compact-date{
+  min-width:118px;width:118px;height:32px;border:0!important;background:transparent!important;padding:0 5px!important;
+  box-shadow:none!important;font-size:10px;
+}
+.history-reset{height:38px}
+.resignation-table-pro{min-width:1450px}
+.resignation-table-pro th{white-space:nowrap}
+.resignation-table-pro td{vertical-align:middle}
+.resignation-table-pro .date-strong{font-weight:800;color:#334b68;white-space:nowrap}
+.resignation-table-pro .reason-cell{max-width:240px;white-space:normal;line-height:1.45}
+.resignation-table-pro .operation-time-cell{white-space:nowrap;color:#718197;font-size:9px}
+.operator-chip{
+  display:inline-flex;align-items:center;min-height:23px;padding:0 8px;
+  border:1px solid #dfe7f1;border-radius:999px;background:#f7f9fc;color:#536982;
+  font-size:8.5px;font-weight:750;white-space:nowrap;
+}
+.history-row-actions{gap:5px;flex-wrap:nowrap}
+.history-row-actions .table-action{white-space:nowrap}
+.edit-history-action{color:#4a67a4}
+.edit-resignation-note{
+  margin:0 16px 14px;padding:10px 12px;border:1px solid #dce5f0;border-radius:9px;
+  background:#f7faff;color:#708199;font-size:9.5px;line-height:1.55;
+}
+.edit-resignation-modal{width:min(560px,92vw)}
+
+.analysis-card-list{gap:10px}
+.structure-analysis-card{border-radius:12px}
+.structure-card-head{padding:12px 14px 10px}
+.overall-ratio{padding:10px 14px 4px}
+.mini-flow-grid{padding:8px 14px;gap:6px}
+.internal-breakdown{padding:5px 14px 13px}
+
+@media(max-width:1280px){
+  .people-analysis-main{grid-template-columns:1fr}
+  .people-analysis-breakdowns{grid-template-columns:1fr 1fr}
+  .history-tools-pro .data-page-controls{align-items:flex-start;flex-direction:column}
+  .history-tools-pro .data-page-search{width:100%;max-width:none;flex:none}
+  .history-tools-pro .data-page-control-right{width:100%;justify-content:flex-start;flex-wrap:wrap}
+}
+@media(max-width:760px){
+  .people-analysis-breakdowns{grid-template-columns:1fr}
+  .history-date-range .compact-date{min-width:105px;width:105px}
+}

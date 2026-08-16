@@ -127,7 +127,7 @@ function bundleToForm(detail){
 
 export default function AdminEmployeesPage(){
   const [sp,setSp]=useSearchParams()
-  const tabs=['员工档案','团队管理','岗位管理','离职记录']
+  const tabs=['员工档案','人员分析','团队管理','岗位管理','离职记录']
   const initialTab=sp.get('tab')==='入离职记录'?'离职记录':sp.get('tab')
   const [tab,setTabState]=useState(tabs.includes(initialTab)?initialTab:'员工档案')
 
@@ -154,6 +154,7 @@ export default function AdminEmployeesPage(){
   const [detailLoading,setDetailLoading]=useState(false)
   const [employeeModal,setEmployeeModal]=useState(null) // {mode,employee_id,form}
   const [resignModal,setResignModal]=useState(null)
+  const [editResignModal,setEditResignModal]=useState(null)
   const [restoreModal,setRestoreModal]=useState(null)
   const [cancelHireModal,setCancelHireModal]=useState(null)
 
@@ -168,6 +169,7 @@ export default function AdminEmployeesPage(){
   })
 
   const [history,setHistory]=useState([])
+  const [historyPermissions,setHistoryPermissions]=useState({can_edit:false,can_restore:false})
   const [historyTotal,setHistoryTotal]=useState(0)
   const [historyPage,setHistoryPage]=useState(1)
   const [historyPageSize,setHistoryPageSizeState]=useState(()=>Number(localStorage.getItem('wfh_history_page_size'))||20)
@@ -220,7 +222,9 @@ export default function AdminEmployeesPage(){
     setHistoryLoading(true); setError('')
     try{
       const data=await invoke({action:'history_list',page:nextPage,page_size:nextSize,filters:historyFilters})
-      setHistory(data.rows||[]); setHistoryTotal(data.total||0)
+      setHistory(data.rows||[])
+      setHistoryPermissions(data.permissions||{can_edit:false,can_restore:false})
+      setHistoryTotal(data.total||0)
     }catch(e){ setError(e.message) }
     finally{ setHistoryLoading(false) }
   }
@@ -312,6 +316,34 @@ export default function AdminEmployeesPage(){
     }catch(e){ setError(e.message) }
   }
 
+  const openHistoryDetail=async row=>{
+    if(!row?.employee_id) return setError('找不到对应员工档案')
+    setSelected({employee:{id:row.employee_id,employee_no:row.employee_no,full_name:row.full_name,status:'resigned'}})
+    setDetailLoading(true)
+    try{ setSelected(await invoke({action:'detail',employee_id:row.employee_id})) }
+    catch(e){ setError(e.message); setSelected(null) }
+    finally{ setDetailLoading(false) }
+  }
+
+  const submitResignEdit=async()=>{
+    if(!editResignModal?.event_id) return
+    if(!editResignModal.resign_date||!text(editResignModal.reason)){
+      return setError('离职日期和离职原因必须填写')
+    }
+    try{
+      const data=await invoke({
+        action:'update_resignation',
+        event_id:editResignModal.event_id,
+        employee_id:editResignModal.employee_id,
+        resign_date:editResignModal.resign_date,
+        reason:editResignModal.reason,
+      })
+      setEditResignModal(null)
+      await Promise.all([loadMeta(),loadAnalytics(),loadList(page,pageSize),loadHistory(historyPage,historyPageSize)])
+      if(data?.sync?.skipped) setError('离职记录已修改；Google Sheet 双向同步尚未完成配置。')
+    }catch(e){ setError(e.message) }
+  }
+
   const submitResign=async()=>{
     if(!resignModal?.employee_id) return
     if(!resignModal.resign_date||!text(resignModal.reason)){
@@ -399,20 +431,13 @@ export default function AdminEmployeesPage(){
       {tabs.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}
     </div>
 
-    <div className="module-summary-grid employee-summary-grid employee-kpi-grid">
-      <MetricSummary label="在职员工" value={analytics.kpis?.active??meta.active} hint={`员工档案 ${meta.total||0}`}/>
-      <MetricSummary label="今日入职" value={analytics.kpis?.today_join??'—'} compare={analytics.kpis?.today_join_delta} compareLabel="较昨日"/>
-      <MetricSummary label="今日离职" value={analytics.kpis?.today_resign??'—'} compare={analytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse/>
-      <MetricSummary label="近7天入职" value={analytics.kpis?.join_7d??'—'} compare={analytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare/>
-      <MetricSummary label="近7天离职" value={analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse/>
-      <MetricSummary label="近30天净增" value={analytics.kpis?.net_30d??'—'} hint={`入 ${analytics.kpis?.join_30d??'—'} / 离 ${analytics.kpis?.resign_30d??'—'}`}/>
-    </div>
-
     {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
 
     {tab==='员工档案'&&<>
-      <EmployeeAnalyticsOverview analytics={analytics}/>
-      <div className="filter-card">
+      <div className="archive-compact-head">
+        <div><h2>员工档案</h2><span>当前在职 {meta.active||0} · 全部档案 {meta.total||0}</span></div>
+      </div>
+      <div className="filter-card archive-filter-card">
         <DataPageControls
           keyword={filters.keyword}
           onKeyword={v=>setFilters({...filters,keyword:v})}
@@ -455,6 +480,22 @@ export default function AdminEmployeesPage(){
       </div>
     </>}
 
+    {tab==='人员分析'&&<>
+      <div className="analysis-head-row people-analysis-title">
+        <div><h2>人员分析</h2><p>人员规模、入离职变化、国家 / 团队 / 岗位 / 班次结构。</p></div>
+        <div className="analysis-badge">实时数据</div>
+      </div>
+      <div className="module-summary-grid employee-summary-grid employee-kpi-grid people-analysis-kpis">
+        <MetricSummary label="在职员工" value={analytics.kpis?.active??meta.active} hint={`员工档案 ${meta.total||0}`}/>
+        <MetricSummary label="今日入职" value={analytics.kpis?.today_join??'—'} compare={analytics.kpis?.today_join_delta} compareLabel="较昨日"/>
+        <MetricSummary label="今日离职" value={analytics.kpis?.today_resign??'—'} compare={analytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse/>
+        <MetricSummary label="近7天入职" value={analytics.kpis?.join_7d??'—'} compare={analytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare/>
+        <MetricSummary label="近7天离职" value={analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse/>
+        <MetricSummary label="近30天净增" value={analytics.kpis?.net_30d??'—'} hint={`入 ${analytics.kpis?.join_30d??'—'} / 离 ${analytics.kpis?.resign_30d??'—'}`}/>
+      </div>
+      <EmployeeAnalyticsOverview analytics={analytics}/>
+    </>}
+
     {tab==='团队管理'&&<>
       <div className="analysis-head-row">
         <div><h2>团队结构分析</h2><p>团队人数、占全体比例、人员流动和团队内部岗位构成。</p></div>
@@ -483,26 +524,48 @@ export default function AdminEmployeesPage(){
       </div>
     </>}
 
-    {tab==='离职记录'&&<div className="data-card">
-      <div className="section-head"><div><h2>离职记录</h2></div><span>{historyTotal} 人</span></div>
-      <div className="inner-tools history-tools">
+    {tab==='离职记录'&&<div className="data-card resignation-card-pro">
+      <div className="section-head resignation-section-head">
+        <div><h2>离职记录</h2><p>保留完整员工档案，可查看、按权限修改离职信息或恢复在职。</p></div>
+        <span>{historyTotal} 人</span>
+      </div>
+      <div className="inner-tools history-tools history-tools-pro">
         <DataPageControls
           keyword={historyFilters.keyword}
           onKeyword={v=>setHistoryFilters({...historyFilters,keyword:v})}
-          placeholder="搜索离职员工ID / 姓名"
+          placeholder="搜索员工ID / 姓名 / 离职原因"
           pageSize={historyPageSize}
           onPageSize={setHistoryPageSize}
-          right={<div className="history-date-range">
-            <label><span>离职日期起</span><input className="compact-date" type="date" value={historyFilters.date_from} onChange={e=>setHistoryFilters({...historyFilters,date_from:e.target.value})}/></label>
-            <label><span>离职日期止</span><input className="compact-date" type="date" value={historyFilters.date_to} onChange={e=>setHistoryFilters({...historyFilters,date_to:e.target.value})}/></label>
-          </div>}
+          right={<>
+            <div className="history-date-range">
+              <label><span>离职日期</span><div className="date-pair"><input className="compact-date" aria-label="离职日期起" type="date" value={historyFilters.date_from} onChange={e=>setHistoryFilters({...historyFilters,date_from:e.target.value})}/><b>—</b><input className="compact-date" aria-label="离职日期止" type="date" value={historyFilters.date_to} onChange={e=>setHistoryFilters({...historyFilters,date_to:e.target.value})}/></div></label>
+            </div>
+            {(historyFilters.keyword||historyFilters.date_from||historyFilters.date_to)&&<button className="secondary-action history-reset" onClick={()=>setHistoryFilters({keyword:'',date_from:'',date_to:''})}>清除</button>}
+          </>}
         />
       </div>
-      {historyLoading?<div className="empty-state">读取离职记录...</div>:<div className="table-scroll"><table className="data-table lifecycle-table">
-        <thead><tr><th>离职日期</th><th>操作时间</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作</th></tr></thead>
+      {historyLoading?<div className="empty-state">读取离职记录...</div>:<div className="table-scroll"><table className="data-table lifecycle-table resignation-table-pro">
+        <thead><tr><th>离职日期</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>团队</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作账号</th><th>操作</th><th>操作时间</th></tr></thead>
         <tbody>{history.map(r=>{
           const s=r.snapshot||{}
-          return <tr key={r.id}><td>{r.effective_date||'—'}</td><td>{formatDateTime(r.created_at)}</td><td><strong>{r.employee_no}</strong></td><td>{r.full_name||'-'}</td><td>{r.employee_type||s.employment_type||'-'}</td><td>{r.employee_country||s.country||'-'}</td><td>{r.position_name||s.position||'-'}</td><td>{r.reason||'-'}</td><td>{r.source_sheet||r.source||'-'}</td><td><button className="row-action restore-action" onClick={()=>setRestoreModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,restore_portal:true})}>恢复在职</button></td></tr>
+          return <tr key={r.id}>
+            <td className="date-strong">{r.effective_date||'—'}</td>
+            <td><strong>{r.employee_no}</strong></td>
+            <td>{r.full_name||'-'}</td>
+            <td>{r.employee_type||s.employment_type||'-'}</td>
+            <td>{r.employee_country||s.country||'-'}</td>
+            <td>{r.team_name||s.team||'-'}</td>
+            <td>{r.position_name||s.position||'-'}</td>
+            <td className="reason-cell">{r.reason||'-'}</td>
+            <td>{r.source_label||r.source_sheet||r.source||'-'}</td>
+            <td><span className="operator-chip">{r.operator_account||'—'}</span></td>
+            <td><div className="row-actions history-row-actions">
+              <button className="table-action" onClick={()=>openHistoryDetail(r)}>查看</button>
+              {historyPermissions.can_edit&&<button className="table-action edit-history-action" onClick={()=>setEditResignModal({event_id:r.id,employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date||'',reason:r.reason||''})}>编辑</button>}
+              {historyPermissions.can_restore&&<button className="table-action restore-action" onClick={()=>setRestoreModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,restore_portal:true})}>恢复在职</button>}
+            </div></td>
+            <td className="operation-time-cell">{formatDateTime(r.operation_time||r.created_at)}</td>
+          </tr>
         })}</tbody>
       </table></div>}
       <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize)}}/>
@@ -511,6 +574,7 @@ export default function AdminEmployeesPage(){
     {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})} onCancelHire={()=>setCancelHireModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,confirm_text:''})}/>}
     {employeeModal&&<EmployeeFormModal state={employeeModal} setState={setEmployeeModal} meta={meta} onClose={()=>setEmployeeModal(null)} onSave={saveEmployee}/>}
     {resignModal&&<ResignModal state={resignModal} setState={setResignModal} onClose={()=>setResignModal(null)} onSave={submitResign}/>}
+    {editResignModal&&<EditResignationModal state={editResignModal} setState={setEditResignModal} onClose={()=>setEditResignModal(null)} onSave={submitResignEdit}/>}
     {restoreModal&&<RestoreModal state={restoreModal} setState={setRestoreModal} onClose={()=>setRestoreModal(null)} onSave={submitRestore}/>}
     {cancelHireModal&&<CancelHireModal state={cancelHireModal} setState={setCancelHireModal} onClose={()=>setCancelHireModal(null)} onSave={submitCancelHire}/>}
   </div>
@@ -665,9 +729,11 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire}){
       <div className="employee-avatar">{text(e.full_name).slice(0,1).toUpperCase()||'E'}</div>
       <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span></div></div>
       <div className="drawer-head-actions">
-        {e.status!=='resigned'?<button className="danger-outline" onClick={onResign}>办理离职</button>:<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
+        {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
+        {e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
         {detail.actions?.can_cancel_hire&&<button className="cancel-hire-outline" onClick={onCancelHire}>撤销入职</button>}
-        <button className="edit-outline" onClick={onEdit}>编辑</button><button className="drawer-close" onClick={onClose}>×</button>
+        {detail.actions?.can_edit&&<button className="edit-outline" onClick={onEdit}>编辑</button>}
+        <button className="drawer-close" onClick={onClose}>×</button>
       </div>
     </div>
     {loading?<div className="empty-state">读取完整档案...</div>:<>
@@ -705,6 +771,18 @@ function ResignModal({state,setState,onClose,onSave}){
       <label className="checkbox-row form-wide"><input type="checkbox" checked={state.disable_portal} onChange={e=>setState({...state,disable_portal:e.target.checked})}/><span>同时停用员工 Portal 登录账号（员工历史资料不会删除）</span></label>
     </div>
     <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="danger-action" onClick={onSave}>确认离职</button></div>
+  </div></div>
+}
+
+function EditResignationModal({state,setState,onClose,onSave}){
+  return <div className="modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal edit-resignation-modal" onMouseDown={e=>e.stopPropagation()}>
+    <div className="modal-head"><div><span className="modal-kicker">EDIT RESIGNATION</span><h2>修改离职记录</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
+    <div className="edit-resignation-note">修改后会同步更新当前离职档案；员工其他历史资料不会删除。</div>
+    <div className="form-grid">
+      <Field label="离职日期"><input type="date" value={state.resign_date} onChange={e=>setState({...state,resign_date:e.target.value})}/></Field>
+      <Field label="离职原因" wide><input value={state.reason} onChange={e=>setState({...state,reason:e.target.value})} placeholder="填写实际离职原因"/></Field>
+    </div>
+    <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" onClick={onSave}>保存修改</button></div>
   </div></div>
 }
 
@@ -780,29 +858,38 @@ function TrendBars({rows=[]}){
 }
 function EmployeeAnalyticsOverview({analytics}){
   if(analytics.loading) return <div className="analysis-overview-card"><div className="empty-state compact-empty">正在计算人员结构...</div></div>
-  const countries=(analytics.countries||[]).slice(0,8)
-  const teams=(analytics.teams||[]).slice(0,8)
-  const positions=(analytics.positions||[]).slice(0,8)
-  return <div className="employee-analytics-grid">
-    <section className="analysis-overview-card trend-card">
-      <div className="analysis-card-head"><div><h3>近14天人员流动</h3><p>按有效入职 / 离职日期统计</p></div><span>30天净增 {signed(analytics.kpis?.net_30d||0)}</span></div>
-      <TrendBars rows={analytics.trend||[]}/>
-    </section>
-    <section className="analysis-overview-card">
-      <div className="analysis-card-head"><div><h3>团队人数占比</h3><p>占当前全部在职员工</p></div></div>
-      <div className="ratio-list">{teams.map(x=><RatioBar key={x.name} {...x}/>)}</div>
-    </section>
-    <section className="analysis-overview-card">
-      <div className="analysis-card-head"><div><h3>岗位人数占比</h3><p>占当前全部在职员工</p></div></div>
-      <div className="ratio-list">{positions.map(x=><RatioBar key={x.name} {...x}/>)}</div>
-    </section>
-    <section className="analysis-overview-card">
-      <div className="analysis-card-head"><div><h3>国家人员与离职</h3><p>当前人数 / 30天离职</p></div></div>
-      <div className="country-analysis-list">{countries.map(x=><div className="country-analysis-row" key={x.name}>
-        <div><strong>{x.name}</strong><span>{x.count} 人 · {pctText(x.share)}</span></div>
-        <div><span>30天离职</span><strong>{x.resign_30d||0}</strong><em>{pctText(x.resign_rate_30||0)}</em></div>
-      </div>)}</div>
-    </section>
+  const countries=(analytics.countries||[]).slice(0,7)
+  const teams=(analytics.teams||[]).slice(0,7)
+  const positions=(analytics.positions||[]).slice(0,7)
+  const shifts=(analytics.shifts||[]).slice(0,7)
+  return <div className="people-analysis-layout">
+    <div className="people-analysis-main">
+      <section className="analysis-overview-card trend-card compact-trend-card">
+        <div className="analysis-card-head"><div><h3>近14天人员流动</h3><p>按有效入职 / 离职日期统计</p></div><span>30天净增 {signed(analytics.kpis?.net_30d||0)}</span></div>
+        <TrendBars rows={analytics.trend||[]}/>
+      </section>
+      <section className="analysis-overview-card country-card-pro">
+        <div className="analysis-card-head"><div><h3>国家人员与离职</h3><p>当前人数 / 30天离职率</p></div></div>
+        <div className="country-analysis-list">{countries.map(x=><div className="country-analysis-row" key={x.name}>
+          <div><strong>{x.name}</strong><span>{x.count} 人 · {pctText(x.share)}</span></div>
+          <div><span>30天离职</span><strong>{x.resign_30d||0}</strong><em>{pctText(x.resign_rate_30||0)}</em></div>
+        </div>)}</div>
+      </section>
+    </div>
+    <div className="people-analysis-breakdowns">
+      <section className="analysis-overview-card">
+        <div className="analysis-card-head"><div><h3>团队人数占比</h3><p>占当前全部在职员工</p></div></div>
+        <div className="ratio-list">{teams.map(x=><RatioBar key={x.name} {...x}/>)}</div>
+      </section>
+      <section className="analysis-overview-card">
+        <div className="analysis-card-head"><div><h3>岗位人数占比</h3><p>占当前全部在职员工</p></div></div>
+        <div className="ratio-list">{positions.map(x=><RatioBar key={x.name} {...x}/>)}</div>
+      </section>
+      <section className="analysis-overview-card">
+        <div className="analysis-card-head"><div><h3>班次人数占比</h3><p>当前班次结构</p></div></div>
+        <div className="ratio-list">{shifts.map(x=><RatioBar key={x.name} {...x}/>)}</div>
+      </section>
+    </div>
   </div>
 }
 function TeamAnalysisSummary({analytics}){
