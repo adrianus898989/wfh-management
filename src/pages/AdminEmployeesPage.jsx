@@ -78,6 +78,25 @@ function tenureDurationLabel(hireDate,resignDate,status){
   parts.push(`${days}天`)
   return `${parts.join(' ')} · 共 ${totalDays} 天`
 }
+function tenureCompactLabel(hireDate,resignDate,status){
+  const start=parseIsoDateOnly(hireDate)
+  if(!start) return '—'
+  const now=new Date()
+  const todayUtc=new Date(Date.UTC(now.getFullYear(),now.getMonth(),now.getDate(),12))
+  const resign=parseIsoDateOnly(resignDate)
+  const end=status==='resigned'&&resign?resign:todayUtc
+  const totalDays=Math.floor((end.getTime()-start.getTime())/86400000)
+  if(totalDays<0) return `待入职 · ${Math.abs(totalDays)}天`
+  let months=(end.getUTCFullYear()-start.getUTCFullYear())*12+(end.getUTCMonth()-start.getUTCMonth())
+  if(end.getUTCDate()<start.getUTCDate()) months-=1
+  months=Math.max(0,months)
+  if(months<1) return `${totalDays}天`
+  if(months<12) return `${months}个月`
+  const years=Math.floor(months/12), rest=months%12
+  return rest?`${years}年${rest}个月`:`${years}年`
+}
+const sheetSyncSucceeded=sync=>Boolean(sync)&&sync.skipped!==true&&sync.ok===true&&sync.body?.ok!==false&&!sync.error
+const sheetSyncMessage=sync=>text(sync?.body?.error||sync?.error||sync?.reason||'正式 Google Sheet 写入失败')
 const normPlatform = v => text(v).replace(/\s+/g,'').toUpperCase()
 const platformRefsFor = (rows,value) => {
   const key=normPlatform(value)
@@ -475,25 +494,39 @@ export default function AdminEmployeesPage(){
   const saveEmployee=async()=>{
     if(!employeeModal) return
     const {mode,employee_id,form}=employeeModal
-    if(!text(form.employee.employee_no)||!text(form.employee.full_name)){
+    const employeeNo=text(form.employee.employee_no).toUpperCase()
+    if(!employeeNo||!text(form.employee.full_name)){
       return setError('员工ID和姓名必须填写')
+    }
+    if(mode==='create'&&(employeeNo==='SYSTEM'||employeeNo==='ADMIN'||employeeNo.startsWith('TEST'))){
+      return setError('正式环境不能使用 SYSTEM / ADMIN / TEST 开头的员工ID。请使用真实员工ID。')
     }
     try{
       const payload={
         action:mode==='create'?'create_employee_full':'update_employee_full',
         employee_id,
-        employee:form.employee,
+        employee:{...form.employee,employee_no:employeeNo},
         contact:form.contact,
         compensation:form.compensation,
         payment:form.payment,
       }
       const data=await invoke(payload)
+      if(mode==='create'&&!sheetSyncSucceeded(data?.sync)){
+        let rollbackOk=false
+        try{
+          await invoke({action:'cancel_new_hire',employee_id:data?.employee_id,confirm_employee_no:employeeNo})
+          rollbackOk=true
+        }catch(_){ rollbackOk=false }
+        throw new Error(`新增失败：正式 Google Sheet 没有写入。${rollbackOk?'Supabase 新增已自动撤销，不会留下半条员工。':'Supabase 自动撤销失败，请立即检查。'} 原因：${sheetSyncMessage(data?.sync)}`)
+      }
+      if(mode==='edit'&&!sheetSyncSucceeded(data?.sync)){
+        throw new Error(`Supabase 已保存，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}。请重新保存一次，直到两边同时成功。`)
+      }
       setEmployeeModal(null)
       await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(mode==='create'?1:page,pageSize)])
       if(mode==='edit'&&employee_id){
         setSelected(await invoke({action:'detail',employee_id}))
       }
-      if(data?.sync?.skipped) setError('员工已保存；Google Sheet 双向同步尚未完成配置。')
     }catch(e){ setError(e.message) }
   }
 
@@ -576,7 +609,7 @@ export default function AdminEmployeesPage(){
       })
       setEditResignModal(null)
       await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(page,pageSize),loadHistory(historyPage,historyPageSize)])
-      if(data?.sync?.skipped) setError('离职记录已修改；Google Sheet 双向同步尚未完成配置。')
+      if(!sheetSyncSucceeded(data?.sync)) setError(`离职记录已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
 
@@ -589,7 +622,7 @@ export default function AdminEmployeesPage(){
       const data=await invoke({action:'resign_employee',...resignModal})
       setResignModal(null); setSelected(null)
       await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
-      if(data?.sync?.skipped) setError('离职已保存；Google Sheet 双向同步尚未完成配置。')
+      if(!sheetSyncSucceeded(data?.sync)) setError(`离职已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
 
@@ -604,7 +637,7 @@ export default function AdminEmployeesPage(){
       setRestoreModal(null)
       setSelected(null)
       await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
-      if(data?.sync?.skipped) setError('已恢复在职；Google Sheet 双向同步尚未完成配置。')
+      if(!sheetSyncSucceeded(data?.sync)) setError(`已恢复 Supabase 在职状态，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
 
@@ -714,9 +747,9 @@ export default function AdminEmployeesPage(){
       <div className="data-card">
         {loading?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
-            <thead><tr><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
+            <thead><tr><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=><tr key={r.id}>
-              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
+              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
               <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
               <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" onClick={()=>generateCode(r.employee_no)}>激活码</button>}</div></td>
@@ -1617,7 +1650,7 @@ function ArchiveStructureStats({data,onTenure,onPosition,onCountry}){
   const updated=data?.latest_updated_at?formatDateTime(data.latest_updated_at):'—'
   return <section className="archive-structure-section">
     <div className="archive-structure-head">
-      <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；Realtime 自动刷新，15 秒轮询兜底。</p></div>
+      <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；Realtime 自动刷新，60 秒静默轮询兜底。</p></div>
       <div className={`archive-sync-badge ${data?.error?'has-error':''}`}><i/><span>{data?.error?'结构统计待部署':`Supabase 更新 ${updated}`}</span></div>
     </div>
     <div className="archive-structure-grid">
