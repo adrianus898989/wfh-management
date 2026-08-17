@@ -145,7 +145,7 @@ function emptyForm(){
   return {
     employee:{
       employee_no:'',full_name:'',country:'',nationality:'',employment_type:'',
-      team_id:'',position_id:'',market_country:'',market_position:'',shift_name:'',
+      team_id:'',position_id:'',position_name:'',market_country:'',market_position:'',shift_name:'',
       group_name:'',leader_name:'',trainer_name:'',platform_scope:'',work_content:'',
       work_tg:'',backend_accounts:'',hire_date:'',last_location:'',return_date:'',home_date:'',
     },
@@ -163,7 +163,7 @@ function bundleToForm(detail){
   return {
     employee:{
       employee_no:e.employee_no||'',full_name:e.full_name||'',country:e.country||'',nationality:e.nationality||'',
-      employment_type:e.employment_type||'',team_id:e.team_id||'',position_id:e.position_id||'',
+      employment_type:e.employment_type||'',team_id:e.team_id||'',position_id:e.position_id||'',position_name:e.positions?.name||'',
       market_country:e.market_country||'',market_position:e.market_position||'',shift_name:e.shift_name||'',
       group_name:e.group_name||'',leader_name:e.leader_name||'',trainer_name:e.trainer_name||'',
       platform_scope:e.platform_scope||'',work_content:e.work_content||'',work_tg:e.work_tg||'',
@@ -269,6 +269,12 @@ export default function AdminEmployeesPage(){
   const invoke=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employees',{body})
     if(error||data?.error) throw new Error(data?.error||error?.message||'操作失败')
+    return data
+  }
+
+  const writeEmployee=async body=>{
+    const {data,error}=await supabase.functions.invoke('admin-employee-write',{body})
+    if(error||data?.error) throw new Error(data?.error||error?.message||'员工资料保存失败')
     return data
   }
 
@@ -508,12 +514,13 @@ export default function AdminEmployeesPage(){
       const payload={
         action:mode==='create'?'create_employee_full':'update_employee_full',
         employee_id,
+        previous_full_name:mode==='edit'?text(selected?.employee?.full_name):'',
         employee:{...form.employee,employee_no:employeeNo},
         contact:form.contact,
         compensation:form.compensation,
         payment:form.payment,
       }
-      const data=await invoke(payload)
+      const data=await writeEmployee(payload)
       if(mode==='create'&&!sheetSyncSucceeded(data?.sync)){
         let rollbackOk=false
         try{
@@ -975,7 +982,16 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
 
     if(k==='market_position'){
       const ref=platformRefFor(meta.platform_map||[],v)
-      if(ref) next.market_country=ref.series || ''
+      if(ref){
+        next.market_country=ref.series || ''
+        const team=(meta.teams||[]).find(t=>text(t.name).toLowerCase()===text(ref.series).toLowerCase())
+        next.team_id=team?.id||''
+      }
+    }
+
+    if(k==='position_name'){
+      const position=(meta.positions||[]).find(p=>text(p.name).toLowerCase()===text(v).toLowerCase())
+      next.position_id=position?.id||''
     }
 
     setState({...state,form:{...f,employee:next,payment,compensation}})
@@ -1013,6 +1029,10 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
       <Field label="员工国家"><SelectValue value={e.country} options={selectOptions(opts.countries,e.country)} onChange={v=>setEmployee('country',v)}/></Field>
       <Field label="员工类型"><SelectValue value={typeName(e.employment_type)==='纯居家（越南/缅甸/印尼等）'?'纯居家（越南/缅甸/印尼等）':e.employment_type} options={selectOptions(typeOptions,typeName(e.employment_type))} onChange={v=>setEmployee('employment_type',v)}/></Field>
       <Field label="入职日期"><input type="date" value={e.hire_date} onChange={x=>setEmployee('hire_date',x.target.value)}/></Field>
+      <Field label="岗位">
+        <input list="employee-position-write-options" value={e.position_name||''} onChange={x=>setEmployee('position_name',x.target.value)} placeholder="选择现有岗位或直接输入新岗位"/>
+        <datalist id="employee-position-write-options">{(meta.positions||[]).map(x=><option key={x.id||x.name} value={x.name}/>)}</datalist>
+      </Field>
     </FormSection>
 
     <FormSection title="组织与工作">
@@ -1024,7 +1044,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
       <Field label="盘口国家"><div className="readonly-choice">{derivedMarketCountry||'—'}</div></Field>
       <Field label="工作TG"><input value={e.work_tg} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
       <Field label="后台账号"><input value={e.backend_accounts} onChange={x=>setEmployee('backend_accounts',x.target.value)}/></Field>
-      <Field label="当前排班"><div className="readonly-choice live-assignment-note">岗位 / 班次由居家排班表同步</div></Field>
+      <Field label="当前排班"><div className="readonly-choice live-assignment-note">班次由居家排班表同步；岗位可先选择 / 手动输入，排班后继续同步</div></Field>
     </FormSection>
 
     {typeName(e.employment_type)==='现场转居家'&&<FormSection title="现场转居家资料">
