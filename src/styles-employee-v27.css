@@ -1,0 +1,32 @@
+/* WFH V27.2 — Employee Management interaction fixes only.
+   This file is intentionally isolated from styles-pro.css so existing employee styling stays untouched. */
+.resignation-history-table-wrap{
+  position:relative;
+  min-height:420px;
+}
+.resignation-history-table-wrap.is-loading{
+  cursor:progress;
+}
+.history-loading-overlay{
+  position:absolute;
+  inset:0;
+  z-index:6;
+  display:grid;
+  place-items:center;
+  background:rgba(248,250,253,.68);
+  backdrop-filter:blur(1px);
+  pointer-events:auto;
+}
+.history-loading-overlay span{
+  display:inline-flex;
+  align-items:center;
+  min-height:34px;
+  padding:0 13px;
+  border:1px solid #dce5ef;
+  border-radius:999px;
+  background:#fff;
+  color:#60758e;
+  font-size:10px;
+  font-weight:750;
+  box-shadow:0 8px 24px rgba(35,57,82,.08);
+}

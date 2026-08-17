@@ -497,7 +497,6 @@ export default function AdminEmployeesPage(){
     </div>
 
     {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
-
     {tab==='员工档案'&&<>
       <div className="archive-compact-head">
         <div><h2>员工档案</h2><span>当前在职 {meta.active||0} · 全部档案 {meta.total||0}</span></div>
@@ -660,7 +659,7 @@ export default function AdminEmployeesPage(){
         <div className="resign-filter-actions v25-resign-actions"><button className="secondary-action" onClick={()=>setHistoryFilters({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})}>重置</button></div>
       </div>
 
-      {historyLoading?<div className="empty-state">读取离职记录...</div>:<div className="table-scroll"><table className="data-table lifecycle-table resignation-table-pro">
+      {!history.length&&historyLoading?<div className="empty-state">读取离职记录...</div>:<div className={`table-scroll resignation-history-table-wrap ${historyLoading?'is-loading':''}`}><table className="data-table lifecycle-table resignation-table-pro">
         <thead><tr><th>离职日期</th><th>员工ID</th><th>姓名</th><th>员工类型</th><th>员工国家</th><th>团队</th><th>岗位</th><th>离职原因</th><th>来源</th><th>操作记录</th><th>操作</th></tr></thead>
         <tbody>{history.map(r=>{
           const s=r.snapshot||{}
@@ -682,7 +681,7 @@ export default function AdminEmployeesPage(){
             </div></td>
           </tr>
         })}</tbody>
-      </table></div>}
+      </table>{historyLoading&&<div className="history-loading-overlay" aria-live="polite"><span>读取离职记录...</span></div>}</div>}
       <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize)}} onPageSize={setHistoryPageSize}/>
     </div>}
 
@@ -1382,31 +1381,40 @@ function SelectValue({value,options,onChange}){
   </select>
 }
 
+
 function FilterCombo({value,options,onChange,placeholder,listId}){
+  // V27.2: selected value 与正在输入的搜索关键字分离。
+  // 这样已经选中“越南”后，可以再次打开并直接搜索“菲律宾”，不用先切回“全部”。
   const [open,setOpen]=useState(false)
+  const [query,setQuery]=useState('')
   const root=useRef(null)
   const values=useMemo(()=>Array.from(new Set((options||[]).map(text).filter(Boolean))),[JSON.stringify(options||[])])
-  const q=text(value).toLowerCase()
+  const q=text(query).toLowerCase()
   const filtered=useMemo(()=>values.filter(x=>!q||x.toLowerCase().includes(q)).slice(0,80),[values,q])
+  const closeMenu=()=>{setOpen(false);setQuery('')}
+  const openMenu=()=>{setQuery('');setOpen(true)}
   useEffect(()=>{
-    const close=e=>{ if(root.current&&!root.current.contains(e.target)) setOpen(false) }
+    const close=e=>{ if(root.current&&!root.current.contains(e.target)){setOpen(false);setQuery('')} }
     document.addEventListener('mousedown',close)
     return()=>document.removeEventListener('mousedown',close)
   },[])
   return <div className={`smart-filter-combo ${open?'is-open':''}`} ref={root} data-combo={listId}>
     <input
-      value={value||''}
-      onChange={e=>{onChange(e.target.value);setOpen(true)}}
-      onFocus={()=>setOpen(true)}
-      onKeyDown={e=>{if(e.key==='Escape')setOpen(false);if(e.key==='Enter'&&filtered.length===1){onChange(filtered[0]);setOpen(false)}}}
+      value={open?query:(value||'')}
+      onChange={e=>{setQuery(e.target.value);setOpen(true)}}
+      onFocus={openMenu}
+      onKeyDown={e=>{
+        if(e.key==='Escape') closeMenu()
+        if(e.key==='Enter'&&filtered.length===1){e.preventDefault();onChange(filtered[0]);closeMenu()}
+      }}
       placeholder={placeholder||'全部 / 输入搜索'}
       autoComplete="off"
     />
-    <button type="button" className="smart-combo-toggle" onMouseDown={e=>e.preventDefault()} onClick={()=>setOpen(v=>!v)} aria-label="展开选项">⌄</button>
+    <button type="button" className="smart-combo-toggle" onMouseDown={e=>e.preventDefault()} onClick={()=>{if(open)closeMenu();else openMenu()}} aria-label="展开选项">⌄</button>
     {open&&<div className="smart-combo-menu">
-      <button type="button" className={!value?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange('');setOpen(false)}}>{placeholder?.split('/')[0]?.trim()||'全部'}</button>
-      {filtered.map(x=><button type="button" key={x} className={text(value)===x?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange(x);setOpen(false)}}>{x}</button>)}
-      {!filtered.length&&<div className="smart-combo-empty">没有完全匹配项，可继续手动输入筛选</div>}
+      <button type="button" className={!value?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange('');closeMenu()}}>{placeholder?.split('/')[0]?.trim()||'全部'}</button>
+      {filtered.map(x=><button type="button" key={x} className={text(value)===x?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange(x);closeMenu()}}>{x}</button>)}
+      {!filtered.length&&<div className="smart-combo-empty">没有匹配项，请换关键字搜索</div>}
     </div>}
   </div>
 }
