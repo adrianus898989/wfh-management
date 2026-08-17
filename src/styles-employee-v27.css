@@ -1,4 +1,4 @@
-/* WFH V27.2 — Employee Management interaction fixes only.
+/* WFH V27.3 — Employee Management interaction and analysis layout fixes.
    This file is intentionally isolated from styles-pro.css so existing employee styling stays untouched. */
 .resignation-history-table-wrap{
   position:relative;
@@ -29,4 +29,124 @@
   font-size:10px;
   font-weight:750;
   box-shadow:0 8px 24px rgba(35,57,82,.08);
+}
+
+/* V27.3 — Employee archive KPI + analysis subdirectories + stable resignation queries */
+.archive-kpi-strip{
+  margin:12px 0 14px;
+}
+.employee-analysis-subtabs{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:0 0 14px;
+  padding:8px;
+  border:1px solid #dbe5f0;
+  border-radius:14px;
+  background:#fff;
+}
+.employee-analysis-subtabs button{
+  min-height:36px;
+  padding:0 15px;
+  border:0;
+  border-radius:9px;
+  background:transparent;
+  color:#60748d;
+  font-size:12px;
+  font-weight:750;
+  cursor:pointer;
+}
+.employee-analysis-subtabs button:hover{
+  background:#f5f8fc;
+  color:#214f99;
+}
+.employee-analysis-subtabs button.active{
+  background:#eaf2ff;
+  color:#155bd7;
+  box-shadow:inset 0 0 0 1px #d8e7ff;
+}
+.dimension-directory-section{
+  display:grid;
+  gap:12px;
+}
+.dimension-directory-heading{
+  margin:0;
+}
+.dimension-directory-summary{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+}
+.dimension-directory-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+}
+.dimension-directory-card{
+  min-width:0;
+  padding:16px;
+  border:1px solid #dce6f1;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 8px 24px rgba(31,58,91,.035);
+}
+.dimension-directory-card-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:12px;
+}
+.dimension-directory-card-head>button{
+  display:grid;
+  gap:3px;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:inherit;
+  text-align:left;
+  cursor:pointer;
+}
+.dimension-directory-card-head strong{
+  color:#18365c;
+  font-size:14px;
+}
+.dimension-directory-card-head span{
+  color:#6c8098;
+  font-size:10px;
+}
+.dimension-directory-card-head em{
+  font-style:normal;
+  color:#174d9f;
+  font-size:13px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.dimension-directory-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:12px;
+}
+.resignation-card-pro,
+.resignation-filter-panel,
+.resignation-history-table-wrap{
+  overflow-anchor:none;
+}
+.resignation-query-action{
+  min-width:82px;
+}
+.resignation-query-action:disabled,
+.v25-resign-actions .secondary-action:disabled{
+  opacity:.58;
+  cursor:wait;
+}
+@media (max-width:1100px){
+  .dimension-directory-summary{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .dimension-directory-grid{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  .employee-analysis-subtabs{overflow-x:auto;flex-wrap:nowrap;}
+  .employee-analysis-subtabs button{white-space:nowrap;}
+  .dimension-directory-summary{grid-template-columns:1fr 1fr;}
 }
