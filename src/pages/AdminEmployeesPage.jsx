@@ -309,33 +309,33 @@ export default function AdminEmployeesPage(){
     }
   }
 
-  const loadList=async(nextPage=page,nextSize=pageSize)=>{
-    setLoading(true); setError('')
+  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false}={})=>{
+    if(!silent){ setLoading(true); setError('') }
     try{
       const data=await invoke({action:'list',page:nextPage,page_size:nextSize,filters})
       setRows(data.rows||[]); setTotal(data.total||0)
-    }catch(e){ setError(e.message) }
-    finally{ setLoading(false) }
+    }catch(e){ if(!silent) setError(e.message) }
+    finally{ if(!silent) setLoading(false) }
   }
 
-  const loadHistory=async(nextPage=historyPage,nextSize=historyPageSize,nextFilters=historyFilters)=>{
-    setHistoryLoading(true); setError('')
+  const loadHistory=async(nextPage=historyPage,nextSize=historyPageSize,nextFilters=historyFilters,{silent=false}={})=>{
+    if(!silent){ setHistoryLoading(true); setError('') }
     try{
       const data=await invoke({action:'history_list',page:nextPage,page_size:nextSize,filters:nextFilters})
       setHistory(data.rows||[])
       setHistoryPermissions(data.permissions||{can_edit:false,can_restore:false})
       setHistoryTotal(data.total||0)
-    }catch(e){ setError(e.message) }
-    finally{ setHistoryLoading(false) }
+    }catch(e){ if(!silent) setError(e.message) }
+    finally{ if(!silent) setHistoryLoading(false) }
   }
 
   const refreshEmployeeData=async({silent=false}={})=>{
     if(!silent) setRefreshing(true)
     try{
       const jobs=[loadMeta(),loadAnalytics(),loadArchiveStats(true)]
-      if(tab==='员工档案') jobs.push(loadList(page,pageSize))
+      if(tab==='员工档案') jobs.push(loadList(page,pageSize,{silent}))
       if(tab==='人员分析') jobs.push(loadPeopleAnalytics(analysisFilters),loadResignationAnalytics(resignationAnalyticsFilters))
-      if(tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters))
+      if(tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
       if(selected?.employee?.id){
         jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(setSelected).catch(()=>{}))
       }
@@ -349,10 +349,10 @@ export default function AdminEmployeesPage(){
     let timer=null
     const signal=()=>{
       clearTimeout(timer)
-      timer=setTimeout(()=>setLiveTick(v=>v+1),220)
+      timer=setTimeout(()=>setLiveTick(v=>v+1),1500)
     }
     const channel=supabase
-      .channel('admin-employees-live-v282')
+      .channel('admin-employees-live-v284')
       .on('postgres_changes',{event:'*',schema:'public',table:'employees'},signal)
       .on('postgres_changes',{event:'*',schema:'public',table:'employee_lifecycle_events'},signal)
       .subscribe()
@@ -367,7 +367,7 @@ export default function AdminEmployeesPage(){
     refreshEmployeeData({silent:true})
   },[liveTick])
 
-  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>loadArchiveStats(true),15000); return()=>clearInterval(t) },[])
+  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>{ if(!document.hidden) loadArchiveStats(true) },60000); return()=>clearInterval(t) },[])
   useEffect(()=>{
     if(tab!=='员工档案') return
     const t=setInterval(async()=>{
@@ -384,7 +384,7 @@ export default function AdminEmployeesPage(){
         setRows(listData.rows||[]); setTotal(listData.total||0)
         setAnalytics({...analyticsData,loading:false})
       }catch{}
-    },15000)
+    },60000)
     return()=>clearInterval(t)
   },[tab,page,pageSize,JSON.stringify(filters)])
   useEffect(()=>{
