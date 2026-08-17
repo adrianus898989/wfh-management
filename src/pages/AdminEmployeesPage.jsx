@@ -20,7 +20,7 @@ const dedupeAnalysisRows = rows => {
 }
 const analysisViews=['总览','团队分析','岗位分析','国家分析','班次分析','离职分析']
 const blankHistoryFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
-const statusName = s => ({active:'在职',inactive:'停用',resigned:'离职'}[s] || s || '-')
+const statusName = s => ({active:'在职',probation:'试用',suspended:'停用',inactive:'停用',resigned:'离职'}[s] || s || '-')
 const typeOptions = [
   '纯居家菲律宾',
   '现场转居家',
@@ -45,6 +45,38 @@ const formatDateTime = v => {
   const d=new Date(v)
   if(Number.isNaN(d.getTime())) return text(v)
   return d.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})
+}
+
+function parseIsoDateOnly(v){
+  const raw=text(v).slice(0,10)
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null
+  const [y,m,d]=raw.split('-').map(Number)
+  const dt=new Date(Date.UTC(y,m-1,d,12))
+  return Number.isNaN(dt.getTime())?null:dt
+}
+function tenureDurationLabel(hireDate,resignDate,status){
+  const start=parseIsoDateOnly(hireDate)
+  if(!start) return '入职日期待完善'
+  const today=new Date()
+  const todayUtc=new Date(Date.UTC(today.getFullYear(),today.getMonth(),today.getDate(),12))
+  const resign=parseIsoDateOnly(resignDate)
+  const end=status==='resigned'&&resign?resign:todayUtc
+  const totalDays=Math.floor((end.getTime()-start.getTime())/86400000)
+  if(totalDays<0) return `待入职 · 还有 ${Math.abs(totalDays)} 天`
+  let years=end.getUTCFullYear()-start.getUTCFullYear()
+  let months=end.getUTCMonth()-start.getUTCMonth()
+  let days=end.getUTCDate()-start.getUTCDate()
+  if(days<0){
+    const prevMonthLast=new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth(),0,12)).getUTCDate()
+    days+=prevMonthLast
+    months-=1
+  }
+  if(months<0){months+=12;years-=1}
+  const parts=[]
+  if(years>0) parts.push(`${years}年`)
+  if(months>0||years>0) parts.push(`${months}个月`)
+  parts.push(`${days}天`)
+  return `${parts.join(' ')} · 共 ${totalDays} 天`
 }
 const normPlatform = v => text(v).replace(/\s+/g,'').toUpperCase()
 const platformRefsFor = (rows,value) => {
@@ -159,6 +191,8 @@ export default function AdminEmployeesPage(){
   const [pageSize,setPageSizeState]=useState(()=>Number(localStorage.getItem('wfh_employee_page_size'))||20)
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
+  const [refreshing,setRefreshing]=useState(false)
+  const [liveTick,setLiveTick]=useState(0)
   const [generated,setGenerated]=useState(null)
   const [showFilters,setShowFilters]=useState(true)
   const [filters,setFilters]=useState({
@@ -294,6 +328,44 @@ export default function AdminEmployeesPage(){
     }catch(e){ setError(e.message) }
     finally{ setHistoryLoading(false) }
   }
+
+  const refreshEmployeeData=async({silent=false}={})=>{
+    if(!silent) setRefreshing(true)
+    try{
+      const jobs=[loadMeta(),loadAnalytics(),loadArchiveStats(true)]
+      if(tab==='员工档案') jobs.push(loadList(page,pageSize))
+      if(tab==='人员分析') jobs.push(loadPeopleAnalytics(analysisFilters),loadResignationAnalytics(resignationAnalyticsFilters))
+      if(tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters))
+      if(selected?.employee?.id){
+        jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(setSelected).catch(()=>{}))
+      }
+      await Promise.all(jobs)
+    }finally{
+      if(!silent) setRefreshing(false)
+    }
+  }
+
+  useEffect(()=>{
+    let timer=null
+    const signal=()=>{
+      clearTimeout(timer)
+      timer=setTimeout(()=>setLiveTick(v=>v+1),220)
+    }
+    const channel=supabase
+      .channel('admin-employees-live-v282')
+      .on('postgres_changes',{event:'*',schema:'public',table:'employees'},signal)
+      .on('postgres_changes',{event:'*',schema:'public',table:'employee_lifecycle_events'},signal)
+      .subscribe()
+    return()=>{
+      clearTimeout(timer)
+      supabase.removeChannel(channel)
+    }
+  },[])
+
+  useEffect(()=>{
+    if(!liveTick) return
+    refreshEmployeeData({silent:true})
+  },[liveTick])
 
   useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>loadArchiveStats(true),15000); return()=>clearInterval(t) },[])
   useEffect(()=>{
@@ -475,6 +547,20 @@ export default function AdminEmployeesPage(){
     finally{ setAnalysisDetailLoading(false) }
   }
 
+  const openArchiveTenureDetail=async(bucket,label)=>{
+    setAnalysisDetail({title:`${label} · 在职员工`,event_type:'active',dimension:'',value:'',date_from:'',date_to:'',rows:[],total:0})
+    setAnalysisDetailLoading(true)
+    try{
+      const d=new Date()
+      const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'tenure_details',bucket,today}})
+      if(error||data?.error) throw new Error(data?.error||error?.message||'入职时长人员读取失败')
+      const uniqueRows=dedupeAnalysisRows(data.rows||[])
+      setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title:`${label} · 在职员工`}))
+    }catch(e){ setError(e.message); setAnalysisDetail(null) }
+    finally{ setAnalysisDetailLoading(false) }
+  }
+
   const submitResignEdit=async()=>{
     if(!editResignModal?.event_id) return
     if(!editResignModal.resign_date||!text(editResignModal.reason)){
@@ -571,7 +657,10 @@ export default function AdminEmployeesPage(){
         <div className="module-kicker">PEOPLE & ORGANIZATION</div>
         <h1>员工管理</h1>
       </div>
-      {tab==='员工档案'&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
+      <div className="employee-title-actions">
+        <button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>
+        {tab==='员工档案'&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
+      </div>
     </div>
 
     <div className="module-tabs">
@@ -598,7 +687,7 @@ export default function AdminEmployeesPage(){
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
           <label>班次<FilterCombo value={filters.shift_name} options={(analytics.shifts||[]).map(x=>x.name).length?(analytics.shifts||[]).map(x=>x.name):(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="employee-shift-filter"/></label>
           <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人 / 输入搜索" listId="employee-leader-filter"/></label>
-          <label>状态<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">全部</option><option value="active">在职</option><option value="inactive">停用</option><option value="resigned">离职</option></select></label>
+          <label>状态<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">全部</option><option value="active">在职</option><option value="probation">试用</option><option value="suspended">停用</option><option value="resigned">离职</option></select></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
         </div>}
@@ -615,7 +704,7 @@ export default function AdminEmployeesPage(){
 
       <ArchiveStructureStats
         data={archiveStats}
-        onTenure={(bucket,label)=>openAnalysisDetail({title:`${label} · 在职员工`,event_type:'active',filters:{tenure_bucket:bucket}})}
+        onTenure={(bucket,label)=>openArchiveTenureDetail(bucket,label)}
         onPosition={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'position',value:name,filters:{}})}
         onCountry={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'country',value:name,filters:{}})}
       />
@@ -627,7 +716,7 @@ export default function AdminEmployeesPage(){
           <table className="data-table employee-master-table">
             <thead><tr><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=><tr key={r.id}>
-              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td>{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
+              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td>{formatDateTime(r.created_at)}</td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
               <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
               <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" onClick={()=>generateCode(r.employee_no)}>激活码</button>}</div></td>
@@ -963,7 +1052,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
       <div className="employee-avatar">{text(e.full_name).slice(0,1).toUpperCase()||'E'}</div>
-      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span></div></div>
+      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span>{e.hire_date&&<span className="employee-tenure-chip">{tenureDurationLabel(e.hire_date,e.resign_date,e.status)}</span>}</div></div>
       <div className="drawer-head-actions">
         {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
         {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
@@ -976,7 +1065,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <div className="detail-sections detail-sections-v11">
-        <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
+        <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['岗位',e.positions?.name],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
@@ -1000,7 +1089,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
 }
 
 function ResignModal({state,setState,onClose,onSave}){
-  return <div className="modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
+  return <div className="modal-mask employee-action-modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
     <div className="modal-head"><div><span className="modal-kicker">EMPLOYEE RESIGNATION</span><h2>办理离职</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
     <div className="form-grid">
       <Field label="离职日期"><input type="date" value={state.resign_date} onChange={e=>setState({...state,resign_date:e.target.value})}/></Field>
@@ -1065,7 +1154,7 @@ function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
 }
 
 function EditResignationModal({state,setState,onClose,onSave}){
-  return <div className="modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal edit-resignation-modal" onMouseDown={e=>e.stopPropagation()}>
+  return <div className="modal-mask employee-action-modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal edit-resignation-modal" onMouseDown={e=>e.stopPropagation()}>
     <div className="modal-head"><div><span className="modal-kicker">EDIT RESIGNATION</span><h2>修改离职记录</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
     <div className="edit-resignation-note">修改后会同步更新当前离职档案；员工其他历史资料不会删除。</div>
     <div className="form-grid">
@@ -1077,7 +1166,7 @@ function EditResignationModal({state,setState,onClose,onSave}){
 }
 
 function CancelHireModal({state,setState,onClose,onSave}){
-  return <div className="modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
+  return <div className="modal-mask employee-action-modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
     <div className="modal-head"><div><span className="modal-kicker">CANCEL NEW HIRE</span><h2>撤销入职</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
     <div className="cancel-hire-warning"><strong>只用于录错资料或新人临时取消上班。</strong><span>确认后会移除当前员工档案与 TEST Google Sheet 记录。已经建立员工登录账号的人员不能直接撤销。</span></div>
     <div className="form-grid"><Field label={`输入员工ID ${state.employee_no} 确认`} wide><input value={state.confirm_text||''} onChange={e=>setState({...state,confirm_text:e.target.value.toUpperCase()})}/></Field></div>
@@ -1086,7 +1175,7 @@ function CancelHireModal({state,setState,onClose,onSave}){
 }
 
 function RestoreModal({state,setState,onClose,onSave}){
-  return <div className="modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
+  return <div className="modal-mask employee-action-modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
     <div className="modal-head"><div><span className="modal-kicker">RESTORE EMPLOYEE</span><h2>恢复在职</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
     <div className="restore-confirm-copy">
       <strong>撤销这次离职记录？</strong>
@@ -1528,7 +1617,7 @@ function ArchiveStructureStats({data,onTenure,onPosition,onCountry}){
   const updated=data?.latest_updated_at?formatDateTime(data.latest_updated_at):'—'
   return <section className="archive-structure-section">
     <div className="archive-structure-head">
-      <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；每 60 秒刷新一次。</p></div>
+      <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；Realtime 自动刷新，15 秒轮询兜底。</p></div>
       <div className={`archive-sync-badge ${data?.error?'has-error':''}`}><i/><span>{data?.error?'结构统计待部署':`Supabase 更新 ${updated}`}</span></div>
     </div>
     <div className="archive-structure-grid">

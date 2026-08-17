@@ -176,3 +176,34 @@
 /* V28 — employee archive opened from analytics must sit above the analytics modal. */
 .detail-mask{z-index:10050!important;}
 .detail-mask .employee-detail-drawer{z-index:10051!important;}
+
+/* ===== V28.1 — explicit refresh control + live data feedback ===== */
+.employee-title-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+.employee-refresh-action{min-width:96px}
+.employee-refresh-action:disabled{opacity:.58;cursor:wait}
+@media(max-width:680px){.employee-title-actions{width:100%;justify-content:flex-start}.employee-title-actions>button{flex:1}}
+
+/* ===== V28.2 — drawer action stacking / tenure / date stability ===== */
+.employee-action-modal-mask,
+.employee-form-mask{
+  z-index:10220!important;
+}
+.employee-action-modal-mask .modal-card,
+.employee-form-mask .modal-card{
+  position:relative;
+  z-index:10221!important;
+}
+.employee-hire-date-cell{
+  min-width:104px;
+  white-space:nowrap!important;
+}
+.employee-tenure-chip{
+  background:#eef7ff!important;
+  color:#2d68b7!important;
+  border:1px solid #d7e8fb;
+  max-width:100%;
+  white-space:normal!important;
+  line-height:1.35;
+  padding:4px 8px!important;
+}
+
