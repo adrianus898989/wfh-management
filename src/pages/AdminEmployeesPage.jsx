@@ -332,7 +332,9 @@ export default function AdminEmployeesPage(){
     if(!silent){ setLoading(true); setError('') }
     try{
       const data=await invoke({action:'list',page:nextPage,page_size:nextSize,filters})
-      setRows(data.rows||[]); setTotal(data.total||0)
+      const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
+      setRows(visibleRows)
+      setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))
     }catch(e){ if(!silent) setError(e.message) }
     finally{ if(!silent) setLoading(false) }
   }
@@ -341,9 +343,10 @@ export default function AdminEmployeesPage(){
     if(!silent){ setHistoryLoading(true); setError('') }
     try{
       const data=await invoke({action:'history_list',page:nextPage,page_size:nextSize,filters:nextFilters})
-      setHistory(data.rows||[])
+      const cleaned=dedupeAnalysisRows(data.rows||[])
+      setHistory(cleaned)
       setHistoryPermissions(data.permissions||{can_edit:false,can_restore:false})
-      setHistoryTotal(data.total||0)
+      setHistoryTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-cleaned.length)))
     }catch(e){ if(!silent) setError(e.message) }
     finally{ if(!silent) setHistoryLoading(false) }
   }
@@ -498,8 +501,8 @@ export default function AdminEmployeesPage(){
     if(!employeeNo||!text(form.employee.full_name)){
       return setError('员工ID和姓名必须填写')
     }
-    if(mode==='create'&&(employeeNo==='SYSTEM'||employeeNo==='ADMIN'||employeeNo.startsWith('TEST'))){
-      return setError('正式环境不能使用 SYSTEM / ADMIN / TEST 开头的员工ID。请使用真实员工ID。')
+    if(mode==='create'&&(employeeNo==='SYSTEM'||employeeNo==='ADMIN')){
+      return setError('SYSTEM / ADMIN 是系统保留ID，不能用于员工。TEST 开头的ID可用于正式表流程测试，但不会计入统计KPI。')
     }
     try{
       const payload={
@@ -1201,7 +1204,7 @@ function EditResignationModal({state,setState,onClose,onSave}){
 function CancelHireModal({state,setState,onClose,onSave}){
   return <div className="modal-mask employee-action-modal-mask" onMouseDown={onClose}><div className="modal-card resign-modal" onMouseDown={e=>e.stopPropagation()}>
     <div className="modal-head"><div><span className="modal-kicker">CANCEL NEW HIRE</span><h2>撤销入职</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
-    <div className="cancel-hire-warning"><strong>只用于录错资料或新人临时取消上班。</strong><span>确认后会移除当前员工档案与 TEST Google Sheet 记录。已经建立员工登录账号的人员不能直接撤销。</span></div>
+    <div className="cancel-hire-warning"><strong>只用于录错资料或新人临时取消上班。</strong><span>确认后会移除当前员工档案与正式《居家员工名单》记录。已经建立员工登录账号的人员不能直接撤销。</span></div>
     <div className="form-grid"><Field label={`输入员工ID ${state.employee_no} 确认`} wide><input value={state.confirm_text||''} onChange={e=>setState({...state,confirm_text:e.target.value.toUpperCase()})}/></Field></div>
     <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="danger-action" onClick={onSave}>确认撤销入职</button></div>
   </div></div>
@@ -1212,7 +1215,7 @@ function RestoreModal({state,setState,onClose,onSave}){
     <div className="modal-head"><div><span className="modal-kicker">RESTORE EMPLOYEE</span><h2>恢复在职</h2><p>{state.employee_no} · {state.full_name}</p></div><button onClick={onClose}>×</button></div>
     <div className="restore-confirm-copy">
       <strong>撤销这次离职记录？</strong>
-      <span>员工会恢复为在职，离职日期与离职原因会从当前 TEST Google Sheet 清除。</span>
+      <span>员工会恢复为在职，离职日期与离职原因会从正式《居家员工名单》清除。</span>
     </div>
     <label className="checkbox-row"><input type="checkbox" checked={state.restore_portal!==false} onChange={e=>setState({...state,restore_portal:e.target.checked})}/><span>如有员工 Portal，同时恢复登录</span></label>
     <div className="modal-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" onClick={onSave}>确认恢复</button></div>
