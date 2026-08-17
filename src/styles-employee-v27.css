@@ -150,3 +150,25 @@
   .employee-analysis-subtabs button{white-space:nowrap;}
   .dimension-directory-summary{grid-template-columns:1fr 1fr;}
 }
+
+
+/* V27.4 — employee archive complete structure statistics */
+.archive-structure-section{margin:0 0 14px;display:grid;gap:10px}
+.archive-structure-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 2px}
+.archive-structure-head h3{margin:0 0 3px;color:#18365c;font-size:14px}
+.archive-structure-head p{margin:0;color:#7b8fa7;font-size:10px}
+.archive-sync-badge{display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:0 10px;border:1px solid #dbe5ef;border-radius:999px;background:#fff;color:#657b95;font-size:9px;font-weight:750;white-space:nowrap}
+.archive-sync-badge i{width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px #dcfce7}
+.archive-structure-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.archive-breakdown-card{min-width:0;border:1px solid #dce6f1;border-radius:13px;background:#fff;overflow:hidden}
+.archive-breakdown-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 13px 10px;border-bottom:1px solid #edf2f7}
+.archive-breakdown-head strong{color:#17365d;font-size:12px}.archive-breakdown-head span{color:#7990ab;font-size:9px;font-weight:750}
+.archive-breakdown-list{max-height:238px;overflow:auto;padding:5px 10px 9px}
+.archive-breakdown-list>button,.archive-breakdown-list>div:not(.archive-breakdown-empty){width:100%;display:flex;align-items:center;justify-content:space-between;gap:9px;box-sizing:border-box;padding:7px 5px;border:0;border-bottom:1px solid #f0f4f8;background:transparent;color:#49617e;text-align:left;font-size:10px}
+.archive-breakdown-list>button{cursor:pointer}.archive-breakdown-list>button:hover{background:#f7faff;color:#185bcf}
+.archive-breakdown-list strong{color:#203d62;font-size:10px;white-space:nowrap}.archive-breakdown-list em{margin-left:6px;color:#91a0b4;font-style:normal;font-size:8px;font-weight:600}
+.archive-breakdown-empty{padding:24px 6px;text-align:center;color:#8798ad;font-size:10px}
+@media(max-width:1300px){.archive-structure-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:720px){.archive-structure-head{align-items:flex-start;flex-direction:column}.archive-structure-grid{grid-template-columns:1fr}}
+
+.archive-sync-badge.has-error i{background:#f59e0b;box-shadow:0 0 0 3px #fef3c7}.archive-sync-badge.has-error{color:#a16207}

@@ -172,6 +172,7 @@ export default function AdminEmployeesPage(){
   const [peopleAnalytics,setPeopleAnalytics]=useState({
     loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[],
   })
+  const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
   const [analysisDetail,setAnalysisDetail]=useState(null)
   const [analysisDetailLoading,setAnalysisDetailLoading]=useState(false)
@@ -206,6 +207,19 @@ export default function AdminEmployeesPage(){
 
   const loadMeta=async()=>{
     try{ setMeta(await invoke({action:'meta'})) }catch(e){ setError(e.message) }
+  }
+
+  const loadArchiveStats=async(silent=false)=>{
+    if(!silent) setArchiveStats(v=>({...v,loading:true}))
+    try{
+      const d=new Date()
+      const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'overview',today}})
+      if(error||data?.error) throw new Error(data?.error||error?.message||'员工结构统计读取失败')
+      setArchiveStats({...data,loading:false,error:''})
+    }catch(e){
+      setArchiveStats(v=>({...v,loading:false,error:e.message||'员工结构统计读取失败'}))
+    }
   }
 
   const loadAnalytics=async()=>{
@@ -267,7 +281,7 @@ export default function AdminEmployeesPage(){
     finally{ setHistoryLoading(false) }
   }
 
-  useEffect(()=>{ loadMeta(); loadAnalytics() },[])
+  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>loadArchiveStats(true),60000); return()=>clearInterval(t) },[])
   useEffect(()=>{
     if(first.current){ first.current=false; loadList(1,pageSize); return }
     const t=setTimeout(()=>{ setPage(1); loadList(1,pageSize) },260)
@@ -370,7 +384,7 @@ export default function AdminEmployeesPage(){
       }
       const data=await invoke(payload)
       setEmployeeModal(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadList(mode==='create'?1:page,pageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(mode==='create'?1:page,pageSize)])
       if(mode==='edit'&&employee_id){
         setSelected(await invoke({action:'detail',employee_id}))
       }
@@ -423,7 +437,7 @@ export default function AdminEmployeesPage(){
         reason:editResignModal.reason,
       })
       setEditResignModal(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadList(page,pageSize),loadHistory(historyPage,historyPageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(page,pageSize),loadHistory(historyPage,historyPageSize)])
       if(data?.sync?.skipped) setError('离职记录已修改；Google Sheet 双向同步尚未完成配置。')
     }catch(e){ setError(e.message) }
   }
@@ -436,7 +450,7 @@ export default function AdminEmployeesPage(){
     try{
       const data=await invoke({action:'resign_employee',...resignModal})
       setResignModal(null); setSelected(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
       if(data?.sync?.skipped) setError('离职已保存；Google Sheet 双向同步尚未完成配置。')
     }catch(e){ setError(e.message) }
   }
@@ -451,7 +465,7 @@ export default function AdminEmployeesPage(){
       })
       setRestoreModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
       if(data?.sync?.skipped) setError('已恢复在职；Google Sheet 双向同步尚未完成配置。')
     }catch(e){ setError(e.message) }
   }
@@ -469,7 +483,7 @@ export default function AdminEmployeesPage(){
       })
       setCancelHireModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
+      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
       if(data?.sheet_warning) setError(data.sheet_warning)
     }catch(e){ setError(e.message) }
   }
@@ -546,6 +560,13 @@ export default function AdminEmployeesPage(){
         <MetricSummary label="近7天离职" value={analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(analytics.as_of,-6),date_to:analytics.as_of,filters:{}})}/>
         <MetricSummary label="近30天净增" value={analytics.kpis?.net_30d??'—'} hint={`入 ${analytics.kpis?.join_30d??'—'} / 离 ${analytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(analytics.as_of,-29),date_to:analytics.as_of,filters:{}})}/>
       </div>
+
+      <ArchiveStructureStats
+        data={archiveStats}
+        onTenure={(bucket,label)=>openAnalysisDetail({title:`${label} · 在职员工`,event_type:'active',filters:{tenure_bucket:bucket}})}
+        onPosition={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'position',value:name,filters:{}})}
+        onCountry={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'country',value:name,filters:{}})}
+      />
 
       {generated&&<div className="activation-banner"><div><span>{generated.employee_no} · {generated.employee_name}</span><strong>{generated.activation_code}</strong></div><button onClick={()=>navigator.clipboard.writeText(generated.activation_code)}>复制激活码</button></div>}
 
@@ -1450,6 +1471,36 @@ function PositionAnalysisCard({item,onPeople,onResign,onTeam}){
     </div>
   </article>
 }
+function ArchiveStructureStats({data,onTenure,onPosition,onCountry}){
+  const tenureRows=data?.tenure||[]
+  const updated=data?.latest_updated_at?formatDateTime(data.latest_updated_at):'—'
+  return <section className="archive-structure-section">
+    <div className="archive-structure-head">
+      <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；每 60 秒刷新一次。</p></div>
+      <div className={`archive-sync-badge ${data?.error?'has-error':''}`}><i/><span>{data?.error?'结构统计待部署':`Supabase 更新 ${updated}`}</span></div>
+    </div>
+    <div className="archive-structure-grid">
+      <ArchiveBreakdownCard title="入职时长" rows={tenureRows} loading={data?.loading} onRow={x=>onTenure?.(x.key,x.name)}/>
+      <ArchiveBreakdownCard title="各岗位人数" rows={data?.positions||[]} loading={data?.loading} onRow={x=>onPosition?.(x.name)}/>
+      <ArchiveBreakdownCard title="各盘口人数" rows={data?.platforms||[]} loading={data?.loading}/>
+      <ArchiveBreakdownCard title="各国家人数" rows={data?.countries||[]} loading={data?.loading} onRow={x=>onCountry?.(x.name)}/>
+    </div>
+  </section>
+}
+function ArchiveBreakdownCard({title,rows,loading,onRow}){
+  const total=(rows||[]).reduce((sum,x)=>sum+(Number(x.count)||0),0)
+  return <section className="archive-breakdown-card">
+    <div className="archive-breakdown-head"><strong>{title}</strong><span>{total} 人次</span></div>
+    <div className="archive-breakdown-list">
+      {loading&&!(rows||[]).length?<div className="archive-breakdown-empty">读取中...</div>:(rows||[]).map(x=>{
+        const inner=<><span>{x.name}</span><strong>{x.count||0}<em>{Number.isFinite(Number(x.share))?`${Number(x.share).toFixed(1)}%`:''}</em></strong></>
+        return onRow?<button type="button" key={x.key||x.name} onClick={()=>onRow(x)}>{inner}</button>:<div key={x.key||x.name}>{inner}</div>
+      })}
+      {!loading&&!(rows||[]).length&&<div className="archive-breakdown-empty">暂无数据</div>}
+    </div>
+  </section>
+}
+
 function SelectValue({value,options,onChange}){
   return <select value={value||''} onChange={e=>onChange(e.target.value)}>
     <option value="">请选择</option>

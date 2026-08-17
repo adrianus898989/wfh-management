@@ -21,3 +21,28 @@
 .reports-primary-tabs button{padding:10px 20px}
 .reports-primary-tabs button.active{background:#eaf2ff;color:#1f5ed5;box-shadow:none}
 .reports-title-row{margin-bottom:12px}
+
+
+/* V27.4 — legacy paibantongji presentation pass */
+.reports-page{max-width:none}
+.reports-primary-tabs{gap:0;padding:0 8px;border-radius:10px;overflow:hidden}
+.reports-primary-tabs button{min-height:46px;padding:0 18px;border-radius:0;border-bottom:3px solid transparent}
+.reports-primary-tabs button.active{background:transparent;border-bottom-color:#2563eb;color:#155bd7}
+.legacy-report-section{overflow:hidden}
+.legacy-report-filter-grid{grid-template-columns:repeat(4,minmax(135px,1fr));align-items:end}
+.people-report-table{min-width:980px}.schedule-report-table{min-width:900px}.efficiency-report-table{min-width:820px}.roster-modal-table{min-width:760px}
+.error-layout.legacy-error-layout{align-items:start;grid-template-columns:minmax(260px,320px) minmax(0,1fr)}
+.legacy-error-ranking{align-self:start;position:sticky;top:68px;overflow:hidden}
+.legacy-error-ranking .report-ratios{max-height:610px;overflow:auto;padding-bottom:10px}
+.legacy-error-table{width:100%;min-width:0;table-layout:fixed}
+.legacy-error-table th,.legacy-error-table td{white-space:normal;overflow-wrap:anywhere;padding:10px 9px}
+.legacy-error-table th:nth-child(1){width:78px}.legacy-error-table th:nth-child(2){width:82px}.legacy-error-table th:nth-child(3){width:100px}.legacy-error-table th:nth-child(4){width:88px}.legacy-error-table th:nth-child(5){width:110px}.legacy-error-table th:nth-child(6){width:48px}.legacy-error-table th:nth-child(7){width:100px}.legacy-error-table th:nth-child(9){width:58px}
+.error-note-preview{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
+.report-error-detail-modal{width:min(900px,92vw)}
+.error-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:18px 20px;overflow:auto}
+.error-detail-grid>div{padding:11px 12px;border:1px solid #e4ebf4;border-radius:9px;background:#fbfdff;min-width:0}.error-detail-grid>div.wide{grid-column:1/-1}
+.error-detail-grid span{display:block;margin-bottom:5px;color:#7b8ca2;font-size:9px;font-weight:750}.error-detail-grid strong{color:#243d5d;font-size:12px}.error-detail-grid p{margin:0;color:#354d69;font-size:11px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.legacy-modal-footer{display:flex;justify-content:flex-end;padding:10px 20px 16px;border-top:1px solid #edf1f6}
+.report-modal .legacy-report-filter-grid{grid-template-columns:repeat(4,minmax(120px,1fr))}
+@media(max-width:1250px){.error-layout.legacy-error-layout{grid-template-columns:1fr}.legacy-error-ranking{position:relative;top:auto}.legacy-error-ranking .report-ratios{max-height:340px}.legacy-report-filter-grid{grid-template-columns:repeat(3,minmax(130px,1fr))}}
+@media(max-width:760px){.reports-primary-tabs{overflow-x:auto}.reports-primary-tabs button{white-space:nowrap}.legacy-report-filter-grid,.report-modal .legacy-report-filter-grid{grid-template-columns:1fr 1fr}.error-detail-grid{grid-template-columns:1fr}.error-detail-grid>div.wide{grid-column:auto}}
