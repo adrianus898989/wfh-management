@@ -172,3 +172,7 @@
 @media(max-width:720px){.archive-structure-head{align-items:flex-start;flex-direction:column}.archive-structure-grid{grid-template-columns:1fr}}
 
 .archive-sync-badge.has-error i{background:#f59e0b;box-shadow:0 0 0 3px #fef3c7}.archive-sync-badge.has-error{color:#a16207}
+
+/* V28 — employee archive opened from analytics must sit above the analytics modal. */
+.detail-mask{z-index:10050!important;}
+.detail-mask .employee-detail-drawer{z-index:10051!important;}

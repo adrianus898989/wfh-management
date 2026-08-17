@@ -4,6 +4,20 @@ import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 
 const text = v => String(v ?? '').trim()
+const dedupeAnalysisRows = rows => {
+  const map=new Map()
+  for(const row of (rows||[])){
+    const employeeKey=text(row.employee_no)||text(row.employee_id)||text(row.id)
+    const type=text(row.event_type)||'event'
+    const date=text(row.date)||text(row.effective_date)||''
+    const key=`${employeeKey}|${type}|${date}`
+    const prev=map.get(key)
+    // Prefer a row that can actually open the employee archive; otherwise keep the newest copy.
+    if(!prev || (!prev.employee_id&&row.employee_id)) map.set(key,row)
+    else if(prev.employee_id===row.employee_id) map.set(key,row)
+  }
+  return Array.from(map.values())
+}
 const analysisViews=['总览','团队分析','岗位分析','国家分析','班次分析','离职分析']
 const blankHistoryFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 const statusName = s => ({active:'在职',inactive:'停用',resigned:'离职'}[s] || s || '-')
@@ -281,7 +295,26 @@ export default function AdminEmployeesPage(){
     finally{ setHistoryLoading(false) }
   }
 
-  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>loadArchiveStats(true),60000); return()=>clearInterval(t) },[])
+  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>loadArchiveStats(true),15000); return()=>clearInterval(t) },[])
+  useEffect(()=>{
+    if(tab!=='员工档案') return
+    const t=setInterval(async()=>{
+      if(document.hidden) return
+      try{
+        const d=new Date()
+        const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+        const [metaData,listData,analyticsData]=await Promise.all([
+          invoke({action:'meta'}),
+          invoke({action:'list',page,page_size:pageSize,filters}),
+          invoke({action:'analytics',today}),
+        ])
+        setMeta(metaData)
+        setRows(listData.rows||[]); setTotal(listData.total||0)
+        setAnalytics({...analyticsData,loading:false})
+      }catch{}
+    },15000)
+    return()=>clearInterval(t)
+  },[tab,page,pageSize,JSON.stringify(filters)])
   useEffect(()=>{
     if(first.current){ first.current=false; loadList(1,pageSize); return }
     const t=setTimeout(()=>{ setPage(1); loadList(1,pageSize) },260)
@@ -393,11 +426,29 @@ export default function AdminEmployeesPage(){
   }
 
   const openHistoryDetail=async row=>{
-    if(!row?.employee_id) return setError('找不到对应员工档案')
-    setSelected({employee:{id:row.employee_id,employee_no:row.employee_no,full_name:row.full_name,status:'resigned'}})
     setDetailLoading(true)
-    try{ setSelected(await invoke({action:'detail',employee_id:row.employee_id})) }
-    catch(e){ setError(e.message); setSelected(null) }
+    try{
+      let employeeId=text(row?.employee_id)
+      // Some lifecycle rows are historical and can miss employee_id. Resolve by exact employee number.
+      if(!employeeId&&text(row?.employee_no)){
+        const found=await invoke({action:'list',page:1,page_size:5,filters:{employee_no:text(row.employee_no),status:''}})
+        const exact=(found.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(row.employee_no).toUpperCase())
+        employeeId=text(exact?.id||exact?.employee_id)
+      }
+      if(!employeeId) throw new Error('找不到对应员工档案')
+      setSelected({employee:{id:employeeId,employee_no:row?.employee_no,full_name:row?.full_name,status:row?.event_type==='resign'?'resigned':'active'}})
+      try{
+        setSelected(await invoke({action:'detail',employee_id:employeeId}))
+      }catch(firstError){
+        // Lifecycle data can carry a stale id after test cleanup; retry once by employee number.
+        if(!text(row?.employee_no)) throw firstError
+        const found=await invoke({action:'list',page:1,page_size:5,filters:{employee_no:text(row.employee_no),status:''}})
+        const exact=(found.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(row.employee_no).toUpperCase())
+        const fallbackId=text(exact?.id||exact?.employee_id)
+        if(!fallbackId||fallbackId===employeeId) throw firstError
+        setSelected(await invoke({action:'detail',employee_id:fallbackId}))
+      }
+    }catch(e){ setError(e.message); setSelected(null) }
     finally{ setDetailLoading(false) }
   }
 
@@ -418,7 +469,8 @@ export default function AdminEmployeesPage(){
     setAnalysisDetailLoading(true)
     try{
       const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:2000,filters:sourceFilters})
-      setAnalysisDetail(v=>({...v,...data,title}))
+      const uniqueRows=dedupeAnalysisRows(data.rows||[])
+      setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title}))
     }catch(e){ setError(e.message); setAnalysisDetail(null) }
     finally{ setAnalysisDetailLoading(false) }
   }
@@ -553,12 +605,12 @@ export default function AdminEmployeesPage(){
       </div>
 
       <div className="module-summary-grid employee-summary-grid employee-kpi-grid archive-kpi-strip">
-        <MetricSummary label="在职员工" value={analytics.kpis?.active??meta.active} hint={`员工档案 ${analytics.kpis?.total_profiles??meta.total??0}`} onClick={()=>openAnalysisDetail({title:'当前在职员工',event_type:'active',filters:{}})}/>
-        <MetricSummary label="今日入职" value={analytics.kpis?.today_join??'—'} compare={analytics.kpis?.today_join_delta} compareLabel="较昨日" onClick={()=>openAnalysisDetail({title:'今日入职人员',event_type:'join',date_from:analytics.as_of,date_to:analytics.as_of,filters:{}})}/>
-        <MetricSummary label="今日离职" value={analytics.kpis?.today_resign??'—'} compare={analytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse onClick={()=>openAnalysisDetail({title:'今日离职人员',event_type:'resign',date_from:analytics.as_of,date_to:analytics.as_of,filters:{}})}/>
-        <MetricSummary label="近7天入职" value={analytics.kpis?.join_7d??'—'} compare={analytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare onClick={()=>openAnalysisDetail({title:'近7天入职人员',event_type:'join',date_from:isoAdd(analytics.as_of,-6),date_to:analytics.as_of,filters:{}})}/>
-        <MetricSummary label="近7天离职" value={analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(analytics.as_of,-6),date_to:analytics.as_of,filters:{}})}/>
-        <MetricSummary label="近30天净增" value={analytics.kpis?.net_30d??'—'} hint={`入 ${analytics.kpis?.join_30d??'—'} / 离 ${analytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(analytics.as_of,-29),date_to:analytics.as_of,filters:{}})}/>
+        <MetricSummary label="在职员工" value={archiveStats.kpis?.active??archiveStats.active??analytics.kpis?.active??meta.active} hint={`员工档案 ${archiveStats.kpis?.total_profiles??archiveStats.total??analytics.kpis?.total_profiles??meta.total??0}`} onClick={()=>openAnalysisDetail({title:'当前在职员工',event_type:'active',filters:{}})}/>
+        <MetricSummary label="今日入职" value={archiveStats.kpis?.today_join??analytics.kpis?.today_join??'—'} compare={analytics.kpis?.today_join_delta} compareLabel="较昨日" onClick={()=>openAnalysisDetail({title:'今日入职人员',event_type:'join',date_from:archiveStats.as_of||analytics.as_of,date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="今日离职" value={archiveStats.kpis?.today_resign??analytics.kpis?.today_resign??'—'} compare={analytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse onClick={()=>openAnalysisDetail({title:'今日离职人员',event_type:'resign',date_from:archiveStats.as_of||analytics.as_of,date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="近7天入职" value={archiveStats.kpis?.join_7d??analytics.kpis?.join_7d??'—'} compare={analytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare onClick={()=>openAnalysisDetail({title:'近7天入职人员',event_type:'join',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-6),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="近7天离职" value={archiveStats.kpis?.resign_7d??analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-6),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="近30天净增" value={archiveStats.kpis?.net_30d??analytics.kpis?.net_30d??'—'} hint={`入 ${archiveStats.kpis?.join_30d??analytics.kpis?.join_30d??'—'} / 离 ${archiveStats.kpis?.resign_30d??analytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-29),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
       </div>
 
       <ArchiveStructureStats
