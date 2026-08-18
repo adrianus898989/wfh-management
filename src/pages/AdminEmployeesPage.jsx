@@ -278,6 +278,12 @@ export default function AdminEmployeesPage(){
     return data
   }
 
+  const checkEmployeeIdentity=async body=>{
+    const {data,error}=await supabase.functions.invoke('admin-employee-write',{body:{action:'check_identity',...body}})
+    if(error||data?.error) throw new Error(data?.error||error?.message||'员工ID / 姓名检查失败')
+    return data
+  }
+
   const loadMeta=async()=>{
     try{ setMeta(await invoke({action:'meta'})) }catch(e){ setError(e.message) }
   }
@@ -491,18 +497,24 @@ export default function AdminEmployeesPage(){
 
   const openCreate=()=>{
     const f=emptyForm()
-    setEmployeeModal({mode:'create',employee_id:null,form:f})
+    setEmployeeModal({mode:'create',employee_id:null,original_employee_no:'',original_full_name:'',form:f})
   }
 
   const openEdit=async()=>{
     if(!selected?.employee?.id) return
     const detail=selected
-    setEmployeeModal({mode:'edit',employee_id:detail.employee.id,form:bundleToForm(detail)})
+    setEmployeeModal({
+      mode:'edit',
+      employee_id:detail.employee.id,
+      original_employee_no:text(detail.employee.employee_no),
+      original_full_name:text(detail.employee.full_name),
+      form:bundleToForm(detail),
+    })
   }
 
   const saveEmployee=async()=>{
     if(!employeeModal) return
-    const {mode,employee_id,form}=employeeModal
+    const {mode,employee_id,form,original_employee_no,original_full_name}=employeeModal
     const employeeNo=text(form.employee.employee_no).toUpperCase()
     if(!employeeNo||!text(form.employee.full_name)){
       return setError('员工ID和姓名必须填写')
@@ -514,7 +526,8 @@ export default function AdminEmployeesPage(){
       const payload={
         action:mode==='create'?'create_employee_full':'update_employee_full',
         employee_id,
-        previous_full_name:mode==='edit'?text(selected?.employee?.full_name):'',
+        previous_employee_no:mode==='edit'?text(original_employee_no||selected?.employee?.employee_no):'',
+        previous_full_name:mode==='edit'?text(original_full_name||selected?.employee?.full_name):'',
         employee:{...form.employee,employee_no:employeeNo},
         contact:form.contact,
         compensation:form.compensation,
@@ -533,9 +546,21 @@ export default function AdminEmployeesPage(){
         throw new Error(`Supabase 已保存，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}。请重新保存一次，直到两边同时成功。`)
       }
       setEmployeeModal(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(mode==='create'?1:page,pageSize)])
-      if(mode==='edit'&&employee_id){
-        setSelected(await invoke({action:'detail',employee_id}))
+      if(mode==='create'){
+        const nextFilters={...clearEmployeeFilters(),employee_no:employeeNo,status:''}
+        setFilters(nextFilters)
+        setPage(1)
+        const [listData]=await Promise.all([
+          invoke({action:'list',page:1,page_size:pageSize,filters:nextFilters}),
+          loadMeta(),loadAnalytics(),loadArchiveStats(),
+        ])
+        const visibleRows=(listData.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
+        setRows(visibleRows)
+        setTotal(Math.max(0,(listData.total||0)-((listData.rows||[]).length-visibleRows.length)))
+        if(data?.employee_id) setSelected(await invoke({action:'detail',employee_id:data.employee_id}))
+      }else{
+        await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(page,pageSize)])
+        if(employee_id) setSelected(await invoke({action:'detail',employee_id}))
       }
     }catch(e){ setError(e.message) }
   }
@@ -940,7 +965,7 @@ export default function AdminEmployeesPage(){
     {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={row=>openHistoryDetail(row)}/>}
 
     {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} returnToAnalysis={Boolean(analysisDetail)} onReturn={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})} onCancelHire={()=>setCancelHireModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,confirm_text:''})}/>}
-    {employeeModal&&<EmployeeFormModal state={employeeModal} setState={setEmployeeModal} meta={meta} onClose={()=>setEmployeeModal(null)} onSave={saveEmployee}/>}
+    {employeeModal&&<EmployeeFormModal state={employeeModal} setState={setEmployeeModal} meta={meta} onClose={()=>setEmployeeModal(null)} onSave={saveEmployee} onCheckIdentity={checkEmployeeIdentity}/>}
     {resignModal&&<ResignModal state={resignModal} setState={setResignModal} onClose={()=>setResignModal(null)} onSave={submitResign}/>}
     {editResignModal&&<EditResignationModal state={editResignModal} setState={setEditResignModal} onClose={()=>setEditResignModal(null)} onSave={submitResignEdit}/>}
     {restoreModal&&<RestoreModal state={restoreModal} setState={setRestoreModal} onClose={()=>setRestoreModal(null)} onSave={submitRestore}/>}
@@ -948,11 +973,49 @@ export default function AdminEmployeesPage(){
   </div>
 }
 
-function EmployeeFormModal({state,setState,meta,onClose,onSave}){
+function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity}){
   const f=state.form
   const e=f.employee
   const phpHome=isPhpHome(e.employment_type)
   const paymentMode=f.payment.mode||defaultPaymentMode(e.employment_type)
+  const [identityCheck,setIdentityCheck]=useState(null)
+  const [identityChecking,setIdentityChecking]=useState(false)
+  const identitySeq=useRef(0)
+
+  useEffect(()=>{
+    const employeeNo=text(e.employee_no).toUpperCase()
+    const fullName=text(e.full_name)
+    if(!employeeNo&&!fullName){ setIdentityCheck(null); setIdentityChecking(false); return }
+    setIdentityCheck(null)
+    setIdentityChecking(true)
+    const seq=++identitySeq.current
+    const timer=setTimeout(async()=>{
+      try{
+        const result=await onCheckIdentity({
+          employee_id:state.employee_id||'',
+          previous_employee_no:state.original_employee_no||'',
+          employee_no:employeeNo,
+          full_name:fullName,
+        })
+        if(seq===identitySeq.current) setIdentityCheck(result)
+      }catch(err){
+        if(seq===identitySeq.current) setIdentityCheck({check_error:err?.message||'检查失败'})
+      }finally{
+        if(seq===identitySeq.current) setIdentityChecking(false)
+      }
+    },420)
+    return()=>clearTimeout(timer)
+  },[e.employee_no,e.full_name,state.employee_id,state.original_employee_no])
+
+  const idConflict=identityCheck?.employee_no?.conflict||null
+  const nameConflict=identityCheck?.full_name?.conflict||null
+  const nameMatches=identityCheck?.full_name?.matches||[]
+  const identityReady=Boolean(text(e.employee_no)||text(e.full_name))
+  const nameMatchSummary=nameMatches.slice(0,4).map(x=>{
+    const status=x.status==='resigned'?'离职':x.status==='historical'||x.source==='lifecycle_history'?'历史记录':'在职'
+    const date=x.resign_date||x.effective_date||''
+    return `${x.employee_no||'历史记录'} · ${status}${date?` · ${date}`:''}`
+  }).join('；')
 
   const setEmployee=(k,v)=>{
     const next={...e,[k]:v}
@@ -1024,8 +1087,19 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
     <div className="modal-head employee-form-head"><div><span>{state.mode==='create'?'NEW EMPLOYEE':'EDIT EMPLOYEE'}</span><h2>{state.mode==='create'?'新增员工':'编辑员工资料'}</h2></div><button onClick={onClose}>×</button></div>
 
     <FormSection title="基本资料">
-      <Field label="员工ID"><input disabled={state.mode==='edit'} value={e.employee_no} onChange={x=>setEmployee('employee_no',x.target.value.toUpperCase())}/></Field>
-      <Field label="姓名"><input value={e.full_name} onChange={x=>setEmployee('full_name',x.target.value)}/></Field>
+      <Field label="员工ID">
+        <input value={e.employee_no} onChange={x=>setEmployee('employee_no',x.target.value.toUpperCase())} aria-invalid={Boolean(idConflict)}/>
+        {identityChecking&&<small style={{display:'block',marginTop:6,color:'#64748b'}}>正在检查员工ID…</small>}
+        {!identityChecking&&idConflict&&<small style={{display:'block',marginTop:6,color:'#dc2626',fontWeight:700}}>此员工ID已被使用：{idConflict.employee_no} · {idConflict.full_name||'未命名'} · {idConflict.status==='resigned'||idConflict.source==='lifecycle_history'?'历史/离职记录':'当前员工'}，不能保存。</small>}
+        {!identityChecking&&identityCheck&&!identityCheck?.check_error&&!idConflict&&identityReady&&text(e.employee_no)&&<small style={{display:'block',marginTop:6,color:'#15803d'}}>✓ 员工ID可用；编辑现有员工时也可以在这里纠正输错的ID。</small>}
+        {!identityChecking&&identityCheck?.check_error&&<small style={{display:'block',marginTop:6,color:'#dc2626',fontWeight:700}}>检查失败：{identityCheck.check_error}。为避免重复员工，暂时不能保存。</small>}
+      </Field>
+      <Field label="姓名">
+        <input value={e.full_name} onChange={x=>setEmployee('full_name',x.target.value)} aria-invalid={Boolean(nameConflict)}/>
+        {identityChecking&&text(e.full_name)&&<small style={{display:'block',marginTop:6,color:'#64748b'}}>正在检查姓名是否已被使用…</small>}
+        {!identityChecking&&nameConflict&&<small style={{display:'block',marginTop:6,color:'#dc2626',fontWeight:700}}>此姓名已被使用：{nameMatchSummary}{nameMatches.length>4?`；另有 ${nameMatches.length-4} 条`:''}。姓名必须唯一，不能保存。</small>}
+        {!identityChecking&&identityCheck&&!identityCheck?.check_error&&text(e.full_name)&&!nameConflict&&<small style={{display:'block',marginTop:6,color:'#15803d'}}>✓ 姓名可用，当前员工及历史记录中均未被其他人使用。</small>}
+      </Field>
       <Field label="员工国家"><SelectValue value={e.country} options={selectOptions(opts.countries,e.country)} onChange={v=>setEmployee('country',v)}/></Field>
       <Field label="员工类型"><SelectValue value={typeName(e.employment_type)==='纯居家（越南/缅甸/印尼等）'?'纯居家（越南/缅甸/印尼等）':e.employment_type} options={selectOptions(typeOptions,typeName(e.employment_type))} onChange={v=>setEmployee('employment_type',v)}/></Field>
       <Field label="入职日期"><input type="date" value={e.hire_date} onChange={x=>setEmployee('hire_date',x.target.value)}/></Field>
@@ -1094,7 +1168,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
       <Field label="员工地址" wide><textarea value={f.payment.employee_address} onChange={x=>setPayment('employee_address',x.target.value)}/></Field>
     </FormSection>}
 
-    <div className="modal-actions employee-form-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" onClick={onSave}>{state.mode==='create'?'创建员工':'保存修改'}</button></div>
+    <div className="modal-actions employee-form-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" disabled={Boolean(idConflict)||Boolean(nameConflict)||identityChecking||!identityCheck||Boolean(identityCheck?.check_error)} onClick={onSave}>{identityChecking?'正在检查…':state.mode==='create'?'创建员工':'保存修改'}</button></div>
   </div></div>
 }
 
