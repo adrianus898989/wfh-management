@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 
 const text = v => String(v ?? '').trim()
+const isTestEmployeeNo = v => text(v).toUpperCase().startsWith('TEST')
 const dedupeAnalysisRows = rows => {
   const map=new Map()
   for(const row of (rows||[])){
@@ -199,7 +200,7 @@ export default function AdminEmployeesPage(){
   const [tab,setTabState]=useState(tabs.includes(initialTab)?initialTab:'员工档案')
 
   const [meta,setMeta]=useState({
-    teams:[],positions:[],total:0,active:0,no_team:0,official_id_pending:0,
+    teams:[],positions:[],position_options:[],total:0,active:0,no_team:0,official_id_pending:0,
     options:{countries:[],nationalities:[],employment_types:[],shifts:[],groups:[],leaders:[],trainers:[],market_countries:[],market_positions:[],platforms:[]},
     platform_map:[],
     schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]}
@@ -284,8 +285,20 @@ export default function AdminEmployeesPage(){
     return data
   }
 
+  const loadMasterPositionOptions=async()=>{
+    const {data,error}=await supabase.functions.invoke('admin-employee-write',{body:{action:'get_master_position_options'}})
+    if(error||data?.error) return []
+    return Array.isArray(data?.rows)?data.rows:[]
+  }
+
   const loadMeta=async()=>{
-    try{ setMeta(await invoke({action:'meta'})) }catch(e){ setError(e.message) }
+    try{
+      const [baseMeta,positionOptions]=await Promise.all([
+        invoke({action:'meta'}),
+        loadMasterPositionOptions(),
+      ])
+      setMeta({...baseMeta,position_options:positionOptions})
+    }catch(e){ setError(e.message) }
   }
 
   const loadArchiveStats=async(silent=false)=>{
@@ -355,10 +368,13 @@ export default function AdminEmployeesPage(){
     if(!silent){ setHistoryLoading(true); setError('') }
     try{
       const data=await invoke({action:'history_list',page:nextPage,page_size:nextSize,filters:nextFilters})
-      const cleaned=dedupeAnalysisRows(data.rows||[])
+      const rawRows=data.rows||[]
+      const productionRows=rawRows.filter(r=>!isTestEmployeeNo(r.employee_no))
+      const cleaned=dedupeAnalysisRows(productionRows)
       setHistory(cleaned)
       setHistoryPermissions(data.permissions||{can_edit:false,can_restore:false})
-      setHistoryTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-cleaned.length)))
+      const hiddenTest=rawRows.length-productionRows.length
+      setHistoryTotal(Math.max(0,(data.total||0)-hiddenTest-(productionRows.length-cleaned.length)))
     }catch(e){ if(!silent) setError(e.message) }
     finally{ if(!silent) setHistoryLoading(false) }
   }
@@ -609,7 +625,8 @@ export default function AdminEmployeesPage(){
     setAnalysisDetailLoading(true)
     try{
       const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:2000,filters:sourceFilters})
-      const uniqueRows=dedupeAnalysisRows(data.rows||[])
+      const productionRows=(data.rows||[]).filter(r=>!isTestEmployeeNo(r.employee_no))
+      const uniqueRows=dedupeAnalysisRows(productionRows)
       setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title}))
     }catch(e){ setError(e.message); setAnalysisDetail(null) }
     finally{ setAnalysisDetailLoading(false) }
@@ -654,7 +671,11 @@ export default function AdminEmployeesPage(){
       return setError('离职日期和离职原因必须填写')
     }
     try{
+      const resignedEmployeeId=resignModal.employee_id
       const data=await invoke({action:'resign_employee',...resignModal})
+      // 先从当前在职列表立即移除，再用后端刷新做最终校验，不需要用户 F5。
+      setRows(prev=>prev.filter(r=>text(r.id)!==text(resignedEmployeeId)))
+      setTotal(prev=>Math.max(0,prev-1))
       setResignModal(null); setSelected(null)
       await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize)])
       if(!sheetSyncSucceeded(data?.sync)) setError(`离职已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
@@ -1104,15 +1125,25 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
       <Field label="员工类型"><SelectValue value={typeName(e.employment_type)==='纯居家（越南/缅甸/印尼等）'?'纯居家（越南/缅甸/印尼等）':e.employment_type} options={selectOptions(typeOptions,typeName(e.employment_type))} onChange={v=>setEmployee('employment_type',v)}/></Field>
       <Field label="入职日期"><input type="date" value={e.hire_date} onChange={x=>setEmployee('hire_date',x.target.value)}/></Field>
       <Field label="主档岗位">
-        <input list="employee-position-write-options" value={e.position_name||''} onChange={x=>setEmployee('position_name',x.target.value)} placeholder="选择现有岗位或直接输入新岗位"/>
-        <datalist id="employee-position-write-options">{(meta.positions||[]).map(x=><option key={x.id||x.name} value={x.name}/>)}</datalist>
+        <WriteCombo
+          value={e.position_name||''}
+          options={meta.position_options?.length?meta.position_options:(meta.positions||[]).map(x=>x.name)}
+          onChange={v=>setEmployee('position_name',v)}
+          placeholder="选择岗位 / 输入新岗位"
+          listId="employee-position-write-options"
+        />
       </Field>
     </FormSection>
 
     <FormSection title="组织与工作">
       <Field label="盘口岗位">
-        <input list="employee-market-position-options" value={e.market_position||''} onChange={x=>setEmployee('market_position',x.target.value)} placeholder="可直接输入新盘口 / 组合盘口"/>
-        <datalist id="employee-market-position-options">{platformOptions.map(x=><option key={x} value={x}/>)}</datalist>
+        <WriteCombo
+          value={e.market_position||''}
+          options={platformOptions}
+          onChange={v=>setEmployee('market_position',v)}
+          placeholder="选择盘口 / 输入新盘口或组合盘口"
+          listId="employee-market-position-options"
+        />
       </Field>
       <Field label="团队 / 系列"><div className="readonly-choice">{derivedSeries||'—'}</div></Field>
       <Field label="盘口国家"><div className="readonly-choice">{derivedMarketCountry||'—'}</div></Field>
@@ -1815,6 +1846,58 @@ function FilterCombo({value,options,onChange,placeholder,listId}){
       <button type="button" className={!value?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange('');closeMenu()}}>{placeholder?.split('/')[0]?.trim()||'全部'}</button>
       {filtered.map(x=><button type="button" key={x} className={text(value)===x?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange(x);closeMenu()}}>{x}</button>)}
       {!filtered.length&&<div className="smart-combo-empty">没有匹配项，请换关键字搜索</div>}
+    </div>}
+  </div>
+}
+
+
+function WriteCombo({value,options,onChange,placeholder,listId}){
+  const [open,setOpen]=useState(false)
+  const [query,setQuery]=useState('')
+  const root=useRef(null)
+
+  const values=useMemo(()=>Array.from(new Map(
+    (options||[])
+      .map(text)
+      .filter(Boolean)
+      .map(x=>[x.replace(/\s+/g,'').toUpperCase(),x])
+  ).values()),[JSON.stringify(options||[])])
+
+  const q=text(query).toLowerCase()
+  const filtered=useMemo(()=>values.filter(x=>!q||x.toLowerCase().includes(q)).slice(0,100),[values,q])
+
+  const closeMenu=()=>{setOpen(false);setQuery('')}
+  const openMenu=()=>{setQuery('');setOpen(true)}
+
+  useEffect(()=>{
+    const close=e=>{ if(root.current&&!root.current.contains(e.target)) closeMenu() }
+    document.addEventListener('mousedown',close)
+    return()=>document.removeEventListener('mousedown',close)
+  },[])
+
+  return <div className={`smart-filter-combo write-combo ${open?'is-open':''}`} ref={root} data-combo={listId}>
+    <input
+      value={open?query:(value||'')}
+      onChange={e=>{setQuery(e.target.value);setOpen(true)}}
+      onFocus={openMenu}
+      onKeyDown={e=>{
+        if(e.key==='Escape') closeMenu()
+        if(e.key==='Enter'){
+          e.preventDefault()
+          const manual=text(query)
+          if(manual) onChange(manual)
+          closeMenu()
+        }
+      }}
+      placeholder={placeholder||'选择 / 输入搜索'}
+      autoComplete="off"
+    />
+    <button type="button" className="smart-combo-toggle" onMouseDown={e=>e.preventDefault()} onClick={()=>{if(open)closeMenu();else openMenu()}} aria-label="展开选项">⌄</button>
+    {open&&<div className="smart-combo-menu">
+      {filtered.map(x=><button type="button" key={x} className={text(value)===x?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange(x);closeMenu()}}>{x}</button>)}
+      {text(query)&&!values.some(x=>x.toLowerCase()===text(query).toLowerCase())&&
+        <button type="button" className="write-combo-create" onMouseDown={e=>e.preventDefault()} onClick={()=>{onChange(text(query));closeMenu()}}>＋ 使用新值「{text(query)}」</button>}
+      {!filtered.length&&!text(query)&&<div className="smart-combo-empty">暂无可选项</div>}
     </div>}
   </div>
 }
