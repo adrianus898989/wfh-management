@@ -146,6 +146,12 @@ const auditSourceLabel = r => {
   if(text(r?.source)==='backend') return '后台'
   return text(r?.source)||'—'
 }
+const operatorDisplay = v => {
+  const s=text(v)
+  if(!s) return '—'
+  if(['Google Sheet','Google Sheet（账号不可用）','Google Sheet（未登记操作人）'].includes(s)) return 'Google Sheet（未登记操作人）'
+  return s
+}
 const eventLabel = v => ({join:'入职',resign:'离职',reactivate:'复职',profile_update:'资料修改'}[v] || v || '-')
 const formatDateTime = v => {
   if(!v) return '—'
@@ -1115,7 +1121,7 @@ export default function AdminEmployeesPage(){
             <td>{r.position_name||s.position||'-'}</td>
             <td className="reason-cell">{r.reason||'-'}</td>
             <td>{r.source_label||r.source_sheet||r.source||'-'}</td>
-            <td><div className="operation-record"><span className="operator-chip">{r.operator_account||'—'}</span><small>{formatDateTime(r.operation_time||r.created_at)}</small></div></td>
+            <td><div className="operation-record"><span className="operator-chip">{operatorDisplay(r.operator_account)}</span><small>{formatDateTime(r.operation_time||r.created_at)}</small></div></td>
             <td><div className="row-actions history-row-actions">
               <button className="table-action" onClick={()=>openHistoryDetail(r)}>查看</button>
               {historyPermissions.can_edit&&<button className="table-action edit-history-action" onClick={()=>setEditResignModal({event_id:r.id,employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date||'',reason:r.reason||''})}>编辑</button>}
@@ -1130,7 +1136,7 @@ export default function AdminEmployeesPage(){
 
     {tab==='操作日志'&&<div className="data-card">
       <div className="section-head">
-        <div><h2>操作日志</h2><p>只显示 V29.4.6.2 启用后的新操作。后台历史重扫不再显示；Google Sheet 编辑会尽量记录真实编辑账号。</p></div>
+        <div><h2>操作日志</h2><p>只显示新操作。后台历史重扫不再显示；Google 编辑优先显示真实邮箱，邮箱被隐藏时使用已登记操作人，不再统一冒充 Google Sheet。</p></div>
         <span>{auditTotal} 条</span>
       </div>
       <div className="resignation-filter-panel v25-resignation-filter-panel" style={{gridTemplateColumns:'repeat(4,minmax(0,1fr))'}}>
@@ -1144,7 +1150,7 @@ export default function AdminEmployeesPage(){
       {auditLoading&&!auditRows.length?<div className="empty-state">读取操作日志...</div>:!auditRows.length?<div className="empty-state">暂无操作日志</div>:<div className="table-scroll"><table className="data-table">
         <thead><tr><th>时间</th><th>操作账号</th><th>员工ID</th><th>姓名</th><th>操作</th><th>详细变更</th><th>来源</th></tr></thead>
         <tbody>{auditRows.map(r=><tr key={r.id}>
-          <td style={{whiteSpace:'nowrap'}}>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{r.actor_username||'—'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{auditActionLabel(r.action)}</td><td className="reason-cell"><AuditChanges row={r} meta={meta}/></td><td style={{whiteSpace:'nowrap'}}>{auditSourceLabel(r)}</td>
+          <td style={{whiteSpace:'nowrap'}}>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.actor_username)}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{auditActionLabel(r.action)}</td><td className="reason-cell"><AuditChanges row={r} meta={meta}/></td><td style={{whiteSpace:'nowrap'}}>{auditSourceLabel(r)}</td>
         </tr>)}</tbody>
       </table></div>}
       <Pagination page={auditPage} pages={auditPages} total={auditTotal} pageSize={auditPageSize} loading={auditLoading} onPage={p=>{setAuditPage(p);loadAudit(p,auditPageSize,auditFilters)}} onPageSize={changeAuditPageSize}/>
@@ -1234,9 +1240,8 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
     if(k==='market_position'){
       const ref=platformRefFor(meta.platform_map||[],v)
       if(ref){
+        // V29.4.7: 盘口系列与团队彻底分开；团队只由「居家排班表」同步。
         next.market_country=ref.series || ''
-        const team=(meta.teams||[]).find(t=>text(t.name).toLowerCase()===text(ref.series).toLowerCase())
-        next.team_id=team?.id||''
       }
     }
 
@@ -1266,8 +1271,9 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
   const platformOptions=platformMap.length ? Array.from(new Set(platformMap.map(x=>x.platform).filter(Boolean))) : (opts.market_positions||[])
   const platformRefs=platformRefsFor(platformMap,e.market_position)
   const platformRef=platformRefs[0]||null
-  const existingTeamName=(meta.teams||[]).find(t=>t.id===e.team_id)?.name||''
-  const derivedSeries=platformRef?.series || existingTeamName || e.market_country || ''
+  const existingTeamName=(meta.teams||[]).find(t=>text(t.id)===text(e.team_id))?.name||''
+  const derivedSeries=platformRef?.series || e.market_country || ''
+  const actualTeamName=existingTeamName || '待排班同步'
   const countries=Array.from(new Set(platformRefs.map(x=>x.country).filter(Boolean)))
   const derivedMarketCountry=countries.length>1?`多国家：${countries.join(' / ')}`:(countries[0]||'')
 
@@ -1312,7 +1318,8 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
           listId="employee-market-position-options"
         />
       </Field>
-      <Field label="团队 / 系列"><div className="readonly-choice">{derivedSeries||'—'}</div></Field>
+      <Field label="盘口系列"><div className="readonly-choice">{derivedSeries||'—'}</div></Field>
+      <Field label="当前团队（排班）"><div className="readonly-choice">{actualTeamName}</div></Field>
       <Field label="盘口国家"><div className="readonly-choice">{derivedMarketCountry||'—'}</div></Field>
       <Field label="工作TG"><input value={e.work_tg} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
       <Field label="后台账号"><input value={e.backend_accounts} onChange={x=>setEmployee('backend_accounts',x.target.value)}/></Field>
@@ -1778,8 +1785,11 @@ function ResignationAnalyticsPanel({analytics,filters,setFilters,options,onOpen}
   const historyFrom=r.history_from||'2000-01-01'
   const monthFrom=r.month_from||String(asOf||'').slice(0,7)+'-01'
   const teams=analytics.teams||[]
-  const positions=(analytics.positions||[]).slice().sort((a,b)=>(b.month_resign||0)-(a.month_resign||0)||(b.resign_total||0)-(a.resign_total||0)).slice(0,8)
-  const countries=(analytics.countries||[]).slice().sort((a,b)=>(b.month_resign||0)-(a.month_resign||0)||(b.resign_total||0)-(a.resign_total||0)).slice(0,8)
+  const positions=(analytics.positions||[]).slice().sort((a,b)=>(b.month_resign||0)-(a.month_resign||0)||(b.resign_total||0)-(a.resign_total||0)).slice(0,12)
+  const countries=(analytics.countries||[]).slice().sort((a,b)=>(b.month_resign||0)-(a.month_resign||0)||(b.resign_total||0)-(a.resign_total||0)).slice(0,12)
+  const shifts=(analytics.shifts||[]).slice().sort((a,b)=>(b.month_resign||0)-(a.month_resign||0)||(b.resign_total||0)-(a.resign_total||0)).slice(0,12)
+  const unmatchedTeam=teams.find(x=>['未匹配团队','未分类'].includes(text(x.name)))
+  const validTeamCount=teams.filter(x=>!['未匹配团队','未分类'].includes(text(x.name))).length
   const open=(title,date_from,date_to,dimension='',value='')=>onOpen?.({title,event_type:'resign',date_from,date_to,dimension,value})
 
   return <section className="resignation-analytics-section">
@@ -1789,6 +1799,14 @@ function ResignationAnalyticsPanel({analytics,filters,setFilters,options,onOpen}
         <p>按日、周、月和累计统计离职；环比上升用红色、下降用绿色。所有数字都可下钻到具体员工与离职原因。</p>
       </div>
       <div className="analysis-badge">截至 {asOf||'—'}</div>
+    </div>
+
+    <div className="resignation-period-strip" style={{marginBottom:14}}>
+      <div><span>团队统计来源</span><strong>居家排班表</strong></div>
+      <div><span>当前有效团队</span><strong>{validTeamCount}</strong></div>
+      <div><span>当前未匹配人员</span><strong>{unmatchedTeam?.count||0}</strong></div>
+      <div><span>历史离职团队</span><strong>优先读取「团队」字段</strong></div>
+      <div><span>岗位 / 国家 / 班次</span><strong>可分别下钻</strong></div>
     </div>
 
     <div className="resignation-analysis-filterbar">
@@ -1886,6 +1904,13 @@ function ResignationAnalyticsPanel({analytics,filters,setFilters,options,onOpen}
         <div className="resign-ranking-list">{countries.map(x=><button type="button" key={x.name} onClick={()=>open(`${x.name} · 本月离职人员`,monthFrom,today,'country',x.name)}>
           <span>{x.name}</span><strong>{x.month_resign||0} 人</strong><em>上月同期 {x.prev_month_resign||0} · 累计 {x.resign_total||0}</em><ResignCompare value={x.month_resign_delta_pct}/>
         </button>)}</div>
+      </div>
+      <div className="analysis-overview-card resignation-ranking-card">
+        <div className="analysis-card-head"><div><h3>班次离职排行</h3><p>本月离职 / 上月同期 / 累计；点击查看具体人员</p></div></div>
+        <div className="resign-ranking-list">{shifts.map(x=><button type="button" key={x.name} onClick={()=>open(`${x.name} · 本月离职人员`,monthFrom,today,'shift',x.name)}>
+          <span>{x.name}</span><strong>{x.month_resign||0} 人</strong><em>上月同期 {x.prev_month_resign||0} · 累计 {x.resign_total||0}</em><ResignCompare value={x.month_resign_delta_pct}/>
+        </button>)}</div>
+        {!shifts.length&&<div className="empty-state">暂无班次离职数据</div>}
       </div>
     </div>
   </section>
