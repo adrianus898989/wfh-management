@@ -376,6 +376,7 @@ export default function AdminEmployeesPage(){
   const [historyLoading,setHistoryLoading]=useState(false)
   const [historyFilters,setHistoryFilters]=useState(blankHistoryFilters)
   const [historyDraftFilters,setHistoryDraftFilters]=useState(blankHistoryFilters)
+  const [reasonPreview,setReasonPreview]=useState(null)
 
   const [auditRows,setAuditRows]=useState([])
   const [auditTotal,setAuditTotal]=useState(0)
@@ -525,7 +526,7 @@ export default function AdminEmployeesPage(){
       if(tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
       if(tab==='操作日志') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
       if(selected?.employee?.id){
-        jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(setSelected).catch(()=>{}))
+        jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(d=>setSelected(prev=>({...d,resignation_reason:text(prev?.resignation_reason||d?.resignation_reason)}))).catch(()=>{}))
       }
       await Promise.all(jobs)
     }finally{
@@ -741,7 +742,8 @@ export default function AdminEmployeesPage(){
       if(!employeeId) throw new Error('找不到对应员工档案')
       setSelected({employee:{id:employeeId,employee_no:row?.employee_no,full_name:row?.full_name,status:row?.event_type==='resign'?'resigned':'active'}})
       try{
-        setSelected(await invoke({action:'detail',employee_id:employeeId}))
+        const detail=await invoke({action:'detail',employee_id:employeeId})
+        setSelected({...detail,resignation_reason:text(row?.reason)})
       }catch(firstError){
         // Lifecycle data can carry a stale id after test cleanup; retry once by employee number.
         if(!text(row?.employee_no)) throw firstError
@@ -749,7 +751,8 @@ export default function AdminEmployeesPage(){
         const exact=(found.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(row.employee_no).toUpperCase())
         const fallbackId=text(exact?.id||exact?.employee_id)
         if(!fallbackId||fallbackId===employeeId) throw firstError
-        setSelected(await invoke({action:'detail',employee_id:fallbackId}))
+        const detail=await invoke({action:'detail',employee_id:fallbackId})
+        setSelected({...detail,resignation_reason:text(row?.reason)})
       }
     }catch(e){ setError(e.message); setSelected(null) }
     finally{ setDetailLoading(false) }
@@ -1119,7 +1122,7 @@ export default function AdminEmployeesPage(){
             <td>{r.employee_country||s.country||'-'}</td>
             <td>{r.team_name||s.team||'-'}</td>
             <td>{r.position_name||s.position||'-'}</td>
-            <td className="reason-cell">{r.reason||'-'}</td>
+            <td className="reason-cell">{text(r.reason)?<button type="button" title="点击查看完整离职原因" onClick={()=>setReasonPreview({reason:text(r.reason),employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date})} style={{display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden',maxWidth:230,padding:0,border:0,background:'transparent',color:'inherit',font:'inherit',lineHeight:1.45,textAlign:'left',cursor:'pointer',wordBreak:'break-word'}}>{text(r.reason).length>90?`${text(r.reason).slice(0,90)}…`:text(r.reason)}</button>:'—'}</td>
             <td>{r.source_label||r.source_sheet||r.source||'-'}</td>
             <td><div className="operation-record"><span className="operator-chip">{operatorDisplay(r.operator_account)}</span><small>{formatDateTime(r.operation_time||r.created_at)}</small></div></td>
             <td><div className="row-actions history-row-actions">
@@ -1155,6 +1158,11 @@ export default function AdminEmployeesPage(){
       </table></div>}
       <Pagination page={auditPage} pages={auditPages} total={auditTotal} pageSize={auditPageSize} loading={auditLoading} onPage={p=>{setAuditPage(p);loadAudit(p,auditPageSize,auditFilters)}} onPageSize={changeAuditPageSize}/>
     </div>}
+
+    {reasonPreview&&<div className="modal-mask employee-action-modal-mask" onMouseDown={()=>setReasonPreview(null)}><div className="modal-card" style={{width:'min(720px,calc(100vw - 40px))',maxWidth:720}} onMouseDown={e=>e.stopPropagation()}>
+      <div className="modal-head"><div><span className="modal-kicker">RESIGNATION REASON</span><h2>完整离职原因</h2><p>{reasonPreview.employee_no||'—'} · {reasonPreview.full_name||'—'} · {reasonPreview.resign_date||'—'}</p></div><button onClick={()=>setReasonPreview(null)}>×</button></div>
+      <div style={{padding:'0 24px 24px'}}><div style={{whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:1.8,fontSize:14,color:'#243b5a',padding:'16px 18px',border:'1px solid #dbe5f1',borderRadius:12,background:'#f8fbff',maxHeight:'55vh',overflow:'auto'}}>{reasonPreview.reason}</div></div>
+    </div></div>}
 
     {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={row=>openHistoryDetail(row)}/>}
 
@@ -1400,7 +1408,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <div className="detail-sections detail-sections-v11">
-        <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
+        <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
