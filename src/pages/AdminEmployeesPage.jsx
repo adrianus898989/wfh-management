@@ -621,7 +621,7 @@ export default function AdminEmployeesPage(){
     try{
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'tenure_details',bucket,today}})
+      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'tenure_details',bucket,today,include_test:true}})
       if(error||data?.error) throw new Error(data?.error||error?.message||'入职时长人员读取失败')
       const uniqueRows=dedupeAnalysisRows(data.rows||[])
       setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title:`${label} · 在职员工`}))
@@ -1256,6 +1256,8 @@ function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
   const pageRows=filteredRows.slice((detailPage-1)*detailPageSize,detailPage*detailPageSize)
   const isActiveView=state.event_type==='active'
   const showReason=state.event_type!=='active'
+  const visibleTestCount=filteredRows.filter(r=>r.is_test).length
+  const visibleProductionCount=filteredRows.length-visibleTestCount
   const detailTypeLabel=v=>v==='resign'?'离职':v==='active'?'在职':'入职'
   const detailDateLabel=v=>v==='resign'?'离职日期':'入职日期'
   useEffect(()=>setDetailPage(1),[JSON.stringify(detailFilters),detailPageSize,state.title])
@@ -1263,7 +1265,7 @@ function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
 
   return <div className="modal-mask analytics-detail-mask" onMouseDown={onClose}><div className="analytics-detail-dialog" onMouseDown={e=>e.stopPropagation()}>
     <div className="analytics-detail-head">
-      <div><span className="modal-kicker">PEOPLE DETAIL</span><h2>{state.title}</h2><p>{filteredRows.length} 条符合条件 · 原始 {state.total||0} 条 · 可继续筛选并查看完整员工档案。</p></div>
+      <div><span className="modal-kicker">PEOPLE DETAIL</span><h2>{state.title}</h2><p>{filteredRows.length} 条显示{visibleTestCount>0?`（正式 ${visibleProductionCount} + TEST ${visibleTestCount}）`:''} · 正式KPI仍不计TEST · 可继续筛选并查看完整员工档案。</p></div>
       <button className="drawer-close" onClick={onClose}>×</button>
     </div>
     <div className={`analytics-detail-filterbar ${isActiveView?'active-detail-filterbar':''}`}>
@@ -1278,7 +1280,7 @@ function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
     </div>
     {loading?<div className="empty-state">读取人员明细...</div>:!filteredRows.length?<div className="empty-state">这个条件下暂无人员记录</div>:<div className="analytics-detail-content"><div className="analytics-detail-table-wrap"><table className="data-table analytics-detail-table">
       <thead><tr><th>{isActiveView?'入职日期':'入 / 离职日期'}</th><th>状态</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>员工国家</th><th>班次</th>{showReason&&<th>离职原因</th>}<th>操作</th></tr></thead>
-      <tbody>{pageRows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.date||'—'}</strong><small>{detailDateLabel(r.event_type)}</small></div></td><td><span className={`event-chip ${r.event_type==='resign'?'resign':r.event_type==='active'?'active':'join'}`}>{detailTypeLabel(r.event_type)}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td>{showReason&&<td className="analytics-reason">{r.reason||'—'}</td>}<td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
+      <tbody>{pageRows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.date||'—'}</strong><small>{detailDateLabel(r.event_type)}</small></div></td><td><span className={`event-chip ${r.event_type==='resign'?'resign':r.event_type==='active'?'active':'join'}`}>{detailTypeLabel(r.event_type)}</span></td><td><strong>{r.employee_no||'—'}</strong>{r.is_test&&<span style={{marginLeft:6,fontSize:10,fontWeight:800,color:'#b45309'}}>TEST</span>}</td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td>{showReason&&<td className="analytics-reason">{r.reason||'—'}</td>}<td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
     </table></div><Pagination page={detailPage} pages={pages} total={filteredRows.length} pageSize={detailPageSize} loading={loading} onPage={setDetailPage} onPageSize={n=>{setDetailPageSize(n);setDetailPage(1)}}/></div>}
   </div></div>
 }
