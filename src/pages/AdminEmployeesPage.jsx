@@ -129,6 +129,14 @@ function tenureCompactLabel(hireDate,resignDate,status){
   const years=Math.floor(months/12), rest=months%12
   return rest?`${years}年${rest}个月`:`${years}年`
 }
+function isPendingHireForCancel(hireDate,status){
+  if(!['active','resigned'].includes(text(status))) return false
+  const hire=parseIsoDateOnly(hireDate)
+  if(!hire) return false
+  const now=new Date()
+  const todayUtc=new Date(Date.UTC(now.getFullYear(),now.getMonth(),now.getDate(),12))
+  return hire.getTime()>=todayUtc.getTime()
+}
 const sheetSyncSucceeded=sync=>Boolean(sync)&&sync.skipped!==true&&sync.ok===true&&sync.body?.ok!==false&&!sync.error
 const sheetSyncMessage=sync=>text(sync?.body?.error||sync?.error||sync?.reason||'正式 Google Sheet 写入失败')
 const normPlatform = v => text(v).replace(/\s+/g,'').toUpperCase()
@@ -1009,7 +1017,7 @@ export default function AdminEmployeesPage(){
         <span>{historyTotal} 人</span>
       </div>
 
-      <div className="resignation-filter-panel v25-resignation-filter-panel">
+      <div className="resignation-filter-panel v25-resignation-filter-panel" style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:'14px 16px',alignItems:'end'}}>
         <label className="resign-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.employee_no} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
         <label className="resign-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.full_name} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
         <label className="resign-filter-field"><span>团队</span><FilterCombo value={historyDraftFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/></label>
@@ -1017,7 +1025,7 @@ export default function AdminEmployeesPage(){
         <label className="resign-filter-field"><span>员工国家</span><FilterCombo value={historyDraftFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="history-country"/></label>
         <label className="resign-filter-field v25-resign-reason"><span>离职原因</span><input value={historyDraftFilters.reason} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,reason:e.target.value})} placeholder="输入离职原因关键字"/></label>
         <label className="resign-filter-field v25-resign-date"><span>离职日期区间</span><div className="pro-date-range"><input aria-label="离职日期起" type="date" value={historyDraftFilters.date_from} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_from:e.target.value})}/><b>—</b><input aria-label="离职日期止" type="date" value={historyDraftFilters.date_to} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_to:e.target.value})}/></div></label>
-        <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={applyHistoryFilters} disabled={historyLoading}>{historyLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={resetHistoryFilters} disabled={historyLoading}>重置</button></div>
+        <div className="resign-filter-actions v25-resign-actions" style={{gridColumn:'4',display:'flex',justifyContent:'flex-end',alignItems:'end',gap:8,minHeight:42}}><button className="primary-action resignation-query-action" onClick={applyHistoryFilters} disabled={historyLoading}>{historyLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={resetHistoryFilters} disabled={historyLoading}>重置</button></div>
       </div>
 
       {!history.length&&historyLoading?<div className="empty-state">读取离职记录...</div>:<div className={`table-scroll resignation-history-table-wrap ${historyLoading?'is-loading':''}`}><table className="data-table lifecycle-table resignation-table-pro">
@@ -1039,7 +1047,7 @@ export default function AdminEmployeesPage(){
               <button className="table-action" onClick={()=>openHistoryDetail(r)}>查看</button>
               {historyPermissions.can_edit&&<button className="table-action edit-history-action" onClick={()=>setEditResignModal({event_id:r.id,employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date||'',reason:r.reason||''})}>编辑</button>}
               {historyPermissions.can_restore&&<button className="table-action restore-action" onClick={()=>setRestoreModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,restore_portal:true})}>恢复在职</button>}
-              {r.employee_id&&text(r.source)==='backend'&&<button className="table-action" onClick={()=>setCancelHireModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,confirm_text:''})}>撤销入职</button>}
+              {r.employee_id&&<button className="table-action cancel-hire-history-action" title="未正式入职或后台新增员工可直接撤销；不符合条件时系统会安全拒绝" onClick={()=>setCancelHireModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,confirm_text:''})}>撤销入职</button>}
             </div></td>
           </tr>
         })}</tbody>
@@ -1057,7 +1065,7 @@ export default function AdminEmployeesPage(){
         <label className="resign-filter-field"><span>姓名</span><input value={auditFilters.full_name} onChange={e=>setAuditFilters({...auditFilters,full_name:e.target.value})} placeholder="输入姓名"/></label>
         <label className="resign-filter-field"><span>操作类型</span><select value={auditFilters.action} onChange={e=>setAuditFilters({...auditFilters,action:e.target.value})}><option value="">全部操作</option><option value="employee_create">新增员工</option><option value="employee_update">编辑员工</option><option value="employee_id_edit">修改员工ID</option><option value="resign">办理离职</option><option value="edit_resignation">编辑离职</option><option value="reactivate">恢复在职</option><option value="cancel_hire">撤销入职</option><option value="google">Google同步</option></select></label>
         <label className="resign-filter-field"><span>操作账号</span><input value={auditFilters.actor} onChange={e=>setAuditFilters({...auditFilters,actor:e.target.value})} placeholder="输入后台账号 / Google Sheet"/></label>
-        <label className="resign-filter-field v25-resign-date"><span>操作日期区间</span><div className="pro-date-range"><input type="date" value={auditFilters.date_from} onChange={e=>setAuditFilters({...auditFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditFilters.date_to} onChange={e=>setAuditFilters({...auditFilters,date_to:e.target.value})}/></div></label>
+        <label className="resign-filter-field v25-resign-date" style={{gridColumn:'1 / span 3',minWidth:0}}><span>操作日期区间</span><div className="pro-date-range" style={{width:'100%'}}> <input type="date" value={auditFilters.date_from} onChange={e=>setAuditFilters({...auditFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditFilters.date_to} onChange={e=>setAuditFilters({...auditFilters,date_to:e.target.value})}/></div></label>
         <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={()=>{setAuditPage(1);loadAudit(1,auditPageSize,auditFilters)}} disabled={auditLoading}>{auditLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={()=>{const next={employee_no:'',full_name:'',action:'',actor:'',date_from:'',date_to:''};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
       </div>
       {auditLoading&&!auditRows.length?<div className="empty-state">读取操作日志...</div>:!auditRows.length?<div className="empty-state">暂无操作日志</div>:<div className="table-scroll"><table className="data-table">
@@ -1304,7 +1312,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
         {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
         {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
         {e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
-        {detail.actions?.can_cancel_hire&&<button className="cancel-hire-outline" onClick={onCancelHire}>撤销入职</button>}
+        {(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status))&&<button className="cancel-hire-outline" onClick={onCancelHire}>撤销入职</button>}
         {detail.actions?.can_edit&&<button className="edit-outline" onClick={onEdit}>编辑</button>}
         <button className="drawer-close" onClick={onClose}>×</button>
       </div>
