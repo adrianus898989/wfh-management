@@ -60,18 +60,91 @@ const cleanShiftOptions = values => {
     const k=text(v).toUpperCase(); if(!k||seen.has(k)) return false; seen.add(k); return true
   }).sort((a,b)=>a.localeCompare(b,'zh-CN'))
 }
-const auditActionLabel = v => ({
-  employee_create:'新增员工',employee_update:'编辑员工',employee_id_edit:'修改员工ID',
-  resign:'办理离职',edit_resignation:'编辑离职',reactivate:'恢复在职',cancel_hire:'撤销入职',
-  google_employee_create:'Google新增',google_profile_sync:'Google资料同步',google_employee_id_edit:'Google修改员工ID',
-}[text(v)]||text(v)||'-')
-const auditChangesText = changes => {
-  const entries=Object.entries(changes||{})
-  if(!entries.length) return '—'
-  return entries.slice(0,4).map(([key,v])=>{
-    const item=v||{}; const before=item.before===null||item.before===undefined?'—':String(item.before); const after=item.after===null||item.after===undefined?'—':String(item.after)
-    return `${key}: ${before} → ${after}`
-  }).join('；') + (entries.length>4?`；另 ${entries.length-4} 项`:'')
+const auditActionOptions = [
+  {value:'employee_create',label:'新增员工'},{value:'employee_update',label:'编辑员工'},{value:'employee_id_edit',label:'修改员工ID'},
+  {value:'resign',label:'办理离职'},{value:'edit_resignation',label:'编辑离职'},{value:'reactivate',label:'恢复在职'},{value:'cancel_hire',label:'撤销入职'},
+  {value:'google_employee_create',label:'Google新增'},{value:'google_profile_sync',label:'Google资料同步'},{value:'google_employee_id_edit',label:'Google修改员工ID'},
+]
+const auditActionLabel = v => auditActionOptions.find(x=>x.value===text(v))?.label || text(v) || '-'
+const auditActionValueByLabel = label => auditActionOptions.find(x=>x.label===text(label))?.value || ''
+const auditFieldLabel = key => ({
+  employee_no:'员工ID',full_name:'姓名',country:'员工国家',nationality:'国籍',employment_type:'员工类型',
+  team_id:'团队',position_id:'主档岗位',market_country:'盘口国家',market_position:'盘口岗位',shift_name:'班次',
+  status:'状态',work_tg:'工作TG',backend_accounts:'后台账号',hire_date:'入职日期',resign_date:'离职日期',
+  last_location:'最后地点',return_date:'回去时间',home_date:'居家时间',platform_scope:'盘口',reason:'离职原因',
+  'contact.work_email':'Workfolio 邮箱','contact.telegram_username':'Telegram','contact.zoom_email':'Zoom 邮箱',
+  'contact.facebook':'Facebook','contact.whatsapp_phone':'WhatsApp / 手机',
+  'compensation.base_salary':'底薪','compensation.daily_rate':'日薪','compensation.performance_default':'默认绩效',
+  'compensation.meal_allowance':'餐补','payment.mode':'收款方式','payment.transfer_using':'转账方式',
+  'payment.gcash_account':'GCash / 银行账号','payment.gcash_name':'收款姓名','payment.usdt_address':'USDT 地址',
+  'payment.contact_phone':'联系电话','payment.whatsapp_number':'收款 WhatsApp','payment.employee_address':'员工地址',
+}[key]||key)
+const auditBlank = v => v===null||v===undefined||text(v)===''
+const auditEntityName = (list,id) => (list||[]).find(x=>text(x.id)===text(id))?.name || text(id)
+const auditValueLabel = (key,value,meta) => {
+  if(auditBlank(value)) return '空白'
+  if(key==='status') return statusName(value)
+  if(key==='position_id') return auditEntityName(meta?.positions,value)
+  if(key==='team_id') return auditEntityName(meta?.teams,value)
+  if(['hire_date','resign_date','return_date','home_date'].includes(key)) return text(value).slice(0,10)
+  if(typeof value==='object') return JSON.stringify(value)
+  return text(value)
+}
+const auditPlatformDiff = (before,after) => {
+  const split=v=>text(v).split(/[\/，,；;\n\r]+/).map(x=>text(x)).filter(Boolean)
+  const a=new Set(split(before)), b=new Set(split(after))
+  return {added:[...b].filter(x=>!a.has(x)),removed:[...a].filter(x=>!b.has(x))}
+}
+function auditChangeRows(row,meta){
+  const changes=row?.changes||{}
+  const rows=[]
+  const push=(label,before,after,kind='change')=>rows.push({label,before,after,kind})
+  for(const [key,itemRaw] of Object.entries(changes)){
+    const item=itemRaw||{}
+    if(key==='created' && item.after && typeof item.after==='object'){
+      const x=item.after
+      push('新增员工档案','—',`${text(x.employee_no)||row.employee_no||'—'} · ${text(x.full_name)||row.full_name||'—'}${text(x.hire_date)?` · 入职 ${text(x.hire_date).slice(0,10)}`:''}`,'summary')
+      continue
+    }
+    if(key==='employee' && (item.before||item.after)){
+      const before=item.before||{}, after=item.after||{}
+      if(item.before && !item.after){
+        push('撤销员工档案',`${text(before.employee_no)||row.employee_no||'—'} · ${text(before.full_name)||row.full_name||'—'}${text(before.hire_date)?` · 入职 ${text(before.hire_date).slice(0,10)}`:''}`,'已删除','summary')
+        continue
+      }
+      const nestedKeys=Array.from(new Set([...Object.keys(before),...Object.keys(after)]))
+      nestedKeys.forEach(nk=>{
+        const a=before[nk]??null,b=after[nk]??null
+        if(JSON.stringify(a)!==JSON.stringify(b)) push(auditFieldLabel(nk),auditValueLabel(nk,a,meta),auditValueLabel(nk,b,meta))
+      })
+      continue
+    }
+    const before=item?.before??null, after=item?.after??null
+    if(key==='platform_scope'){
+      const diff=auditPlatformDiff(before,after)
+      if(diff.added.length) push('盘口新增','—',diff.added.join(' / '),'add')
+      if(diff.removed.length) push('盘口移除',diff.removed.join(' / '),'—','remove')
+      if(!diff.added.length&&!diff.removed.length) push('盘口',auditValueLabel(key,before,meta),auditValueLabel(key,after,meta))
+      continue
+    }
+    push(auditFieldLabel(key),auditValueLabel(key,before,meta),auditValueLabel(key,after,meta))
+  }
+  return rows
+}
+function AuditChanges({row,meta}){
+  const rows=auditChangeRows(row,meta)
+  if(!rows.length) return <span className="muted">—</span>
+  return <div style={{display:'grid',gap:5,minWidth:360,maxWidth:760}}>
+    {rows.map((x,i)=><div key={`${x.label}-${i}`} style={{display:'grid',gridTemplateColumns:'120px minmax(0,1fr)',gap:10,alignItems:'start',padding:'5px 8px',border:'1px solid #e7edf6',borderRadius:8,background:'#fbfdff'}}>
+      <strong style={{color:'#425b7c'}}>{x.label}</strong>
+      <span style={{whiteSpace:'normal',wordBreak:'break-word'}}>{x.kind==='summary'?<><span>{x.before}</span>{x.after&&x.after!=='—'?<><span style={{margin:'0 8px',color:'#94a3b8'}}>→</span><strong>{x.after}</strong></>:null}</>:<><span>{x.before}</span><span style={{margin:'0 8px',color:'#94a3b8'}}>→</span><strong>{x.after}</strong></>}</span>
+    </div>)}
+  </div>
+}
+const auditSourceLabel = r => {
+  if(text(r?.source).includes('google')) return `Google Sheet${text(r?.metadata?.source_sheet)?` · ${text(r.metadata.source_sheet)}`:''}`
+  if(text(r?.source)==='backend') return '后台'
+  return text(r?.source)||'—'
 }
 const eventLabel = v => ({join:'入职',resign:'离职',reactivate:'复职',profile_update:'资料修改'}[v] || v || '-')
 const formatDateTime = v => {
@@ -1057,21 +1130,21 @@ export default function AdminEmployeesPage(){
 
     {tab==='操作日志'&&<div className="data-card">
       <div className="section-head">
-        <div><h2>操作日志</h2><p>记录员工新增、编辑、员工ID修改、办理离职、恢复在职、撤销入职，以及 Google Sheet 同步变动。</p></div>
+        <div><h2>操作日志</h2><p>只显示 V29.4.6.2 启用后的新操作。后台历史重扫不再显示；Google Sheet 编辑会尽量记录真实编辑账号。</p></div>
         <span>{auditTotal} 条</span>
       </div>
-      <div className="resignation-filter-panel v25-resignation-filter-panel">
+      <div className="resignation-filter-panel v25-resignation-filter-panel" style={{gridTemplateColumns:'repeat(4,minmax(0,1fr))'}}>
         <label className="resign-filter-field"><span>员工ID</span><input value={auditFilters.employee_no} onChange={e=>setAuditFilters({...auditFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></label>
         <label className="resign-filter-field"><span>姓名</span><input value={auditFilters.full_name} onChange={e=>setAuditFilters({...auditFilters,full_name:e.target.value})} placeholder="输入姓名"/></label>
-        <label className="resign-filter-field"><span>操作类型</span><select value={auditFilters.action} onChange={e=>setAuditFilters({...auditFilters,action:e.target.value})}><option value="">全部操作</option><option value="employee_create">新增员工</option><option value="employee_update">编辑员工</option><option value="employee_id_edit">修改员工ID</option><option value="resign">办理离职</option><option value="edit_resignation">编辑离职</option><option value="reactivate">恢复在职</option><option value="cancel_hire">撤销入职</option><option value="google">Google同步</option></select></label>
-        <label className="resign-filter-field"><span>操作账号</span><input value={auditFilters.actor} onChange={e=>setAuditFilters({...auditFilters,actor:e.target.value})} placeholder="输入后台账号 / Google Sheet"/></label>
-        <label className="resign-filter-field v25-resign-date" style={{gridColumn:'1 / span 3',minWidth:0}}><span>操作日期区间</span><div className="pro-date-range" style={{width:'100%'}}> <input type="date" value={auditFilters.date_from} onChange={e=>setAuditFilters({...auditFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditFilters.date_to} onChange={e=>setAuditFilters({...auditFilters,date_to:e.target.value})}/></div></label>
-        <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={()=>{setAuditPage(1);loadAudit(1,auditPageSize,auditFilters)}} disabled={auditLoading}>{auditLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={()=>{const next={employee_no:'',full_name:'',action:'',actor:'',date_from:'',date_to:''};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
+        <label className="resign-filter-field"><span>操作类型</span><FilterCombo value={auditFilters.action?auditActionLabel(auditFilters.action):''} options={auditActionOptions.map(x=>x.label)} onChange={label=>setAuditFilters({...auditFilters,action:auditActionValueByLabel(label)})} placeholder="全部操作 / 输入搜索" listId="audit-action-filter"/></label>
+        <label className="resign-filter-field"><span>操作账号</span><input value={auditFilters.actor} onChange={e=>setAuditFilters({...auditFilters,actor:e.target.value})} placeholder="后台账号 / Google 邮箱"/></label>
+        <label className="resign-filter-field v25-resign-date" style={{gridColumn:'1 / span 3',minWidth:0}}><span>操作日期区间</span><div className="pro-date-range" style={{width:'100%'}}><input type="date" value={auditFilters.date_from} onChange={e=>setAuditFilters({...auditFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditFilters.date_to} onChange={e=>setAuditFilters({...auditFilters,date_to:e.target.value})}/></div></label>
+        <div className="resign-filter-actions v25-resign-actions" style={{gridColumn:'4',alignSelf:'end',justifyContent:'flex-end'}}><button className="primary-action resignation-query-action" onClick={()=>{setAuditPage(1);loadAudit(1,auditPageSize,auditFilters)}} disabled={auditLoading}>{auditLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={()=>{const next={employee_no:'',full_name:'',action:'',actor:'',date_from:'',date_to:''};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
       </div>
       {auditLoading&&!auditRows.length?<div className="empty-state">读取操作日志...</div>:!auditRows.length?<div className="empty-state">暂无操作日志</div>:<div className="table-scroll"><table className="data-table">
-        <thead><tr><th>时间</th><th>操作账号</th><th>员工ID</th><th>姓名</th><th>操作</th><th>变更内容</th><th>来源</th></tr></thead>
+        <thead><tr><th>时间</th><th>操作账号</th><th>员工ID</th><th>姓名</th><th>操作</th><th>详细变更</th><th>来源</th></tr></thead>
         <tbody>{auditRows.map(r=><tr key={r.id}>
-          <td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{r.actor_username||'—'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{auditActionLabel(r.action)}</td><td className="reason-cell">{auditChangesText(r.changes)}</td><td>{r.source||'—'}</td>
+          <td style={{whiteSpace:'nowrap'}}>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{r.actor_username||'—'}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{auditActionLabel(r.action)}</td><td className="reason-cell"><AuditChanges row={r} meta={meta}/></td><td style={{whiteSpace:'nowrap'}}>{auditSourceLabel(r)}</td>
         </tr>)}</tbody>
       </table></div>}
       <Pagination page={auditPage} pages={auditPages} total={auditTotal} pageSize={auditPageSize} loading={auditLoading} onPage={p=>{setAuditPage(p);loadAudit(p,auditPageSize,auditFilters)}} onPageSize={changeAuditPageSize}/>
