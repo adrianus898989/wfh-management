@@ -1029,7 +1029,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
       <Field label="员工国家"><SelectValue value={e.country} options={selectOptions(opts.countries,e.country)} onChange={v=>setEmployee('country',v)}/></Field>
       <Field label="员工类型"><SelectValue value={typeName(e.employment_type)==='纯居家（越南/缅甸/印尼等）'?'纯居家（越南/缅甸/印尼等）':e.employment_type} options={selectOptions(typeOptions,typeName(e.employment_type))} onChange={v=>setEmployee('employment_type',v)}/></Field>
       <Field label="入职日期"><input type="date" value={e.hire_date} onChange={x=>setEmployee('hire_date',x.target.value)}/></Field>
-      <Field label="岗位">
+      <Field label="主档岗位">
         <input list="employee-position-write-options" value={e.position_name||''} onChange={x=>setEmployee('position_name',x.target.value)} placeholder="选择现有岗位或直接输入新岗位"/>
         <datalist id="employee-position-write-options">{(meta.positions||[]).map(x=><option key={x.id||x.name} value={x.name}/>)}</datalist>
       </Field>
@@ -1044,7 +1044,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave}){
       <Field label="盘口国家"><div className="readonly-choice">{derivedMarketCountry||'—'}</div></Field>
       <Field label="工作TG"><input value={e.work_tg} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
       <Field label="后台账号"><input value={e.backend_accounts} onChange={x=>setEmployee('backend_accounts',x.target.value)}/></Field>
-      <Field label="当前排班"><div className="readonly-choice live-assignment-note">班次由居家排班表同步；岗位可先选择 / 手动输入，排班后继续同步</div></Field>
+      <Field label="当前排班"><div className="readonly-choice live-assignment-note">主档岗位同步「居家员工名单」；排班岗位由「居家排班表」最新排班同步，二者独立不互相覆盖</div></Field>
     </FormSection>
 
     {typeName(e.employment_type)==='现场转居家'&&<FormSection title="现场转居家资料">
@@ -1108,7 +1108,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
       <div className="employee-avatar">{text(e.full_name).slice(0,1).toUpperCase()||'E'}</div>
-      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置岗位'}</span>{e.hire_date&&<span className="employee-tenure-chip">{tenureDurationLabel(e.hire_date,e.resign_date,e.status)}</span>}</div></div>
+      <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置主档岗位'}</span>{e.schedule_position&&e.schedule_position!==e.positions?.name&&<span>排班：{e.schedule_position}</span>}{e.hire_date&&<span className="employee-tenure-chip">{tenureDurationLabel(e.hire_date,e.resign_date,e.status)}</span>}</div></div>
       <div className="drawer-head-actions">
         {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
         {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
@@ -1122,7 +1122,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <div className="detail-sections detail-sections-v11">
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)]]}/>
-        <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['岗位',e.positions?.name],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
+        <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
           ? (comp.base_salary!==null && comp.base_salary!==undefined && comp.base_salary!==''
