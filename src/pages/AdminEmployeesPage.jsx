@@ -344,7 +344,7 @@ export default function AdminEmployeesPage(){
   const [generated,setGenerated]=useState(null)
   const [showFilters,setShowFilters]=useState(true)
   const [filters,setFilters]=useState({
-    employee_no:'',full_name:'',work_tg:'',backend_account:'',team:'',position:'',country:'',status:'active',
+    employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',team:'',position:'',country:'',status:'active',
     employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
   })
 
@@ -497,10 +497,19 @@ export default function AdminEmployeesPage(){
     }
   }
 
+  const fetchEmployeeListData=async(nextPage,nextSize,nextFilters=filters)=>{
+    if(text(nextFilters?.risk_level)){
+      const {data,error}=await supabase.functions.invoke('admin-employee-risk-list',{body:{action:'list',page:nextPage,page_size:nextSize,filters:nextFilters,risk_level:nextFilters.risk_level}})
+      if(error||data?.error) throw new Error(data?.error||error?.message||'等级筛选读取失败')
+      return data
+    }
+    return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:nextFilters})
+  }
+
   const loadList=async(nextPage=page,nextSize=pageSize,{silent=false}={})=>{
     if(!silent){ setLoading(true); setError('') }
     try{
-      const data=await invoke({action:'list',page:nextPage,page_size:nextSize,filters})
+      const data=await fetchEmployeeListData(nextPage,nextSize,filters)
       const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
       const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))
       setRows(visibleRows.map(r=>({...r,operator_account:operatorMap.get(text(r.id))||text(r.operator_account)})))
@@ -584,7 +593,7 @@ export default function AdminEmployeesPage(){
         const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
         const [metaData,listData,analyticsData]=await Promise.all([
           invoke({action:'meta'}),
-          invoke({action:'list',page,page_size:pageSize,filters}),
+          fetchEmployeeListData(page,pageSize,filters),
           invoke({action:'analytics',today}),
         ])
         setMeta(metaData)
@@ -742,7 +751,7 @@ export default function AdminEmployeesPage(){
         // 新增成功只刷新，不再把新员工 ID 自动塞进搜索框。
         setPage(1)
         const [listData]=await Promise.all([
-          invoke({action:'list',page:1,page_size:pageSize,filters}),
+          fetchEmployeeListData(1,pageSize,filters),
           loadMeta(),loadAnalytics(),loadArchiveStats(),
         ])
         const visibleRows=(listData.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
@@ -786,7 +795,7 @@ export default function AdminEmployeesPage(){
   }
 
   const clearEmployeeFilters=()=>({
-    employee_no:'',full_name:'',work_tg:'',backend_account:'',team:'',position:'',country:'',status:'active',
+    employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',team:'',position:'',country:'',status:'active',
     employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
   })
 
@@ -804,7 +813,19 @@ export default function AdminEmployeesPage(){
       const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:2000,filters:sourceFilters})
       const productionRows=(data.rows||[]).filter(r=>!isTestEmployeeNo(r.employee_no))
       const uniqueRows=dedupeAnalysisRows(productionRows)
-      setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title}))
+      const employeeNos=Array.from(new Set(uniqueRows.map(r=>text(r.employee_no)).filter(Boolean)))
+      let dateRows=[]
+      if(employeeNos.length){
+        const {data:dateData,error:dateError}=await supabase.functions.invoke('admin-employee-dates',{body:{employee_nos:employeeNos}})
+        if(error||dateData?.error) throw new Error(dateData?.error||dateError?.message||'员工入离职日期读取失败')
+        dateRows=dateData?.rows||[]
+      }
+      const dateMap=new Map(dateRows.map(x=>[text(x.employee_no).toUpperCase(),x]))
+      const enrichedRows=uniqueRows.map(r=>{
+        const d=dateMap.get(text(r.employee_no).toUpperCase())||{}
+        return {...r,hire_date:text(d.hire_date).slice(0,10),resign_date:r.event_type==='resign'?(text(r.date).slice(0,10)||text(d.resign_date).slice(0,10)):text(d.resign_date).slice(0,10)}
+      })
+      setAnalysisDetail(v=>({...v,...data,rows:enrichedRows,total:enrichedRows.length,title}))
     }catch(e){ setError(e.message); setAnalysisDetail(null) }
     finally{ setAnalysisDetailLoading(false) }
   }
@@ -943,11 +964,11 @@ export default function AdminEmployeesPage(){
       </div>
       <div className="filter-card archive-filter-card v24-filter-card">
         <div className="field-search-grid employee-core-search-grid">
+          <label className="pro-filter-field" data-native-risk-filter="1"><span>等级</span><select value={filters.risk_level||''} onChange={e=>setFilters({...filters,risk_level:e.target.value})}><option value="">全部等级</option><option value="normal">正常（0）</option><option value="attention">注意（1–3）</option><option value="watch">重点（4–9）</option><option value="high">高频（10+）</option></select></label>
           <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={filters.employee_no} onChange={e=>setFilters({...filters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
           <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={filters.full_name} onChange={e=>setFilters({...filters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
           <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={filters.work_tg} onChange={e=>setFilters({...filters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>
           <label className="pro-filter-field"><span>后台账号</span><div className="pro-input-shell"><i>⌕</i><input value={filters.backend_account} onChange={e=>setFilters({...filters,backend_account:e.target.value})} placeholder="输入后台账号"/></div></label>
-          <div className="filter-toolbar-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="secondary-action" onClick={clear}>重置</button></div>
         </div>
         {showFilters&&<div className="filter-grid employee-filter-grid v24-advanced-filter-grid">
           <label>团队<FilterCombo value={filters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="employee-team-filter"/></label>
@@ -960,6 +981,7 @@ export default function AdminEmployeesPage(){
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
         </div>}
+        <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="secondary-action" onClick={clear}>重置</button></div>
       </div>
 
       <div className="module-summary-grid employee-summary-grid employee-kpi-grid archive-kpi-strip">
@@ -1519,8 +1541,8 @@ function AnalysisDetailModal({state,loading,onClose,onOpenEmployee}){
       <div className="filter-toolbar-actions"><button className="secondary-action" onClick={()=>setDetailFilters({employee_no:'',full_name:'',team:'',position:'',country:'',shift:'',reason:''})}>重置</button></div>
     </div>
     {loading?<div className="empty-state">读取人员明细...</div>:!filteredRows.length?<div className="empty-state">这个条件下暂无人员记录</div>:<div className="analytics-detail-content"><div className="analytics-detail-table-wrap"><table className="data-table analytics-detail-table">
-      <thead><tr><th>{isActiveView?'入职日期':'入 / 离职日期'}</th><th>状态</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>员工国家</th><th>班次</th>{showReason&&<th>离职原因</th>}<th>操作</th></tr></thead>
-      <tbody>{pageRows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.date||'—'}</strong><small>{detailDateLabel(r.event_type)}</small></div></td><td><span className={`event-chip ${r.event_type==='resign'?'resign':r.event_type==='active'?'active':'join'}`}>{detailTypeLabel(r.event_type)}</span></td><td><strong>{r.employee_no||'—'}</strong>{r.is_test&&<span style={{marginLeft:6,fontSize:10,fontWeight:800,color:'#b45309'}}>TEST</span>}</td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td>{showReason&&<td className="analytics-reason">{r.reason||'—'}</td>}<td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
+      <thead><tr><th>入职日期</th>{showReason&&<th>离职日期</th>}<th>状态</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>员工国家</th><th>班次</th>{showReason&&<th>离职原因</th>}<th>操作</th></tr></thead>
+      <tbody>{pageRows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.hire_date||((r.event_type==='join'||r.event_type==='active')?r.date:'—')||'—'}</strong><small>入职日期</small></div></td>{showReason&&<td><div className="event-date-cell"><strong>{r.resign_date||r.date||'—'}</strong><small>离职日期</small></div></td>}<td><span className={`event-chip ${r.event_type==='resign'?'resign':r.event_type==='active'?'active':'join'}`}>{detailTypeLabel(r.event_type)}</span></td><td><strong>{r.employee_no||'—'}</strong>{r.is_test&&<span style={{marginLeft:6,fontSize:10,fontWeight:800,color:'#b45309'}}>TEST</span>}</td><td>{r.full_name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td>{r.country||'—'}</td><td>{r.shift||'—'}</td>{showReason&&<td className="analytics-reason">{r.reason||'—'}</td>}<td>{r.employee_id&&<button className="table-action primary-mini-action" onClick={()=>onOpenEmployee(r)}>查看档案</button>}</td></tr>)}</tbody>
     </table></div><Pagination page={detailPage} pages={pages} total={filteredRows.length} pageSize={detailPageSize} loading={loading} onPage={setDetailPage} onPageSize={n=>{setDetailPageSize(n);setDetailPage(1)}}/></div>}
   </div></div>
 }
@@ -1833,15 +1855,7 @@ function ResignationAnalyticsPanel({analytics,filters,setFilters,options,onOpen}
         <h2>离职分析</h2>
         <p>按日、周、月和累计统计离职；环比上升用红色、下降用绿色。所有数字都可下钻到具体员工与离职原因。</p>
       </div>
-      <div className="analysis-badge">截至 {asOf||'—'}</div>
-    </div>
-
-    <div className="resignation-period-strip" style={{marginBottom:14}}>
-      <div><span>团队统计来源</span><strong>居家排班表</strong></div>
-      <div><span>当前有效团队</span><strong>{validTeamCount}</strong></div>
-      <div><span>当前未匹配人员</span><strong>{unmatchedTeam?.count||0}</strong></div>
-      <div><span>历史离职团队</span><strong>优先读取「团队」字段</strong></div>
-      <div><span>岗位 / 国家 / 班次</span><strong>可分别下钻</strong></div>
+      <div className="resignation-heading-actions">{Number(unmatchedTeam?.count||0)>0&&<button type="button" className="resignation-unmatched-bell" title={`当前有 ${unmatchedTeam?.count||0} 名人员未匹配团队`}>🔔 <strong>{unmatchedTeam?.count||0}</strong></button>}<div className="analysis-badge">截至 {asOf||'—'}</div></div>
     </div>
 
     <div className="resignation-analysis-filterbar">

@@ -109,10 +109,11 @@ function Errors({invoke,roster,onError}){
   useEffect(()=>{load()},[])
   useEffect(()=>{const t=setInterval(()=>load(range),60000);return()=>clearInterval(t)},[range.from,range.to])
   const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])
+  const rosterFilterActive=Boolean(data)&&allowed.size<Number(data?.current_roster_employee_count||allowed.size)
   const setSortKey=key=>setSort(prev=>({key,asc:prev.key===key?!prev.asc:true}))
   const sortMark=key=>sort.key===key?(sort.asc?' ↑':' ↓'):' ↕'
   const rows=useMemo(()=>{
-    let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id))
+    let x=(data?.rows||[]).filter(r=>!rosterFilterActive||allowed.has(r.employee_id))
     const qq=q.trim().toLowerCase()
     if(qq)x=x.filter(r=>[r.employee_id,r.name].map(text).join(' ').toLowerCase().includes(qq))
     if(type)x=x.filter(r=>r.error_type===type)

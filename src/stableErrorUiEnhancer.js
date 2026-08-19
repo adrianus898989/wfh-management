@@ -157,12 +157,16 @@ function buildErrorFilter(){
 function compactErrorTable(){
   const table=document.querySelector('.rp-errors-table');if(!table)return
   const heads=[...table.querySelectorAll('thead th')]
+  for(const th of heads)th.classList.remove('wfh-hide-error-col','wfh-error-type-head','wfh-platform-head','wfh-action-head')
+  for(const td of table.querySelectorAll('tbody td'))td.classList.remove('wfh-hide-error-col','wfh-error-type-cell','wfh-platform-cell','wfh-action-cell')
   const labels=heads.map(h=>text(h.textContent).replace(/[↕↑↓]/g,'').trim())
   const hide=new Set(['小组长复审','质检人对/错','复检时间'])
-  labels.forEach((label,i)=>{if(hide.has(label)){heads[i].classList.add('wfh-hide-error-col');for(const tr of table.querySelectorAll('tbody tr'))tr.children[i]?.classList.add('wfh-hide-error-col')}})
-  const typeIndex=labels.findIndex(x=>x==='错误类型')
-  if(typeIndex>=0)for(const tr of table.querySelectorAll('tbody tr')){const td=tr.children[typeIndex];if(td){td.classList.add('wfh-error-type-cell');td.querySelector('.rp-cell-clamp')?.classList.remove('rp-cell-clamp')}}
-  for(const tr of table.querySelectorAll('tbody tr')){const cell=tr.lastElementChild;const btn=cell?.querySelector('button');if(btn)btn.textContent='查看错误';cell?.querySelectorAll('.wfh-employee-open-btn').forEach(x=>x.remove())}
+  labels.forEach((label,i)=>{
+    if(hide.has(label)){heads[i].classList.add('wfh-hide-error-col');for(const tr of table.querySelectorAll('tbody tr'))tr.children[i]?.classList.add('wfh-hide-error-col')}
+    if(label==='错误类型'){heads[i].classList.add('wfh-error-type-head');for(const tr of table.querySelectorAll('tbody tr')){const td=tr.children[i];if(td){td.classList.add('wfh-error-type-cell');const div=td.querySelector('.rp-cell-clamp');if(div){div.classList.remove('rp-cell-clamp');div.title=text(div.textContent)}}}}
+    if(label==='盘口'){heads[i].classList.add('wfh-platform-head');for(const tr of table.querySelectorAll('tbody tr'))tr.children[i]?.classList.add('wfh-platform-cell')}
+    if(label==='操作'){heads[i].classList.add('wfh-action-head');for(const tr of table.querySelectorAll('tbody tr')){const td=tr.children[i];if(td){td.classList.remove('wfh-hide-error-col');td.classList.add('wfh-action-cell');const btn=td.querySelector('button');if(btn)btn.textContent='查看错误'}}}
+  })
 }
 
 function triggerEmployeeReload(){
@@ -184,11 +188,15 @@ async function riskFilteredList(body){
 }
 function patchInvoke(){
   if(supabase.functions.__wfhStableRiskPatched)return
-  supabase.functions.invoke=async(name,options={})=>{const body=options?.body||{};if(name==='admin-employees'&&body.action==='list'&&riskFilter){try{return await riskFilteredList(body)}catch(error){return {data:null,error}}}return originalInvoke(name,options)}
+  supabase.functions.invoke=async(name,options={})=>{
+    const body=options?.body||{}
+    if(name==='admin-reports'&&body.action==='errors') return originalInvoke('admin-report-errors',options)
+    return originalInvoke(name,options)
+  }
   supabase.functions.__wfhStableRiskPatched=true
 }
 
-async function run(){if(stopped)return;scheduled=false;buildErrorFilter();ensureEmployeeRiskFilter();compactErrorTable();await ensureRiskColumns()}
+async function run(){if(stopped)return;scheduled=false;buildErrorFilter();await ensureRiskColumns();compactErrorTable()}
 function schedule(){if(stopped||scheduled)return;scheduled=true;setTimeout(run,120)}
 export function startStableErrorUiEnhancer(){
   if(window.__WFH_STABLE_ERROR_UI__)return
