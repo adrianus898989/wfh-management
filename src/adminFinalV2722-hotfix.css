@@ -1,0 +1,5 @@
+/* v27.22: AdminEmployeesPage already owns the native 等级 filter.
+   Keep the fallback DOM filter hidden when the native React filter exists. */
+.employee-core-search-grid:has([data-native-risk-filter="1"]) .wfh-v2722-employee-risk-filter{
+  display:none!important;
+}
