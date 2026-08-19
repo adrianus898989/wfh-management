@@ -17,13 +17,14 @@ import { startUiPolishV2713Enhancer } from './uiPolishV2713Enhancer'
 import { startUiPolishV2713Fix } from './uiPolishV2713Fix'
 import { startUiV2714Enhancer } from './uiV2714Enhancer'
 import { startAdminCompactV2716 } from './adminCompactV2716'
+import { startAdminUiV2717Fix } from './adminUiV2717Fix'
 
 for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles]')) old.remove()
 const base = document.createElement('style'); base.setAttribute('data-wfh-inline-styles', 'true'); base.textContent = appStyles; document.head.appendChild(base)
 const pro = document.createElement('style'); pro.setAttribute('data-wfh-pro-styles', 'true'); pro.textContent = proStyles; document.head.appendChild(pro)
 const reports = document.createElement('style'); reports.setAttribute('data-wfh-reports-styles', 'true'); reports.textContent = reportsStyles; document.head.appendChild(reports)
 const employeeV27 = document.createElement('style'); employeeV27.setAttribute('data-wfh-employee-v27-styles', 'true'); employeeV27.textContent = employeeV27Styles; document.head.appendChild(employeeV27)
-document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.16-compact-filters-grade-rules')
+document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.17-aligned-filters-error-grade')
 ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter basename="/wfh-management"><App /></BrowserRouter></React.StrictMode>)
 startStableErrorUiEnhancer()
 startReportWorkloadEnhancerV2714()
@@ -31,3 +32,4 @@ startUiPolishV2713Enhancer()
 startUiPolishV2713Fix()
 startUiV2714Enhancer()
 startAdminCompactV2716()
+startAdminUiV2717Fix()
