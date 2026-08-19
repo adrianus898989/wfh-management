@@ -18,6 +18,7 @@ const formatDateTime = v => {
   const d=new Date(v)
   return Number.isNaN(d.getTime()) ? text(v) : d.toLocaleString('zh-CN',{hour12:false})
 }
+const statusName = v => ({active:'在职',resigned:'离职',probation:'试用',suspended:'停用',inactive:'停用'}[text(v)]||text(v)||'—')
 
 const cache = new Map()
 let scheduled = false
@@ -31,6 +32,7 @@ function addStyles(){
     .wfh-risk-col-head,.wfh-risk-col-cell{width:72px!important;min-width:72px!important;max-width:72px!important;text-align:center!important;white-space:nowrap!important}
     .wfh-risk-level{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:48px;height:22px;padding:0 7px;border:1px solid var(--risk-border);border-radius:999px;background:var(--risk-bg);color:var(--risk-color);font-size:9px;font-weight:850;line-height:1;white-space:nowrap;vertical-align:middle}
     .wfh-risk-level:before{content:'';width:6px;height:6px;border-radius:50%;background:var(--risk-color);flex:0 0 auto}
+    .wfh-risk-level.is-clickable{cursor:pointer;transition:transform .14s,box-shadow .14s}.wfh-risk-level.is-clickable:hover{transform:translateY(-1px);box-shadow:0 4px 10px rgba(35,61,98,.12)}
     .wfh-employee-risk-banner{margin:0 16px 12px;padding:10px 12px;border:1px solid var(--risk-border);border-radius:10px;background:var(--risk-bg);color:var(--risk-color);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
     .wfh-employee-risk-banner strong{display:block;font-size:12px}.wfh-employee-risk-banner span{font-size:10px}.wfh-risk-history-btn{height:30px;padding:0 10px;border:1px solid var(--risk-border);border-radius:8px;background:#fff;color:var(--risk-color);font-size:10px;font-weight:800;cursor:pointer;white-space:nowrap}.wfh-risk-history-btn:hover{filter:brightness(.98)}
     .wfh-error-audit-card{margin:0 16px 16px;padding:12px;border:1px solid #dfe7f2;border-radius:10px;background:#fbfdff;color:#405974}
@@ -42,7 +44,9 @@ function addStyles(){
     .wfh-months{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}.wfh-months span{padding:5px 8px;border-radius:999px;background:#f1f6fd;color:#506b8c;font-size:9px;font-weight:750}
     .wfh-history-table-wrap{width:100%;overflow:auto;border:1px solid #e4ebf4;border-radius:10px}.wfh-history-table{width:100%;min-width:760px;border-collapse:collapse;font-size:10px}.wfh-history-table th{background:#f5f8fc;color:#667b97;text-align:left;padding:9px 10px;white-space:nowrap}.wfh-history-table td{padding:9px 10px;border-top:1px solid #edf1f6;color:#344d6a;white-space:nowrap}.wfh-history-table tr:hover td{background:#fbfdff}.wfh-history-view{height:28px;padding:0 9px;border:1px solid #bcd0ef;border-radius:7px;background:#fff;color:#155bd7;font-size:9px;font-weight:800;cursor:pointer}
     .wfh-record-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.wfh-record-grid>div{border:1px solid #e3eaf3;border-radius:9px;padding:9px;background:#fbfdff;min-width:0}.wfh-record-grid>div.wide{grid-column:1/-1}.wfh-record-grid b{display:block;color:#8293a8;font-size:8px;margin-bottom:4px}.wfh-record-grid p{margin:0;color:#314b68;font-size:10px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
-    @media(max-width:700px){.wfh-error-audit-grid,.wfh-history-summary,.wfh-record-grid{grid-template-columns:1fr}.wfh-record-grid>div.wide{grid-column:auto}.wfh-history-mask{padding:8px}}
+    .rp-errors-table{width:100%!important;min-width:1380px!important}.rp-errors-table th:last-child,.rp-errors-table td:last-child{width:150px!important;max-width:150px!important}.rp-errors-scroll{width:100%!important;max-width:100%!important}.wfh-error-actions{display:flex;align-items:center;gap:5px;white-space:nowrap}.wfh-employee-open-btn{height:28px;padding:0 8px;border:1px solid #d1ddea;border-radius:7px;background:#fff;color:#4c6482;font-size:9px;font-weight:800;cursor:pointer}.wfh-employee-open-btn:hover{border-color:#9cb6dd;background:#f7faff;color:#155bd7}.wfh-error-id-button{font-weight:850!important}
+    .wfh-profile-mask{position:fixed;inset:0;z-index:2000;background:rgba(13,27,48,.55);display:flex;justify-content:flex-end}.wfh-profile-drawer{width:min(720px,92vw);height:100vh;background:#f7f9fc;box-shadow:-22px 0 60px rgba(8,25,49,.25);overflow:hidden;display:flex;flex-direction:column;color:#203a5b}.wfh-profile-head{display:flex;align-items:center;gap:12px;padding:18px 20px;background:#fff;border-bottom:1px solid #e3eaf3}.wfh-profile-avatar{width:48px;height:48px;border-radius:13px;background:linear-gradient(135deg,#4f67e8,#7058e9);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:900;flex:0 0 auto}.wfh-profile-title{min-width:0;flex:1}.wfh-profile-title small{display:block;color:#2563eb;font-size:9px;font-weight:850;letter-spacing:1.3px}.wfh-profile-title h2{margin:3px 0 6px;font-size:20px;line-height:1.15}.wfh-profile-tags{display:flex;gap:5px;flex-wrap:wrap}.wfh-profile-tags span{padding:4px 7px;border-radius:999px;background:#f1f5fa;border:1px solid #e2e9f2;color:#61758f;font-size:8px;font-weight:750}.wfh-profile-close{width:36px;height:36px;border:0;border-radius:9px;background:#eef2f7;color:#607590;font-size:20px;cursor:pointer}.wfh-profile-body{padding:14px 16px 24px;overflow:auto}.wfh-profile-alert{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border:1px solid var(--risk-border);border-radius:10px;background:var(--risk-bg);color:var(--risk-color);margin-bottom:12px}.wfh-profile-alert strong{display:block;font-size:12px}.wfh-profile-alert small{display:block;margin-top:3px;font-size:9px}.wfh-profile-card{background:#fff;border:1px solid #dfe7f1;border-radius:12px;margin-bottom:11px;overflow:hidden}.wfh-profile-card h3{margin:0;padding:12px 14px;border-bottom:1px solid #e9eef5;font-size:12px}.wfh-profile-grid{display:grid;grid-template-columns:1fr 1fr;padding:4px 14px}.wfh-profile-field{display:grid;grid-template-columns:105px minmax(0,1fr);gap:8px;padding:9px 0;border-bottom:1px solid #eef2f6;min-width:0}.wfh-profile-field:nth-last-child(-n+2){border-bottom:0}.wfh-profile-field b{color:#8595aa;font-size:9px}.wfh-profile-field span{color:#304966;font-size:10px;font-weight:650;word-break:break-word}.wfh-profile-loading{padding:55px;text-align:center;color:#7c8da5}.wfh-profile-error{margin:18px;padding:18px;border:1px solid #fecdd3;border-radius:10px;background:#fff1f2;color:#b42334}.wfh-profile-history{height:30px;padding:0 10px;border:1px solid var(--risk-border);border-radius:8px;background:#fff;color:var(--risk-color);font-size:9px;font-weight:850;cursor:pointer;white-space:nowrap}
+    @media(max-width:700px){.wfh-error-audit-grid,.wfh-history-summary,.wfh-record-grid,.wfh-profile-grid{grid-template-columns:1fr}.wfh-record-grid>div.wide{grid-column:auto}.wfh-history-mask{padding:8px}.wfh-profile-drawer{width:100vw}.wfh-profile-field{grid-template-columns:92px minmax(0,1fr)}}
   `
   document.head.appendChild(style)
 }
@@ -67,13 +71,19 @@ function styleRisk(el,cfg){
   el.style.setProperty('--risk-bg',cfg.bg)
   el.style.setProperty('--risk-border',cfg.border)
 }
-function levelNode(summary){
+function levelNode(summary,onOpen){
   const cfg=riskCfg(summary?.month_error_count)
   const chip=document.createElement('span')
-  chip.className='wfh-risk-level'
+  chip.className=`wfh-risk-level${onOpen?' is-clickable':''}`
   chip.textContent=cfg.label
-  chip.title=`${cfg.full} · ${monthLabel(summary?.month_key)} ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔`
+  chip.title=`${cfg.full} · ${monthLabel(summary?.month_key)} ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔${onOpen?' · 点击查看全部错误记录':''}`
   styleRisk(chip,cfg)
+  if(onOpen){
+    chip.setAttribute('role','button')
+    chip.tabIndex=0
+    chip.addEventListener('click',e=>{e.stopPropagation();onOpen()})
+    chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onOpen()}})
+  }
   return chip
 }
 
@@ -89,22 +99,65 @@ function ensureLevelHeader(table){
   }
 }
 
+function wireEmployeeOpen(button,id){
+  if(!button||!id||button.dataset.wfhEmployeeOpen==='1') return
+  button.dataset.wfhEmployeeOpen='1'
+  button.classList.add('wfh-error-id-button')
+  button.title='打开员工档案'
+  button.addEventListener('click',e=>{
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    openEmployeeProfile(id)
+  },true)
+}
+
+function ensureErrorActions(tr,id){
+  const cell=tr?.lastElementChild
+  if(!cell||!id) return
+  const existing=cell.querySelector('button')
+  if(existing&&text(existing.textContent)==='查看') existing.textContent='查看错误'
+  if(cell.querySelector('.wfh-employee-open-btn')) return
+  let wrap=cell.querySelector('.wfh-error-actions')
+  if(!wrap){
+    wrap=document.createElement('div')
+    wrap.className='wfh-error-actions'
+    while(cell.firstChild) wrap.appendChild(cell.firstChild)
+    cell.appendChild(wrap)
+  }
+  const btn=document.createElement('button')
+  btn.type='button'
+  btn.className='wfh-employee-open-btn'
+  btn.textContent='员工档案'
+  btn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();openEmployeeProfile(id)})
+  wrap.appendChild(btn)
+}
+
 async function enhanceErrorTable(){
   const table=document.querySelector('.rp-errors-table')
   if(!table) return
   table.querySelectorAll('.wfh-risk-chip').forEach(x=>x.remove())
   ensureLevelHeader(table)
+  const title=table.closest('.rp-card')?.querySelector('.rp-card-title p')
+  if(title&&!title.dataset.wfhLinkedCopy){title.dataset.wfhLinkedCopy='1';title.textContent='主表保留管理重点；点击「等级」查看该员工全部错误记录，点击员工ID打开员工档案；订单号、金额、错误备注、正确操作方式放进「查看错误」详情。'}
   const rows=[...table.querySelectorAll('tbody tr')]
   const pairs=[]
   for(const tr of rows){
     let levelCell=tr.querySelector(':scope > .wfh-risk-col-cell')
     if(!levelCell){levelCell=document.createElement('td');levelCell.className='wfh-risk-col-cell';tr.insertBefore(levelCell,tr.firstChild)}
     const idCell=levelCell.nextElementSibling
+    const nameCell=idCell?.nextElementSibling
     const id=upper(idCell?.querySelector('button')?.textContent || idCell?.textContent)
-    if(id) pairs.push({id,cell:levelCell})
+    if(id){
+      pairs.push({id,cell:levelCell,name:text(nameCell?.textContent)})
+      wireEmployeeOpen(idCell?.querySelector('button'),id)
+      ensureErrorActions(tr,id)
+    }
   }
   await fetchSummaries(pairs.map(x=>x.id))
-  for(const {id,cell} of pairs){cell.replaceChildren(levelNode(cache.get(id)))}
+  for(const {id,cell,name} of pairs){
+    const summary=cache.get(id)
+    cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))
+  }
 }
 
 async function enhanceEmployeeTable(){
@@ -118,11 +171,15 @@ async function enhanceEmployeeTable(){
     let levelCell=tr.querySelector(':scope > .wfh-risk-col-cell')
     if(!levelCell){levelCell=document.createElement('td');levelCell.className='wfh-risk-col-cell';tr.insertBefore(levelCell,tr.firstChild)}
     const idCell=levelCell.nextElementSibling
+    const nameCell=idCell?.nextElementSibling
     const id=upper(idCell?.textContent)
-    if(id) pairs.push({id,cell:levelCell})
+    if(id) pairs.push({id,cell:levelCell,name:text(nameCell?.textContent)})
   }
   await fetchSummaries(pairs.map(x=>x.id))
-  for(const {id,cell} of pairs){cell.replaceChildren(levelNode(cache.get(id)))}
+  for(const {id,cell,name} of pairs){
+    const summary=cache.get(id)
+    cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))
+  }
 }
 
 function closeOverlay(node){node?.remove()}
@@ -135,6 +192,90 @@ function makeOverlay(title,subTitle='',narrow=false){
   modal.querySelector('.wfh-history-close')?.addEventListener('click',()=>closeOverlay(mask))
   document.body.appendChild(mask)
   return {mask,modal,body:modal.querySelector('.wfh-history-body')}
+}
+
+function makeProfileDrawer(){
+  document.querySelector('.wfh-profile-mask')?.remove()
+  const mask=document.createElement('div');mask.className='wfh-profile-mask'
+  const drawer=document.createElement('aside');drawer.className='wfh-profile-drawer'
+  mask.appendChild(drawer)
+  mask.addEventListener('mousedown',e=>{if(e.target===mask)mask.remove()})
+  document.body.appendChild(mask)
+  return {mask,drawer}
+}
+function profileField(label,value){
+  const row=document.createElement('div');row.className='wfh-profile-field'
+  const b=document.createElement('b');b.textContent=label
+  const s=document.createElement('span');s.textContent=text(value)||'—'
+  row.append(b,s);return row
+}
+function profileCard(title,fields){
+  const card=document.createElement('section');card.className='wfh-profile-card'
+  const h=document.createElement('h3');h.textContent=title
+  const grid=document.createElement('div');grid.className='wfh-profile-grid'
+  fields.forEach(([k,v])=>grid.appendChild(profileField(k,v)))
+  card.append(h,grid);return card
+}
+
+async function openEmployeeProfile(employeeNo){
+  const id=upper(employeeNo)
+  if(!id) return
+  const ui=makeProfileDrawer()
+  ui.drawer.innerHTML='<div class="wfh-profile-loading">正在读取员工档案…</div>'
+  try{
+    const {data:listData,error:listError}=await supabase.functions.invoke('admin-employees',{body:{action:'list',page:1,page_size:5,filters:{employee_no:id,status:''}}})
+    if(listError||listData?.error) throw new Error(text(listData?.error||listError?.message)||'员工档案读取失败')
+    const row=(listData?.rows||[]).find(x=>upper(x.employee_no)===id)
+    if(!row?.id) throw new Error(`找不到员工档案：${id}`)
+    const {data:detail,error:detailError}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:row.id}})
+    if(detailError||detail?.error) throw new Error(text(detail?.error||detailError?.message)||'员工档案读取失败')
+    const e=detail?.employee||row
+    const contact=detail?.contact||{}
+    const comp=detail?.compensation||{}
+    const pay=detail?.payment||{}
+    await fetchSummaries([id])
+    const summary=cache.get(id)
+    const cfg=riskCfg(summary?.month_error_count)
+
+    ui.drawer.replaceChildren()
+    const head=document.createElement('div');head.className='wfh-profile-head'
+    const avatar=document.createElement('div');avatar.className='wfh-profile-avatar';avatar.textContent=(text(e.full_name)||id).slice(0,1).toUpperCase()
+    const title=document.createElement('div');title.className='wfh-profile-title'
+    const small=document.createElement('small');small.textContent=id
+    const h2=document.createElement('h2');h2.textContent=text(e.full_name)||id
+    const tags=document.createElement('div');tags.className='wfh-profile-tags'
+    ;[e.employment_type,e.teams?.name||e.team_name,e.positions?.name||e.position_name||e.schedule_position,e.shift_name].map(text).filter(Boolean).forEach(v=>{const x=document.createElement('span');x.textContent=v;tags.appendChild(x)})
+    title.append(small,h2,tags)
+    const close=document.createElement('button');close.className='wfh-profile-close';close.type='button';close.textContent='×';close.addEventListener('click',()=>ui.mask.remove())
+    head.append(avatar,title,close)
+    const body=document.createElement('div');body.className='wfh-profile-body'
+
+    if(Number(summary?.total_error_count||0)>0){
+      const alert=document.createElement('div');alert.className='wfh-profile-alert';styleRisk(alert,cfg)
+      const info=document.createElement('div');const strong=document.createElement('strong');strong.textContent=`${cfg.full} · ${monthLabel(summary?.month_key)} ${Number(summary?.month_error_count||0)} 笔错误`;const sm=document.createElement('small');sm.textContent=`近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔 · 最近 ${text(summary?.last_error_date)||'—'}`;info.append(strong,sm)
+      const btn=document.createElement('button');btn.type='button';btn.className='wfh-profile-history';btn.textContent='查看全部错误记录';styleRisk(btn,cfg);btn.addEventListener('click',()=>openEmployeeErrorHistory(id,summary,text(e.full_name)))
+      alert.append(info,btn);body.appendChild(alert)
+    }
+
+    body.appendChild(profileCard('基本资料',[
+      ['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',e.employment_type],['状态',statusName(e.status)],['入职日期',e.hire_date],['离职日期',e.resign_date],['离职原因',detail?.resignation_reason]
+    ]))
+    body.appendChild(profileCard('组织与排班',[
+      ['团队',e.teams?.name||e.team_name],['主档岗位',e.positions?.name||e.position_name],['排班岗位',e.schedule_position],['班次',e.shift_name],['组别',e.group_name],['负责人 / 组长',e.leader_name||e.person_in_charge],['培训',e.trainer_name||e.online_trainer||e.on_site_trainer],['盘口',e.platform_scope||e.market_position]
+    ]))
+    body.appendChild(profileCard('联系与账号',[
+      ['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Workfolio 邮箱',contact.work_email],['Telegram',contact.telegram_username],['Zoom 邮箱',contact.zoom_email],['WhatsApp / 手机',contact.whatsapp_phone]
+    ]))
+    if([comp.base_salary,comp.daily_rate,comp.performance_default,comp.meal_allowance,pay.payment_mode,pay.transfer_using,pay.gcash_account,pay.usdt_address].some(v=>text(v))){
+      body.appendChild(profileCard('工资与收款',[
+        ['底薪',comp.base_salary],['日薪',comp.daily_rate],['默认绩效',comp.performance_default],['餐补',comp.meal_allowance],['收款方式',pay.payment_mode||pay.mode],['转账方式',pay.transfer_using],['GCash / 银行账号',pay.gcash_account||pay.bank_wallet_account],['USDT 地址',pay.usdt_address]
+      ]))
+    }
+    ui.drawer.append(head,body)
+  }catch(e){
+    ui.drawer.innerHTML=''
+    const box=document.createElement('div');box.className='wfh-profile-error';box.textContent=e?.message||'员工档案读取失败';ui.drawer.appendChild(box)
+  }
 }
 
 async function fetchAuditForRow(row){
