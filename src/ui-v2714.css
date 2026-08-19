@@ -1,0 +1,88 @@
+/* V27.14 — report original-style charts, no nested team scroll, compact employee filters */
+
+/* Report team matrix: fit the whole table into the card, use the page scrollbar only. */
+.wfh-team-fit-card .rp-table-scroll{max-height:none!important;height:auto!important;overflow:visible!important}
+.wfh-team-fit-card .rp-team-table{width:100%!important;min-width:0!important;table-layout:fixed!important}
+.wfh-team-fit-card .rp-team-table th{position:static!important;background:#101827!important;color:#f8fafc!important;padding:9px 4px!important;font-size:10px!important;font-weight:850!important;line-height:1.15!important;white-space:normal!important;word-break:keep-all!important}
+.wfh-team-fit-card .rp-team-table td{height:48px!important;padding:7px 4px!important;font-size:10.5px!important;font-weight:620!important;line-height:1.2!important;white-space:normal!important;overflow:hidden!important;text-overflow:ellipsis!important}
+.wfh-team-fit-card .rp-team-table th:first-child,.wfh-team-fit-card .rp-team-table td:first-child{position:static!important;width:78px!important;min-width:78px!important;max-width:78px!important;box-shadow:none!important}
+.wfh-team-fit-card .rp-team-table th:nth-child(2),.wfh-team-fit-card .rp-team-table td:nth-child(2){width:55px!important}
+.wfh-team-fit-card .rp-team-table .rp-link,.wfh-team-fit-card .rp-team-table .rp-special-count{font-weight:850!important;font-size:10.5px!important}
+.wfh-team-fit-card .rp-team-table .rp-avg{margin-top:3px!important;min-width:0!important;width:100%!important;max-width:68px!important;padding:3px 3px!important;font-size:8px!important;font-weight:800!important}
+.wfh-team-fit-card .rp-table-scroll::-webkit-scrollbar{display:none!important}
+
+/* Replace the improvised lower cards with the original-site visual language. */
+.wfh-original-chart-card{min-height:440px!important;overflow:hidden!important}
+.wfh-original-chart-card>.rp-card-title{display:flex!important;align-items:flex-start!important;justify-content:space-between!important;gap:12px!important;padding:18px 20px 8px!important}
+.wfh-original-chart-card>.rp-card-title h3{font-size:17px!important;font-weight:850!important;color:#182f4c!important;margin:0 0 5px!important}
+.wfh-original-chart-card>.rp-card-title p{font-size:10px!important;font-weight:650!important;color:#637a96!important;margin:0!important}
+.wfh-view-summary{flex:0 0 auto;height:34px;padding:0 14px;border:1px solid #d8e1eb;border-radius:999px;background:#fff;color:#233d5a;font-size:10px;font-weight:800;cursor:pointer}
+.wfh-view-summary:hover{background:#f7faff;border-color:#b7c8dc}
+.wfh-original-chart-card>.rp-bars{position:absolute!important;left:-10000px!important;top:auto!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
+.wfh-original-position-chart{padding:0 18px 16px}
+.wfh-position-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 12px;min-height:54px;padding:2px 10px 8px}
+.wfh-position-legend button{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:#425a75;font-size:9.5px;font-weight:700;padding:2px 0;cursor:pointer;white-space:nowrap}
+.wfh-position-legend button i{width:10px;height:10px;border-radius:1px;background:var(--legend);flex:0 0 auto}
+.wfh-position-legend button:hover{color:#0f5bd8}
+.wfh-donut-wrap{display:flex;justify-content:center;align-items:center;height:318px}
+.wfh-donut-wrap svg{width:min(380px,82%);height:100%;overflow:visible}
+.wfh-donut-wrap circle[data-i]{cursor:pointer;transition:opacity .15s ease,filter .15s ease}
+.wfh-donut-wrap circle[data-i]:hover{opacity:.84;filter:drop-shadow(0 2px 3px rgba(30,64,100,.18))}
+.wfh-donut-hole{fill:#fff}
+.wfh-original-team-chart{padding:2px 18px 10px;height:360px}
+.wfh-original-team-chart svg{display:block;width:100%;height:100%;overflow:visible}
+.wfh-team-grid line{stroke:rgba(105,122,145,.22);stroke-width:1}
+.wfh-team-grid text{fill:#586d86;font-size:10px;font-weight:650}
+.wfh-team-bars rect{fill:#91c8ee;cursor:pointer;transition:opacity .15s ease,transform .15s ease;transform-box:fill-box;transform-origin:center bottom}
+.wfh-team-bars rect:hover{opacity:.82;transform:scaleY(1.015)}
+.wfh-team-x{fill:#4a5f78;font-size:9.5px;font-weight:650}
+
+.wfh-chart-summary-mask{position:fixed;inset:0;z-index:5200;background:rgba(15,29,48,.56);display:flex;align-items:center;justify-content:center;padding:22px;backdrop-filter:blur(2px)}
+.wfh-chart-summary-modal{width:min(620px,92vw);max-height:82vh;background:#fff;border-radius:15px;box-shadow:0 28px 80px rgba(7,23,46,.32);overflow:hidden;display:flex;flex-direction:column}
+.wfh-chart-summary-modal header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #e6edf4}.wfh-chart-summary-modal header span{display:block;font-size:8px;letter-spacing:1.4px;color:#8293a8;font-weight:850}.wfh-chart-summary-modal header h3{margin:3px 0 0;font-size:16px;color:#203c5c}.wfh-chart-summary-modal header button{width:34px;height:34px;border:0;border-radius:9px;background:#eef3f8;color:#667b95;font-size:20px;cursor:pointer}
+.wfh-chart-summary-list{overflow:auto;padding:10px 12px 14px;display:grid;grid-template-columns:1fr 1fr;gap:7px}.wfh-chart-summary-list button{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:38px;padding:0 11px;border:1px solid #e0e7f0;border-radius:9px;background:#fff;color:#35516e;cursor:pointer}.wfh-chart-summary-list button:hover{background:#f5f9ff;border-color:#bfd3ef}.wfh-chart-summary-list span{font-size:10.5px;font-weight:700}.wfh-chart-summary-list strong{font-size:12px;color:#0f5bd8}
+
+/* Error filters: denser, aligned, less vertical waste. */
+.wfh-error-unified{padding:9px 10px!important;margin-bottom:8px!important;gap:7px!important}
+.wfh-error-primary{grid-template-columns:minmax(230px,1.45fr) 145px 145px minmax(170px,1fr) minmax(155px,.95fr) 56px 62px 54px 54px 54px!important;gap:7px!important;align-items:end!important}
+.wfh-error-advanced{grid-template-columns:132px repeat(7,minmax(112px,1fr))!important;gap:7px!important;padding-top:8px!important}
+.wfh-error-unified input,.wfh-error-unified select,.wfh-error-unified button{height:34px!important;border-radius:8px!important}
+.wfh-error-grade-slot{min-width:0!important}
+.wfh-grade-picker>button.wfh-grade-trigger{height:34px!important;border-radius:8px!important;font-size:10px!important}
+
+/* Employee archive: compact two-level filter block. */
+.archive-filter-card{padding:11px 13px 10px!important}
+.employee-core-search-grid{display:grid!important;grid-template-columns:140px repeat(4,minmax(155px,1fr))!important;gap:8px 10px!important;align-items:end!important}
+.employee-core-search-grid .pro-filter-field{gap:4px!important}
+.employee-core-search-grid .pro-filter-field>span,.v24-advanced-filter-grid>label{font-size:9px!important;font-weight:750!important;color:#667d98!important}
+.employee-core-search-grid .pro-input-shell,.employee-core-search-grid select,.v24-advanced-filter-grid input,.v24-advanced-filter-grid select,.v24-advanced-filter-grid .filter-combo input{height:36px!important;min-height:36px!important;border-radius:8px!important}
+.v24-advanced-filter-grid{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;gap:8px 10px!important;margin-top:8px!important;padding-top:9px!important;border-top:1px dashed #dce5ef!important}
+.v24-advanced-filter-grid>label{display:grid!important;gap:4px!important;min-width:0!important}
+.archive-filter-actions{margin:7px 0 0!important;padding:7px 0 0!important;min-height:36px!important;border-top:0!important;gap:7px!important}
+.archive-filter-actions button{height:34px!important;min-width:76px!important;border-radius:8px!important}
+
+/* Native grade select in employee archive, visually aligned with the custom picker. */
+label[data-native-risk-filter="1"]{position:relative!important}
+label[data-native-risk-filter="1"] select{appearance:none!important;-webkit-appearance:none!important;width:100%!important;height:36px!important;border:1px solid #d5e0ec!important;border-radius:8px!important;background:#fff!important;color:#2b4765!important;padding:0 31px 0 28px!important;font-size:10px!important;font-weight:800!important;box-shadow:0 1px 2px rgba(24,52,83,.025)!important;cursor:pointer!important}
+label[data-native-risk-filter="1"]:before{content:'';position:absolute;left:10px;bottom:14px;width:7px;height:7px;border-radius:50%;background:var(--native-grade-color,#8ca0b7);z-index:2;pointer-events:none}
+label[data-native-risk-filter="1"]:after{content:'⌄';position:absolute;right:11px;bottom:10px;color:#71849a;font-size:13px;font-weight:800;pointer-events:none}
+label[data-native-risk-filter="1"] select:focus{outline:none!important;border-color:#6597e5!important;box-shadow:0 0 0 3px rgba(66,129,222,.10)!important}
+
+/* Dates already have headers, so don't repeat labels below each date. */
+.analytics-detail-table .event-date-cell small{display:none!important}
+.analytics-detail-table .event-date-cell strong{font-size:11px!important;line-height:1.2!important}
+.analytics-detail-table .event-date-cell{min-height:0!important;gap:0!important}
+
+@media(max-width:1500px){
+  .wfh-error-primary{grid-template-columns:minmax(190px,1.4fr) 132px 132px minmax(150px,1fr) minmax(138px,.9fr) repeat(5,auto)!important}
+  .wfh-error-advanced{grid-template-columns:126px repeat(4,minmax(120px,1fr))!important}
+  .employee-core-search-grid{grid-template-columns:135px repeat(4,minmax(145px,1fr))!important}
+  .v24-advanced-filter-grid{grid-template-columns:repeat(5,minmax(0,1fr))!important}
+  .wfh-team-fit-card .rp-team-table th{font-size:9px!important}.wfh-team-fit-card .rp-team-table td{font-size:9.5px!important}
+}
+@media(max-width:1120px){
+  .rp-grid2{grid-template-columns:1fr!important}
+  .wfh-error-primary,.wfh-error-advanced{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .employee-core-search-grid,.v24-advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .wfh-team-fit-card .rp-table-scroll{overflow-x:auto!important}.wfh-team-fit-card .rp-team-table{min-width:1180px!important}
+}
