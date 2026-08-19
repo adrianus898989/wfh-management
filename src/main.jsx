@@ -11,6 +11,7 @@ import './report-overview-v2712.css'
 import './ui-v2714.css'
 import './ui-v2714-hotfix.css'
 import './adminCompactV2716.css'
+import './adminFinalV2722-hotfix.css'
 import { startStableErrorUiEnhancer } from './stableErrorUiEnhancer'
 import { startReportWorkloadEnhancerV2714 } from './reportWorkloadEnhancerV2714'
 import { startUiPolishV2713Enhancer } from './uiPolishV2713Enhancer'
@@ -27,7 +28,7 @@ const pro = document.createElement('style'); pro.setAttribute('data-wfh-pro-styl
 const reports = document.createElement('style'); reports.setAttribute('data-wfh-reports-styles', 'true'); reports.textContent = reportsStyles; document.head.appendChild(reports)
 const employeeV27 = document.createElement('style'); employeeV27.setAttribute('data-wfh-employee-v27-styles', 'true'); employeeV27.textContent = employeeV27Styles; document.head.appendChild(employeeV27)
 const isReportsPath = window.location.pathname.includes('/admin/reports')
-document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.22-final-report-errors-risk-ui')
+document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.22.1-final-report-errors-risk-ui')
 ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter basename="/wfh-management"><App /></BrowserRouter></React.StrictMode>)
 
 startReportWorkloadEnhancerV2714()
