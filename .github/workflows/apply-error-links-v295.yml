@@ -135,3 +135,5 @@ jobs:
           git rm .github/workflows/apply-error-links-v295.yml
           git commit -m "fix: link error levels and employee profiles"
           git push
+
+# trigger: 2026-08-19T14:52+04:00
