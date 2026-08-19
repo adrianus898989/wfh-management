@@ -17,7 +17,7 @@ jobs:
         with:
           ref: main
 
-      - name: Patch reports only
+      - name: Apply report-only alignment patch
         shell: bash
         run: |
           python3 - <<'PY'
