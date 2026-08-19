@@ -4,6 +4,14 @@ import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 
 const text = v => String(v ?? '').trim()
+const localDateIso = () => {
+  const d=new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+const blankAuditFilters = () => {
+  const today=localDateIso()
+  return {employee_no:'',full_name:'',action:'',actor:'',date_from:today,date_to:today}
+}
 const isTestEmployeeNo = v => text(v).toUpperCase().startsWith('TEST')
 const dedupeAnalysisRows = rows => {
   const map=new Map()
@@ -383,7 +391,7 @@ export default function AdminEmployeesPage(){
   const [auditPage,setAuditPage]=useState(1)
   const [auditPageSize,setAuditPageSize]=useState(20)
   const [auditLoading,setAuditLoading]=useState(false)
-  const [auditFilters,setAuditFilters]=useState({employee_no:'',full_name:'',action:'',actor:'',date_from:'',date_to:''})
+  const [auditFilters,setAuditFilters]=useState(blankAuditFilters)
 
   const [teamKeyword,setTeamKeyword]=useState('')
   const [teamPageSize,setTeamPageSize]=useState(20)
@@ -1152,13 +1160,13 @@ export default function AdminEmployeesPage(){
         <div><h2>操作日志</h2><p>只显示新操作。后台历史重扫不再显示；Google 编辑优先显示真实邮箱，邮箱被隐藏时使用已登记操作人，不再统一冒充 Google Sheet。</p></div>
         <span>{auditTotal} 条</span>
       </div>
-      <div className="resignation-filter-panel v25-resignation-filter-panel" style={{gridTemplateColumns:'repeat(4,minmax(0,1fr))'}}>
+      <div className="resignation-filter-panel v25-resignation-filter-panel" style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:'14px 16px',alignItems:'end'}}>
         <label className="resign-filter-field"><span>员工ID</span><input value={auditFilters.employee_no} onChange={e=>setAuditFilters({...auditFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></label>
         <label className="resign-filter-field"><span>姓名</span><input value={auditFilters.full_name} onChange={e=>setAuditFilters({...auditFilters,full_name:e.target.value})} placeholder="输入姓名"/></label>
         <label className="resign-filter-field"><span>操作类型</span><FilterCombo value={auditFilters.action?auditActionLabel(auditFilters.action):''} options={auditActionOptions.map(x=>x.label)} onChange={label=>setAuditFilters({...auditFilters,action:auditActionValueByLabel(label)})} placeholder="全部操作 / 输入搜索" listId="audit-action-filter"/></label>
         <label className="resign-filter-field"><span>操作账号</span><input value={auditFilters.actor} onChange={e=>setAuditFilters({...auditFilters,actor:e.target.value})} placeholder="后台账号 / Google 邮箱"/></label>
-        <label className="resign-filter-field v25-resign-date" style={{gridColumn:'1 / span 3',minWidth:0}}><span>操作日期区间</span><div className="pro-date-range" style={{width:'100%'}}><input type="date" value={auditFilters.date_from} onChange={e=>setAuditFilters({...auditFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditFilters.date_to} onChange={e=>setAuditFilters({...auditFilters,date_to:e.target.value})}/></div></label>
-        <div className="resign-filter-actions v25-resign-actions" style={{gridColumn:'4',alignSelf:'end',justifyContent:'flex-end'}}><button className="primary-action resignation-query-action" onClick={()=>{setAuditPage(1);loadAudit(1,auditPageSize,auditFilters)}} disabled={auditLoading}>{auditLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={()=>{const next={employee_no:'',full_name:'',action:'',actor:'',date_from:'',date_to:''};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
+        <label className="resign-filter-field v25-resign-date" style={{gridColumn:'1 / span 2',minWidth:0}}><span>操作日期区间</span><div className="pro-date-range" style={{width:'100%'}}><input type="date" value={auditFilters.date_from} onChange={e=>setAuditFilters({...auditFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditFilters.date_to} onChange={e=>setAuditFilters({...auditFilters,date_to:e.target.value})}/></div></label>
+        <div className="resign-filter-actions v25-resign-actions" style={{gridColumn:'3 / span 2',display:'flex',alignSelf:'end',justifyContent:'flex-end',alignItems:'end',gap:8,minHeight:42}}><button className="primary-action resignation-query-action" onClick={()=>{setAuditPage(1);loadAudit(1,auditPageSize,auditFilters)}} disabled={auditLoading}>{auditLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={()=>{const next=blankAuditFilters();setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
       </div>
       {auditLoading&&!auditRows.length?<div className="empty-state">读取操作日志...</div>:!auditRows.length?<div className="empty-state">暂无操作日志</div>:<div className="table-scroll"><table className="data-table">
         <thead><tr><th>时间</th><th>操作账号</th><th>员工ID</th><th>姓名</th><th>操作</th><th>详细变更</th><th>来源</th></tr></thead>
@@ -1410,7 +1418,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
         {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
         {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
         {e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
-        {(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status))&&<button className="cancel-hire-outline" onClick={onCancelHire}>撤销入职</button>}
+        {(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status)||(detail.actions?.can_edit&&detail.actions?.can_resign&&detail.actions?.can_reactivate))&&<button className="cancel-hire-outline" title="不符合撤销条件时系统会安全拒绝，不会删除员工资料" onClick={onCancelHire}>撤销入职</button>}
         {detail.actions?.can_edit&&<button className="edit-outline" onClick={onEdit}>编辑</button>}
         <button className="drawer-close" onClick={onClose}>×</button>
       </div>
