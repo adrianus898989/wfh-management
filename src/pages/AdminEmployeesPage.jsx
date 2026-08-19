@@ -368,7 +368,7 @@ export default function AdminEmployeesPage(){
   const [peopleAnalytics,setPeopleAnalytics]=useState({
     loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[],
   })
-  const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',tenure:[],positions:[],platforms:[],countries:[]})
+  const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
   const [analysisDetail,setAnalysisDetail]=useState(null)
   const [analysisDetailLoading,setAnalysisDetailLoading]=useState(false)
@@ -415,6 +415,14 @@ export default function AdminEmployeesPage(){
     return data
   }
 
+  const loadOperatorMap=async employeeIds=>{
+    const ids=(employeeIds||[]).map(text).filter(Boolean)
+    if(!ids.length) return new Map()
+    const {data,error}=await supabase.functions.invoke('admin-employee-operators',{body:{employee_ids:ids}})
+    if(error||data?.error) return new Map()
+    return new Map((data?.rows||[]).map(x=>[text(x.employee_id),text(x.operator_account)]))
+  }
+
   const checkEmployeeIdentity=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employee-write',{body:{action:'check_identity',...body}})
     if(error||data?.error) throw new Error(data?.error||error?.message||'员工ID / 姓名检查失败')
@@ -444,7 +452,7 @@ export default function AdminEmployeesPage(){
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'overview',today}})
       if(error||data?.error) throw new Error(data?.error||error?.message||'员工结构统计读取失败')
-      setArchiveStats({...data,loading:false,error:''})
+      setArchiveStats({...data,loading:false,error:'',refreshed_at:new Date().toISOString()})
     }catch(e){
       setArchiveStats(v=>({...v,loading:false,error:e.message||'员工结构统计读取失败'}))
     }
@@ -494,7 +502,8 @@ export default function AdminEmployeesPage(){
     try{
       const data=await invoke({action:'list',page:nextPage,page_size:nextSize,filters})
       const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
-      setRows(visibleRows)
+      const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))
+      setRows(visibleRows.map(r=>({...r,operator_account:operatorMap.get(text(r.id))||text(r.operator_account)})))
       setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))
     }catch(e){ if(!silent) setError(e.message) }
     finally{ if(!silent) setLoading(false) }
@@ -974,9 +983,9 @@ export default function AdminEmployeesPage(){
       <div className="data-card">
         {loading?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
-            <thead><tr><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
+            <thead><tr><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=><tr key={r.id}>
-              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td>
+              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
               <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
               <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" onClick={()=>generateCode(r.employee_no)}>激活码</button>}</div></td>
@@ -1418,7 +1427,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
         {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
         {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
         {e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
-        {(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status)||(detail.actions?.can_edit&&detail.actions?.can_resign&&detail.actions?.can_reactivate))&&<button className="cancel-hire-outline" title="不符合撤销条件时系统会安全拒绝，不会删除员工资料" onClick={onCancelHire}>撤销入职</button>}
+        {(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status)||detail.actions?.can_edit)&&<button className="cancel-hire-outline" title="不符合撤销条件时系统会安全拒绝，不会删除员工资料" onClick={onCancelHire}>撤销入职</button>}
         {detail.actions?.can_edit&&<button className="edit-outline" onClick={onEdit}>编辑</button>}
         <button className="drawer-close" onClick={onClose}>×</button>
       </div>
@@ -1995,11 +2004,12 @@ function PositionAnalysisCard({item,onPeople,onResign,onTeam}){
 }
 function ArchiveStructureStats({data,onTenure,onPosition,onCountry}){
   const tenureRows=data?.tenure||[]
-  const updated=data?.latest_updated_at?formatDateTime(data.latest_updated_at):'—'
+  const updated=data?.refreshed_at?formatDateTime(data.refreshed_at):'—'
+  const changed=data?.latest_updated_at?formatDateTime(data.latest_updated_at):'—'
   return <section className="archive-structure-section">
     <div className="archive-structure-head">
       <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；Realtime 自动刷新，60 秒静默轮询兜底。</p></div>
-      <div className={`archive-sync-badge ${data?.error?'has-error':''}`}><i/><span>{data?.error?'结构统计待部署':`Supabase 更新 ${updated}`}</span></div>
+      <div className={`archive-sync-badge ${data?.error?'has-error':''}`}><i/><span title={`最近数据变更 ${changed}`}>{data?.error?'结构统计待部署':`实时已连接 · ${updated}`}</span></div>
     </div>
     <div className="archive-structure-grid">
       <ArchiveBreakdownCard title="入职时长" rows={tenureRows} loading={data?.loading} onRow={x=>onTenure?.(x.key,x.name)}/>
