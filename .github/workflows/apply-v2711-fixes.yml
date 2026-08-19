@@ -1,0 +1,153 @@
+name: Apply V27.11 employee and error fixes
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-v2711-fixes.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def once(s, old, new, label):
+              if old not in s:
+                  raise SystemExit(f'missing target: {label}')
+              return s.replace(old, new, 1)
+
+          # ---------------- AdminReportsPage ----------------
+          p=Path('src/pages/AdminReportsPage.jsx')
+          s=p.read_text()
+          s=once(s,
+            "  const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])\n  const setSortKey=key=>setSort(prev=>({key,asc:prev.key===key?!prev.asc:true}))",
+            "  const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])\n  const rosterFilterActive=Boolean(data)&&allowed.size<Number(data?.current_roster_employee_count||allowed.size)\n  const setSortKey=key=>setSort(prev=>({key,asc:prev.key===key?!prev.asc:true}))",
+            'error roster filter mode')
+          s=once(s,
+            "    let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id))",
+            "    let x=(data?.rows||[]).filter(r=>!rosterFilterActive||allowed.has(r.employee_id))",
+            'show all synced errors by default')
+          p.write_text(s)
+
+          # ---------------- AdminEmployeesPage ----------------
+          p=Path('src/pages/AdminEmployeesPage.jsx')
+          s=p.read_text()
+          # risk level becomes a real React filter, not a DOM-only decoration
+          s=s.replace(
+            "employee_no:'',full_name:'',work_tg:'',backend_account:'',team:'',position:'',country:'',status:'active',\n    employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',",
+            "employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',team:'',position:'',country:'',status:'active',\n    employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',")
+
+          helper="""  const fetchEmployeeListData=async(nextPage,nextSize,nextFilters=filters)=>{\n    if(text(nextFilters?.risk_level)){\n      const {data,error}=await supabase.functions.invoke('admin-employee-risk-list',{body:{action:'list',page:nextPage,page_size:nextSize,filters:nextFilters,risk_level:nextFilters.risk_level}})\n      if(error||data?.error) throw new Error(data?.error||error?.message||'等级筛选读取失败')\n      return data\n    }\n    return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:nextFilters})\n  }\n\n"""
+          s=once(s,"  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false}={})=>{",helper+"  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false}={})=>{",'employee risk helper')
+          s=once(s,"      const data=await invoke({action:'list',page:nextPage,page_size:nextSize,filters})","      const data=await fetchEmployeeListData(nextPage,nextSize,filters)",'employee loadList risk route')
+          s=once(s,"          invoke({action:'list',page,page_size:pageSize,filters}),","          fetchEmployeeListData(page,pageSize,filters),",'employee polling risk route')
+          s=once(s,"          invoke({action:'list',page:1,page_size:pageSize,filters}),","          fetchEmployeeListData(1,pageSize,filters),",'employee create refresh risk route')
+
+          s=once(s,
+            '''        <div className="field-search-grid employee-core-search-grid">\n          <label className="pro-filter-field"><span>员工ID</span>''',
+            '''        <div className="field-search-grid employee-core-search-grid">\n          <label className="pro-filter-field" data-native-risk-filter="1"><span>等级</span><select value={filters.risk_level||''} onChange={e=>setFilters({...filters,risk_level:e.target.value})}><option value="">全部等级</option><option value="normal">正常（0）</option><option value="attention">注意（1–3）</option><option value="watch">重点（4–9）</option><option value="high">高频（10+）</option></select></label>\n          <label className="pro-filter-field"><span>员工ID</span>''',
+            'native risk selector')
+
+          actions='''          <div className="filter-toolbar-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="secondary-action" onClick={clear}>重置</button></div>\n'''
+          if actions not in s: raise SystemExit('missing employee filter actions')
+          s=s.replace(actions,'',1)
+          target='''          <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>\n        </div>}\n      </div>'''
+          repl='''          <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>\n        </div>}\n        <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="secondary-action" onClick={clear}>重置</button></div>\n      </div>'''
+          s=once(s,target,repl,'move employee filter actions to bottom')
+
+          # Enrich analysis detail rows with both hire date and resign date.
+          old='''      const productionRows=(data.rows||[]).filter(r=>!isTestEmployeeNo(r.employee_no))\n      const uniqueRows=dedupeAnalysisRows(productionRows)\n      setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title}))'''
+          new='''      const productionRows=(data.rows||[]).filter(r=>!isTestEmployeeNo(r.employee_no))\n      const uniqueRows=dedupeAnalysisRows(productionRows)\n      const employeeNos=Array.from(new Set(uniqueRows.map(r=>text(r.employee_no)).filter(Boolean)))\n      const dateRows=[]\n      for(let i=0;i<employeeNos.length;i+=300){\n        const {data:chunk,error:dateError}=await supabase.from('employees').select('employee_no,hire_date,resign_date').in('employee_no',employeeNos.slice(i,i+300))\n        if(dateError) throw dateError\n        dateRows.push(...(chunk||[]))\n      }\n      const dateMap=new Map(dateRows.map(x=>[text(x.employee_no).toUpperCase(),x]))\n      const enrichedRows=uniqueRows.map(r=>{\n        const d=dateMap.get(text(r.employee_no).toUpperCase())||{}\n        return {...r,hire_date:text(d.hire_date).slice(0,10),resign_date:r.event_type==='resign'?(text(r.date).slice(0,10)||text(d.resign_date).slice(0,10)):text(d.resign_date).slice(0,10)}\n      })\n      setAnalysisDetail(v=>({...v,...data,rows:enrichedRows,total:enrichedRows.length,title}))'''
+          s=once(s,old,new,'analysis detail dates')
+
+          s=once(s,
+            '''      <thead><tr><th>{isActiveView?'入职日期':'入 / 离职日期'}</th><th>状态</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>员工国家</th><th>班次</th>{showReason&&<th>离职原因</th>}<th>操作</th></tr></thead>''',
+            '''      <thead><tr><th>入职日期</th>{showReason&&<th>离职日期</th>}<th>状态</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>员工国家</th><th>班次</th>{showReason&&<th>离职原因</th>}<th>操作</th></tr></thead>''',
+            'analysis detail date headers')
+          s=once(s,
+            '''      <tbody>{pageRows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.date||'—'}</strong><small>{detailDateLabel(r.event_type)}</small></div></td><td><span className={`event-chip ${r.event_type==='resign'?'resign':r.event_type==='active'?'active':'join'}`}>{detailTypeLabel(r.event_type)}</span></td>''',
+            '''      <tbody>{pageRows.map((r,i)=><tr key={r.id||`${r.employee_no}-${r.date}-${i}`}><td><div className="event-date-cell"><strong>{r.hire_date||((r.event_type==='join'||r.event_type==='active')?r.date:'—')||'—'}</strong><small>入职日期</small></div></td>{showReason&&<td><div className="event-date-cell"><strong>{r.resign_date||r.date||'—'}</strong><small>离职日期</small></div></td>}<td><span className={`event-chip ${r.event_type==='resign'?'resign':r.event_type==='active'?'active':'join'}`}>{detailTypeLabel(r.event_type)}</span></td>''',
+            'analysis detail date cells')
+
+          # Remove the large resignation info strip; keep unmatched people as a small bell at upper-right.
+          s=once(s,
+            '''      <div className="analysis-badge">截至 {asOf||'—'}</div>''',
+            '''      <div className="resignation-heading-actions">{Number(unmatchedTeam?.count||0)>0&&<button type="button" className="resignation-unmatched-bell" title={`当前有 ${unmatchedTeam?.count||0} 名人员未匹配团队`}>🔔 <strong>{unmatchedTeam?.count||0}</strong></button>}<div className="analysis-badge">截至 {asOf||'—'}</div></div>''',
+            'resignation bell')
+          strip='''    <div className="resignation-period-strip" style={{marginBottom:14}}>\n      <div><span>团队统计来源</span><strong>居家排班表</strong></div>\n      <div><span>当前有效团队</span><strong>{validTeamCount}</strong></div>\n      <div><span>当前未匹配人员</span><strong>{unmatchedTeam?.count||0}</strong></div>\n      <div><span>历史离职团队</span><strong>优先读取「团队」字段</strong></div>\n      <div><span>岗位 / 国家 / 班次</span><strong>可分别下钻</strong></div>\n    </div>\n\n'''
+          if strip not in s: raise SystemExit('missing resignation period strip')
+          s=s.replace(strip,'',1)
+          p.write_text(s)
+
+          # ---------------- stableErrorUiEnhancer ----------------
+          p=Path('src/stableErrorUiEnhancer.js')
+          s=p.read_text()
+          # no DOM-only risk filter; native page owns the filter now
+          patch_start=s.index('function patchInvoke(){')
+          patch_end=s.index('\n\nasync function run()',patch_start)
+          new_patch='''function patchInvoke(){\n  if(supabase.functions.__wfhStableRiskPatched)return\n  supabase.functions.invoke=async(name,options={})=>{\n    const body=options?.body||{}\n    if(name==='admin-reports'&&body.action==='errors') return originalInvoke('admin-report-errors',options)\n    return originalInvoke(name,options)\n  }\n  supabase.functions.__wfhStableRiskPatched=true\n}'''
+          s=s[:patch_start]+new_patch+s[patch_end:]
+
+          comp_start=s.index('function compactErrorTable(){')
+          comp_end=s.index('\n\nfunction triggerEmployeeReload()',comp_start)
+          new_compact='''function compactErrorTable(){\n  const table=document.querySelector('.rp-errors-table');if(!table)return\n  const heads=[...table.querySelectorAll('thead th')]\n  for(const th of heads)th.classList.remove('wfh-hide-error-col','wfh-error-type-head','wfh-platform-head','wfh-action-head')\n  for(const td of table.querySelectorAll('tbody td'))td.classList.remove('wfh-hide-error-col','wfh-error-type-cell','wfh-platform-cell','wfh-action-cell')\n  const labels=heads.map(h=>text(h.textContent).replace(/[↕↑↓]/g,'').trim())\n  const hide=new Set(['小组长复审','质检人对/错','复检时间'])\n  labels.forEach((label,i)=>{\n    if(hide.has(label)){heads[i].classList.add('wfh-hide-error-col');for(const tr of table.querySelectorAll('tbody tr'))tr.children[i]?.classList.add('wfh-hide-error-col')}\n    if(label==='错误类型'){heads[i].classList.add('wfh-error-type-head');for(const tr of table.querySelectorAll('tbody tr')){const td=tr.children[i];if(td){td.classList.add('wfh-error-type-cell');const div=td.querySelector('.rp-cell-clamp');if(div){div.classList.remove('rp-cell-clamp');div.title=text(div.textContent)}}}}\n    if(label==='盘口'){heads[i].classList.add('wfh-platform-head');for(const tr of table.querySelectorAll('tbody tr'))tr.children[i]?.classList.add('wfh-platform-cell')}\n    if(label==='操作'){heads[i].classList.add('wfh-action-head');for(const tr of table.querySelectorAll('tbody tr')){const td=tr.children[i];if(td){td.classList.remove('wfh-hide-error-col');td.classList.add('wfh-action-cell');const btn=td.querySelector('button');if(btn)btn.textContent='查看错误'}}}\n  })\n}'''
+          s=s[:comp_start]+new_compact+s[comp_end:]
+          old_run="async function run(){if(stopped)return;scheduled=false;buildErrorFilter();ensureEmployeeRiskFilter();compactErrorTable();await ensureRiskColumns()}"
+          new_run="async function run(){if(stopped)return;scheduled=false;buildErrorFilter();await ensureRiskColumns();compactErrorTable()}"
+          s=once(s,old_run,new_run,'stable run order')
+          p.write_text(s)
+
+          # ---------------- stable-layout-hotfix.css ----------------
+          p=Path('src/stable-layout-hotfix.css')
+          s=p.read_text()
+          s=s.replace('flex-wrap:wrap!important;','flex-wrap:nowrap!important;')
+          extra=r'''
+
+/* V27.11: buttons stay side-by-side and filter actions sit below the advanced filters. */
+.archive-filter-actions{display:flex!important;justify-content:flex-end!important;align-items:center!important;gap:8px!important;margin-top:12px!important;padding-top:10px!important;border-top:1px solid #e5ecf4!important;position:static!important}
+.employee-master-table .row-actions{display:flex!important;flex-wrap:nowrap!important;align-items:center!important;gap:5px!important}
+.employee-master-table th:last-child,.employee-master-table td:last-child{width:112px!important;min-width:112px!important;white-space:nowrap!important}
+.employee-master-table .row-actions .table-action{white-space:nowrap!important;padding-left:9px!important;padding-right:9px!important}
+
+/* Error table: clear layout, no stale blank columns, error text never overlaps score/action. */
+.rp-errors-table{width:100%!important;min-width:1180px!important;table-layout:fixed!important}
+.rp-errors-table .wfh-risk-head,.rp-errors-table .wfh-risk-cell{width:64px!important}
+.rp-errors-table .wfh-platform-head,.rp-errors-table .wfh-platform-cell{width:190px!important;max-width:190px!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+.rp-errors-table .wfh-error-type-head,.rp-errors-table .wfh-error-type-cell{width:245px!important;max-width:245px!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+.rp-errors-table .wfh-error-type-cell *{display:block!important;max-width:100%!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+.rp-errors-table .wfh-action-head,.rp-errors-table .wfh-action-cell{width:92px!important;min-width:92px!important;max-width:92px!important;white-space:nowrap!important;text-align:center!important}
+.rp-errors-table .wfh-action-cell .rp-view-error{white-space:nowrap!important}
+
+.resignation-heading-actions{display:flex;align-items:center;gap:10px}
+.resignation-unmatched-bell{height:32px;min-width:54px;padding:0 10px;border:1px solid #f1c76f;border-radius:999px;background:#fff8e7;color:#9a6200;font-size:12px;font-weight:800;cursor:default}
+.resignation-unmatched-bell strong{margin-left:4px}
+.analytics-detail-table .event-date-cell{min-width:90px}
+'''
+          if '/* V27.11:' not in s:s+=extra
+          p.write_text(s)
+
+          # bump visible build marker
+          p=Path('src/main.jsx');s=p.read_text();s=s.replace("employee-v27.10-stable-error-layout","employee-v27.11-stable-data-layout");p.write_text(s)
+          PY
+          git diff --check
+          git diff --stat
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "WFH Patch Bot"
+          git config user.email "wfh-patch-bot@users.noreply.github.com"
+          git add src/pages/AdminReportsPage.jsx src/pages/AdminEmployeesPage.jsx src/stableErrorUiEnhancer.js src/stable-layout-hotfix.css src/main.jsx
+          git rm .github/workflows/apply-v2711-fixes.yml
+          git commit -m "fix: stabilize error totals and employee analysis UX"
+          git push
