@@ -26,7 +26,7 @@ const gradeKey=value=>{
   return 'excellent'
 }
 
-let stopped=false,scheduled=false
+let stopped=false,scheduled=false,employeeGrade=null
 let summaryCache={at:0,map:new Map()}
 
 function nativeSet(el,value,eventName='change'){
@@ -44,8 +44,18 @@ async function getSummaryMap(force=false){
   return summaryCache.map
 }
 
+function syncGradePicker(label,select){
+  const picker=label.querySelector(':scope > .wfh-v2716-grade-picker')
+  if(!picker)return
+  const value=employeeGrade??text(select.value)
+  const trigger=picker.querySelector('.wfh-v2716-grade-trigger')
+  const chosen=choices.find(x=>x[0]===value)||choices[0]
+  const meta=gradeMeta[value]
+  trigger.innerHTML=`${meta?`<i class="wfh-v2716-grade-dot" style="--grade-color:${meta.color}"></i>`:''}${chosen[1]}`
+  picker.querySelectorAll('.wfh-v2716-grade-menu button').forEach(b=>b.classList.toggle('active',b.dataset.key===value))
+}
+
 function renderGradePicker(label,select){
-  const current=text(select.value)
   let picker=label.querySelector(':scope > .wfh-v2716-grade-picker')
   if(!picker){
     picker=document.createElement('div')
@@ -60,6 +70,7 @@ function renderGradePicker(label,select){
       b.type='button';b.dataset.key=key;b.textContent=name
       b.addEventListener('click',e=>{
         e.preventDefault();e.stopPropagation()
+        employeeGrade=key
         nativeSet(select,key,'change')
         picker.classList.remove('open')
         setTimeout(()=>{syncGradePicker(label,select);schedule()},30)
@@ -74,18 +85,7 @@ function renderGradePicker(label,select){
     picker.append(trigger,menu)
     label.appendChild(picker)
   }
-  syncGradePicker(label,select,current)
-}
-
-function syncGradePicker(label,select,currentValue){
-  const picker=label.querySelector(':scope > .wfh-v2716-grade-picker')
-  if(!picker)return
-  const value=currentValue===undefined?text(select.value):text(currentValue)
-  const trigger=picker.querySelector('.wfh-v2716-grade-trigger')
-  const chosen=choices.find(x=>x[0]===value)||choices[0]
-  const meta=gradeMeta[value]
-  trigger.innerHTML=`${meta?`<i class="wfh-v2716-grade-dot" style="--grade-color:${meta.color}"></i>`:''}${chosen[1]}`
-  picker.querySelectorAll('.wfh-v2716-grade-menu button').forEach(b=>b.classList.toggle('active',b.dataset.key===value))
+  syncGradePicker(label,select)
 }
 
 function ensureEmployeeGrade(){
@@ -95,12 +95,10 @@ function ensureEmployeeGrade(){
   if(!select)return
   label.classList.add('wfh-v2716-grade-field')
   select.classList.add('wfh-v2716-native-grade')
-  const current=text(select.value)
+  if(employeeGrade===null)employeeGrade=text(select.value)
   const expected=choices.map(([k,n])=>`<option value="${k}">${n}</option>`).join('')
-  if(select.innerHTML!==expected){
-    select.innerHTML=expected
-    select.value=current
-  }
+  if(select.innerHTML!==expected)select.innerHTML=expected
+  if(text(select.value)!==text(employeeGrade))select.value=employeeGrade||''
   renderGradePicker(label,select)
 }
 
@@ -140,6 +138,12 @@ function closePickers(e){
   if(e?.target?.closest?.('.wfh-v2716-grade-picker'))return
   document.querySelectorAll('.wfh-v2716-grade-picker.open').forEach(x=>x.classList.remove('open'))
 }
+function captureReset(e){
+  const b=e.target?.closest?.('button')
+  if(!b||text(b.textContent)!=='重置'||!b.closest('.archive-filter-actions'))return
+  employeeGrade=''
+  schedule()
+}
 
 async function run(){
   if(stopped)return
@@ -157,14 +161,19 @@ export function startAdminCompactV2716(){
   if(window.__WFH_ADMIN_COMPACT_V2716__)return
   window.__WFH_ADMIN_COMPACT_V2716__=true
   document.addEventListener('click',closePickers,true)
+  document.addEventListener('click',captureReset,true)
   document.addEventListener('change',e=>{
-    if(e.target?.matches?.('.employee-core-search-grid label[data-native-risk-filter="1"] select'))schedule()
+    if(e.target?.matches?.('.employee-core-search-grid label[data-native-risk-filter="1"] select')){
+      const v=text(e.target.value)
+      if(choices.some(x=>x[0]===v))employeeGrade=v
+      schedule()
+    }
   },true)
   const observer=new MutationObserver(schedule)
   observer.observe(document.body,{subtree:true,childList:true})
   const timer=setInterval(()=>{summaryCache.at=0;schedule()},12000)
   schedule()
   window.addEventListener('beforeunload',()=>{
-    stopped=true;clearInterval(timer);observer.disconnect();document.removeEventListener('click',closePickers,true)
+    stopped=true;clearInterval(timer);observer.disconnect();document.removeEventListener('click',closePickers,true);document.removeEventListener('click',captureReset,true)
   },{once:true})
 }
