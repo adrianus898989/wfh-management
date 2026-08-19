@@ -655,7 +655,17 @@ export default function AdminEmployeesPage(){
   const openDetail=async row=>{
     setSelected({employee:row,missing_fields:row.missing_fields||[]})
     setDetailLoading(true)
-    try{ setSelected(await invoke({action:'detail',employee_id:row.id})) }
+    try{
+      const detail=await invoke({action:'detail',employee_id:row.id})
+      if(detail?.employee?.status==='resigned'&&!text(detail.resignation_reason)&&text(detail.employee.employee_no)){
+        try{
+          const h=await invoke({action:'history_list',page:1,page_size:20,filters:{employee_no:text(detail.employee.employee_no)}})
+          const match=(h.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(detail.employee.employee_no).toUpperCase()&&text(x.reason))
+          if(match) detail.resignation_reason=text(match.reason)
+        }catch(_){}
+      }
+      setSelected(detail)
+    }
     catch(e){ setError(e.message); setSelected(null) }
     finally{ setDetailLoading(false) }
   }
@@ -1124,7 +1134,7 @@ export default function AdminEmployeesPage(){
             <td>{r.position_name||s.position||'-'}</td>
             <td className="reason-cell">{text(r.reason)?<button type="button" title="点击查看完整离职原因" onClick={()=>setReasonPreview({reason:text(r.reason),employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date})} style={{display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden',maxWidth:230,padding:0,border:0,background:'transparent',color:'inherit',font:'inherit',lineHeight:1.45,textAlign:'left',cursor:'pointer',wordBreak:'break-word'}}>{text(r.reason).length>90?`${text(r.reason).slice(0,90)}…`:text(r.reason)}</button>:'—'}</td>
             <td>{r.source_label||r.source_sheet||r.source||'-'}</td>
-            <td><div className="operation-record"><span className="operator-chip">{operatorDisplay(r.operator_account)}</span><small>{formatDateTime(r.operation_time||r.created_at)}</small></div></td>
+            <td><div className="operation-record"><span className="operator-chip">{operatorDisplay(r.snapshot?.operator_account||r.snapshot?.operator_email||r.snapshot?.last_edited_username||r.operator_account)}</span><small>{formatDateTime(r.snapshot?.operation_time||r.snapshot?.last_edited_at||r.operation_time||r.created_at)}</small></div></td>
             <td><div className="row-actions history-row-actions">
               <button className="table-action" onClick={()=>openHistoryDetail(r)}>查看</button>
               {historyPermissions.can_edit&&<button className="table-action edit-history-action" onClick={()=>setEditResignModal({event_id:r.id,employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date||'',reason:r.reason||''})}>编辑</button>}
