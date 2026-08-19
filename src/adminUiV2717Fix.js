@@ -1,6 +1,5 @@
 import { supabase } from './lib/supabase'
 
-const text=v=>String(v??'').trim()
 let stopped=false,scheduled=false
 
 function addStyles(){
@@ -111,6 +110,14 @@ function addStyles(){
   document.head.appendChild(s)
 }
 
+function hasVisibleAdvancedRosterFilter(){
+  const bar=document.querySelector('.rp-filterbar')
+  if(!bar)return false
+  const selects=[...bar.querySelectorAll('select')]
+  const manager=bar.querySelector('input[list]')
+  return selects.some(x=>String(x.value||'').trim())||Boolean(String(manager?.value||'').trim())
+}
+
 function patchInvoke(){
   if(supabase.functions.__wfhV2718ErrorTotalsPatched)return
   const prior=supabase.functions.invoke.bind(supabase.functions)
@@ -118,10 +125,9 @@ function patchInvoke(){
     const body=options?.body||{}
     const isErrorRequest=(name==='admin-report-errors')||(name==='admin-reports'&&body.action==='errors')
     const result=await prior(name,options)
-    if(isErrorRequest&&result?.data&&!result?.data?.error){
-      /* AdminReportsPage only applies the current-roster filter when this count is larger
-         than the filtered roster. Setting it to 0 keeps the full employee-error snapshot,
-         including historical/resigned staff, which is the same source users compare with. */
+    if(isErrorRequest&&result?.data&&!result?.data?.error&&!hasVisibleAdvancedRosterFilter()){
+      /* Without an explicit team/shift/group/position/country/manager/platform filter,
+         show the complete employee-error snapshot instead of current-roster-only history. */
       return {...result,data:{...result.data,current_roster_employee_count:0}}
     }
     return result
