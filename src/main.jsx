@@ -13,6 +13,6 @@ const base = document.createElement('style'); base.setAttribute('data-wfh-inline
 const pro = document.createElement('style'); pro.setAttribute('data-wfh-pro-styles', 'true'); pro.textContent = proStyles; document.head.appendChild(pro)
 const reports = document.createElement('style'); reports.setAttribute('data-wfh-reports-styles', 'true'); reports.textContent = reportsStyles; document.head.appendChild(reports)
 const employeeV27 = document.createElement('style'); employeeV27.setAttribute('data-wfh-employee-v27-styles', 'true'); employeeV27.textContent = employeeV27Styles; document.head.appendChild(employeeV27)
-document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.4-error-risk')
+document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.5-error-profile-links')
 ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter basename="/wfh-management"><App /></BrowserRouter></React.StrictMode>)
 startErrorRiskEnhancer()
