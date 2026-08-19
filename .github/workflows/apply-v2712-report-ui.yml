@@ -111,3 +111,5 @@ function TeamBarChart({title,rows,field,onOpen}){const groups=useMemo(()=>groupe
           git add -A
           git commit -m "fix: restore workload stats and responsive report UI"
           git push
+
+# trigger: 2026-08-19T16:53+04:00
