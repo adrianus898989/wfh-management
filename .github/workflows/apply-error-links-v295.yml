@@ -22,105 +22,86 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new, label):
-              p=Path(path)
-              s=p.read_text(encoding='utf-8')
+          def patch(path, old, new, label):
+              p=Path(path); s=p.read_text(encoding='utf-8')
+              if new in s:
+                  print('already patched:', label); return
               if old not in s:
-                  raise SystemExit(f'PATCH MISS: {label} in {path}')
-              if s.count(old) != 1:
-                  raise SystemExit(f'PATCH AMBIGUOUS: {label} count={s.count(old)} in {path}')
+                  raise SystemExit(f'PATCH MISS: {label}')
               p.write_text(s.replace(old,new,1),encoding='utf-8')
+              print('patched:', label)
 
-          # 1) Reports: employee ID opens the canonical employee archive drawer.
-          replace_once(
-              'src/pages/AdminReportsPage.jsx',
-              "import React,{useEffect,useMemo,useState} from 'react'\nimport {supabase} from '../lib/supabase'",
-              "import React,{useEffect,useMemo,useState} from 'react'\nimport {useNavigate} from 'react-router-dom'\nimport {supabase} from '../lib/supabase'",
-              'reports import useNavigate'
-          )
-          replace_once(
-              'src/pages/AdminReportsPage.jsx',
-              "  const [range,setRange]=useState({from:'',to:''}),[data,setData]=useState(null),[loading,setLoading]=useState(true),[q,setQ]=useState(''),[type,setType]=useState(''),[qc,setQc]=useState(''),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null)\n  const load=async(next=range)=>",
-              "  const [range,setRange]=useState({from:'',to:''}),[data,setData]=useState(null),[loading,setLoading]=useState(true),[q,setQ]=useState(''),[type,setType]=useState(''),[qc,setQc]=useState(''),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null)\n  const navigate=useNavigate()\n  const openEmployee=id=>{const no=text(id);if(no)navigate(`/admin/employees?tab=${encodeURIComponent('员工档案')}&employee_no=${encodeURIComponent(no)}`)}\n  const load=async(next=range)=>",
-              'reports navigate helper'
-          )
-          replace_once(
-              'src/pages/AdminReportsPage.jsx',
-              "<div className=\"rp-card-title\"><div><h2>员工错误统计</h2><p>主表只保留管理重点；会员/订单号、金额、错误备注、正确操作方式统一放进「查看」详情。</p></div><span>{rows.length} 条</span></div>",
-              "<div className=\"rp-card-title\"><div><h2>员工错误统计</h2><p>主表只保留管理重点；等级可点击查看该员工全部错误记录，员工ID直接打开员工档案；会员/订单号、金额、错误备注、正确操作方式统一放进「查看错误」详情。</p></div><span>{rows.length} 条</span></div>",
-              'reports error helper copy'
-          )
-          replace_once(
-              'src/pages/AdminReportsPage.jsx',
-              "<td><button className=\"rp-link\" onClick={()=>setDetail(r)}>{r.employee_id}</button></td><td>{r.name||'—'}</td>",
-              "<td><button className=\"rp-link\" onClick={()=>openEmployee(r.employee_id)} title=\"打开员工档案\">{r.employee_id}</button></td><td>{r.name||'—'}</td>",
-              'reports ID opens employee'
-          )
-          replace_once(
-              'src/pages/AdminReportsPage.jsx',
-              "<td><button className=\"rp-view-error\" onClick={()=>setDetail(r)}>查看</button></td></tr>)}</tbody></table>",
-              "<td><div className=\"rp-error-actions\"><button className=\"rp-view-error\" onClick={()=>setDetail(r)}>查看错误</button><button className=\"rp-view-error rp-employee-open\" onClick={()=>openEmployee(r.employee_id)}>员工档案</button></div></td></tr>)}</tbody></table>",
-              'reports action buttons'
-          )
+          # Reports: error level = history, ID = employee archive, single record keeps its own detail action.
+          patch('src/pages/AdminReportsPage.jsx',
+                "import React,{useEffect,useMemo,useState} from 'react'\nimport {supabase} from '../lib/supabase'",
+                "import React,{useEffect,useMemo,useState} from 'react'\nimport {useNavigate} from 'react-router-dom'\nimport {supabase} from '../lib/supabase'",
+                'reports navigate import')
 
-          # 2) Employee archive: support deep-link employee_no and automatically open the existing canonical drawer.
-          replace_once(
-              'src/pages/AdminEmployeesPage.jsx',
-              "  const first=useRef(true)\n",
-              "  const first=useRef(true)\n  const deepLinkOpened=useRef('')\n",
-              'employee deep link ref'
-          )
-          marker="""  const openDetail=async row=>{\n    setSelected({employee:row,missing_fields:row.missing_fields||[]})\n    setDetailLoading(true)\n    try{\n      const detail=await invoke({action:'detail',employee_id:row.id})\n      if(detail?.employee?.status==='resigned'&&!text(detail.resignation_reason)&&text(detail.employee.employee_no)){\n        try{\n          const h=await invoke({action:'history_list',page:1,page_size:20,filters:{employee_no:text(detail.employee.employee_no)}})\n          const match=(h.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(detail.employee.employee_no).toUpperCase()&&text(x.reason))\n          if(match) detail.resignation_reason=text(match.reason)\n        }catch(_){}\n      }\n      setSelected(detail)\n    }\n    catch(e){ setError(e.message); setSelected(null) }\n    finally{ setDetailLoading(false) }\n  }\n"""
-          addition=marker+"""\n  useEffect(()=>{\n    const no=text(sp.get('employee_no')).toUpperCase()\n    if(tab!=='员工档案'||!no||deepLinkOpened.current===no) return\n    deepLinkOpened.current=no\n    ;(async()=>{\n      try{\n        const found=await invoke({action:'list',page:1,page_size:5,filters:{employee_no:no,status:''}})\n        const exact=(found.rows||[]).find(x=>text(x.employee_no).toUpperCase()===no)\n        if(!exact) throw new Error(`找不到员工档案：${no}`)\n        await openDetail(exact)\n      }catch(e){\n        deepLinkOpened.current=''\n        setError(e.message||`找不到员工档案：${no}`)\n      }\n    })()\n  },[tab,sp])\n"""
-          replace_once('src/pages/AdminEmployeesPage.jsx',marker,addition,'employee deep link effect')
+          patch('src/pages/AdminReportsPage.jsx',
+                "  const [range,setRange]=useState({from:'',to:''}),[data,setData]=useState(null),[loading,setLoading]=useState(true),[q,setQ]=useState(''),[type,setType]=useState(''),[qc,setQc]=useState(''),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null)\n  const load=async(next=range)=>",
+                "  const [range,setRange]=useState({from:'',to:''}),[data,setData]=useState(null),[loading,setLoading]=useState(true),[q,setQ]=useState(''),[type,setType]=useState(''),[qc,setQc]=useState(''),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null)\n  const navigate=useNavigate()\n  const openEmployee=id=>{const no=text(id);if(no)navigate(`/admin/employees?tab=${encodeURIComponent('员工档案')}&employee_no=${encodeURIComponent(no)}`)}\n  const load=async(next=range)=>",
+                'reports employee navigation')
 
-          # 3) Risk enhancer: level badge itself opens ALL error history.
-          replace_once(
-              'src/errorRiskEnhancer.js',
-              ".wfh-risk-level{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:48px;height:22px;padding:0 7px;border:1px solid var(--risk-border);border-radius:999px;background:var(--risk-bg);color:var(--risk-color);font-size:9px;font-weight:850;line-height:1;white-space:nowrap;vertical-align:middle}",
-              ".wfh-risk-level{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:48px;height:22px;padding:0 7px;border:1px solid var(--risk-border);border-radius:999px;background:var(--risk-bg);color:var(--risk-color);font-size:9px;font-weight:850;line-height:1;white-space:nowrap;vertical-align:middle}.wfh-risk-level.is-clickable{cursor:pointer;transition:.14s}.wfh-risk-level.is-clickable:hover{transform:translateY(-1px);box-shadow:0 4px 10px rgba(35,61,98,.12)}",
-              'risk clickable style'
-          )
-          replace_once(
-              'src/errorRiskEnhancer.js',
-              "function levelNode(summary){\n  const cfg=riskCfg(summary?.month_error_count)\n  const chip=document.createElement('span')\n  chip.className='wfh-risk-level'\n  chip.textContent=cfg.label\n  chip.title=`${cfg.full} · ${monthLabel(summary?.month_key)} ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔`\n  styleRisk(chip,cfg)\n  return chip\n}",
-              "function levelNode(summary,onOpen){\n  const cfg=riskCfg(summary?.month_error_count)\n  const chip=document.createElement('span')\n  chip.className=`wfh-risk-level${onOpen?' is-clickable':''}`\n  chip.textContent=cfg.label\n  chip.title=`${cfg.full} · ${monthLabel(summary?.month_key)} ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔${onOpen?' · 点击查看全部错误记录':''}`\n  styleRisk(chip,cfg)\n  if(onOpen){\n    chip.setAttribute('role','button');chip.tabIndex=0\n    chip.addEventListener('click',e=>{e.stopPropagation();onOpen()})\n    chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onOpen()}})\n  }\n  return chip\n}",
-              'risk node callback'
-          )
-          replace_once(
-              'src/errorRiskEnhancer.js',
-              "    const idCell=levelCell.nextElementSibling\n    const id=upper(idCell?.querySelector('button')?.textContent || idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell} of pairs){cell.replaceChildren(levelNode(cache.get(id)))}\n}",
-              "    const idCell=levelCell.nextElementSibling\n    const nameCell=idCell?.nextElementSibling\n    const id=upper(idCell?.querySelector('button')?.textContent || idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell,name:text(nameCell?.textContent)})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell,name} of pairs){const summary=cache.get(id);cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))}\n}",
-              'risk error table history click'
-          )
-          replace_once(
-              'src/errorRiskEnhancer.js',
-              "    const idCell=levelCell.nextElementSibling\n    const id=upper(idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell} of pairs){cell.replaceChildren(levelNode(cache.get(id)))}\n}",
-              "    const idCell=levelCell.nextElementSibling\n    const nameCell=idCell?.nextElementSibling\n    const id=upper(idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell,name:text(nameCell?.textContent)})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell,name} of pairs){const summary=cache.get(id);cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))}\n}",
-              'risk employee table history click'
-          )
+          patch('src/pages/AdminReportsPage.jsx',
+                "<div className=\"rp-card-title\"><div><h2>员工错误统计</h2><p>主表只保留管理重点；会员/订单号、金额、错误备注、正确操作方式统一放进「查看」详情。</p></div><span>{rows.length} 条</span></div>",
+                "<div className=\"rp-card-title\"><div><h2>员工错误统计</h2><p>主表只保留管理重点；等级可点击查看该员工全部错误记录，员工ID直接打开员工档案；会员/订单号、金额、错误备注、正确操作方式统一放进「查看错误」详情。</p></div><span>{rows.length} 条</span></div>",
+                'reports helper text')
 
-          # 4) Error table fills the card (no giant empty right area) and reserves room for both actions.
-          replace_once(
-              'src/styles-reports.css',
-              ".rp-errors-table{width:1180px!important;min-width:1180px!important;table-layout:fixed}.rp-errors-table th,.rp-errors-table td{overflow:hidden}.rp-errors-table th:nth-child(1){width:92px}.rp-errors-table th:nth-child(2){width:135px}.rp-errors-table th:nth-child(3){width:85px}.rp-errors-table th:nth-child(4){width:76px}.rp-errors-table th:nth-child(5){width:155px}.rp-errors-table th:nth-child(6){width:130px}.rp-errors-table th:nth-child(7){width:60px}.rp-errors-table th:nth-child(8){width:118px}.rp-errors-table th:nth-child(9){width:92px}.rp-errors-table th:nth-child(10){width:100px}.rp-errors-table th:nth-child(11){width:100px}.rp-errors-table th:nth-child(12){width:92px}.rp-errors-table th:nth-child(13){width:70px}",
-              ".rp-errors-table{width:100%!important;min-width:1390px!important;table-layout:fixed}.rp-errors-table th,.rp-errors-table td{overflow:hidden}.rp-errors-table th:nth-child(1){width:72px}.rp-errors-table th:nth-child(2){width:92px}.rp-errors-table th:nth-child(3){width:135px}.rp-errors-table th:nth-child(4){width:85px}.rp-errors-table th:nth-child(5){width:76px}.rp-errors-table th:nth-child(6){width:155px}.rp-errors-table th:nth-child(7){width:130px}.rp-errors-table th:nth-child(8){width:60px}.rp-errors-table th:nth-child(9){width:118px}.rp-errors-table th:nth-child(10){width:92px}.rp-errors-table th:nth-child(11){width:100px}.rp-errors-table th:nth-child(12){width:100px}.rp-errors-table th:nth-child(13){width:92px}.rp-errors-table th:nth-child(14){width:142px}",
-              'error table width mapping'
-          )
-          replace_once(
-              'src/styles-reports.css',
-              ".rp-view-error{height:28px;padding:0 10px;border:1px solid #a9c3ef;border-radius:7px;background:#fff;color:#155bd7;font-size:10px;font-weight:800;cursor:pointer}.rp-view-error:hover{background:#eff6ff;border-color:#7da7ed}.rp-sort-head:hover{color:#155bd7!important}",
-              ".rp-error-actions{display:flex;align-items:center;gap:5px;white-space:nowrap}.rp-view-error{height:28px;padding:0 9px;border:1px solid #a9c3ef;border-radius:7px;background:#fff;color:#155bd7;font-size:9px;font-weight:800;cursor:pointer}.rp-view-error:hover{background:#eff6ff;border-color:#7da7ed}.rp-employee-open{border-color:#d3deeb;color:#4c6482}.rp-sort-head:hover{color:#155bd7!important}",
-              'error action styles'
-          )
+          patch('src/pages/AdminReportsPage.jsx',
+                "<td><button className=\"rp-link\" onClick={()=>setDetail(r)}>{r.employee_id}</button></td><td>{r.name||'—'}</td>",
+                "<td><button className=\"rp-link\" onClick={()=>openEmployee(r.employee_id)} title=\"打开员工档案\">{r.employee_id}</button></td><td>{r.name||'—'}</td>",
+                'reports ID opens archive')
 
-          # Visible build marker for cache/debug confirmation.
-          replace_once(
-              'src/main.jsx',
-              "document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.4-error-risk')",
-              "document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.5-error-links')",
-              'build marker'
-          )
+          patch('src/pages/AdminReportsPage.jsx',
+                "<td><button className=\"rp-view-error\" onClick={()=>setDetail(r)}>查看</button></td></tr>)}</tbody></table>",
+                "<td><div className=\"rp-error-actions\"><button className=\"rp-view-error\" onClick={()=>setDetail(r)}>查看错误</button><button className=\"rp-view-error rp-employee-open\" onClick={()=>openEmployee(r.employee_id)}>员工档案</button></div></td></tr>)}</tbody></table>",
+                'reports actions')
+
+          # Employee archive: accept employee_no deep links and reuse the existing official drawer.
+          patch('src/pages/AdminEmployeesPage.jsx',
+                "  const first=useRef(true)\n",
+                "  const first=useRef(true)\n  const deepLinkOpened=useRef('')\n",
+                'employee deeplink ref')
+
+          effect="""  useEffect(()=>{\n    const no=text(sp.get('employee_no')).toUpperCase()\n    if(tab!=='员工档案'||!no||deepLinkOpened.current===no) return\n    deepLinkOpened.current=no\n    ;(async()=>{\n      try{\n        const found=await invoke({action:'list',page:1,page_size:5,filters:{employee_no:no,status:''}})\n        const exact=(found.rows||[]).find(x=>text(x.employee_no).toUpperCase()===no)\n        if(!exact) throw new Error(`找不到员工档案：${no}`)\n        await openDetail(exact)\n      }catch(e){\n        deepLinkOpened.current=''\n        setError(e.message||`找不到员工档案：${no}`)\n      }\n    })()\n  },[tab,sp])\n\n"""
+          patch('src/pages/AdminEmployeesPage.jsx',
+                "  const openCreate=()=>{\n",
+                effect+"  const openCreate=()=>{\n",
+                'employee deeplink effect')
+
+          # Risk chips: chip itself opens every error record for that employee.
+          patch('src/errorRiskEnhancer.js',
+                ".wfh-risk-level{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:48px;height:22px;padding:0 7px;border:1px solid var(--risk-border);border-radius:999px;background:var(--risk-bg);color:var(--risk-color);font-size:9px;font-weight:850;line-height:1;white-space:nowrap;vertical-align:middle}",
+                ".wfh-risk-level{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:48px;height:22px;padding:0 7px;border:1px solid var(--risk-border);border-radius:999px;background:var(--risk-bg);color:var(--risk-color);font-size:9px;font-weight:850;line-height:1;white-space:nowrap;vertical-align:middle}.wfh-risk-level.is-clickable{cursor:pointer;transition:.14s}.wfh-risk-level.is-clickable:hover{transform:translateY(-1px);box-shadow:0 4px 10px rgba(35,61,98,.12)}",
+                'risk clickable CSS')
+
+          patch('src/errorRiskEnhancer.js',
+                "function levelNode(summary){\n  const cfg=riskCfg(summary?.month_error_count)\n  const chip=document.createElement('span')\n  chip.className='wfh-risk-level'\n  chip.textContent=cfg.label\n  chip.title=`${cfg.full} · ${monthLabel(summary?.month_key)} ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔`\n  styleRisk(chip,cfg)\n  return chip\n}",
+                "function levelNode(summary,onOpen){\n  const cfg=riskCfg(summary?.month_error_count)\n  const chip=document.createElement('span')\n  chip.className=`wfh-risk-level${onOpen?' is-clickable':''}`\n  chip.textContent=cfg.label\n  chip.title=`${cfg.full} · ${monthLabel(summary?.month_key)} ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔${onOpen?' · 点击查看全部错误记录':''}`\n  styleRisk(chip,cfg)\n  if(onOpen){chip.setAttribute('role','button');chip.tabIndex=0;chip.addEventListener('click',e=>{e.stopPropagation();onOpen()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onOpen()}})}\n  return chip\n}",
+                'risk chip callback')
+
+          error_old="""    const idCell=levelCell.nextElementSibling\n    const id=upper(idCell?.querySelector('button')?.textContent || idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell} of pairs){cell.replaceChildren(levelNode(cache.get(id)))}\n}\n\nasync function enhanceEmployeeTable(){"""
+          error_new="""    const idCell=levelCell.nextElementSibling\n    const nameCell=idCell?.nextElementSibling\n    const id=upper(idCell?.querySelector('button')?.textContent || idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell,name:text(nameCell?.textContent)})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell,name} of pairs){const summary=cache.get(id);cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))}\n}\n\nasync function enhanceEmployeeTable(){"""
+          patch('src/errorRiskEnhancer.js',error_old,error_new,'error table risk history')
+
+          emp_old="""    const idCell=levelCell.nextElementSibling\n    const id=upper(idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell} of pairs){cell.replaceChildren(levelNode(cache.get(id)))}\n}\n\nfunction closeOverlay"""
+          emp_new="""    const idCell=levelCell.nextElementSibling\n    const nameCell=idCell?.nextElementSibling\n    const id=upper(idCell?.textContent)\n    if(id) pairs.push({id,cell:levelCell,name:text(nameCell?.textContent)})\n  }\n  await fetchSummaries(pairs.map(x=>x.id))\n  for(const {id,cell,name} of pairs){const summary=cache.get(id);cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))}\n}\n\nfunction closeOverlay"""
+          patch('src/errorRiskEnhancer.js',emp_old,emp_new,'employee table risk history')
+
+          # Fill the width and reserve enough room for two action buttons after injected level column.
+          old_css=".rp-errors-table{width:1180px!important;min-width:1180px!important;table-layout:fixed}.rp-errors-table th,.rp-errors-table td{overflow:hidden}.rp-errors-table th:nth-child(1){width:92px}.rp-errors-table th:nth-child(2){width:135px}.rp-errors-table th:nth-child(3){width:85px}.rp-errors-table th:nth-child(4){width:76px}.rp-errors-table th:nth-child(5){width:155px}.rp-errors-table th:nth-child(6){width:130px}.rp-errors-table th:nth-child(7){width:60px}.rp-errors-table th:nth-child(8){width:118px}.rp-errors-table th:nth-child(9){width:92px}.rp-errors-table th:nth-child(10){width:100px}.rp-errors-table th:nth-child(11){width:100px}.rp-errors-table th:nth-child(12){width:92px}.rp-errors-table th:nth-child(13){width:70px}"
+          new_css=".rp-errors-table{width:100%!important;min-width:1390px!important;table-layout:fixed}.rp-errors-table th,.rp-errors-table td{overflow:hidden}.rp-errors-table th:nth-child(1){width:72px}.rp-errors-table th:nth-child(2){width:92px}.rp-errors-table th:nth-child(3){width:135px}.rp-errors-table th:nth-child(4){width:85px}.rp-errors-table th:nth-child(5){width:76px}.rp-errors-table th:nth-child(6){width:155px}.rp-errors-table th:nth-child(7){width:130px}.rp-errors-table th:nth-child(8){width:60px}.rp-errors-table th:nth-child(9){width:118px}.rp-errors-table th:nth-child(10){width:92px}.rp-errors-table th:nth-child(11){width:100px}.rp-errors-table th:nth-child(12){width:100px}.rp-errors-table th:nth-child(13){width:92px}.rp-errors-table th:nth-child(14){width:142px}"
+          patch('src/styles-reports.css',old_css,new_css,'error table width')
+
+          patch('src/styles-reports.css',
+                ".rp-view-error{height:28px;padding:0 10px;border:1px solid #a9c3ef;border-radius:7px;background:#fff;color:#155bd7;font-size:10px;font-weight:800;cursor:pointer}.rp-view-error:hover{background:#eff6ff;border-color:#7da7ed}.rp-sort-head:hover{color:#155bd7!important}",
+                ".rp-error-actions{display:flex;align-items:center;gap:5px;white-space:nowrap}.rp-view-error{height:28px;padding:0 9px;border:1px solid #a9c3ef;border-radius:7px;background:#fff;color:#155bd7;font-size:9px;font-weight:800;cursor:pointer}.rp-view-error:hover{background:#eff6ff;border-color:#7da7ed}.rp-employee-open{border-color:#d3deeb;color:#4c6482}.rp-sort-head:hover{color:#155bd7!important}",
+                'error action CSS')
+
+          patch('src/main.jsx',
+                "document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.4-error-risk')",
+                "document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.5-error-links')",
+                'build marker')
           PY
 
           npm ci
@@ -136,4 +117,4 @@ jobs:
           git commit -m "fix: link error levels and employee profiles"
           git push
 
-# trigger: 2026-08-19T14:52+04:00
+# retry trigger: 2026-08-19T14:56+04:00
