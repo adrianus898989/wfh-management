@@ -1,0 +1,101 @@
+/* Stable desktop layout hotfix — no JavaScript observer, CSS only. */
+
+/* 员工档案：搜索区整齐排列，操作按钮独立靠右，不再卡在中间。 */
+.employee-core-search-grid{
+  grid-template-columns:150px repeat(4,minmax(0,1fr))!important;
+  gap:10px 12px!important;
+  align-items:end!important;
+}
+.employee-core-search-grid>.filter-toolbar-actions{
+  grid-column:1/-1!important;
+  display:flex!important;
+  justify-content:flex-end!important;
+  align-items:center!important;
+  gap:8px!important;
+  min-height:36px!important;
+  margin:0!important;
+  padding:0!important;
+}
+.v24-advanced-filter-grid{
+  grid-template-columns:repeat(5,minmax(0,1fr))!important;
+  gap:10px 12px!important;
+}
+
+/* 员工列表：正常桌面宽度内直接压紧，不再为了固定 1500px 制造底部横向滚动条。 */
+.table-scroll:has(.employee-master-table){overflow-x:hidden!important;}
+.employee-master-table{
+  width:100%!important;
+  min-width:0!important;
+  max-width:100%!important;
+  table-layout:fixed!important;
+}
+.employee-master-table th,
+.employee-master-table td{
+  padding-left:6px!important;
+  padding-right:6px!important;
+  font-size:9.5px!important;
+  line-height:1.35!important;
+  white-space:normal!important;
+  overflow-wrap:anywhere!important;
+  word-break:break-word!important;
+}
+.employee-master-table th{font-size:9px!important;white-space:nowrap!important;}
+.employee-master-table th:nth-child(1){width:4%!important;}
+.employee-master-table th:nth-child(2){width:6%!important;}
+.employee-master-table th:nth-child(3){width:12%!important;}
+.employee-master-table th:nth-child(4){width:4%!important;}
+.employee-master-table th:nth-child(5){width:5%!important;}
+.employee-master-table th:nth-child(6){width:5%!important;}
+.employee-master-table th:nth-child(7){width:5%!important;}
+.employee-master-table th:nth-child(8){width:5%!important;}
+.employee-master-table th:nth-child(9){width:10%!important;}
+.employee-master-table th:nth-child(10){width:7%!important;}
+.employee-master-table th:nth-child(11){width:6%!important;}
+.employee-master-table th:nth-child(12){width:8%!important;}
+.employee-master-table th:nth-child(13){width:8%!important;}
+.employee-master-table th:nth-child(14){width:4%!important;}
+.employee-master-table th:nth-child(15){width:4%!important;}
+.employee-master-table th:nth-child(16){width:6%!important;}
+.employee-master-table td:nth-child(1),
+.employee-master-table td:nth-child(2),
+.employee-master-table td:nth-child(10),
+.employee-master-table td:nth-child(11),
+.employee-master-table td:nth-child(14),
+.employee-master-table td:nth-child(15),
+.employee-master-table td:nth-child(16){white-space:nowrap!important;}
+.employee-master-table .operator-chip{
+  display:block!important;
+  max-width:100%!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  white-space:nowrap!important;
+}
+.employee-master-table .row-actions{
+  display:flex!important;
+  gap:4px!important;
+  flex-wrap:wrap!important;
+  white-space:normal!important;
+}
+
+/* 错误统计：错误类型正常一行展示，主表不放低频复审字段。 */
+.rp-errors-table .wfh-error-type-cell,
+.rp-errors-table .wfh-error-type-cell *{
+  white-space:nowrap!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  word-break:normal!important;
+}
+.rp-errors-table .wfh-hide-error-col{display:none!important;}
+.rp-errors-table th:last-child,
+.rp-errors-table td:last-child{width:86px!important;max-width:86px!important;white-space:nowrap!important;}
+
+@media (max-width:1450px){
+  .employee-core-search-grid{grid-template-columns:150px repeat(2,minmax(0,1fr))!important;}
+  .v24-advanced-filter-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;}
+  .employee-master-table th,.employee-master-table td{font-size:9px!important;padding-left:4px!important;padding-right:4px!important;}
+}
+@media (max-width:1050px){
+  .employee-core-search-grid,.v24-advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+  .table-scroll:has(.employee-master-table){overflow-x:auto!important;}
+  .employee-master-table{min-width:980px!important;table-layout:auto!important;}
+}
