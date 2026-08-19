@@ -1,0 +1,6 @@
+.wfh-hide-native-grade{display:none!important}
+.wfh-v2714-employee-grade{display:grid!important;gap:4px!important;min-width:0!important;align-self:end!important}
+.wfh-v2714-employee-grade>span{font-size:9px!important;font-weight:750!important;color:#667d98!important}
+.wfh-v2714-employee-grade .wfh-grade-picker{width:100%!important}
+.wfh-v2714-employee-grade .wfh-grade-trigger{width:100%!important;height:36px!important;border-radius:8px!important;font-size:10px!important;font-weight:800!important}
+.wfh-v2714-employee-grade .wfh-grade-menu{min-width:175px!important}
