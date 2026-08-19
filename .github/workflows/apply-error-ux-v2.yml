@@ -1,0 +1,217 @@
+name: Apply unified error UX patch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-error-ux-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch error statistics and employee risk UX
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(s, old, new, label):
+              if old not in s:
+                  raise SystemExit(f'missing patch target: {label}')
+              return s.replace(old, new, 1)
+
+          # -------------------------------------------------
+          # 1) AdminReportsPage: one unified filter area for 错误统计
+          # -------------------------------------------------
+          p=Path('src/pages/AdminReportsPage.jsx')
+          s=p.read_text()
+          s=replace_once(
+              s,
+              '    <GlobalFilters value={filters} onChange={setFilters} options={overview?.options||{}} meta={`${overview?.roster?.length||0} 行 · 当前筛选 ${roster.length} 行 · ${uniqueCount(roster)} 人`}/>',
+              "    {tab!=='错误统计'&&<GlobalFilters value={filters} onChange={setFilters} options={overview?.options||{}} meta={`${overview?.roster?.length||0} 行 · 当前筛选 ${roster.length} 行 · ${uniqueCount(roster)} 人`}/>} ",
+              'hide duplicate global filters on error tab'
+          )
+          s=replace_once(
+              s,
+              "      {tab==='错误统计'&&<Errors invoke={invoke} roster={roster} onError={setError}/>} ",
+              "      {tab==='错误统计'&&<Errors invoke={invoke} roster={overview?.roster||[]} filters={filters} onFilters={setFilters} options={overview?.options||{}} onError={setError}/>} ",
+              'pass merged filters to errors'
+          )
+          start=s.index('function Errors({')
+          end=s.index('\nfunction RosterTable', start)
+          new_errors=r'''function Errors({invoke,roster,filters,onFilters,options,onError}){
+  const [range,setRange]=useState({from:'',to:''}),[data,setData]=useState(null),[loading,setLoading]=useState(true),[q,setQ]=useState(''),[type,setType]=useState(''),[qc,setQc]=useState(''),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null)
+  const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'errors',date_from:next.from,date_to:next.to});setData(d);onError('')}catch(e){onError(e.message||'错误统计读取失败')}finally{setLoading(false)}}
+  useEffect(()=>{load()},[])
+  useEffect(()=>{const t=setInterval(()=>load(range),60000);return()=>clearInterval(t)},[range.from,range.to])
+  useEffect(()=>{
+    const handler=e=>{const id=text(e.detail?.employee_id);if(!id)return;setQ(id);setPage(1)}
+    window.addEventListener('wfh-filter-error-employee',handler)
+    return()=>window.removeEventListener('wfh-filter-error-employee',handler)
+  },[])
+  const rosterFilters=useMemo(()=>({...filters,q:''}),[filters])
+  const filteredRoster=useMemo(()=>filterRoster(roster,rosterFilters),[roster,rosterFilters])
+  const allowed=useMemo(()=>new Set(filteredRoster.map(r=>r.employee_id).filter(Boolean)),[filteredRoster])
+  const setAdvanced=(key,value)=>onFilters({...filters,[key]:value})
+  const setSortKey=key=>setSort(prev=>({key,asc:prev.key===key?!prev.asc:true}))
+  const sortMark=key=>sort.key===key?(sort.asc?' ↑':' ↓'):' ↕'
+  const rows=useMemo(()=>{
+    let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id))
+    const qq=q.trim().toLowerCase()
+    if(qq)x=x.filter(r=>[r.employee_id,r.name].map(text).join(' ').toLowerCase().includes(qq))
+    if(type)x=x.filter(r=>r.error_type===type)
+    if(qc)x=x.filter(r=>r.qc_person===qc)
+    x=[...x].sort((a,b)=>{
+      if(sort.key==='score'){
+        const av=Number(a.score||0),bv=Number(b.score||0)
+        return sort.asc?av-bv:bv-av
+      }
+      const av=text(a?.[sort.key]),bv=text(b?.[sort.key])
+      return sort.asc?av.localeCompare(bv,'zh-CN',{numeric:true}):bv.localeCompare(av,'zh-CN',{numeric:true})
+    })
+    return x
+  },[data,allowed,q,type,qc,sort])
+  useEffect(()=>setPage(1),[q,type,qc,sort,size,filteredRoster])
+  const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size)
+  const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)}
+  const resetAll=()=>{const next={from:'',to:''};setQ('');setType('');setQc('');setRange(next);onFilters(blankFilters());setPage(1);load(next)}
+  const SortTh=({field,children})=><th><button className="rp-sort-head" onClick={()=>setSortKey(field)}>{children}{sortMark(field)}</button></th>
+  return <section className="rp-card">
+    <div className="rp-card-title"><div><h2>员工错误统计</h2><p>筛选已合并；点击等级直接筛出该员工全部错误，点击员工ID打开员工档案。错误类型在主表完整显示。</p></div><span>{rows.length} 条</span></div>
+    <div className="rp-error-unified-filter">
+      <div className="rp-error-main-filters">
+        <input className="rp-search" value={q} onChange={e=>setQ(e.target.value)} placeholder="输入员工ID / 姓名"/>
+        <label>质检时间起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label>
+        <label>质检时间止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label>
+        <Select value={type} onChange={setType} options={data?.options?.error_types||[]} all="全部错误类型"/>
+        <Select value={qc} onChange={setQc} options={data?.options?.qc_people||[]} all="全部质检人"/>
+        <button className="primary" onClick={()=>load()}>查询</button>
+        <button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button><button onClick={resetAll}>重置</button>
+      </div>
+      <div className="rp-error-advanced-filters">
+        <Select value={filters.shift} onChange={v=>setAdvanced('shift',v)} options={options.shifts} all="全部班次"/>
+        <Select value={filters.team} onChange={v=>setAdvanced('team',v)} options={options.teams} all="全部团队"/>
+        <Select value={filters.group} onChange={v=>setAdvanced('group',v)} options={options.groups} all="全部组别"/>
+        <Select value={filters.position} onChange={v=>setAdvanced('position',v)} options={options.positions} all="全部岗位"/>
+        <Select value={filters.country} onChange={v=>setAdvanced('country',v)} options={options.countries} all="全部国家"/>
+        <input list="rp-error-supervisors" value={filters.supervisor} onChange={e=>setAdvanced('supervisor',e.target.value)} placeholder="负责人 / 培训 / 组长"/>
+        <datalist id="rp-error-supervisors">{(options.supervisors||[]).map(x=><option key={x} value={x}/>)}</datalist>
+        <Select value={filters.platform} onChange={v=>setAdvanced('platform',v)} options={options.platforms} all="全部盘口"/>
+        <div className="rp-filter-meta">当前排班筛选 {uniqueCount(filteredRoster)} 人</div>
+      </div>
+    </div>
+    {loading&&!data?<div className="rp-loading-inline">读取员工错误…</div>:<><div className="rp-table-scroll rp-errors-scroll"><table className="rp-table rp-errors-table"><thead><tr><SortTh field="employee_id">员工ID</SortTh><SortTh field="name">姓名</SortTh><SortTh field="team">团队</SortTh><SortTh field="position">岗位</SortTh><SortTh field="platform">盘口</SortTh><SortTh field="error_type">错误类型</SortTh><SortTh field="score">扣分</SortTh><SortTh field="qc_person">质检人</SortTh><SortTh field="qc_date">质检时间</SortTh><th>操作</th></tr></thead><tbody>{slice.map(r=><tr key={r.key}><td><button className="rp-link" onClick={()=>setDetail(r)}>{r.employee_id}</button></td><td>{r.name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td><div className="rp-cell-clamp" title={r.platform}>{r.platform||'—'}</div></td><td className="rp-error-type-full">{r.error_type||'—'}</td><td>{text(r.score)===''?'—':r.score}</td><td>{r.qc_person||'—'}</td><td>{r.qc_date||'—'}</td><td><button className="rp-view-error" onClick={()=>setDetail(r)}>查看错误</button></td></tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}
+    {detail&&<ErrorDetailModal row={detail} onClose={()=>setDetail(null)}/>} 
+  </section>
+}
+'''
+          s=s[:start]+new_errors+s[end:]
+          p.write_text(s)
+
+          # -------------------------------------------------
+          # 2) AdminEmployeesPage: add real level filter.
+          #    When level filter is used, read all filtered employees in 500-row batches,
+          #    match employee_error_summary, then paginate locally for correct totals.
+          # -------------------------------------------------
+          p=Path('src/pages/AdminEmployeesPage.jsx')
+          s=p.read_text()
+          s=replace_once(
+              s,
+              "const typeName = v => legacyType[text(v)] || text(v) || '-'",
+              "const typeName = v => legacyType[text(v)] || text(v) || '-'\nconst errorRiskKey = value => {\n  const n=Number(value||0)\n  if(n>=10) return 'high'\n  if(n>=4) return 'watch'\n  if(n>=1) return 'attention'\n  return 'normal'\n}",
+              'employee risk helper'
+          )
+          s=s.replace(
+              "employee_no:'',full_name:'',work_tg:'',backend_account:'',team:'',position:'',country:'',status:'active',\n    employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',",
+              "employee_no:'',full_name:'',work_tg:'',backend_account:'',team:'',position:'',country:'',status:'active',risk_level:'',\n    employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',"
+          )
+          old_load="""  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false}={})=>{\n    if(!silent){ setLoading(true); setError('') }\n    try{\n      const data=await invoke({action:'list',page:nextPage,page_size:nextSize,filters})\n      const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')\n      const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))\n      setRows(visibleRows.map(r=>({...r,operator_account:operatorMap.get(text(r.id))||text(r.operator_account)})))\n      setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))\n    }catch(e){ if(!silent) setError(e.message) }\n    finally{ if(!silent) setLoading(false) }\n  }\n"""
+          new_load="""  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false}={})=>{\n    if(!silent){ setLoading(true); setError('') }\n    try{\n      const riskLevel=text(filters.risk_level)\n      if(riskLevel){\n        const baseFilters={...filters}\n        delete baseFilters.risk_level\n        const {data:summaryRows,error:riskError}=await supabase.from('employee_error_summary').select('employee_no,month_error_count').limit(5000)\n        if(riskError) throw riskError\n        const riskMap=new Map((summaryRows||[]).map(x=>[text(x.employee_no).toUpperCase(),Number(x.month_error_count||0)]))\n        const allRows=[]\n        let batchPage=1,batchPages=1\n        do{\n          const data=await invoke({action:'list',page:batchPage,page_size:500,filters:baseFilters})\n          allRows.push(...(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted'))\n          batchPages=Math.max(1,Number(data.pages||1))\n          batchPage+=1\n        }while(batchPage<=batchPages&&batchPage<=50)\n        const matched=allRows.filter(r=>errorRiskKey(riskMap.get(text(r.employee_no).toUpperCase())||0)===riskLevel)\n        const visibleRows=matched.slice((nextPage-1)*nextSize,nextPage*nextSize)\n        const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))\n        setRows(visibleRows.map(r=>({...r,operator_account:operatorMap.get(text(r.id))||text(r.operator_account)})))\n        setTotal(matched.length)\n      }else{\n        const data=await invoke({action:'list',page:nextPage,page_size:nextSize,filters})\n        const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')\n        const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))\n        setRows(visibleRows.map(r=>({...r,operator_account:operatorMap.get(text(r.id))||text(r.operator_account)})))\n        setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))\n      }\n    }catch(e){ if(!silent) setError(e.message) }\n    finally{ if(!silent) setLoading(false) }\n  }\n"""
+          s=replace_once(s,old_load,new_load,'risk-aware employee list')
+          core='''        <div className="field-search-grid employee-core-search-grid">\n          <label className="pro-filter-field"><span>员工ID</span>'''
+          core_new='''        <div className="field-search-grid employee-core-search-grid">\n          <label className="pro-filter-field"><span>等级</span><select value={filters.risk_level||''} onChange={e=>setFilters({...filters,risk_level:e.target.value})}><option value="">全部等级</option><option value="normal">正常（0错误）</option><option value="attention">注意（1–3）</option><option value="watch">重点（4–9）</option><option value="high">高频（10+）</option></select></label>\n          <label className="pro-filter-field"><span>员工ID</span>'''
+          s=replace_once(s,core,core_new,'employee level filter UI')
+          p.write_text(s)
+
+          # -------------------------------------------------
+          # 3) errorRiskEnhancer: thresholds + click behavior + remove duplicate employee button
+          # -------------------------------------------------
+          p=Path('src/errorRiskEnhancer.js')
+          s=p.read_text()
+          old="""const riskCfg = count => {\n  const n = Number(count || 0)\n  if (n >= 10) return { key:'high', label:'高频', full:'高频错误', color:'#b42334', bg:'#fff1f2', border:'#fecdd3' }\n  if (n >= 6) return { key:'watch', label:'重点', full:'重点观察', color:'#c2410c', bg:'#fff7ed', border:'#fed7aa' }\n  if (n >= 4) return { key:'attention', label:'注意', full:'注意', color:'#a16207', bg:'#fffbeb', border:'#fde68a' }\n  return { key:'normal', label:'正常', full:'正常', color:'#39734a', bg:'#f0fdf4', border:'#bbf7d0' }\n}\n"""
+          new="""const riskCfg = count => {\n  const n = Number(count || 0)\n  if (n >= 10) return { key:'high', label:'高频', full:'高频错误', color:'#b42334', bg:'#fff1f2', border:'#fecdd3' }\n  if (n >= 4) return { key:'watch', label:'重点', full:'重点观察', color:'#c2410c', bg:'#fff7ed', border:'#fed7aa' }\n  if (n >= 1) return { key:'attention', label:'注意', full:'注意', color:'#a16207', bg:'#fffbeb', border:'#fde68a' }\n  return { key:'normal', label:'正常', full:'正常（0错误）', color:'#39734a', bg:'#f0fdf4', border:'#bbf7d0' }\n}\n"""
+          s=replace_once(s,old,new,'risk thresholds')
+          s=s.replace("th.title='按员工当月错误次数计算：0–3 正常 / 4–5 注意 / 6–9 重点 / 10+ 高频'","th.title='按员工当月错误次数计算：0 正常 / 1–3 注意 / 4–9 重点 / 10+ 高频'")
+          start=s.index('function ensureErrorActions(')
+          end=s.index('\nasync function enhanceErrorTable',start)
+          s=s[:start]+'''function ensureErrorActions(tr,id){\n  const cell=tr?.lastElementChild\n  if(!cell||!id) return\n  const existing=cell.querySelector('button')\n  if(existing) existing.textContent='查看错误'\n  cell.querySelector('.wfh-employee-open-btn')?.remove()\n}\n'''+s[end:]
+          s=s.replace("if(title&&!title.dataset.wfhLinkedCopy){title.dataset.wfhLinkedCopy='1';title.textContent='主表保留管理重点；点击「等级」查看该员工全部错误记录，点击员工ID打开员工档案；订单号、金额、错误备注、正确操作方式放进「查看错误」详情。'}","if(title&&!title.dataset.wfhLinkedCopy){title.dataset.wfhLinkedCopy='1';title.textContent='主表保留管理重点；点击等级直接筛出该员工全部错误，点击员工ID打开员工档案；错误类型完整显示，详细备注放进「查看错误」。'}")
+          s=s.replace("cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))","cell.replaceChildren(levelNode(summary,()=>window.dispatchEvent(new CustomEvent('wfh-filter-error-employee',{detail:{employee_id:id}}))))",1)
+          # employee archive: only non-zero level is clickable
+          target="""  for(const {id,cell,name} of pairs){\n    const summary=cache.get(id)\n    cell.replaceChildren(levelNode(summary,()=>openEmployeeErrorHistory(id,summary,name)))\n  }\n}\n\nfunction closeOverlay"""
+          replacement="""  for(const {id,cell,name} of pairs){\n    const summary=cache.get(id)\n    const canOpen=Number(summary?.month_error_count||0)>0\n    cell.replaceChildren(levelNode(summary,canOpen?()=>openEmployeeErrorHistory(id,summary,name):null))\n  }\n}\n\nfunction closeOverlay"""
+          s=replace_once(s,target,replacement,'normal level no-click in employee archive')
+          s=s.replace('.rp-errors-table{width:100%!important;min-width:1380px!important}.rp-errors-table th:last-child,.rp-errors-table td:last-child{width:150px!important;max-width:150px!important}.rp-errors-scroll{width:100%!important;max-width:100%!important}.wfh-error-actions{display:flex;align-items:center;gap:5px;white-space:nowrap}.wfh-employee-open-btn{height:28px;padding:0 8px;border:1px solid #d1ddea;border-radius:7px;background:#fff;color:#4c6482;font-size:9px;font-weight:800;cursor:pointer}.wfh-employee-open-btn:hover{border-color:#9cb6dd;background:#f7faff;color:#155bd7}.wfh-error-id-button{font-weight:850!important}', '.rp-errors-table{width:100%!important;min-width:1080px!important}.rp-errors-table th:last-child,.rp-errors-table td:last-child{width:92px!important;max-width:92px!important}.rp-errors-scroll{width:100%!important;max-width:100%!important}.wfh-error-actions{display:flex;align-items:center;gap:5px;white-space:nowrap}.wfh-error-id-button{font-weight:850!important}')
+          p.write_text(s)
+
+          # -------------------------------------------------
+          # 4) report overview: same 0 / 1-3 / 4-9 / 10+ rule and event-based jump
+          # -------------------------------------------------
+          p=Path('src/reportErrorOverviewEnhancer.js')
+          s=p.read_text()
+          s=s.replace("const bucket=v=>{const n=num(v);return n>=10?'high':n>=6?'watch':n>=4?'attention':n>0?'normal':'none'}", "const bucket=v=>{const n=num(v);return n>=10?'high':n>=4?'watch':n>=1?'attention':'normal'}")
+          s=s.replace("const labels={high:'高频',watch:'重点观察',attention:'注意',normal:'正常',none:'本月0笔'}", "const labels={high:'高频',watch:'重点',attention:'注意',normal:'正常'}")
+          open_start=s.index('function openErrorsFor(id){')
+          open_end=s.index('\nfunction kpi(',open_start)
+          s=s[:open_start]+'''function openErrorsFor(id){\n  const tab=[...document.querySelectorAll('.rp-tabs button')].find(x=>text(x.textContent)==='错误统计')\n  if(!tab)return\n  tab.click()\n  setTimeout(()=>window.dispatchEvent(new CustomEvent('wfh-filter-error-employee',{detail:{employee_id:id}})),180)\n}\n'''+s[open_end:]
+          s=s.replace("const counts={high:0,watch:0,attention:0,normal:0,none:0}","const counts={high:0,watch:0,attention:0,normal:0}")
+          s=s.replace("counts.high,counts.watch,counts.attention,counts.normal,counts.none", "counts.high,counts.watch,counts.attention,counts.normal")
+          s=s.replace("kpi('高频员工',counts.high,'本月 ≥10 笔','high'),kpi('重点观察',counts.watch,'本月 6–9 笔','watch'),kpi('注意员工',counts.attention,'本月 4–5 笔','attention')", "kpi('高频员工',counts.high,'本月 ≥10 笔','high'),kpi('重点员工',counts.watch,'本月 4–9 笔','watch'),kpi('注意员工',counts.attention,'本月 1–3 笔','attention')")
+          s=s.replace("['high','watch','attention','normal','none']", "['high','watch','attention','normal']")
+          p.write_text(s)
+
+          # -------------------------------------------------
+          # 5) report styles for merged filter and full error type
+          # -------------------------------------------------
+          p=Path('src/styles-reports.css')
+          s=p.read_text()
+          marker='/* WFH unified error filter V29.6.2 */'
+          if marker not in s:
+              s += r'''
+
+/* WFH unified error filter V29.6.2 */
+.rp-error-unified-filter{margin:0 0 14px;padding:12px;border:1px solid #dfe7f2;border-radius:12px;background:#fbfdff;display:grid;gap:9px}
+.rp-error-main-filters{display:grid;grid-template-columns:minmax(210px,1.35fr) repeat(4,minmax(145px,.9fr)) repeat(5,auto);gap:8px;align-items:end}
+.rp-error-main-filters>label{display:grid;gap:4px;color:#6a7f99;font-size:9px;font-weight:750}
+.rp-error-main-filters input,.rp-error-main-filters select,.rp-error-main-filters button,.rp-error-advanced-filters input,.rp-error-advanced-filters select{height:34px;min-width:0;border:1px solid #d6e0ec;border-radius:8px;background:#fff;padding:0 9px;color:#314b68;font-size:10px}
+.rp-error-main-filters button{cursor:pointer;font-weight:800;white-space:nowrap}.rp-error-main-filters button.primary{background:#2164d8;border-color:#2164d8;color:#fff}
+.rp-error-advanced-filters{display:grid;grid-template-columns:repeat(7,minmax(125px,1fr)) auto;gap:8px;align-items:center;padding-top:9px;border-top:1px dashed #dce5f0}
+.rp-error-advanced-filters .rp-filter-meta{white-space:nowrap;text-align:right;color:#8090a5;font-size:9px}
+.rp-errors-table{min-width:1080px!important}.rp-errors-table th,.rp-errors-table td{vertical-align:top}.rp-error-type-full{min-width:240px;max-width:390px;white-space:normal!important;overflow-wrap:anywhere;word-break:break-word;line-height:1.5;color:#314b68}
+.rp-errors-table th:nth-last-child(1),.rp-errors-table td:nth-last-child(1){width:92px;white-space:nowrap}
+@media(max-width:1450px){.rp-error-main-filters{grid-template-columns:repeat(5,minmax(140px,1fr));}.rp-error-advanced-filters{grid-template-columns:repeat(4,minmax(135px,1fr));}}
+@media(max-width:900px){.rp-error-main-filters,.rp-error-advanced-filters{grid-template-columns:repeat(2,minmax(0,1fr));}.rp-error-main-filters .rp-search{grid-column:1/-1}.rp-error-advanced-filters .rp-filter-meta{text-align:left}}
+'''
+          p.write_text(s)
+
+          for file in ['src/pages/AdminReportsPage.jsx','src/pages/AdminEmployeesPage.jsx','src/errorRiskEnhancer.js','src/reportErrorOverviewEnhancer.js','src/styles-reports.css']:
+              txt=Path(file).read_text()
+              if '\r' in txt: raise SystemExit(f'CRLF unexpectedly found: {file}')
+          PY
+          git diff --check
+          git diff --stat
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "WFH Patch Bot"
+          git config user.email "wfh-patch-bot@users.noreply.github.com"
+          git add src/pages/AdminReportsPage.jsx src/pages/AdminEmployeesPage.jsx src/errorRiskEnhancer.js src/reportErrorOverviewEnhancer.js src/styles-reports.css
+          git rm .github/workflows/apply-error-ux-v2.yml
+          git commit -m "fix: unify error filters and risk levels"
+          git push
