@@ -1,0 +1,92 @@
+name: Apply Employee Error Risk Linkage
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/error-risk-linkage-patch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch reports and employee profile
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          reports=Path('src/pages/AdminReportsPage.jsx')
+          s=reports.read_text()
+          start=s.index('function Errors({invoke,roster,onError}){')
+          end=s.index('\nfunction RosterTable({rows})', start)
+          block=r'''const errorHash32=input=>{let h=2166136261;for(let i=0;i<input.length;i++){h^=input.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(36)}
+const errorRecordKey=r=>`${text(r.employee_id).toUpperCase()}|${text(r.qc_date)}|${errorHash32([text(r.member_order),text(r.error_type),text(r.qc_person),text(r.error_note)].join('|'))}`
+const riskInfo=level=>({attention:{label:'注意',icon:'●'},watch:{label:'重点观察',icon:'●'},high:{label:'高频错误',icon:'●'},normal:{label:'正常',icon:'●'}}[level]||{label:'正常',icon:'●'})
+function ErrorRiskBadge({summary,compact=false}){if(!summary||Number(summary.month_error_count||0)<=3)return compact?<span className="rp-risk-empty">—</span>:null;const info=riskInfo(summary.risk_level);return <span className={`rp-risk-badge is-${summary.risk_level}`} title={`本月 ${summary.month_error_count} 笔 · 近30天 ${summary.last_30d_error_count} 笔 · 累计 ${summary.total_error_count} 笔`}><i>{info.icon}</i>{compact?summary.month_error_count:`${info.label} · ${summary.month_error_count}`}</span>}
+
+function Errors({invoke,roster,onError}){
+  const [range,setRange]=useState({from:'',to:''}),[data,setData]=useState(null),[loading,setLoading]=useState(true)
+  const [q,setQ]=useState(''),[type,setType]=useState(''),[qc,setQc]=useState(''),[riskFilter,setRiskFilter]=useState('')
+  const [riskMap,setRiskMap]=useState(new Map()),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null)
+  const loadRisk=async()=>{const {data:rows,error}=await supabase.from('employee_error_summary').select('*').range(0,4999);if(!error)setRiskMap(new Map((rows||[]).map(x=>[text(x.employee_no).toUpperCase(),x])))}
+  const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'errors',date_from:next.from,date_to:next.to});setData(d);await loadRisk();onError('')}catch(e){onError(e.message||'错误统计读取失败')}finally{setLoading(false)}}
+  useEffect(()=>{load()},[])
+  useEffect(()=>{const t=setInterval(()=>{load(range)},30000);return()=>clearInterval(t)},[range.from,range.to])
+  const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])
+  const setSortKey=key=>setSort(s=>({key,asc:s.key===key?!s.asc:false}))
+  const sortMark=key=>sort.key===key?(sort.asc?' ↑':' ↓'):' ⇅'
+  const rows=useMemo(()=>{let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id));const qq=q.toLowerCase();if(qq)x=x.filter(r=>[r.employee_id,r.name].map(text).join(' ').toLowerCase().includes(qq));if(type)x=x.filter(r=>r.error_type===type);if(qc)x=x.filter(r=>r.qc_person===qc);if(riskFilter)x=x.filter(r=>(riskMap.get(text(r.employee_id).toUpperCase())?.risk_level||'normal')===riskFilter);x=[...x].sort((a,b)=>{if(sort.key==='score'){const av=Number(a.score||0),bv=Number(b.score||0);return sort.asc?av-bv:bv-av}if(sort.key==='risk'){const av=Number(riskMap.get(text(a.employee_id).toUpperCase())?.month_error_count||0),bv=Number(riskMap.get(text(b.employee_id).toUpperCase())?.month_error_count||0);return sort.asc?av-bv:bv-av}const av=text(a?.[sort.key]),bv=text(b?.[sort.key]);return sort.asc?av.localeCompare(bv,'zh-CN',{numeric:true}):bv.localeCompare(av,'zh-CN',{numeric:true})});return x},[data,allowed,q,type,qc,riskFilter,riskMap,sort])
+  useEffect(()=>setPage(1),[q,type,qc,riskFilter,sort,size,roster])
+  const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size)
+  const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)}
+  const openDetail=async r=>{const risk=riskMap.get(text(r.employee_id).toUpperCase())||null;const base={...r,risk,audit:null,audit_loading:true};setDetail(base);const key=errorRecordKey(r);const {data:audit}=await supabase.from('employee_error_audit').select('first_seen_at,last_seen_at,google_actor,google_event_at').eq('record_key',key).maybeSingle();setDetail(prev=>prev?.key===r.key?{...prev,audit:audit||null,audit_loading:false}:prev)}
+  const SortTh=({field,children})=><th><button className="rp-sort-head" onClick={()=>setSortKey(field)}>{children}{sortMark(field)}</button></th>
+  return <section className="rp-card"><div className="rp-card-title"><div><h2>员工错误统计</h2><p>主表只保留管理重点；会员/订单号、金额、错误备注、正确操作方式统一放进「查看」详情。风险按本月错误次数实时汇总。</p></div><span>{rows.length} 条</span></div><div className="rp-order-toolbar"><label>质检时间起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>质检时间止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><button className="primary" onClick={()=>load()}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div><div className="rp-error-filters"><input value={q} onChange={e=>setQ(e.target.value)} placeholder="输入员工ID / 姓名"/><Select value={type} onChange={setType} options={data?.options?.error_types||[]} all="全部错误类型"/><Select value={qc} onChange={setQc} options={data?.options?.qc_people||[]} all="全部质检人"/><select value={riskFilter} onChange={e=>setRiskFilter(e.target.value)}><option value="">全部风险等级</option><option value="attention">注意（本月4-5笔）</option><option value="watch">重点观察（本月6-9笔）</option><option value="high">高频错误（本月10笔+）</option><option value="normal">正常（本月0-3笔）</option></select><button onClick={()=>{setQ('');setType('');setQc('');setRiskFilter('')}}>重置</button></div>{loading&&!data?<div className="rp-loading-inline">读取员工错误…</div>:<><div className="rp-table-scroll rp-errors-scroll"><table className="rp-table rp-errors-table"><thead><tr><SortTh field="risk">风险</SortTh><SortTh field="employee_id">员工ID</SortTh><SortTh field="name">姓名</SortTh><SortTh field="team">团队</SortTh><SortTh field="position">岗位</SortTh><SortTh field="platform">盘口</SortTh><SortTh field="error_type">错误类型</SortTh><SortTh field="score">扣分</SortTh><SortTh field="qc_person">质检人</SortTh><SortTh field="qc_date">质检时间</SortTh><SortTh field="leader_review">小组长复审</SortTh><SortTh field="qc_result">质检人对/错</SortTh><SortTh field="review_date">复检时间</SortTh><th>操作</th></tr></thead><tbody>{slice.map(r=>{const risk=riskMap.get(text(r.employee_id).toUpperCase());return <tr key={r.key}><td><ErrorRiskBadge summary={risk} compact/></td><td><button className="rp-link" onClick={()=>openDetail(r)}>{r.employee_id}</button></td><td>{r.name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td><div className="rp-cell-clamp" title={r.platform}>{r.platform||'—'}</div></td><td><div className="rp-cell-clamp" title={r.error_type}>{r.error_type||'—'}</div></td><td>{text(r.score)===''?'—':r.score}</td><td>{r.qc_person||'—'}</td><td>{r.qc_date||'—'}</td><td><div className="rp-cell-clamp">{r.leader_review||'—'}</div></td><td><div className="rp-cell-clamp">{r.qc_result||'—'}</div></td><td>{r.review_date||'—'}</td><td><button className="rp-view-error" onClick={()=>openDetail(r)}>查看</button></td></tr>})}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{detail&&<ErrorDetailModal row={detail} onClose={()=>setDetail(null)}/>}</section>
+}
+'''
+          s=s[:start]+block+s[end:]
+          old="function ErrorDetailModal({row,onClose}){return <Modal title={`${row.employee_id} · ${row.error_type||'错误记录'}`} onClose={onClose}><div className=\"rp-detail-grid\"><Detail k=\"姓名\" v={row.name}/><Detail k=\"团队\" v={row.team}/><Detail k=\"岗位\" v={row.position}/><Detail k=\"盘口\" v={row.platform}/><Detail k=\"金额\" v={row.amount}/><Detail k=\"扣分\" v={row.score}/><Detail k=\"质检人\" v={row.qc_person}/><Detail k=\"质检时间\" v={row.qc_date}/><Detail k=\"复检时间\" v={row.review_date}/><Detail k=\"会员/id /订单号\" v={row.member_order} wide/><Detail k=\"错误备注\" v={row.error_note} wide/><Detail k=\"正确操作方式\" v={row.correct_action} wide/><Detail k=\"小组长复审 / 质检人对错\" v={[row.leader_review,row.qc_result].filter(Boolean).join(' / ')} wide/></div></Modal>}"
+          new="function ErrorDetailModal({row,onClose}){const risk=row.risk||null,a=row.audit||null;const riskText=risk&&Number(risk.month_error_count||0)>3?`${riskInfo(risk.risk_level).label} · 本月 ${risk.month_error_count} 笔`:'正常';return <Modal title={`${row.employee_id} · ${row.error_type||'错误记录'}`} onClose={onClose}><div className=\"rp-detail-grid\"><Detail k=\"姓名\" v={row.name}/><Detail k=\"团队\" v={row.team}/><Detail k=\"岗位\" v={row.position}/><Detail k=\"风险提示\" v={riskText}/><Detail k=\"本月错误\" v={risk?.month_error_count}/><Detail k=\"近30天错误\" v={risk?.last_30d_error_count}/><Detail k=\"累计错误\" v={risk?.total_error_count}/><Detail k=\"最近错误\" v={risk?.last_error_date}/><Detail k=\"盘口\" v={row.platform}/><Detail k=\"金额\" v={row.amount}/><Detail k=\"扣分\" v={row.score}/><Detail k=\"质检人\" v={row.qc_person}/><Detail k=\"质检时间\" v={row.qc_date}/><Detail k=\"复检时间\" v={row.review_date}/><Detail k=\"系统首次同步\" v={a?.first_seen_at?new Date(a.first_seen_at).toLocaleString('zh-CN',{hour12:false}):'—'}/><Detail k=\"最新同步\" v={a?.last_seen_at?new Date(a.last_seen_at).toLocaleString('zh-CN',{hour12:false}):'—'}/><Detail k=\"Google录入账号\" v={a?.google_actor||'未记录（原表没有操作人字段）'}/><Detail k=\"Google录入时间\" v={a?.google_event_at?new Date(a.google_event_at).toLocaleString('zh-CN',{hour12:false}):'未记录'}/><Detail k=\"会员/id /订单号\" v={row.member_order} wide/><Detail k=\"错误备注\" v={row.error_note} wide/><Detail k=\"正确操作方式\" v={row.correct_action} wide/><Detail k=\"小组长复审 / 质检人对错\" v={[row.leader_review,row.qc_result].filter(Boolean).join(' / ')} wide/></div></Modal>}"
+          if old not in s:
+              raise SystemExit('ErrorDetailModal target not found')
+          s=s.replace(old,new,1)
+          reports.write_text(s)
+
+          employees=Path('src/pages/AdminEmployeesPage.jsx')
+          e=employees.read_text()
+          target="""function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn}){\n  const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}\n  const missing=detail.missing_fields||[]\n"""
+          repl="""function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn}){\n  const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}\n  const missing=detail.missing_fields||[]\n  const [errorRisk,setErrorRisk]=useState(null)\n  useEffect(()=>{let alive=true;const employeeNo=text(e.employee_no).toUpperCase();if(!employeeNo){setErrorRisk(null);return()=>{alive=false}};(async()=>{const {data}=await supabase.from('employee_error_summary').select('*').eq('employee_no',employeeNo).maybeSingle();if(alive)setErrorRisk(data||null)})();return()=>{alive=false}},[e.employee_no])\n  const errorRiskCount=Number(errorRisk?.month_error_count||0)\n  const errorRiskCfg=errorRisk?.risk_level==='high'?{bg:'#fff1f2',bd:'#fecdd3',fg:'#b42334',label:'高频错误'}:errorRisk?.risk_level==='watch'?{bg:'#fff7ed',bd:'#fed7aa',fg:'#c2410c',label:'重点观察'}:{bg:'#fffbeb',bd:'#fde68a',fg:'#a16207',label:'注意'}\n"""
+          if target not in e:
+              raise SystemExit('EmployeeDrawer target not found')
+          e=e.replace(target,repl,1)
+          status="""      <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>\n      <div className=\"detail-sections detail-sections-v11\">"""
+          status_new="""      <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>\n      {e.status==='active'&&errorRiskCount>3&&<div style={{margin:'0 16px 12px',padding:'10px 12px',border:`1px solid ${errorRiskCfg.bd}`,borderRadius:10,background:errorRiskCfg.bg,color:errorRiskCfg.fg,display:'flex',justifyContent:'space-between',gap:12,alignItems:'center',flexWrap:'wrap'}}><div><strong style={{display:'block',fontSize:12}}>{errorRiskCfg.label} · 本月 {errorRiskCount} 笔错误</strong><span style={{fontSize:10}}>近30天 {errorRisk?.last_30d_error_count||0} 笔 · 累计 {errorRisk?.total_error_count||0} 笔 · 最近 {errorRisk?.last_error_date||'—'}</span></div><span style={{fontSize:9,fontWeight:800}}>统计报表 → 错误统计可查看明细</span></div>}\n      <div className=\"detail-sections detail-sections-v11\">"""
+          if status not in e:
+              raise SystemExit('Employee status target not found')
+          e=e.replace(status,status_new,1)
+          employees.write_text(e)
+
+          css=Path('src/styles-reports.css')
+          c=css.read_text()
+          marker='/* employee-error-risk-v1 */'
+          if marker not in c:
+              c += r'''\n/* employee-error-risk-v1 */
+.rp-error-filters{grid-template-columns:minmax(220px,2fr) minmax(135px,1fr) minmax(135px,1fr) minmax(155px,1fr) 70px}.rp-errors-table{width:1320px!important;min-width:1320px!important}.rp-errors-table th:nth-child(1){width:72px}.rp-errors-table th:nth-child(2){width:92px}.rp-errors-table th:nth-child(3){width:135px}.rp-errors-table th:nth-child(4){width:85px}.rp-errors-table th:nth-child(5){width:76px}.rp-errors-table th:nth-child(6){width:155px}.rp-errors-table th:nth-child(7){width:130px}.rp-errors-table th:nth-child(8){width:60px}.rp-errors-table th:nth-child(9){width:118px}.rp-errors-table th:nth-child(10){width:92px}.rp-errors-table th:nth-child(11){width:100px}.rp-errors-table th:nth-child(12){width:100px}.rp-errors-table th:nth-child(13){width:92px}.rp-errors-table th:nth-child(14){width:70px}.rp-risk-badge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 7px;font-size:9px;font-weight:850;white-space:nowrap}.rp-risk-badge i{font-style:normal;font-size:8px}.rp-risk-badge.is-attention{background:#fffbeb;color:#a16207;border:1px solid #fde68a}.rp-risk-badge.is-watch{background:#fff7ed;color:#c2410c;border:1px solid #fed7aa}.rp-risk-badge.is-high{background:#fff1f2;color:#b42334;border:1px solid #fecdd3}.rp-risk-empty{color:#c0cad7}.rp-detail-grid>div:nth-child(-n+8){background:#fbfdff}.rp-sort-head{white-space:nowrap}
+@media(max-width:1100px){.rp-error-filters{grid-template-columns:1fr 1fr}}\n'''
+          css.write_text(c)
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "wfh-bot"
+          git config user.email "wfh-bot@users.noreply.github.com"
+          git add src/pages/AdminReportsPage.jsx src/pages/AdminEmployeesPage.jsx src/styles-reports.css
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: add employee error risk and audit details"
+          git push origin main
