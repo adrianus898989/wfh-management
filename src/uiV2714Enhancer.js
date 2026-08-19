@@ -3,8 +3,11 @@ import { supabase } from './lib/supabase'
 const text=v=>String(v??'').trim()
 const esc=v=>text(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))
 const COLORS=['#36a2eb','#ff6384','#ff9f40','#ffcd56','#4bc0c0','#9966ff','#c9cbcf','#2f9ed8','#f55f83','#f28e2b','#59c3c3','#8a5cf6','#bfc3c8','#9bd3f4','#ffb16a','#6fc9c4','#7f63dd','#f2c14e','#45b7aa','#f08a24']
-const gradeColor={excellent:'#168a63',normal:'#2563a8',attention:'#a16207',watch:'#c2410c',high:'#b42334'}
-let stopped=false,scheduled=false,priorInvoke=null
+const gradeMeta={
+  excellent:{label:'优秀（0错误）',color:'#168a63'},normal:{label:'正常（1–8）',color:'#2563a8'},attention:{label:'注意（9–15）',color:'#a16207'},watch:{label:'重点（16–30）',color:'#c2410c'},high:{label:'高频（31+）',color:'#b42334'},
+}
+const gradeChoices=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
+let stopped=false,scheduled=false,priorInvoke=null,employeeGrade=''
 
 function gradeFromErrorUi(){
   const label=text(document.querySelector('.wfh-error-grade-slot .wfh-grade-trigger')?.textContent)
@@ -20,6 +23,9 @@ function patchInvoke(){
   priorInvoke=supabase.functions.invoke.bind(supabase.functions)
   supabase.functions.invoke=async(name,options={})=>{
     const body=options?.body||{}
+    if(name==='admin-employees'&&body.action==='list'&&employeeGrade){
+      return priorInvoke('admin-employee-risk-list',{...options,body:{...body,risk_level:employeeGrade,filters:{...(body.filters||{}),risk_level:employeeGrade}}})
+    }
     const isErrors=(name==='admin-reports'&&body.action==='errors')||name==='admin-report-errors'
     if(isErrors){
       const risk=gradeFromErrorUi()
@@ -30,21 +36,36 @@ function patchInvoke(){
   supabase.functions.__wfhV2714Patched=true
 }
 
-function normalizeEmployeeGradeSelect(){
-  const label=document.querySelector('label[data-native-risk-filter="1"]')
-  const select=label?.querySelector('select')
-  if(!label||!select)return
-  const wanted=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
-  const sig=wanted.map(x=>x.join(':')).join('|')
-  if(select.dataset.v2714Options!==sig){
-    const current=select.value
-    select.replaceChildren(...wanted.map(([value,name])=>{const o=document.createElement('option');o.value=value;o.textContent=name;return o}))
-    if(wanted.some(x=>x[0]===current))select.value=current
-    select.dataset.v2714Options=sig
+function triggerEmployeeReload(){
+  const grid=document.querySelector('.employee-core-search-grid')
+  const idInput=[...(grid?.querySelectorAll('label')||[])].find(x=>text(x.querySelector('span')?.textContent)==='员工ID')?.querySelector('input')
+  if(idInput){
+    const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set,current=idInput.value||''
+    if(setter){setter.call(idInput,current+' ');idInput.dispatchEvent(new Event('input',{bubbles:true}));setTimeout(()=>{setter.call(idInput,current);idInput.dispatchEvent(new Event('input',{bubbles:true}))},65);return}
   }
-  const key=select.value||''
-  label.dataset.grade=key
-  label.style.setProperty('--native-grade-color',gradeColor[key]||'#8ca0b7')
+  document.querySelector('.employee-refresh-action')?.click()
+}
+function updateEmployeeGradePicker(root){
+  const trigger=root?.querySelector('.wfh-grade-trigger'),menu=root?.querySelector('.wfh-grade-menu');if(!trigger||!menu)return
+  const chosen=gradeChoices.find(x=>x[0]===employeeGrade)||gradeChoices[0],meta=gradeMeta[employeeGrade]
+  trigger.innerHTML=`${meta?`<i class="wfh-grade-dot" style="--grade-color:${meta.color}"></i>`:''}${chosen[1]}`
+  ;[...menu.querySelectorAll('button')].forEach(b=>b.classList.toggle('active',b.dataset.key===employeeGrade))
+}
+function ensureEmployeeGradePicker(){
+  const grid=document.querySelector('.employee-core-search-grid');if(!grid)return
+  const native=grid.querySelector('label[data-native-risk-filter="1"]');if(native)native.classList.add('wfh-hide-native-grade')
+  let label=grid.querySelector('.wfh-v2714-employee-grade')
+  if(!label){
+    label=document.createElement('label');label.className='pro-filter-field wfh-v2714-employee-grade'
+    const title=document.createElement('span');title.textContent='等级'
+    const root=document.createElement('div');root.className='wfh-grade-picker'
+    const trigger=document.createElement('button');trigger.type='button';trigger.className='wfh-grade-trigger'
+    const menu=document.createElement('div');menu.className='wfh-grade-menu'
+    gradeChoices.forEach(([key,name])=>{const b=document.createElement('button');b.type='button';b.dataset.key=key;b.textContent=name;b.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();employeeGrade=key;root.classList.remove('open');updateEmployeeGradePicker(root);triggerEmployeeReload()});menu.appendChild(b)})
+    trigger.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();document.querySelectorAll('.wfh-grade-picker.open').forEach(x=>{if(x!==root)x.classList.remove('open')});root.classList.toggle('open')})
+    root.append(trigger,menu);label.append(title,root);grid.insertBefore(label,grid.firstChild)
+  }
+  updateEmployeeGradePicker(label.querySelector('.wfh-grade-picker'))
 }
 
 function hideEmployeeNoise(){
@@ -60,10 +81,7 @@ function rankingCards(){
   const team=teamCard(),grid=team?.nextElementSibling
   if(!grid?.classList?.contains('rp-grid2'))return {}
   const cards=[...grid.querySelectorAll(':scope > .rp-card')]
-  return {
-    position:cards.find(x=>text(x.querySelector('.rp-card-title h3')?.textContent)==='岗位分布'),
-    team:cards.find(x=>text(x.querySelector('.rp-card-title h3')?.textContent)==='团队人数'),
-  }
+  return {position:cards.find(x=>text(x.querySelector('.rp-card-title h3')?.textContent)==='岗位分布'),team:cards.find(x=>text(x.querySelector('.rp-card-title h3')?.textContent)==='团队人数')}
 }
 function sourceItems(card){return [...(card?.querySelectorAll('.rp-bars button')||[])].map((button,i)=>({button,name:text(button.querySelector('span')?.textContent)||`项目${i+1}`,count:Number(text(button.querySelector('strong')?.textContent))||0})).filter(x=>x.name)}
 
@@ -85,7 +103,6 @@ function ensureChartHeader(card,subtitle,items){
   if(!btn){btn=document.createElement('button');btn.type='button';btn.className='wfh-view-summary';btn.textContent='查看汇总';head.appendChild(btn)}
   btn.onclick=()=>openSummary(text(head.querySelector('h3')?.textContent),items)
 }
-
 function renderDonut(card){
   if(!card)return
   card.querySelector('.rp-injected-donut')?.remove()
@@ -99,10 +116,8 @@ function renderDonut(card){
   let cursor=0
   const arcs=items.map((x,i)=>{const raw=x.count/total*circ,gap=Math.min(2.6,raw*.12),len=Math.max(0,raw-gap),offset=-cursor;cursor+=raw;return `<circle data-i="${i}" cx="180" cy="180" r="${r}" fill="none" stroke="${COLORS[i%COLORS.length]}" stroke-width="76" stroke-dasharray="${len.toFixed(2)} ${(circ-len).toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}" transform="rotate(-90 180 180)"/>`}).join('')
   host.innerHTML=`<div class="wfh-position-legend">${items.map((x,i)=>`<button type="button" data-i="${i}"><i style="--legend:${COLORS[i%COLORS.length]}"></i>${esc(x.name)}</button>`).join('')}</div><div class="wfh-donut-wrap"><svg viewBox="0 0 360 360" role="img" aria-label="岗位分布">${arcs}<circle cx="180" cy="180" r="76" class="wfh-donut-hole"/></svg></div>`
-  const open=i=>items[Number(i)]?.button?.click()
-  host.querySelectorAll('[data-i]').forEach(el=>el.addEventListener('click',()=>open(el.dataset.i)))
+  const open=i=>items[Number(i)]?.button?.click();host.querySelectorAll('[data-i]').forEach(el=>el.addEventListener('click',()=>open(el.dataset.i)))
 }
-
 function renderTeamBars(card){
   if(!card)return
   const items=sourceItems(card).filter(x=>x.count>=0),sig=items.map(x=>`${x.name}:${x.count}`).join('|')
@@ -120,28 +135,23 @@ function renderTeamBars(card){
   host.innerHTML=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="团队人数"><g class="wfh-team-grid">${grid.join('')}</g><g class="wfh-team-bars">${bars}</g></svg>`
   host.querySelectorAll('rect[data-i]').forEach(el=>el.addEventListener('click',()=>items[Number(el.dataset.i)]?.button?.click()))
 }
-
 function patchReports(){
-  const active=text(document.querySelector('.rp-tabs button.active')?.textContent)==='总汇'
-  if(!active)return
+  const active=text(document.querySelector('.rp-tabs button.active')?.textContent)==='总汇';if(!active)return
   const card=teamCard();if(card)card.classList.add('wfh-team-fit-card')
   const {position,team}=rankingCards();if(position)position.classList.add('wfh-original-chart-card');if(team)team.classList.add('wfh-original-chart-card')
   renderDonut(position);renderTeamBars(team)
 }
 
-async function run(){
-  if(stopped)return
-  scheduled=false
-  normalizeEmployeeGradeSelect();hideEmployeeNoise();patchReports()
-}
+async function run(){if(stopped)return;scheduled=false;ensureEmployeeGradePicker();hideEmployeeNoise();patchReports()}
 function schedule(){if(stopped||scheduled)return;scheduled=true;setTimeout(run,100)}
-
+function captureClick(e){
+  const b=e.target.closest?.('button')
+  if(b&&text(b.textContent)==='重置'&&b.closest('.archive-filter-actions')){employeeGrade='';schedule()}
+}
 export function startUiV2714Enhancer(){
   if(window.__WFH_UI_V2714__)return
-  window.__WFH_UI_V2714__=true
-  patchInvoke()
-  const observer=new MutationObserver(schedule);observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','value']})
-  document.addEventListener('change',e=>{if(e.target.matches?.('label[data-native-risk-filter="1"] select'))schedule()})
+  window.__WFH_UI_V2714__=true;patchInvoke();document.addEventListener('click',captureClick,true)
+  const observer=new MutationObserver(schedule);observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']})
   schedule()
-  window.addEventListener('beforeunload',()=>{stopped=true;observer.disconnect()},{once:true})
+  window.addEventListener('beforeunload',()=>{stopped=true;observer.disconnect();document.removeEventListener('click',captureClick,true)},{once:true})
 }
