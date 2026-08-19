@@ -19,6 +19,7 @@ import { startUiV2714Enhancer } from './uiV2714Enhancer'
 import { startAdminCompactV2716 } from './adminCompactV2716'
 import { startAdminUiV2717Fix } from './adminUiV2717Fix'
 import { startReportErrorsStableV2721 } from './reportErrorsStableV2721'
+import { startAdminFinalV2722 } from './adminFinalV2722'
 
 for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles]')) old.remove()
 const base = document.createElement('style'); base.setAttribute('data-wfh-inline-styles', 'true'); base.textContent = appStyles; document.head.appendChild(base)
@@ -26,16 +27,16 @@ const pro = document.createElement('style'); pro.setAttribute('data-wfh-pro-styl
 const reports = document.createElement('style'); reports.setAttribute('data-wfh-reports-styles', 'true'); reports.textContent = reportsStyles; document.head.appendChild(reports)
 const employeeV27 = document.createElement('style'); employeeV27.setAttribute('data-wfh-employee-v27-styles', 'true'); employeeV27.textContent = employeeV27Styles; document.head.appendChild(employeeV27)
 const isReportsPath = window.location.pathname.includes('/admin/reports')
-document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.21-stable-errors-full-history-drawer')
+document.documentElement.setAttribute('data-wfh-ui-build', 'employee-v27.22-final-report-errors-risk-ui')
 ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter basename="/wfh-management"><App /></BrowserRouter></React.StrictMode>)
 
 startReportWorkloadEnhancerV2714()
 startUiV2714Enhancer()
 startReportErrorsStableV2721()
 
-// The legacy employee DOM observers are useful on employee-management pages,
-// but they were all mutating the report error table/filter at the same time.
-// Do not start them on /admin/reports; this prevents the visible jumping/flicker.
+// Legacy observers are still useful when the first loaded route is employee management.
+// The v27.22 final layer is path-aware and always starts last so SPA navigation cannot
+// leave a report/employee page without the correct final behavior.
 if (!isReportsPath) {
   startStableErrorUiEnhancer()
   startUiPolishV2713Enhancer()
@@ -43,3 +44,4 @@ if (!isReportsPath) {
   startAdminCompactV2716()
   startAdminUiV2717Fix()
 }
+startAdminFinalV2722()
