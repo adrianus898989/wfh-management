@@ -187,10 +187,12 @@ async function enhanceEmployeeDrawer(){
   const id=upper(drawer.querySelector('.employee-id-line')?.textContent)
   if(!id) return
   await fetchSummaries([id])
-  const summary=cache.get(id),cfg=riskCfg(summary?.month_error_count)
+  const summary=cache.get(id)
   const existing=drawer.querySelector('.wfh-employee-risk-banner')
   const resigned=Boolean(drawer.querySelector('.restore-outline'))
-  if(resigned){if(existing)existing.remove();return}
+  const flagged=Number(summary?.month_error_count||0)>3
+  if(resigned||!flagged){if(existing)existing.remove();return}
+  const cfg=riskCfg(summary?.month_error_count)
   const anchor=drawer.querySelector('.profile-status-line')
   if(!anchor) return
   const box=existing||document.createElement('div')
