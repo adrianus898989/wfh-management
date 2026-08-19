@@ -1,0 +1,240 @@
+/* V27.16 — compact desktop filter bars. Keep filters dense, aligned and responsive. */
+.employee-page .filter-card,
+.employee-page .analytics-filter-panel,
+.employee-page .resignation-filter-panel{
+  box-sizing:border-box;
+}
+
+.employee-page .pro-filter-field,
+.employee-page .resign-filter-field,
+.employee-page .filter-grid>label{
+  min-width:0!important;
+}
+
+.employee-page .pro-filter-field>span,
+.employee-page .resign-filter-field>span,
+.employee-page .filter-grid>label{
+  font-size:9px!important;
+  font-weight:750!important;
+  color:#667d98!important;
+}
+
+.employee-page .pro-input-shell,
+.employee-page .pro-input-shell input,
+.employee-page .filter-card input,
+.employee-page .filter-card select,
+.employee-page .filter-card .filter-combo-input,
+.employee-page .resignation-filter-panel input,
+.employee-page .resignation-filter-panel select,
+.employee-page .resignation-filter-panel .filter-combo-input,
+.employee-page .resignation-filter-panel .pro-date-range,
+.employee-page .analytics-filter-panel input,
+.employee-page .analytics-filter-panel select,
+.employee-page .analytics-filter-panel .filter-combo-input,
+.employee-page .analytics-filter-panel .pro-date-range{
+  min-height:34px!important;
+  height:34px!important;
+  border-radius:8px!important;
+  font-size:10px!important;
+}
+
+.employee-page .archive-filter-card{
+  padding:10px 12px!important;
+}
+.employee-page .employee-core-search-grid{
+  grid-template-columns:145px 160px 180px 190px minmax(190px,1fr)!important;
+  gap:8px 10px!important;
+  align-items:end!important;
+}
+.employee-page .v24-advanced-filter-grid{
+  grid-template-columns:repeat(9,minmax(105px,1fr))!important;
+  gap:8px!important;
+  margin-top:8px!important;
+  padding-top:8px!important;
+}
+.employee-page .archive-filter-actions{
+  display:flex!important;
+  grid-column:1/-1!important;
+  justify-content:flex-end!important;
+  gap:7px!important;
+  margin:7px 0 0!important;
+  padding:7px 0 0!important;
+  min-height:0!important;
+  border-top:1px dashed #dce5f0!important;
+}
+.employee-page .archive-filter-actions button{
+  height:34px!important;
+  min-width:72px!important;
+  padding:0 12px!important;
+  border-radius:8px!important;
+}
+
+/* Resignation history: everything fits on one desktop row. */
+.employee-page .resignation-card-pro .v25-resignation-filter-panel{
+  display:grid!important;
+  grid-template-columns:110px 140px 165px 165px 155px 190px minmax(255px,1fr) 138px!important;
+  gap:8px!important;
+  align-items:end!important;
+  padding:10px 12px!important;
+}
+.employee-page .resignation-card-pro .v25-resign-date,
+.employee-page .resignation-card-pro .v25-resign-actions{
+  grid-column:auto!important;
+}
+.employee-page .resignation-card-pro .v25-resign-actions{
+  display:flex!important;
+  justify-content:flex-end!important;
+  align-items:end!important;
+  gap:6px!important;
+  margin:0!important;
+  padding:0!important;
+  min-height:34px!important;
+  border:0!important;
+  white-space:nowrap!important;
+}
+.employee-page .resignation-card-pro .v25-resign-actions button{
+  height:34px!important;
+  min-width:64px!important;
+  padding:0 11px!important;
+  border-radius:8px!important;
+}
+
+/* Operation log uses the same compact principle, also one desktop row. */
+.employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel{
+  display:grid!important;
+  grid-template-columns:125px 145px 175px 210px minmax(280px,1fr) 140px!important;
+  gap:8px!important;
+  align-items:end!important;
+  padding:10px 12px!important;
+}
+.employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel .v25-resign-date,
+.employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel .v25-resign-actions{
+  grid-column:auto!important;
+}
+.employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel .v25-resign-actions{
+  display:flex!important;
+  justify-content:flex-end!important;
+  align-items:end!important;
+  gap:6px!important;
+  min-height:34px!important;
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+}
+.employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel .v25-resign-actions button{
+  height:34px!important;
+  min-width:64px!important;
+  padding:0 11px!important;
+}
+
+/* People analysis: one dense row on wide screens rather than a tall filter block. */
+.employee-page .people-filter-grid{
+  gap:8px!important;
+  align-items:end!important;
+}
+
+/* Grade selector: never use the dark OS-native dropdown. */
+.employee-page label[data-native-risk-filter="1"]>select.wfh-v2716-native-grade{
+  display:none!important;
+}
+.employee-page .wfh-v2716-grade-picker{
+  position:relative!important;
+  width:100%!important;
+}
+.employee-page .wfh-v2716-grade-trigger{
+  width:100%!important;
+  height:34px!important;
+  border:1px solid #d5e0ec!important;
+  border-radius:8px!important;
+  background:#fff!important;
+  color:#294561!important;
+  padding:0 30px 0 10px!important;
+  font-size:10px!important;
+  font-weight:800!important;
+  text-align:left!important;
+  cursor:pointer!important;
+  position:relative!important;
+  box-shadow:0 1px 2px rgba(26,52,84,.03)!important;
+}
+.employee-page .wfh-v2716-grade-trigger:after{
+  content:'⌄';
+  position:absolute;
+  right:10px;
+  top:50%;
+  transform:translateY(-55%);
+  color:#6f8298;
+  font-size:13px;
+}
+.employee-page .wfh-v2716-grade-picker.open .wfh-v2716-grade-trigger{
+  border-color:#4b83dd!important;
+  box-shadow:0 0 0 3px rgba(47,111,216,.10)!important;
+}
+.employee-page .wfh-v2716-grade-menu{
+  display:none;
+  position:absolute;
+  z-index:9000;
+  left:0;
+  top:calc(100% + 5px);
+  min-width:185px;
+  padding:6px;
+  border:1px solid #dbe5ef;
+  border-radius:10px;
+  background:#fff;
+  box-shadow:0 16px 40px rgba(18,42,72,.18);
+}
+.employee-page .wfh-v2716-grade-picker.open .wfh-v2716-grade-menu{
+  display:grid;
+  gap:3px;
+}
+.employee-page .wfh-v2716-grade-menu button{
+  height:32px!important;
+  border:0!important;
+  border-radius:7px!important;
+  background:#fff!important;
+  color:#35516f!important;
+  padding:0 9px!important;
+  text-align:left!important;
+  font-size:10px!important;
+  font-weight:750!important;
+  cursor:pointer!important;
+}
+.employee-page .wfh-v2716-grade-menu button:hover{background:#f2f7fd!important}
+.employee-page .wfh-v2716-grade-menu button.active{background:#eaf2ff!important;color:#145bcf!important}
+.employee-page .wfh-v2716-grade-dot{
+  display:inline-block;
+  width:7px;
+  height:7px;
+  border-radius:50%;
+  margin-right:7px;
+  vertical-align:1px;
+  background:var(--grade-color,#71849a);
+}
+
+@media(min-width:1450px){
+  .employee-page .people-filter-grid{
+    grid-template-columns:120px 145px 145px 165px 165px 165px 150px minmax(260px,1fr) 74px!important;
+  }
+}
+
+@media(max-width:1449px){
+  .employee-page .employee-core-search-grid{grid-template-columns:145px repeat(4,minmax(145px,1fr))!important}
+  .employee-page .v24-advanced-filter-grid{grid-template-columns:repeat(5,minmax(120px,1fr))!important}
+  .employee-page .resignation-card-pro .v25-resignation-filter-panel{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+  .employee-page .resignation-card-pro .v25-resign-date{grid-column:span 2!important}
+  .employee-page .resignation-card-pro .v25-resign-actions{grid-column:span 2!important}
+  .employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+  .employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel .v25-resign-date{grid-column:span 2!important}
+  .employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel .v25-resign-actions{grid-column:span 2!important}
+}
+
+@media(max-width:1000px){
+  .employee-page .employee-core-search-grid,
+  .employee-page .v24-advanced-filter-grid,
+  .employee-page .resignation-card-pro .v25-resignation-filter-panel,
+  .employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel,
+  .employee-page .people-filter-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  }
+  .employee-page .v25-resign-date,
+  .employee-page .v25-resign-actions{grid-column:1/-1!important}
+}
