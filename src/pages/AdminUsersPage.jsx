@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+
+const USER_TABS = ['backend', 'staff', 'roles']
 
 const blankAccount = () => ({
   auth_user_id: '',
@@ -47,7 +50,9 @@ function permissionShape(code) {
 }
 
 export default function AdminUsersPage() {
-  const [tab, setTab] = useState('backend')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const [tab, setTabState] = useState(USER_TABS.includes(requestedTab) ? requestedTab : 'backend')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -74,6 +79,14 @@ export default function AdminUsersPage() {
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    setTabState(USER_TABS.includes(requestedTab) ? requestedTab : 'backend')
+  }, [requestedTab])
+
+  const setTab = next => {
+    setTabState(next)
+    setSearchParams(next === 'backend' ? {} : { tab: next }, { replace: true })
+  }
 
   const callerFounder = data?.caller?.is_founder
   const backend = data?.backend_accounts || []

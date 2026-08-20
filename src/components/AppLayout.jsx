@@ -12,6 +12,7 @@ const ADMIN_NAV = [
     ['团队管理', `/admin/employees?tab=${enc('团队管理')}`],
     ['岗位管理', `/admin/employees?tab=${enc('岗位管理')}`],
     ['离职记录', `/admin/employees?tab=${enc('离职记录')}`],
+    ['操作日志', `/admin/employees?tab=${enc('操作日志')}`],
   ]},
   { to:'/admin/reports', label:'统计报表', icon:'报', children:[
     ['总汇', `/admin/reports?tab=${enc('总汇')}`],
@@ -35,9 +36,26 @@ const ADMIN_NAV = [
     ['异常问题', `/admin/daily?tab=${enc('异常问题')}`],
     ['奖惩记录', `/admin/daily?tab=${enc('奖惩记录')}`],
   ]},
-  { to:'/admin/training', label:'培训与考试', icon:'训' },
-  { to:'/admin/payroll', label:'工资中心', icon:'薪' },
-  { to:'/admin/users', label:'用户与权限', icon:'权' },
+  { to:'/admin/training', label:'培训与考试', icon:'训', children:[
+    ['考试概览', `/admin/training?tab=${enc('考试概览')}`],
+    ['考试记录', `/admin/training?tab=${enc('考试记录')}`],
+    ['题库', `/admin/training?tab=${enc('题库')}`],
+    ['创建 / 分配考试', `/admin/training?tab=${enc('创建 / 分配考试')}`],
+    ['人工批改', `/admin/training?tab=${enc('人工批改')}`],
+    ['成绩统计', `/admin/training?tab=${enc('成绩统计')}`],
+  ]},
+  { to:'/admin/payroll', label:'工资中心', icon:'薪', children:[
+    ['工资计算', `/admin/payroll?tab=${enc('工资计算')}`],
+    ['待复核', `/admin/payroll?tab=${enc('待复核')}`],
+    ['已发布', `/admin/payroll?tab=${enc('已发布')}`],
+    ['工资规则', `/admin/payroll?tab=${enc('工资规则')}`],
+    ['导出记录', `/admin/payroll?tab=${enc('导出记录')}`],
+  ]},
+  { to:'/admin/users', label:'用户与权限', icon:'权', children:[
+    ['后台账号', '/admin/users?tab=backend'],
+    ['员工账号', '/admin/users?tab=staff'],
+    ['角色与权限', '/admin/users?tab=roles'],
+  ]},
 ]
 
 const STAFF_NAV = [
@@ -83,7 +101,6 @@ export default function AppLayout({ mode, children }) {
 
         {mode==='admin' ? <nav className="sidebar-nav sidebar-nav-pro">
           {ADMIN_NAV.map(item=>{
-            const active = item.to==='/admin' ? location.pathname==='/admin' : groupActive(item)
             const expanded = openGroup===item.to
 
             if(!item.children) return (
