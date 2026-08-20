@@ -8,11 +8,18 @@ const ADMIN_NAV = [
   { to:'/admin', label:'首页', icon:'⌂' },
   { to:'/admin/employees', label:'员工管理', icon:'人', children:[
     ['员工档案', `/admin/employees?tab=${enc('员工档案')}`],
-    ['统计报表', '/admin/reports'],
     ['人员分析', `/admin/employees?tab=${enc('人员分析')}`],
     ['团队管理', `/admin/employees?tab=${enc('团队管理')}`],
     ['岗位管理', `/admin/employees?tab=${enc('岗位管理')}`],
     ['离职记录', `/admin/employees?tab=${enc('离职记录')}`],
+  ]},
+  { to:'/admin/reports', label:'统计报表', icon:'报', children:[
+    ['总汇', `/admin/reports?tab=${enc('总汇')}`],
+    ['人员', `/admin/reports?tab=${enc('人员')}`],
+    ['排班表', `/admin/reports?tab=${enc('排班表')}`],
+    ['盘口人数', `/admin/reports?tab=${enc('盘口人数')}`],
+    ['统计', `/admin/reports?tab=${enc('统计')}`],
+    ['错误统计', `/admin/reports?tab=${enc('错误统计')}`],
   ]},
   { to:'/admin/schedule', label:'排班与考勤', icon:'班', children:[
     ['排班表', `/admin/schedule?tab=${enc('排班表')}`],
@@ -86,8 +93,8 @@ export default function AppLayout({ mode, children }) {
               </NavLink>
             )
 
-            return <div className={`nav-group ${active?'active-group':''}`} key={item.to}>
-              <button type="button" className={`nav-parent nav-parent-button ${active?'active':''}`} aria-expanded={expanded} onClick={()=>clickParent(item)}>
+            return <div className="nav-group" key={item.to}>
+              <button type="button" className="nav-parent nav-parent-button" aria-expanded={expanded} onClick={()=>clickParent(item)}>
                 <span className="nav-icon">{item.icon}</span>
                 <span className="nav-parent-label">{item.label}</span>
                 <span className="nav-chevron">{expanded?'⌄':'›'}</span>

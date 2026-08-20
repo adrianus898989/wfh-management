@@ -1,4 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react'
+import {useSearchParams} from 'react-router-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
 
@@ -40,7 +41,9 @@ function filterRoster(rows,f){
 }
 
 export default function AdminReportsPage(){
-  const [tab,setTab]=useState('总汇')
+  const [sp,setSp]=useSearchParams()
+  const requestedTab=sp.get('tab')
+  const [tab,setTabState]=useState(OPS.includes(requestedTab)?requestedTab:'总汇')
   const [overview,setOverview]=useState(null)
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
@@ -58,6 +61,9 @@ export default function AdminReportsPage(){
     finally{if(!silent)setLoading(false)}
   }
   useEffect(()=>{load();const t=setInterval(()=>load(true),30000);return()=>clearInterval(t)},[])
+  useEffect(()=>{const next=OPS.includes(requestedTab)?requestedTab:'总汇';setTabState(current=>current===next?current:next)},[requestedTab])
+
+  const setTab=next=>{setTabState(next);setSp(next==='总汇'?{}:{tab:next},{replace:true})}
 
   const roster=useMemo(()=>filterRoster(overview?.roster||[],filters),[overview,filters])
   const syncRoster=overview?.sync_state?.['居家排班表/填表']
