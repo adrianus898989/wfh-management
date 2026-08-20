@@ -204,9 +204,19 @@ function patchChartTooltips(){
 function triggerEmployeeReload(){const refresh=document.querySelector('.employee-refresh-action');if(refresh){refresh.click();return}const id=document.querySelector('.employee-core-search-grid input[placeholder*="员工ID"]');if(id)nativeSet(id,id.value,'input')}
 function ensureEmployeeRiskFilter(){
   const grid=document.querySelector('.employee-core-search-grid');if(!grid)return
+  if(grid.querySelector('[data-native-risk-filter="1"]')){grid.querySelectorAll('.wfh-v2722-employee-risk-filter').forEach(box=>box.remove());return}
   let box=grid.querySelector('.wfh-v2722-employee-risk-filter')
   if(!box){box=document.createElement('label');box.className='pro-filter-field wfh-v2722-employee-risk-filter';const title=document.createElement('span');title.textContent='等级';const sel=document.createElement('select');sel.innerHTML=employeeGradeChoices.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');sel.value=employeeRisk;sel.addEventListener('change',()=>{employeeRisk=text(sel.value);triggerEmployeeReload()});box.append(title,sel);grid.insertBefore(box,grid.firstChild)}
   const sel=box.querySelector('select');if(sel&&document.activeElement!==sel)sel.value=employeeRisk
+}
+function removeFinalEmployeeRiskColumn(){
+  for(const table of document.querySelectorAll('.employee-master-table')){
+    const head=table.querySelector('thead tr'),finalHead=head?.querySelector(':scope > .wfh-v2722-risk-head')
+    const index=finalHead?[...head.children].indexOf(finalHead):-1
+    finalHead?.remove()
+    if(index>=0)for(const row of table.querySelectorAll('tbody tr'))row.children[index]?.remove()
+    else for(const cell of table.querySelectorAll('tbody .wfh-v2722-risk-cell'))cell.remove()
+  }
 }
 async function ensureEmployeeRiskColumn(){
   const table=document.querySelector('.employee-master-table');if(!table)return
@@ -245,7 +255,9 @@ async function run(){
   }
   document.querySelector('.rp-filterbar')?.style.removeProperty('display')
   if(isEmployees()){
-    ensureEmployeeRiskFilter();await ensureEmployeeRiskColumn();await injectDrawerRisk();return
+    ensureEmployeeRiskFilter()
+    if(window.__WFH_STABLE_ERROR_UI__)removeFinalEmployeeRiskColumn();else await ensureEmployeeRiskColumn()
+    await injectDrawerRisk();return
   }
 }
 function schedule(){if(stopped||scheduled)return;scheduled=true;setTimeout(run,90)}
