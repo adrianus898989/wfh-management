@@ -99,6 +99,7 @@ function LegacyDailyWorkPage() {
   const [saving,setSaving] = useState(false)
   const [error,setError] = useState('')
   const [filters,setFilters] = useState({ q:'', from:'', to:'', author:'' })
+  const [draftFilters,setDraftFilters] = useState({ q:'', from:'', to:'', author:'' })
   const [page,setPage] = useState(1)
   const [modal,setModal] = useState(null)
   const [pendingFiles,setPendingFiles] = useState([])
@@ -397,14 +398,14 @@ function LegacyDailyWorkPage() {
     </nav>
 
     <section className="dw-filter-card">
-      <div className="dw-search"><span>⌕</span><input value={filters.q} onChange={event=>setFilters({...filters,q:event.target.value})} placeholder="搜索标题、提交人、盘口、员工或工作内容"/></div>
-      <label>日期起<input type="date" value={filters.from} onChange={event=>setFilters({...filters,from:event.target.value})}/></label>
-      <label>日期止<input type="date" value={filters.to} onChange={event=>setFilters({...filters,to:event.target.value})}/></label>
-      <select value={filters.author} onChange={event=>setFilters({...filters,author:event.target.value})}>
+      <div className="dw-search"><span>⌕</span><input value={draftFilters.q} onChange={event=>setDraftFilters({...draftFilters,q:event.target.value})} onKeyDown={event=>{if(event.key==='Enter')setFilters({...draftFilters})}} placeholder="搜索标题、提交人、盘口、员工或工作内容"/></div>
+      <label>日期起<input type="date" value={draftFilters.from} onChange={event=>setDraftFilters({...draftFilters,from:event.target.value})}/></label>
+      <label>日期止<input type="date" value={draftFilters.to} onChange={event=>setDraftFilters({...draftFilters,to:event.target.value})}/></label>
+      <select value={draftFilters.author} onChange={event=>setDraftFilters({...draftFilters,author:event.target.value})}>
         <option value="">全部提交人</option>
         {authors.map(author=><option value={author} key={author}>{author}</option>)}
       </select>
-      <button onClick={()=>setFilters({ q:'',from:'',to:'',author:'' })}>重置</button>
+      <div className="dw-filter-actions"><button className="query" onClick={()=>setFilters({...draftFilters})}>查询</button><button onClick={()=>{const next={q:'',from:'',to:'',author:''};setDraftFilters(next);setFilters(next)}}>重置</button></div>
     </section>
 
     <div className="dw-list-head">

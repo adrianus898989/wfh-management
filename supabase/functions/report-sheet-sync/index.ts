@@ -243,7 +243,7 @@ function buildRiskSummaries(errors: ReturnType<typeof normalizeErrors>) {
     }
     delete summary.types
     summary.main_error_type = topType || null
-    summary.risk_level = riskLevel(summary.month_error_count)
+    summary.risk_level = riskLevel(summary.total_error_count)
     summary.total_deduct = Number(summary.total_deduct.toFixed(2))
     return summary
   })

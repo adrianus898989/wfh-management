@@ -63,8 +63,8 @@
 
 /* Native grade select in employee archive, visually aligned with the custom picker. */
 label[data-native-risk-filter="1"]{position:relative!important}
-label[data-native-risk-filter="1"] select{appearance:none!important;-webkit-appearance:none!important;width:100%!important;height:36px!important;border:1px solid #d5e0ec!important;border-radius:8px!important;background:#fff!important;color:#2b4765!important;padding:0 31px 0 28px!important;font-size:10px!important;font-weight:800!important;box-shadow:0 1px 2px rgba(24,52,83,.025)!important;cursor:pointer!important}
-label[data-native-risk-filter="1"]:before{content:'';position:absolute;left:10px;bottom:14px;width:7px;height:7px;border-radius:50%;background:var(--native-grade-color,#8ca0b7);z-index:2;pointer-events:none}
+label[data-native-risk-filter="1"] select{appearance:none!important;-webkit-appearance:none!important;width:100%!important;height:36px!important;border:1px solid #d5e0ec!important;border-radius:8px!important;background:#fff!important;color:#2b4765!important;padding:0 31px 0 11px!important;font-size:10px!important;font-weight:800!important;box-shadow:0 1px 2px rgba(24,52,83,.025)!important;cursor:pointer!important}
+label[data-native-risk-filter="1"]:before{display:none!important;content:none!important}
 label[data-native-risk-filter="1"]:after{content:'⌄';position:absolute;right:11px;bottom:10px;color:#71849a;font-size:13px;font-weight:800;pointer-events:none}
 label[data-native-risk-filter="1"] select:focus{outline:none!important;border-color:#6597e5!important;box-shadow:0 0 0 3px rgba(66,129,222,.10)!important}
 

@@ -20,3 +20,7 @@
 
 @media(max-width:900px){.ot-auto-top{grid-template-columns:180px 1fr}.ot-admin-picker{grid-template-columns:1fr}.ot-admin-picker small{padding-bottom:0}.ot-member-more>div{grid-template-columns:1fr}.ot-upload-list{grid-template-columns:1fr 1fr}}
 @media(max-width:650px){.ot-auto-top{grid-template-columns:1fr}.ot-assignment-ok{align-items:flex-start;flex-direction:column}.ot-upload-list{grid-template-columns:1fr}.ot-auto-facts span{white-space:normal}.ot-attachments.compact{grid-template-columns:repeat(4,48px)}.ot-attachments.compact button{width:48px}.ot-attachments.compact img,.ot-attachments.compact button>span{height:38px}}
+
+.ot-filter-actions{display:flex;gap:8px;align-items:center}.ot-filter-actions button.query{border-color:#2f63e9;background:#2f63e9;color:#fff}.ot-filter-actions button:disabled{cursor:wait;opacity:.7}
+@media(max-width:900px){.ot-filter-actions{grid-column:2/4;justify-content:flex-end}}
+@media(max-width:650px){.ot-filter-actions{grid-column:1!important;justify-content:flex-start}}

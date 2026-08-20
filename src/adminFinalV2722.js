@@ -183,7 +183,7 @@ async function decorateReportGrades(){
   const map=await getSummary()
   for(const tr of table.querySelectorAll('tbody tr')){
     const cell=tr.querySelector('td:first-child');const idButton=cell?.querySelector('button.rp-link');if(!cell||!idButton)continue
-    const id=upper(idButton.textContent),summary=map.get(id),label=reportGradeLabel(reportGradeKey(summary?.month_error_count||0))
+    const id=upper(idButton.textContent),summary=map.get(id),label=reportGradeLabel(reportGradeKey(summary?.total_error_count||0))
     cell.classList.add('wfh-v2722-id-cell')
     let chip=cell.querySelector('.wfh-v2722-grade-chip')
     if(!chip){chip=document.createElement('button');chip.type='button';chip.className='wfh-v2722-grade-chip';cell.insertBefore(chip,idButton);chip.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();const employee=upper(chip.dataset.employee);resetErrorFilters({keepId:employee});buttonByText(originalErrorParts().order,'全部')?.click();setTimeout(triggerErrorQuery,30)})}
@@ -227,7 +227,7 @@ async function ensureEmployeeRiskColumn(){
     let cell=tr.querySelector('.wfh-v2722-risk-cell')
     if(!cell){cell=document.createElement('td');cell.className='wfh-v2722-risk-cell';tr.insertBefore(cell,tr.firstChild)}
     const idCell=cell.nextElementSibling,id=upper(idCell?.textContent);if(!id)continue
-    const s=map.get(id),label=employeeRiskLabel(employeeRiskKey(s?.month_error_count||0));let chip=cell.querySelector('.wfh-v2722-employee-chip');if(!chip){chip=document.createElement('span');chip.className='wfh-v2722-employee-chip';cell.appendChild(chip)}chip.dataset.grade=label;chip.textContent=label;chip.title=`本月 ${Number(s?.month_error_count||0)} · 近30天 ${Number(s?.last_30d_error_count||0)} · 总错误 ${Number(s?.total_error_count||0)}`
+    const s=map.get(id),label=employeeRiskLabel(employeeRiskKey(s?.total_error_count||0));let chip=cell.querySelector('.wfh-v2722-employee-chip');if(!chip){chip=document.createElement('span');chip.className='wfh-v2722-employee-chip';cell.appendChild(chip)}chip.dataset.grade=label;chip.textContent=label;chip.title=`累计 ${Number(s?.total_error_count||0)} · 本月 ${Number(s?.month_error_count||0)} · 近30天 ${Number(s?.last_30d_error_count||0)}`
   }
 }
 
@@ -236,7 +236,7 @@ async function injectDrawerRisk(){
     const id=upper(drawer.querySelector('.employee-id-line')?.textContent);if(!id||id.includes('读取'))continue
     drawer.querySelector('.profile-status-line.is-complete')?.remove()
     const map=await getSummary(),s=map.get(id)||{},isReport=drawer.closest('.wfh-v2721-employee-mask')
-    const label=reportGradeLabel(text(s.risk_level)||reportGradeKey(s.month_error_count||0))
+    const label=reportGradeLabel(reportGradeKey(s.total_error_count||0))
     let box=drawer.querySelector('.wfh-v2722-risk-summary')
     if(!box){box=document.createElement('div');box.className='wfh-v2722-risk-summary';const hero=drawer.querySelector('.employee-hero');hero?.insertAdjacentElement('afterend',box)}
     if(!box)continue

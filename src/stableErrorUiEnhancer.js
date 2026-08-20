@@ -84,15 +84,15 @@ async function getSummaryMap(force=false){
   try{return await summaryRequest}finally{summaryRequest=null}
 }
 function styleChip(chip,summary){
-  const info=riskInfo(summary?.month_error_count)
+  const info=riskInfo(summary?.total_error_count)
   chip.textContent=info.label
-  chip.title=`${info.full} · 本月 ${info.n} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔`
+  chip.title=`${info.full} · 累计 ${info.n} 笔 · 本月 ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔`
   chip.style.setProperty('--risk-color',info.color);chip.style.setProperty('--risk-bg',info.bg);chip.style.setProperty('--risk-border',info.border)
   chip.dataset.count=String(info.n);chip.dataset.key=info.key
 }
 function riskChip(id,summary,context,name){
   const chip=document.createElement('span');chip.className='wfh-stable-risk';styleChip(chip,summary)
-  if(context==='errors'||Number(summary?.month_error_count||0)>0){chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0;const open=()=>context==='errors'?filterErrorsTo(id):openErrorHistory(id,name||id,summary);chip.addEventListener('click',e=>{e.stopPropagation();open()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}})}
+  if(context==='errors'||Number(summary?.total_error_count||0)>0){chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0;const open=()=>context==='errors'?filterErrorsTo(id):openErrorHistory(id,name||id,summary);chip.addEventListener('click',e=>{e.stopPropagation();open()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}})}
   return chip
 }
 
@@ -118,7 +118,7 @@ async function ensureRiskColumns(){
     dedupeEmployeeRiskColumns(table)
     const context=table.classList.contains('rp-errors-table')?'errors':'employees'
     const head=table.querySelector('thead tr')
-    if(head&&!head.querySelector(':scope > .wfh-risk-head')){const th=document.createElement('th');th.className='wfh-risk-head';th.textContent='等级';th.title='0 正常 / 1–3 注意 / 4–9 重点 / 10+ 高频';head.insertBefore(th,head.firstChild)}
+    if(head&&!head.querySelector(':scope > .wfh-risk-head')){const th=document.createElement('th');th.className='wfh-risk-head';th.textContent='等级';th.title='累计：0 优秀 / 1–8 正常 / 9–15 注意 / 16–30 重点 / 31+ 高频';head.insertBefore(th,head.firstChild)}
     for(const tr of table.querySelectorAll('tbody tr')){
       let cell=tr.querySelector(':scope > .wfh-risk-cell')
       if(!cell){cell=document.createElement('td');cell.className='wfh-risk-cell';tr.insertBefore(cell,tr.firstChild)}
@@ -210,7 +210,7 @@ async function riskFilteredList(body){
   const requestedPage=Math.max(1,Number(body.page||1)),requestedSize=Number(body.page_size||20),filters={...(body.filters||{})}
   const key=JSON.stringify({riskFilter,filters})
   let matched=employeeListCache.key===key&&Date.now()-employeeListCache.at<15000?employeeListCache.rows:null
-  if(!matched){const map=await getSummaryMap(),all=[];let page=1,pages=1;do{const res=await originalInvoke('admin-employees',{body:{action:'list',page,page_size:500,filters}});if(res.error||res.data?.error)return res;all.push(...(res.data?.rows||[]).filter(r=>text(r.source_type)!=='google_deleted'));pages=Math.max(1,Number(res.data?.pages||1));page+=1}while(page<=pages&&page<=50);matched=all.filter(r=>riskKey(map.get(upper(r.employee_no))?.month_error_count||0)===riskFilter);employeeListCache={key,at:Date.now(),rows:matched}}
+  if(!matched){const map=await getSummaryMap(),all=[];let page=1,pages=1;do{const res=await originalInvoke('admin-employees',{body:{action:'list',page,page_size:500,filters}});if(res.error||res.data?.error)return res;all.push(...(res.data?.rows||[]).filter(r=>text(r.source_type)!=='google_deleted'));pages=Math.max(1,Number(res.data?.pages||1));page+=1}while(page<=pages&&page<=50);matched=all.filter(r=>riskKey(map.get(upper(r.employee_no))?.total_error_count||0)===riskFilter);employeeListCache={key,at:Date.now(),rows:matched}}
   const start=(requestedPage-1)*requestedSize
   return {data:{rows:matched.slice(start,start+requestedSize),total:matched.length,page:requestedPage,page_size:requestedSize,pages:Math.max(1,Math.ceil(matched.length/requestedSize))},error:null}
 }

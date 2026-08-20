@@ -110,6 +110,8 @@ export default function OnlineTrainingPage(){
   const [bootstrap,setBootstrap]=useState(null)
   const [mode,setMode]=useState('reports')
   const [filters,setFilters]=useState({q:'',from:'',to:''})
+  const [draftFilters,setDraftFilters]=useState({q:'',from:'',to:''})
+  const [searchVersion,setSearchVersion]=useState(0)
   const [page,setPage]=useState(1)
   const [result,setResult]=useState({rows:[],total:0,pages:1})
   const [loading,setLoading]=useState(true)
@@ -170,10 +172,10 @@ export default function OnlineTrainingPage(){
   useEffect(()=>{loadBootstrap()},[])
   useEffect(()=>{
     if(!bootstrap)return
-    const timer=setTimeout(()=>loadList({silent:true}),filters.q?350:0)
+    const timer=setTimeout(()=>loadList({silent:true}),0)
     return()=>clearTimeout(timer)
-  },[bootstrap,mode,page,filters.q,filters.from,filters.to])
-  useEffect(()=>setPage(1),[mode,filters.q,filters.from,filters.to])
+  },[bootstrap,mode,page,searchVersion])
+  useEffect(()=>setPage(1),[mode])
   useEffect(()=>{
     if(!(editor||viewing||deleteTarget||profile||history||lightbox))return
     const prior=document.body.style.overflow;document.body.style.overflow='hidden'
@@ -326,7 +328,8 @@ export default function OnlineTrainingPage(){
     catch{setError('浏览器未允许复制，请在报告详情中手动复制')}
   }
 
-  const clearFilters=()=>setFilters({q:'',from:'',to:''})
+  const queryFilters=()=>{setFilters({...draftFilters});setPage(1);setSearchVersion(version=>version+1)}
+  const clearFilters=()=>{const next={q:'',from:'',to:''};setDraftFilters(next);setFilters(next);setPage(1);setSearchVersion(version=>version+1)}
 
   return <div className="content-page ot-page">
     <header className="ot-header">
@@ -353,10 +356,10 @@ export default function OnlineTrainingPage(){
     </div>
 
     <section className="ot-filters">
-      <div className="search"><span>⌕</span><input value={filters.q} onChange={event=>setFilters({...filters,q:event.target.value})} placeholder={mode==='people'?'搜索员工ID或姓名，查看全部每天记录':'搜索员工ID、姓名、提交人、平台或报告内容'}/></div>
-      <label>日期起<input type="date" value={filters.from} onChange={event=>setFilters({...filters,from:event.target.value})}/></label>
-      <label>日期止<input type="date" value={filters.to} onChange={event=>setFilters({...filters,to:event.target.value})}/></label>
-      <button onClick={clearFilters}>重置</button>
+      <div className="search"><span>⌕</span><input value={draftFilters.q} onChange={event=>setDraftFilters({...draftFilters,q:event.target.value})} onKeyDown={event=>{if(event.key==='Enter')queryFilters()}} placeholder={mode==='people'?'搜索员工ID或姓名，查看全部每天记录':'搜索员工ID、姓名、提交人、平台或报告内容'}/></div>
+      <label>日期起<input type="date" value={draftFilters.from} onChange={event=>setDraftFilters({...draftFilters,from:event.target.value})}/></label>
+      <label>日期止<input type="date" value={draftFilters.to} onChange={event=>setDraftFilters({...draftFilters,to:event.target.value})}/></label>
+      <div className="ot-filter-actions"><button className="query" onClick={queryFilters} disabled={searching}>{searching?'查询中…':'查询'}</button><button onClick={clearFilters} disabled={searching}>重置</button></div>
     </section>
     {searching&&<div className="ot-searching"><i/><span>正在搜索线上培训记录…</span></div>}
 

@@ -161,7 +161,7 @@ Deno.serve(async req => {
       service.from('employees').select('employee_no,full_name,country,nationality,status,team_id,position_id,shift_name,platform_scope').limit(5000),
       service.from('teams').select('id,name'),
       service.from('positions').select('id,name'),
-      service.from('employee_error_summary').select('employee_no,month_error_count,risk_level').limit(5000),
+      service.from('employee_error_summary').select('employee_no,month_error_count,total_error_count,risk_level').limit(5000),
     ])
     if (snapshotError) throw snapshotError
     if (chunkError) throw chunkError
@@ -248,8 +248,9 @@ Deno.serve(async req => {
         group,
         platform,
         managers,
-        risk_level: text(summary?.risk_level) || riskKey(summary?.month_error_count || 0),
+        risk_level: riskKey(summary?.total_error_count || 0),
         month_error_count: Number(summary?.month_error_count || 0),
+        total_error_count: Number(summary?.total_error_count || 0),
         employee_status: text(employee?.status || historical?.status),
         roster_match: Boolean(rosterRow),
         employee_match: Boolean(employee),

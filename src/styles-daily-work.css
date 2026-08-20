@@ -34,7 +34,7 @@
 .dw-filter-card input,.dw-filter-card select{height:39px;border:1px solid #d3deeb;border-radius:9px;background:#fff;color:#263a56;padding:0 11px;outline:none}
 .dw-filter-card input:focus,.dw-filter-card select:focus{border-color:#4d78ea;box-shadow:0 0 0 3px rgba(77,120,234,.11)}
 .dw-filter-card>select{height:39px}
-.dw-filter-card>button{height:39px;border:1px solid #d3deeb;border-radius:9px;background:#fff;color:#566a84;font-weight:800;padding:0 15px;cursor:pointer}
+.dw-filter-actions{display:flex;gap:8px;align-items:center}.dw-filter-actions button{height:39px;border:1px solid #d3deeb;border-radius:9px;background:#fff;color:#566a84;font-weight:800;padding:0 15px;cursor:pointer}.dw-filter-actions button.query{border-color:#2f63e9;background:#2f63e9;color:#fff}
 .dw-search{height:39px;display:flex;align-items:center;border:1px solid #d3deeb;border-radius:9px;padding:0 11px;gap:8px}
 .dw-search:focus-within{border-color:#4d78ea;box-shadow:0 0 0 3px rgba(77,120,234,.11)}
 .dw-search span{color:#8a9bb1;font-size:17px}
@@ -133,7 +133,7 @@
 .dw-lightbox>button{position:absolute;right:24px;top:20px;width:42px;height:42px;border:1px solid rgba(255,255,255,.2);border-radius:12px;background:rgba(255,255,255,.1);color:#fff;font-size:27px;cursor:pointer}
 .dw-lightbox>span{position:absolute;bottom:14px;color:#d8e1ec;font-size:12px}
 @media(max-width:1100px){
-  .dw-filter-card{grid-template-columns:1fr 140px 140px}.dw-filter-card>select{grid-column:auto}.dw-filter-card>button{width:auto}
+  .dw-filter-card{grid-template-columns:1fr 140px 140px}.dw-filter-card>select{grid-column:auto}.dw-filter-actions{grid-column:span 2;justify-content:flex-end}
   .dw-report-grid{grid-template-columns:1fr}
 }
 @media(max-width:760px){

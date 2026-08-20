@@ -150,14 +150,14 @@ Deno.serve(async req => {
     if (employeeError) throw employeeError
 
     const { data: summaryRows, error: summaryError } = await service.from('employee_error_summary')
-      .select('employee_no,month_error_count,risk_level')
+      .select('employee_no,month_error_count,total_error_count,risk_level')
       .limit(5000)
     if (summaryError) throw summaryError
 
     const summaryMap = new Map((summaryRows || []).map((row: any) => [upper(row.employee_no), row]))
     const matched = (allEmployees || []).filter((employee: any) => {
       const summary: any = summaryMap.get(upper(employee.employee_no))
-      const currentRisk = text(summary?.risk_level) || riskKey(summary?.month_error_count || 0)
+      const currentRisk = riskKey(summary?.total_error_count || 0)
       return currentRisk === risk
     })
 

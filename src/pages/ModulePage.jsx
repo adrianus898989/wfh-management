@@ -47,6 +47,7 @@ export default function ModulePage({ module }) {
   const urlTab = searchParams.get('tab')
   const [tab,setTabState] = useState(cfg.tabs.includes(urlTab)?urlTab:cfg.tabs[0])
   const [q,setQ] = useState('')
+  const [draftQ,setDraftQ] = useState('')
   const [advanced,setAdvanced] = useState(true)
   const [data,setData] = useState(null)
   const [loading,setLoading] = useState(true)
@@ -99,7 +100,9 @@ export default function ModulePage({ module }) {
 
       {(module==='schedule'||module==='reports') && <div className="filter-card">
         <div className="filter-main-row">
-          <div className="search-box"><span>⌕</span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="搜索员工ID / 姓名 / 团队 / 班次 / 盘口"/></div>
+          <div className="search-box"><span>⌕</span><input value={draftQ} onChange={e=>setDraftQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')setQ(draftQ)}} placeholder="搜索员工ID / 姓名 / 团队 / 班次 / 盘口"/></div>
+          <button className="primary-action" onClick={()=>setQ(draftQ)}>查询</button>
+          <button className="secondary-action" onClick={()=>{setDraftQ('');setQ('')}}>重置</button>
           <button className="filter-toggle" onClick={()=>setAdvanced(v=>!v)}>{advanced?'收起筛选':'更多筛选'}</button>
         </div>
         {advanced && <div className="filter-hint-row"><span>当前先使用已导入员工与排班字段展示；高级筛选随 paibantongji 页面迁移一起完成。</span></div>}

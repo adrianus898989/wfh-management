@@ -118,10 +118,10 @@ async function regradeTables(){
       const id=upper(idCell?.querySelector('button')?.textContent||idCell?.textContent)
       if(!chip||!id)continue
       const summary=map.get(id)||null
-      const n=Number(summary?.month_error_count||0)
+      const n=Number(summary?.total_error_count||0)
       const key=gradeKey(n),meta=gradeMeta[key]
       chip.textContent=meta.label
-      chip.title=`${meta.label} · ${meta.range} · 本月 ${n} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔 · 累计 ${Number(summary?.total_error_count||0)} 笔`
+      chip.title=`${meta.label} · ${meta.range} · 累计 ${n} 笔 · 本月 ${Number(summary?.month_error_count||0)} 笔 · 近30天 ${Number(summary?.last_30d_error_count||0)} 笔`
       chip.dataset.key=key;chip.dataset.count=String(n)
       chip.style.setProperty('--risk-color',meta.color)
       chip.style.setProperty('--risk-bg',meta.bg)
