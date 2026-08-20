@@ -13,7 +13,6 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   status,
   headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' },
 })
-
 const riskKey = (value: unknown) => {
   const count = Number(value || 0)
   if (count >= 31) return 'high'
@@ -73,6 +72,7 @@ Deno.serve(async req => {
     const body = await req.json().catch(() => ({}))
     const [
       { data: snapshot, error: snapshotError },
+      { data: errorChunks, error: chunkError },
       { data: rosterSnapshot },
       { data: employees, error: employeeError },
       { data: teams },
@@ -80,6 +80,7 @@ Deno.serve(async req => {
       { data: summaries, error: summaryError },
     ] = await Promise.all([
       service.from('report_sheet_snapshots').select('payload,row_count,synced_at,note').eq('source', '效率表/员工错误').maybeSingle(),
+      service.from('report_sheet_snapshot_chunks').select('payload,row_count,synced_at,chunk_index').eq('source', '效率表/员工错误').order('chunk_index'),
       service.from('report_sheet_snapshots').select('payload,synced_at').eq('source', '居家排班表/填表').maybeSingle(),
       service.from('employees').select('employee_no,full_name,country,nationality,status,team_id,position_id,shift_name,platform_scope').limit(5000),
       service.from('teams').select('id,name'),
@@ -87,10 +88,20 @@ Deno.serve(async req => {
       service.from('employee_error_summary').select('employee_no,month_error_count,risk_level').limit(5000),
     ])
     if (snapshotError) throw snapshotError
+    if (chunkError) throw chunkError
     if (employeeError) throw employeeError
     if (summaryError) throw summaryError
 
-    const raw = Array.isArray(snapshot?.payload) ? snapshot.payload : []
+    const chunkRows = Array.isArray(errorChunks) ? errorChunks : []
+    const raw = chunkRows.length
+      ? chunkRows.flatMap((row: any) => Array.isArray(row.payload) ? row.payload : [])
+      : (Array.isArray(snapshot?.payload) ? snapshot.payload : [])
+    const sourceRowCount = chunkRows.length
+      ? chunkRows.reduce((sum: number, row: any) => sum + Number(row.row_count || 0), 0)
+      : Number(snapshot?.row_count || 0)
+    const sourceSyncedAt = chunkRows.length
+      ? chunkRows.map((row: any) => row.synced_at).filter(Boolean).sort().at(-1) || null
+      : snapshot?.synced_at || null
     const roster = Array.isArray(rosterSnapshot?.payload) ? rosterSnapshot.payload : []
     const rosterMap = new Map(roster.map((row: any) => [upper(row.employee_id), row]).filter((entry: any) => entry[0]))
     const employeeMap = new Map((employees || []).map((row: any) => [upper(row.employee_no), row]).filter((entry: any) => entry[0]))
@@ -201,10 +212,10 @@ Deno.serve(async req => {
 
     return json({
       updated_at: new Date().toISOString(),
-      source: 'supabase_error_snapshot_server_paged',
-      source_raw_count: Number(snapshot?.row_count || 0),
+      source: chunkRows.length ? 'supabase_error_chunks_server_paged' : 'supabase_error_snapshot_server_paged',
+      source_raw_count: sourceRowCount,
       source_normalized_count: raw.length,
-      source_synced_at: snapshot?.synced_at || null,
+      source_synced_at: sourceSyncedAt,
       rows: pageRows,
       total,
       page,
