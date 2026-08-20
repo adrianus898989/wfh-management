@@ -340,7 +340,6 @@ export default function AdminEmployeesPage(){
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [refreshing,setRefreshing]=useState(false)
-  const [liveTick,setLiveTick]=useState(0)
   const [generated,setGenerated]=useState(null)
   const [showFilters,setShowFilters]=useState(true)
   const [filters,setFilters]=useState({
@@ -559,29 +558,6 @@ export default function AdminEmployeesPage(){
       if(!silent) setRefreshing(false)
     }
   }
-
-  useEffect(()=>{
-    let timer=null
-    const signal=()=>{
-      clearTimeout(timer)
-      timer=setTimeout(()=>setLiveTick(v=>v+1),1500)
-    }
-    const channel=supabase
-      .channel('admin-employees-live-v284')
-      .on('postgres_changes',{event:'*',schema:'public',table:'employees'},signal)
-      .on('postgres_changes',{event:'*',schema:'public',table:'employee_lifecycle_events'},signal)
-      .on('postgres_changes',{event:'*',schema:'public',table:'employee_audit_logs'},signal)
-      .subscribe()
-    return()=>{
-      clearTimeout(timer)
-      supabase.removeChannel(channel)
-    }
-  },[])
-
-  useEffect(()=>{
-    if(!liveTick) return
-    refreshEmployeeData({silent:true})
-  },[liveTick])
 
   useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>{ if(!document.hidden) loadArchiveStats(true) },300000); return()=>clearInterval(t) },[])
   useEffect(()=>{
