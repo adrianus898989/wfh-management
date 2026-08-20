@@ -114,10 +114,10 @@ function normalizeDate(value: unknown) {
 
   match = dateText.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/)
   if (match) {
-    const first = +match[1]
-    const second = +match[2]
-    const day = first > 12 ? first : second > 12 ? second : first
-    const month = first > 12 ? second : first
+    let day = +match[1]
+    let month = +match[2]
+    if (month > 12 && day <= 12) [day, month] = [month, day]
+    if (day < 1 || day > 31 || month < 1 || month > 12) return ''
     return `${match[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
   }
 
