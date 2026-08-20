@@ -2,7 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const ROSTER_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA/填表'
 const ACCOUNT_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA/账号'
-const MISTAKE_URL = 'https://opensheet.vercel.app/1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM/员工错误'
+const MISTAKE_URL = 'https://opensheet.elk.sh/1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM/员工错误'
 const EFF_ID = '1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM'
 const FETCH_TIMEOUT_MS = 25_000
 
@@ -29,7 +29,7 @@ async function fetchJson(url: string) {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   })
   const body = await response.text()
-  if (!response.ok) throw new Error(`fetch ${response.status}`)
+  if (!response.ok) throw new Error(`fetch ${response.status} ${new URL(url).host}`)
   const parsed = JSON.parse(body)
   if (!Array.isArray(parsed)) throw new Error('source is not array')
   return parsed
@@ -155,6 +155,10 @@ function noteHash(note: unknown) {
   return text(note).match(/(?:^|;)hash:([a-z0-9]+)(?:;|$)/i)?.[1] || ''
 }
 
+function noteSummaryHash(note: unknown) {
+  return text(note).match(/(?:^|;)summary-hash:([a-z0-9]+)(?:;|$)/i)?.[1] || ''
+}
+
 function normalizeErrors(rawErrors: Record<string, unknown>[]) {
   return rawErrors.map((row, index) => {
     const employeeId = pick(row, ['ID']).toUpperCase()
@@ -248,16 +252,66 @@ function buildRiskSummaries(errors: ReturnType<typeof normalizeErrors>) {
 async function loadSnapshotStates(service: any) {
   const { data, error } = await service
     .from('report_sheet_snapshots')
-    .select('source,note,row_count,payload')
+    .select('source,note,row_count')
     .in('source', [
       '居家排班表/填表',
       '居家排班表/账号',
-      '效率表/员工错误',
       '效率表/网站数据状态',
       '效率表/员工错误状态',
     ])
   if (error) throw new Error(`snapshot states: ${error.message}`)
   return new Map((data || []).map((row: any) => [row.source, row]))
+}
+
+async function writeChunkedSnapshot(
+  service: any,
+  source: string,
+  payload: unknown[],
+  chunkSize = 500,
+) {
+  const { data: currentRows, error: stateError } = await service
+    .from('report_sheet_snapshot_chunks')
+    .select('chunk_index,content_hash')
+    .eq('source', source)
+  if (stateError) throw new Error(`chunk states: ${stateError.message}`)
+
+  const current = new Map((currentRows || []).map((row: any) => [Number(row.chunk_index), text(row.content_hash)]))
+  const chunks: unknown[][] = []
+  for (let index = 0; index < payload.length; index += chunkSize) {
+    chunks.push(payload.slice(index, index + chunkSize))
+  }
+
+  let changedChunks = 0
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunk = chunks[chunkIndex]
+    const contentHash = payloadHash(chunk)
+    if (current.get(chunkIndex) === contentHash) continue
+    const { error } = await service.from('report_sheet_snapshot_chunks').upsert({
+      source,
+      chunk_index: chunkIndex,
+      payload: chunk,
+      row_count: chunk.length,
+      content_hash: contentHash,
+      synced_at: new Date().toISOString(),
+    }, { onConflict: 'source,chunk_index' })
+    if (error) throw new Error(`error chunk ${chunkIndex}: ${error.message}`)
+    changedChunks += 1
+  }
+
+  if ([...current.keys()].some((chunkIndex) => chunkIndex >= chunks.length)) {
+    const { error } = await service
+      .from('report_sheet_snapshot_chunks')
+      .delete()
+      .eq('source', source)
+      .gte('chunk_index', chunks.length)
+    if (error) throw new Error(`delete stale chunks: ${error.message}`)
+  }
+
+  return {
+    chunks: chunks.length,
+    changed_chunks: changedChunks,
+    rows: payload.length,
+  }
 }
 
 async function writeSnapshot(
@@ -271,15 +325,10 @@ async function writeSnapshot(
   const hash = payloadHash(payload)
   const fullNote = `${note};hash:${hash}`
   const existing = states.get(source)
-  const existingHash = noteHash(existing?.note) || (existing?.payload ? payloadHash(existing.payload) : '')
+  const existingHash = noteHash(existing?.note)
   const now = new Date().toISOString()
 
   if (existing && existingHash === hash) {
-    const { error } = await service
-      .from('report_sheet_snapshots')
-      .update({ synced_at: now, note: fullNote, row_count: rowCount })
-      .eq('source', source)
-    if (error) throw new Error(`${source}: ${error.message}`)
     return { source, changed: false, rows: rowCount }
   }
 
@@ -301,6 +350,7 @@ async function loadAllSummaries(service: any) {
     const { data, error } = await service
       .from('employee_error_summary')
       .select('employee_no,month_key,month_error_count,last_30d_error_count,total_error_count,total_deduct,last_error_date,main_error_type,risk_level')
+      .order('employee_no')
       .range(from, from + pageSize - 1)
     if (error) throw new Error(`read error summary: ${error.message}`)
     const page = data || []
@@ -397,8 +447,10 @@ Deno.serve(async (request) => {
       .sort()
       .at(-1) || ''
 
+    const errorChunkResult = await writeChunkedSnapshot(service, '效率表/员工错误', errors)
     const states = await loadSnapshotStates(service)
-    const summaryChanges = await syncChangedSummaries(service, summaries)
+    const summaryHash = payloadHash(summaries)
+    const previousSummaryHash = noteSummaryHash(states.get('效率表/员工错误状态')?.note)
     const snapshotPlans: Array<[string, unknown[], string, number?]> = [
       [
         '居家排班表/填表',
@@ -415,23 +467,24 @@ Deno.serve(async (request) => {
         [{ latest_date: latestOrders }],
         '检查网站数据最新日期；完整统计按需读取原版数据源',
       ],
-      [
-        '效率表/员工错误状态',
-        [{ latest_date: latestErrors, summary_employees: summaries.length }],
-        '同步错误快照与风险汇总；不再重复写入未使用的完整审计表',
-        rawErrors.length,
-      ],
-      [
-        '效率表/员工错误',
-        errors,
-        '按源表变化同步完整员工错误明细；源表异常时保留最近一次完整数据',
-        rawErrors.length,
-      ],
     ]
     const snapshotResults = []
     for (const [source, payload, note, rowCount] of snapshotPlans) {
       snapshotResults.push(await writeSnapshot(service, states, source, payload, note, rowCount))
     }
+
+    let summaryChanges = 0
+    if (errorChunkResult.changed_chunks > 0 || previousSummaryHash !== summaryHash) {
+      summaryChanges = await syncChangedSummaries(service, summaries)
+    }
+    snapshotResults.push(await writeSnapshot(
+      service,
+      states,
+      '效率表/员工错误状态',
+      [{ latest_date: latestErrors, summary_employees: summaries.length }],
+      `同步错误分块快照与风险汇总；summary-hash:${summaryHash}`,
+      rawErrors.length,
+    ))
 
     return json({
       ok: true,
@@ -441,6 +494,7 @@ Deno.serve(async (request) => {
       error_rows: rawErrors.length,
       error_summary: summaries.length,
       summary_changes: summaryChanges,
+      error_chunks: errorChunkResult,
       snapshot_changes: snapshotResults.filter((result) => result.changed).map((result) => result.source),
       latest_orders: latestOrders,
       latest_errors: latestErrors,
