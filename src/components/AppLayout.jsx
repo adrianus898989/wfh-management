@@ -8,6 +8,7 @@ const ADMIN_NAV = [
   { to:'/admin', label:'首页', icon:'⌂' },
   { to:'/admin/employees', label:'员工管理', icon:'人', children:[
     ['员工档案', `/admin/employees?tab=${enc('员工档案')}`],
+    ['统计报表', '/admin/reports'],
     ['人员分析', `/admin/employees?tab=${enc('人员分析')}`],
     ['团队管理', `/admin/employees?tab=${enc('团队管理')}`],
     ['岗位管理', `/admin/employees?tab=${enc('岗位管理')}`],
@@ -29,7 +30,6 @@ const ADMIN_NAV = [
   ]},
   { to:'/admin/training', label:'培训与考试', icon:'训' },
   { to:'/admin/payroll', label:'工资中心', icon:'薪' },
-  { to:'/admin/reports', label:'统计报表', icon:'报' },
   { to:'/admin/users', label:'用户与权限', icon:'权' },
 ]
 
@@ -42,7 +42,12 @@ export default function AppLayout({ mode, children }) {
   const navigate = useNavigate()
   const location = useLocation()
 
-  const pathGroup = ADMIN_NAV.find(x => x.children && location.pathname.startsWith(x.to))?.to || null
+  const childPath = to => new URL(to,'https://wfh.local').pathname
+  const groupActive = item => location.pathname.startsWith(item.to) || item.children?.some(([,to])=>{
+    const path=childPath(to)
+    return location.pathname===path || location.pathname.startsWith(`${path}/`)
+  })
+  const pathGroup = ADMIN_NAV.find(x => x.children && groupActive(x))?.to || null
   const [openGroup,setOpenGroup] = useState(pathGroup)
 
   useEffect(()=>{
@@ -58,13 +63,7 @@ export default function AppLayout({ mode, children }) {
   const activeTab = new URLSearchParams(location.search).get('tab')
 
   const clickParent = item=>{
-    const active = location.pathname.startsWith(item.to)
-    if (active) {
-      setOpenGroup(openGroup===item.to ? null : item.to)
-    } else {
-      setOpenGroup(item.to)
-      navigate(item.to)
-    }
+    setOpenGroup(openGroup===item.to ? null : item.to)
   }
 
   return (
@@ -77,7 +76,7 @@ export default function AppLayout({ mode, children }) {
 
         {mode==='admin' ? <nav className="sidebar-nav sidebar-nav-pro">
           {ADMIN_NAV.map(item=>{
-            const active = item.to==='/admin' ? location.pathname==='/admin' : location.pathname.startsWith(item.to)
+            const active = item.to==='/admin' ? location.pathname==='/admin' : groupActive(item)
             const expanded = openGroup===item.to
 
             if(!item.children) return (
@@ -88,7 +87,7 @@ export default function AppLayout({ mode, children }) {
             )
 
             return <div className={`nav-group ${active?'active-group':''}`} key={item.to}>
-              <button type="button" className={`nav-parent nav-parent-button ${active?'active':''}`} onClick={()=>clickParent(item)}>
+              <button type="button" className={`nav-parent nav-parent-button ${active?'active':''}`} aria-expanded={expanded} onClick={()=>clickParent(item)}>
                 <span className="nav-icon">{item.icon}</span>
                 <span className="nav-parent-label">{item.label}</span>
                 <span className="nav-chevron">{expanded?'⌄':'›'}</span>
@@ -96,8 +95,10 @@ export default function AppLayout({ mode, children }) {
 
               {expanded && <div className="nav-children">
                 {item.children.map(([label,to],index)=>{
-                  const targetTab = new URL(to,'https://wfh.local').searchParams.get('tab')
-                  const childActive = active && (activeTab ? activeTab===targetTab : index===0)
+                  const target = new URL(to,'https://wfh.local')
+                  const targetTab = target.searchParams.get('tab')
+                  const samePath = location.pathname===target.pathname || location.pathname.startsWith(`${target.pathname}/`)
+                  const childActive = samePath && (targetTab ? (activeTab ? activeTab===targetTab : index===0) : true)
                   return <NavLink key={label} to={to} className={childActive?'active-child':''}>
                     <span className="child-dot"/>{label}
                   </NavLink>
