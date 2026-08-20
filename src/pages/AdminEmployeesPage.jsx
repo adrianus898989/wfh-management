@@ -964,7 +964,7 @@ export default function AdminEmployeesPage(){
       </div>
       <div className="filter-card archive-filter-card v24-filter-card">
         <div className="field-search-grid employee-core-search-grid">
-          <label className="pro-filter-field" data-native-risk-filter="1"><span>等级</span><select value={filters.risk_level||''} onChange={e=>setFilters({...filters,risk_level:e.target.value})}><option value="">全部等级</option><option value="normal">正常（0）</option><option value="attention">注意（1–3）</option><option value="watch">重点（4–9）</option><option value="high">高频（10+）</option></select></label>
+          <label className="pro-filter-field" data-native-risk-filter="1"><span>等级</span><select value={filters.risk_level||''} onChange={e=>setFilters({...filters,risk_level:e.target.value})}><option value="">全部等级</option><option value="excellent">优秀（0错误）</option><option value="normal">正常（1–8）</option><option value="attention">注意（9–15）</option><option value="watch">重点（16–30）</option><option value="high">高频（31+）</option></select></label>
           <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={filters.employee_no} onChange={e=>setFilters({...filters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
           <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={filters.full_name} onChange={e=>setFilters({...filters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
           <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={filters.work_tg} onChange={e=>setFilters({...filters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>

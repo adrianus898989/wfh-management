@@ -2,16 +2,17 @@ import { supabase } from './lib/supabase'
 
 const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
-const riskKey=value=>{const n=Number(value||0);return n>=10?'high':n>=4?'watch':n>=1?'attention':'normal'}
+const riskKey=value=>{const n=Number(value||0);return n>=31?'high':n>=16?'watch':n>=9?'attention':n>=1?'normal':'excellent'}
 const riskInfo=value=>{
   const n=Number(value||0)
   const key=riskKey(n)
   return {
     key,n,
-    ...(key==='high'?{label:'高频',full:'高频错误 · 10+',color:'#b42334',bg:'#fff1f2',border:'#fecdd3'}:
-      key==='watch'?{label:'重点',full:'重点观察 · 4–9',color:'#c2410c',bg:'#fff7ed',border:'#fed7aa'}:
-      key==='attention'?{label:'注意',full:'注意 · 1–3',color:'#a16207',bg:'#fffbeb',border:'#fde68a'}:
-      {label:'正常',full:'正常 · 0错误',color:'#39734a',bg:'#f0fdf4',border:'#bbf7d0'})
+    ...(key==='high'?{label:'高频',full:'高频错误 · 31+',color:'#b42334',bg:'#fff1f2',border:'#fecdd3'}:
+      key==='watch'?{label:'重点',full:'重点观察 · 16–30',color:'#c2410c',bg:'#fff7ed',border:'#fed7aa'}:
+      key==='attention'?{label:'注意',full:'注意 · 9–15',color:'#a16207',bg:'#fffbeb',border:'#fde68a'}:
+      key==='normal'?{label:'正常',full:'正常 · 1–8',color:'#2563a8',bg:'#eff6ff',border:'#bfdbfe'}:
+      {label:'优秀',full:'优秀 · 0错误',color:'#168a63',bg:'#ecfdf5',border:'#a7f3d0'})
   }
 }
 
@@ -176,7 +177,7 @@ function triggerEmployeeReload(){
 function ensureEmployeeRiskFilter(){
   const grid=document.querySelector('.employee-core-search-grid');if(!grid)return
   let box=grid.querySelector('.wfh-employee-risk-filter')
-  if(!box){box=document.createElement('label');box.className='pro-filter-field wfh-employee-risk-filter';const title=document.createElement('span');title.textContent='等级';const sel=document.createElement('select');sel.innerHTML='<option value="">全部等级</option><option value="normal">正常（0）</option><option value="attention">注意（1–3）</option><option value="watch">重点（4–9）</option><option value="high">高频（10+）</option>';sel.value=riskFilter;sel.addEventListener('change',()=>{riskFilter=sel.value;employeeListCache={key:'',at:0,rows:[]};triggerEmployeeReload()});box.append(title,sel);grid.insertBefore(box,grid.firstChild)}
+  if(!box){box=document.createElement('label');box.className='pro-filter-field wfh-employee-risk-filter';const title=document.createElement('span');title.textContent='等级';const sel=document.createElement('select');sel.innerHTML='<option value="">全部等级</option><option value="excellent">优秀（0错误）</option><option value="normal">正常（1–8）</option><option value="attention">注意（9–15）</option><option value="watch">重点（16–30）</option><option value="high">高频（31+）</option>';sel.value=riskFilter;sel.addEventListener('change',()=>{riskFilter=sel.value;employeeListCache={key:'',at:0,rows:[]};triggerEmployeeReload()});box.append(title,sel);grid.insertBefore(box,grid.firstChild)}
 }
 async function riskFilteredList(body){
   const requestedPage=Math.max(1,Number(body.page||1)),requestedSize=Number(body.page_size||20),filters={...(body.filters||{})}

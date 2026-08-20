@@ -5,10 +5,10 @@ const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
 const reportGradeKey=n=>{n=Number(n||0);if(n>=31)return'high';if(n>=16)return'watch';if(n>=9)return'attention';if(n>=1)return'normal';return'excellent'}
 const reportGradeLabel=k=>({excellent:'优秀',normal:'正常',attention:'注意',watch:'重点',high:'高频'}[k]||'优秀')
-const employeeRiskKey=n=>{n=Number(n||0);if(n>=10)return'high';if(n>=4)return'watch';if(n>=1)return'attention';return'normal'}
-const employeeRiskLabel=k=>({normal:'正常',attention:'注意',watch:'重点',high:'高频'}[k]||'正常')
+const employeeRiskKey=n=>{n=Number(n||0);if(n>=31)return'high';if(n>=16)return'watch';if(n>=9)return'attention';if(n>=1)return'normal';return'excellent'}
+const employeeRiskLabel=k=>({excellent:'优秀',normal:'正常',attention:'注意',watch:'重点',high:'高频'}[k]||'优秀')
 const reportGradeChoices=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
-const employeeGradeChoices=[['','全部等级'],['normal','正常（0）'],['attention','注意（1–3）'],['watch','重点（4–9）'],['high','高频（10+）']]
+const employeeGradeChoices=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
 let reportRisk=''
 let employeeRisk=''
 let stopped=false,scheduled=false
@@ -54,6 +54,7 @@ function addStyles(){
     .wfh-v2722-employee-risk-filter select{width:100%;height:40px;border:1px solid #d5e0ec;border-radius:9px;background:#fff;padding:0 10px;color:#314b68;font-size:11px}
     .employee-master-table .wfh-v2722-risk-head,.employee-master-table .wfh-v2722-risk-cell{width:66px!important;min-width:66px!important;max-width:66px!important;text-align:center!important;white-space:nowrap!important}
     .wfh-v2722-employee-chip{display:inline-flex;align-items:center;justify-content:center;height:22px;min-width:48px;padding:0 7px;border-radius:999px;font-size:9px;font-weight:850;white-space:nowrap}
+    .wfh-v2722-employee-chip[data-grade="优秀"]{border:1px solid #9eecc6;background:#ebfff5;color:#0a8755}
     .wfh-v2722-employee-chip[data-grade="正常"]{border:1px solid #b8d7ff;background:#eef6ff;color:#1760b8}
     .wfh-v2722-employee-chip[data-grade="注意"]{border:1px solid #f5d77c;background:#fff9e8;color:#9a6500}
     .wfh-v2722-employee-chip[data-grade="重点"]{border:1px solid #ffc28d;background:#fff4e9;color:#b24b00}
