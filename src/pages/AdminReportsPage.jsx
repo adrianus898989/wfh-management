@@ -14,6 +14,37 @@ const employeeStatusName=value=>({active:'在职',probation:'试用',suspended:'
 const employeeTypeName=value=>({home_ph:'纯居家菲律宾',onsite_to_home:'现场转居家',home_vn:'纯居家越南',home_id:'纯居家印尼',home_mm:'纯居家缅甸'}[text(value)]||text(value)||'—')
 const formatDate=value=>text(value).slice(0,10)||'—'
 const formatDateTime=value=>{if(!text(value))return'—';const d=new Date(value);return Number.isNaN(d.getTime())?text(value):d.toLocaleString('zh-CN',{hour12:false})}
+function parseIsoDateOnly(value){
+  const raw=text(value).slice(0,10)
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(raw))return null
+  const [year,month,day]=raw.split('-').map(Number)
+  const date=new Date(Date.UTC(year,month-1,day,12))
+  return Number.isNaN(date.getTime())?null:date
+}
+function tenureDurationLabel(hireDate,resignDate,status){
+  const start=parseIsoDateOnly(hireDate)
+  if(!start)return'入职日期待完善'
+  const today=new Date()
+  const todayUtc=new Date(Date.UTC(today.getFullYear(),today.getMonth(),today.getDate(),12))
+  const resign=parseIsoDateOnly(resignDate)
+  const end=status==='resigned'&&resign?resign:todayUtc
+  const totalDays=Math.floor((end.getTime()-start.getTime())/86400000)
+  if(totalDays<0)return`待入职 · 还有 ${Math.abs(totalDays)} 天`
+  let years=end.getUTCFullYear()-start.getUTCFullYear()
+  let months=end.getUTCMonth()-start.getUTCMonth()
+  let days=end.getUTCDate()-start.getUTCDate()
+  if(days<0){
+    const previousMonthDays=new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth(),0,12)).getUTCDate()
+    days+=previousMonthDays
+    months-=1
+  }
+  if(months<0){months+=12;years-=1}
+  const parts=[]
+  if(years>0)parts.push(`${years}年`)
+  if(months>0||years>0)parts.push(`${months}个月`)
+  parts.push(`${days}天`)
+  return`${parts.join(' ')} · 共 ${totalDays} 天`
+}
 const personKey=r=>text(r.name)
 const uniqueCount=rows=>new Set((rows||[]).map(personKey).filter(Boolean)).size
 const fmtPct=(n,d)=>d?`${((Number(n)||0)/(Number(d)||1)*100).toFixed(2)}%`:'0.00%'
@@ -167,11 +198,11 @@ function ReportEmployeeDrawer({employeeNo,onClose}){
   }catch(error){if(alive)setState({loading:false,error:error.message||'员工档案读取失败',detail:null,summary:null})}})();return()=>{alive=false}},[employeeNo])
   const detail=state.detail||{},employee=detail.employee||{},contact=detail.contact||{},payment=detail.payment||{},compensation=detail.compensation||{},summary=state.summary||{},missing=detail.missing_fields||[],grade=errorGradeLabel(summary.risk_level)
   return <div className="modal-mask detail-mask wfh-report-employee-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={event=>event.stopPropagation()}>
-    <div className="employee-hero"><div className="employee-avatar">{text(employee.full_name).slice(0,1).toUpperCase()||'E'}</div><div className="employee-hero-copy"><div className="employee-id-line">{employeeNo}</div><h2>{employee.full_name||'读取员工档案...'}</h2>{employee.id&&<div className="employee-tags"><span>{employeeTypeName(employee.employment_type)}</span><span>{employee.teams?.name||'未匹配团队'}</span><span>{employee.positions?.name||'未设置主档岗位'}</span></div>}</div><div className="drawer-head-actions"><button className="drawer-close" onClick={onClose}>×</button></div></div>
+    <div className="employee-hero"><div className="employee-avatar">{text(employee.full_name).slice(0,1).toUpperCase()||'E'}</div><div className="employee-hero-copy"><div className="employee-id-line">{employeeNo}</div><h2>{employee.full_name||'读取员工档案...'}</h2>{employee.id&&<div className="employee-tags"><span>{employeeTypeName(employee.employment_type)}</span><span>{employee.teams?.name||'未匹配团队'}</span><span>{employee.positions?.name||'未设置主档岗位'}</span>{employee.hire_date&&<span className="employee-tenure-chip">{tenureDurationLabel(employee.hire_date,employee.resign_date,employee.status)}</span>}</div>}</div><div className="drawer-head-actions"><button className="drawer-close" onClick={onClose}>×</button></div></div>
     {state.loading?<div className="empty-state">读取完整员工档案...</div>:state.error?<div className="empty-state">{state.error}</div>:<>
       <div className="wfh-v2722-risk-summary" data-grade={grade}><div className="risk-grade"><span>等级</span><strong>{grade}</strong></div><div><span>本月错误</span><strong>{Number(summary.month_error_count||0)} 笔</strong></div><div><span>近30天错误</span><strong>{Number(summary.last_30d_error_count||0)} 笔</strong></div><div><span>总错误</span><strong>{Number(summary.total_error_count||0)} 笔</strong></div><div><span>主要错误 / 最近错误</span><strong>{text(summary.main_error_type)||'—'}{summary.last_error_date?` · ${formatDate(summary.last_error_date)}`:''}</strong></div></div>
       {missing.length>0&&<div className="profile-status-line has-missing"><div><strong>资料待完善 {missing.length} 项</strong><span>{missing.join(' · ')}</span></div></div>}
-      <div className="detail-sections detail-sections-v11"><EmployeeInfoPanel title="基本资料" rows={[['员工ID',employee.employee_no],['姓名',employee.full_name],['员工国家',employee.country||employee.nationality],['员工类型',employeeTypeName(employee.employment_type)],['状态',employeeStatusName(employee.status)],['入职日期',formatDate(employee.hire_date)],['录入时间',formatDateTime(employee.created_at)],['离职日期',formatDate(employee.resign_date)],...(employee.status==='resigned'?[['离职原因',detail.resignation_reason||'—']]:[])]}/><EmployeeInfoPanel title="组织与排班" rows={[['团队',employee.teams?.name],['主档岗位',employee.positions?.name],['排班岗位',employee.schedule_position],['班次',employee.shift_name],['负责人 / 组长',employee.leader_name],['培训老师',employee.trainer_name],['盘口',employee.platform_scope],['工作内容',employee.work_content]]}/><EmployeeInfoPanel title="联系方式" rows={[['工作TG',employee.work_tg],['后台账号',employee.backend_accounts],['Telegram',contact.telegram_username],['Workfolio邮箱',contact.work_email],['Zoom邮箱',contact.zoom_email],['Facebook',contact.facebook],['WhatsApp',contact.whatsapp_phone]]}/><EmployeeInfoPanel title="工资设置" rows={[['底薪',compensation.base_salary],['日薪',compensation.daily_rate],['默认绩效',compensation.performance_default],['餐补',compensation.meal_allowance],['备注',compensation.note]]}/><EmployeeInfoPanel title="收款资料" rows={[['收款方式',payment.transfer_using||payment.mode],['银行卡 / 钱包账号',payment.bank_wallet_account],['收款姓名',payment.account_name],['USDT 地址',payment.usdt_address],['联系电话',payment.contact_phone],['WhatsApp',payment.whatsapp_number],['员工地址',payment.employee_address]]}/></div>
+      <div className="detail-sections detail-sections-v11"><EmployeeInfoPanel title="基本资料" rows={[['员工ID',employee.employee_no],['姓名',employee.full_name],['员工国家',employee.country||employee.nationality],['员工类型',employeeTypeName(employee.employment_type)],['状态',employeeStatusName(employee.status)],['入职日期',formatDate(employee.hire_date)],['入职时长',tenureDurationLabel(employee.hire_date,employee.resign_date,employee.status)],['录入时间',formatDateTime(employee.created_at)],['离职日期',formatDate(employee.resign_date)],...(employee.status==='resigned'?[['离职原因',detail.resignation_reason||'—']]:[])]}/><EmployeeInfoPanel title="组织与排班" rows={[['团队',employee.teams?.name],['主档岗位',employee.positions?.name],['排班岗位',employee.schedule_position],['班次',employee.shift_name],['负责人 / 组长',employee.leader_name],['培训老师',employee.trainer_name],['盘口',employee.platform_scope],['工作内容',employee.work_content]]}/><EmployeeInfoPanel title="联系方式" rows={[['工作TG',employee.work_tg],['后台账号',employee.backend_accounts],['Telegram',contact.telegram_username],['Workfolio邮箱',contact.work_email],['Zoom邮箱',contact.zoom_email],['Facebook',contact.facebook],['WhatsApp',contact.whatsapp_phone]]}/><EmployeeInfoPanel title="工资设置" rows={[['底薪',compensation.base_salary],['日薪',compensation.daily_rate],['默认绩效',compensation.performance_default],['餐补',compensation.meal_allowance],['备注',compensation.note]]}/><EmployeeInfoPanel title="收款资料" rows={[['收款方式',payment.transfer_using||payment.mode],['银行卡 / 钱包账号',payment.bank_wallet_account],['收款姓名',payment.account_name],['USDT 地址',payment.usdt_address],['联系电话',payment.contact_phone],['WhatsApp',payment.whatsapp_number],['员工地址',payment.employee_address]]}/></div>
     </>}
   </div></div>
 }
