@@ -211,7 +211,6 @@ export function startStableErrorUiEnhancer(){
   window.__WFH_STABLE_ERROR_UI__=true;addStyles();patchInvoke()
   const observer=new MutationObserver(schedule);observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']})
   const timer=setInterval(()=>{if(!document.hidden){summaries.at=0;schedule()}},300000)
-  const channel=supabase.channel('wfh-stable-error-ui').on('postgres_changes',{event:'*',schema:'public',table:'employee_error_summary'},()=>{summaries.at=0;employeeListCache={key:'',at:0,rows:[]};schedule()}).subscribe()
   schedule()
-  window.addEventListener('beforeunload',()=>{stopped=true;clearInterval(timer);observer.disconnect();supabase.removeChannel(channel)},{once:true})
+  window.addEventListener('beforeunload',()=>{stopped=true;clearInterval(timer);observer.disconnect()},{once:true})
 }
