@@ -583,7 +583,7 @@ export default function AdminEmployeesPage(){
     refreshEmployeeData({silent:true})
   },[liveTick])
 
-  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>{ if(!document.hidden) loadArchiveStats(true) },60000); return()=>clearInterval(t) },[])
+  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>{ if(!document.hidden) loadArchiveStats(true) },300000); return()=>clearInterval(t) },[])
   useEffect(()=>{
     if(tab!=='员工档案') return
     const t=setInterval(async()=>{
@@ -600,7 +600,7 @@ export default function AdminEmployeesPage(){
         setRows(listData.rows||[]); setTotal(listData.total||0)
         setAnalytics({...analyticsData,loading:false})
       }catch{}
-    },60000)
+    },300000)
     return()=>clearInterval(t)
   },[tab,page,pageSize,JSON.stringify(filters)])
   useEffect(()=>{
