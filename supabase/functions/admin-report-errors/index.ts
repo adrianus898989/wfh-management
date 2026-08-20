@@ -27,8 +27,25 @@ function normalizeDate(value: unknown) {
   if (!source) return ''
   const matched = source.match(/(\d{4})[\/\-.年](\d{1,2})[\/\-.月](\d{1,2})/)
   if (matched) return `${matched[1]}-${String(Number(matched[2])).padStart(2, '0')}-${String(Number(matched[3])).padStart(2, '0')}`
+  const dayFirst = source.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/)
+  if (dayFirst) {
+    let day = Number(dayFirst[1])
+    let month = Number(dayFirst[2])
+    if (month > 12 && day <= 12) [day, month] = [month, day]
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return `${dayFirst[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    }
+  }
   const parsed = new Date(source)
   return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10)
+}
+
+function pick(source: Record<string, unknown> | null | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = text(source?.[key])
+    if (value) return value
+  }
+  return ''
 }
 
 function between(date: string, from: string, to: string) {
@@ -57,6 +74,42 @@ async function authorize(req: Request) {
     .eq('auth_user_id', user.id)
     .maybeSingle()
   if (!access?.active || !access?.backend_enabled) throw new Error('FORBIDDEN')
+}
+
+async function loadHistoricalDirectory(service: any, employeeIds: string[]) {
+  const directory = new Map<string, any>()
+  const ids = unique(employeeIds.map(upper))
+
+  for (let index = 0; index < ids.length; index += 100) {
+    const batch = ids.slice(index, index + 100)
+    const { data, error } = await service
+      .from('employee_lifecycle_events')
+      .select('employee_no,full_name,event_type,effective_date,created_at,snapshot')
+      .in('employee_no', batch)
+      .in('event_type', ['resign', 'reactivate', 'join'])
+      .order('effective_date', { ascending: false })
+      .order('created_at', { ascending: false })
+    if (error) throw new Error(`历史员工资料读取失败：${error.message}`)
+
+    for (const row of data || []) {
+      const employeeId = upper(row.employee_no)
+      if (!employeeId || directory.has(employeeId)) continue
+      const snapshot = row.snapshot && typeof row.snapshot === 'object' ? row.snapshot : {}
+      directory.set(employeeId, {
+        employee_id: employeeId,
+        name: text(row.full_name) || pick(snapshot, ['名字 Name', '姓名', '员工姓名', 'Name']),
+        team: pick(snapshot, ['盘口国家', '团队', '團隊', 'team']),
+        group: pick(snapshot, ['组别', '組別', 'group']),
+        position: pick(snapshot, ['岗位', '崗位', 'Position']),
+        country: pick(snapshot, ['国家 country', '国家', '國家', 'Country']),
+        shift: pick(snapshot, ['班次', 'Shift']),
+        platform: pick(snapshot, ['盘口岗位 Platform position', '盘口', '盤口', 'Platform']),
+        status: text(row.event_type) === 'resign' ? 'resigned' : text(row.event_type),
+      })
+    }
+  }
+
+  return directory
 }
 
 Deno.serve(async req => {
@@ -108,6 +161,13 @@ Deno.serve(async req => {
     const teamMap = new Map((teams || []).map((row: any) => [text(row.id), text(row.name)]))
     const positionMap = new Map((positions || []).map((row: any) => [text(row.id), text(row.name)]))
     const summaryMap = new Map((summaries || []).map((row: any) => [upper(row.employee_no), row]))
+    const historicalMap = await loadHistoricalDirectory(
+      service,
+      raw
+        .map((row: any) => upper(row.employee_id || row.ID))
+        .filter((employeeId: string) => employeeId && !rosterMap.has(employeeId) && !employeeMap.has(employeeId)),
+    )
+    const historicalRows = [...historicalMap.values()]
 
     let from = normalizeDate(body.date_from)
     let to = normalizeDate(body.date_to)
@@ -137,17 +197,18 @@ Deno.serve(async req => {
 
       const rosterRow: any = rosterMap.get(employeeId) || null
       const employee: any = employeeMap.get(employeeId) || null
+      const historical: any = historicalMap.get(employeeId) || null
       const summary: any = summaryMap.get(employeeId) || null
       const qcDate = normalizeDate(source.qc_date)
       const reviewDate = normalizeDate(source.review_date)
       const basisDate = basis === 'review' ? (reviewDate || qcDate) : qcDate
-      const name = text(rosterRow?.name || employee?.full_name) || '-'
-      const team = text(rosterRow?.team || teamMap.get(text(employee?.team_id))) || '-'
-      const position = text(rosterRow?.position || positionMap.get(text(employee?.position_id))) || '-'
-      const country = text(rosterRow?.country || employee?.country || employee?.nationality) || '-'
-      const shift = text(rosterRow?.shift || employee?.shift_name) || '-'
-      const platform = text(rosterRow?.platform || employee?.platform_scope) || '-'
-      const group = text(rosterRow?.group) || '-'
+      const name = text(rosterRow?.name || employee?.full_name || historical?.name) || '-'
+      const team = text(rosterRow?.team || teamMap.get(text(employee?.team_id)) || historical?.team) || '-'
+      const position = text(rosterRow?.position || positionMap.get(text(employee?.position_id)) || historical?.position) || '-'
+      const country = text(rosterRow?.country || employee?.country || employee?.nationality || historical?.country) || '-'
+      const shift = text(rosterRow?.shift || employee?.shift_name || historical?.shift) || '-'
+      const platform = text(rosterRow?.platform || employee?.platform_scope || historical?.platform) || '-'
+      const group = text(rosterRow?.group || historical?.group) || '-'
       const managers = [rosterRow?.responsible, rosterRow?.onsite_trainer, rosterRow?.online_leader, rosterRow?.online_trainer].map(text).filter(Boolean)
 
       const row = {
@@ -166,9 +227,10 @@ Deno.serve(async req => {
         managers,
         risk_level: text(summary?.risk_level) || riskKey(summary?.month_error_count || 0),
         month_error_count: Number(summary?.month_error_count || 0),
-        employee_status: text(employee?.status),
+        employee_status: text(employee?.status || historical?.status),
         roster_match: Boolean(rosterRow),
         employee_match: Boolean(employee),
+        historical_match: Boolean(historical),
       }
 
       if ((from || to) && !between(basisDate, from, to)) continue
@@ -228,13 +290,13 @@ Deno.serve(async req => {
       options: {
         error_types: unique(raw.map((row: any) => row.error_type)),
         qc_people: unique(raw.map((row: any) => row.qc_person)),
-        shifts: unique(roster.map((row: any) => row.shift)),
-        teams: unique(roster.map((row: any) => row.team)),
-        groups: unique(roster.map((row: any) => row.group)),
-        positions: unique(roster.map((row: any) => row.position)),
-        countries: unique(roster.map((row: any) => row.country)),
+        shifts: unique([...roster.map((row: any) => row.shift), ...historicalRows.map((row: any) => row.shift)]),
+        teams: unique([...roster.map((row: any) => row.team), ...historicalRows.map((row: any) => row.team)]),
+        groups: unique([...roster.map((row: any) => row.group), ...historicalRows.map((row: any) => row.group)]),
+        positions: unique([...roster.map((row: any) => row.position), ...historicalRows.map((row: any) => row.position)]),
+        countries: unique([...roster.map((row: any) => row.country), ...historicalRows.map((row: any) => row.country)]),
         managers: unique(roster.flatMap((row: any) => [row.responsible, row.onsite_trainer, row.online_leader, row.online_trainer])),
-        platforms: unique(roster.map((row: any) => row.platform)),
+        platforms: unique([...roster.map((row: any) => row.platform), ...historicalRows.map((row: any) => row.platform)]),
       },
     })
   } catch (error) {
