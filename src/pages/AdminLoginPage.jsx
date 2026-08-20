@@ -1,8 +1,7 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 
-function withTimeout(promise, ms = 120000) {
+function withTimeout(promise, ms = 25000) {
   let timer
   const timeout = new Promise((_, reject) => {
     timer = window.setTimeout(() => reject(new Error('TIMEOUT')), ms)
@@ -16,7 +15,6 @@ export default function AdminLoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const navigate = useNavigate()
 
   const submit = async (e) => {
     e.preventDefault()
@@ -45,7 +43,7 @@ export default function AdminLoginPage() {
       }))
 
       if (sessionError) return setError('登录失败，请重试')
-      navigate('/admin', { replace: true })
+      window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}admin`)
     } catch (requestError) {
       setError(requestError?.message === 'TIMEOUT'
         ? '登录服务响应超时，请稍后重试'
