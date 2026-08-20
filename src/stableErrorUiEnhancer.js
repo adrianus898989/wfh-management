@@ -17,7 +17,8 @@ const riskInfo=value=>{
 }
 
 let stopped=false,scheduled=false,riskFilter=''
-let summaries={at:0,map:new Map()}
+let summaries={at:0,retryAt:0,map:new Map()}
+let summaryRequest=null
 let employeeListCache={key:'',at:0,rows:[]}
 const originalInvoke=supabase.functions.invoke.bind(supabase.functions)
 
@@ -70,11 +71,17 @@ function nativeSet(el,value,eventName='input'){
 }
 function buttonByText(root,label){return [...(root?.querySelectorAll('button')||[])].find(x=>text(x.textContent)===label)||null}
 async function getSummaryMap(force=false){
-  if(!force&&Date.now()-summaries.at<20000&&summaries.map.size)return summaries.map
-  const {data,error}=await supabase.from('employee_error_summary').select('employee_no,month_key,month_error_count,last_30d_error_count,total_error_count,last_error_date,main_error_type,risk_level').limit(5000)
-  if(error)return summaries.map
-  summaries={at:Date.now(),map:new Map((data||[]).map(x=>[upper(x.employee_no),x]))}
-  return summaries.map
+  const now=Date.now()
+  if(now<summaries.retryAt)return summaries.map
+  if(!force&&now-summaries.at<120000)return summaries.map
+  if(summaryRequest)return summaryRequest
+  summaryRequest=(async()=>{
+    const {data,error}=await supabase.from('employee_error_summary').select('employee_no,month_key,month_error_count,last_30d_error_count,total_error_count,last_error_date,main_error_type,risk_level').limit(5000)
+    if(error){summaries={...summaries,at:Date.now(),retryAt:Date.now()+60000};return summaries.map}
+    summaries={at:Date.now(),retryAt:0,map:new Map((data||[]).map(x=>[upper(x.employee_no),x]))}
+    return summaries.map
+  })()
+  try{return await summaryRequest}finally{summaryRequest=null}
 }
 function styleChip(chip,summary){
   const info=riskInfo(summary?.month_error_count)
@@ -203,7 +210,7 @@ export function startStableErrorUiEnhancer(){
   if(window.__WFH_STABLE_ERROR_UI__)return
   window.__WFH_STABLE_ERROR_UI__=true;addStyles();patchInvoke()
   const observer=new MutationObserver(schedule);observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']})
-  const timer=setInterval(()=>{summaries.at=0;schedule()},30000)
+  const timer=setInterval(()=>{if(!document.hidden){summaries.at=0;schedule()}},300000)
   const channel=supabase.channel('wfh-stable-error-ui').on('postgres_changes',{event:'*',schema:'public',table:'employee_error_summary'},()=>{summaries.at=0;employeeListCache={key:'',at:0,rows:[]};schedule()}).subscribe()
   schedule()
   window.addEventListener('beforeunload',()=>{stopped=true;clearInterval(timer);observer.disconnect();supabase.removeChannel(channel)},{once:true})
