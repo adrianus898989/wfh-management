@@ -92,7 +92,7 @@ create table if not exists public.online_training_report_members (
   leader_name text not null default '',
   trainer_name text not null default '',
   attendance_status text not null default 'normal'
-    check (attendance_status in ('normal', 'leave', 'rest', 'absent', 'transferred', 'not_applicable')),
+    check (attendance_status in ('normal', 'rest', 'leave', 'absent', 'transferred')),
   status_note text not null default '',
   work_details text not null default '',
   performance text not null default '',
@@ -603,6 +603,7 @@ begin
       count(*) filter (where m.attendance_status = 'leave')::integer as leave_count,
       count(*) filter (where m.attendance_status = 'rest')::integer as rest_count,
       count(*) filter (where m.attendance_status = 'absent')::integer as absent_count,
+      count(*) filter (where m.attendance_status = 'transferred')::integer as home_count,
       count(*) filter (where nullif(btrim(m.issues), '') is not null)::integer as issue_count,
       max(r.report_date) as last_report_date
     from public.online_training_report_members m
@@ -635,6 +636,7 @@ begin
       count(*) filter (where m.attendance_status = 'leave')::integer as leave_count,
       count(*) filter (where m.attendance_status = 'rest')::integer as rest_count,
       count(*) filter (where m.attendance_status = 'absent')::integer as absent_count,
+      count(*) filter (where m.attendance_status = 'transferred')::integer as home_count,
       count(*) filter (where nullif(btrim(m.issues), '') is not null)::integer as issue_count,
       max(r.report_date) as last_report_date
     from public.online_training_report_members m
@@ -850,7 +852,7 @@ begin
     end if;
 
     v_attendance := coalesce(nullif(v_member->>'attendance_status', ''), 'normal');
-    if v_attendance not in ('normal', 'leave', 'rest', 'absent', 'transferred', 'not_applicable') then
+    if v_attendance not in ('normal', 'rest', 'leave', 'absent', 'transferred') then
       raise exception '员工当日状态不正确';
     end if;
 
@@ -860,7 +862,7 @@ begin
       raise exception '% 的正常上班记录尚未填写', v_employee.employee_no;
     end if;
 
-    if v_attendance in ('leave', 'absent', 'transferred', 'not_applicable')
+    if v_attendance in ('leave', 'absent', 'transferred')
        and nullif(btrim(coalesce(v_member->>'status_note', '')), '') is null then
       raise exception '% 的状态需要填写批注', v_employee.employee_no;
     end if;

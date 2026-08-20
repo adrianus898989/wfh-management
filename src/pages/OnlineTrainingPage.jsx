@@ -18,13 +18,14 @@ const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 
 const ATTENDANCE={
   normal:{label:'正常上班',tone:'green'},
-  leave:{label:'休假',tone:'amber'},
-  rest:{label:'休息日',tone:'gray'},
-  absent:{label:'缺勤',tone:'red'},
-  transferred:{label:'临时调班',tone:'blue'},
-  not_applicable:{label:'不在培训范围',tone:'gray'},
+  rest:{label:'公休',tone:'gray'},
+  leave:{label:'请假',tone:'amber'},
+  absent:{label:'缺席',tone:'red'},
+  transferred:{label:'回家',tone:'blue'},
 }
 const ATTENDANCE_OPTIONS=Object.entries(ATTENDANCE)
+const REASON_REQUIRED=new Set(['leave','absent','transferred'])
+const REASON_PLACEHOLDER={leave:'填写请假原因',absent:'填写缺席原因',transferred:'填写回家原因'}
 const REVIEW={pending:'待查看',read:'已阅',needs_changes:'需补充'}
 
 function blankReport(access={}){
@@ -69,11 +70,12 @@ function draftFromReport(row){
 }
 
 function memberFromReport(row,index){
+  const attendance=row.attendance_status==='not_applicable'?'rest':row.attendance_status
   return {
     employee_id:row.employee_id,employee_no:row.employee_no,employee_name:row.employee_name,
     position_name:row.position_name||'',team_name:row.team_name||'',group_name:row.group_name||'',
     shift_name:row.shift_name||'',platform:row.platform||'',leader_name:row.leader_name||'',
-    trainer_name:row.trainer_name||'',attendance_status:row.attendance_status||'normal',
+    trainer_name:row.trainer_name||'',attendance_status:ATTENDANCE[attendance]?attendance:'normal',
     status_note:row.status_note||'',work_details:row.work_details||'',performance:row.performance||'',
     issues:row.issues||'',follow_up:row.follow_up||'',metrics:row.metrics||{response_time:''},sort_order:index,
   }
@@ -184,7 +186,11 @@ export default function OnlineTrainingPage(){
   const canOpenSubmit=Boolean(bootstrap?.access?.can_submit&&(myRoster.length||canAdminSelect))
 
   const updateDraft=(key,value)=>setEditor(current=>({...current,draft:{...current.draft,[key]:value}}))
-  const updateMember=(index,key,value)=>setEditor(current=>({...current,members:current.members.map((member,i)=>i===index?{...member,[key]:value}:member)}))
+  const updateMember=(index,key,value)=>setEditor(current=>({...current,members:current.members.map((member,i)=>{
+    if(i!==index)return member
+    if(key==='attendance_status')return {...member,attendance_status:value,status_note:REASON_REQUIRED.has(value)?member.status_note:''}
+    return {...member,[key]:value}
+  })}))
   const updateMetric=(index,value)=>setEditor(current=>({...current,members:current.members.map((member,i)=>i===index?{...member,metrics:{...(member.metrics||{}),response_time:value}}:member)}))
 
   const openCreate=()=>{
@@ -234,7 +240,7 @@ export default function OnlineTrainingPage(){
     if(!editor.members.length)return editor.assignmentMode==='unmatched'?'居家排班表没有找到当前账号负责的线上培训人员':'请选择需要代填的线上培训人员'
     for(const member of editor.members){
       if(member.attendance_status==='normal'&&!text(member.work_details))return`${member.employee_no} 的当天工作情况尚未填写`
-      if(['leave','absent','transferred','not_applicable'].includes(member.attendance_status)&&!text(member.status_note))return`${member.employee_no} 的状态需要填写批注`
+      if(REASON_REQUIRED.has(member.attendance_status)&&!text(member.status_note))return`${member.employee_no} 的${ATTENDANCE[member.attendance_status]?.label||'异常状态'}需要填写原因`
     }
     return''
   }
@@ -308,7 +314,7 @@ export default function OnlineTrainingPage(){
     ;(row.members||[]).forEach(member=>{
       lines.push(`${member.employee_no} · ${member.employee_name} · ${member.position_name||'—'}`)
       lines.push(`状态：${ATTENDANCE[member.attendance_status]?.label||member.attendance_status}`)
-      if(member.status_note)lines.push(`批注：${member.status_note}`)
+      if(member.status_note)lines.push(`原因：${member.status_note}`)
       if(member.work_details)lines.push(`今日工作：${member.work_details}`)
       if(member.performance)lines.push(`工作表现：${member.performance}`)
       if(member.issues)lines.push(`发现问题：${member.issues}`)
@@ -324,7 +330,7 @@ export default function OnlineTrainingPage(){
 
   return <div className="content-page ot-page">
     <header className="ot-header">
-      <div><div className="module-kicker">ONLINE TRAINING</div><h1>线上培训日报</h1><p>人员来自居家排班表；逐人记录当天表现、休假与后续安排。</p></div>
+      <div><div className="module-kicker">ONLINE TRAINING</div><h1>线上培训日报</h1><p>人员来自居家排班表；逐人记录当天表现、公休、请假、缺席或回家情况。</p></div>
       <div className="ot-header-actions">
         <span className={`ot-access ${canOpenSubmit?'ok':'read'}`}>{myRoster.length?`已关联 ${myRoster.length} 名组员`:canAdminSelect?'管理员代填':'仅查看'}</span>
         <button onClick={()=>{loadBootstrap();loadList({silent:true})}}>刷新</button>
@@ -381,7 +387,7 @@ function ReportList({rows,onView,onEdit,onDelete,onProfile,onOpenImage}){
       <div className="ot-card-top"><div><span>{dateText(row.report_date)}</span><strong>{row.title}</strong></div><em className={`review ${row.review_status}`}>{REVIEW[row.review_status]||'待查看'}</em></div>
       <div className="ot-meta"><span>{row.platform||'未填写平台'}</span><span>{row.shift_name||'未填写班次'}</span><span>{row.trainer_name||row.author_name}</span></div>
       <p>{row.report_summary||row.issues_summary||'已完成逐人培训记录'}</p>
-      <div className="ot-counts"><b>{row.members?.length||0} 人</b><span>正常 {counts.normal||0}</span><span>休假 {counts.leave||0}</span><span>休息 {counts.rest||0}</span><span className={counts.absent?'danger':''}>缺勤 {counts.absent||0}</span></div>
+      <div className="ot-counts"><b>{row.members?.length||0} 人</b><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div>
       <div className="ot-member-chips">{(row.members||[]).slice(0,8).map(member=><button key={member.id} onClick={()=>onProfile(member.employee_id)}>{member.employee_no} · {member.employee_name}</button>)}{row.members?.length>8&&<span>+{row.members.length-8}</span>}</div>
       {row.attachments?.length>0&&<AttachmentGrid items={row.attachments.slice(0,4)} onOpen={onOpenImage} compact/>}
       <footer><div><strong>{row.author_name||'后台用户'}</strong><small>{row.author_employee_no||'后台账号'} · {timeText(row.created_at)}</small></div><div><button onClick={()=>onView(row)}>查看</button>{row.can_edit&&<button onClick={()=>onEdit(row)}>编辑</button>}{row.can_edit&&<button className="danger" onClick={()=>onDelete(row)}>删除</button>}</div></footer>
@@ -394,7 +400,7 @@ function PeopleList({rows,onHistory,onProfile}){
   return <section className="ot-people-list">{rows.map(person=><article key={person.employee_id}>
     <button className="identity" onClick={()=>onProfile(person.employee_id)}><span>{text(person.employee_name).slice(0,1).toUpperCase()}</span><div><strong>{person.employee_name}</strong><small>{person.employee_no} · {person.position_name||'未填写岗位'}</small></div></button>
     <div className="scope"><span>{person.team_name||'—'}</span><span>{person.group_name||'—'}</span><span>{person.shift_name||'—'}</span></div>
-    <div className="stats"><span><b>{person.report_count}</b>日报</span><span><b>{person.normal_count}</b>正常</span><span><b>{person.leave_count}</b>休假</span><span><b>{person.rest_count}</b>休息</span><span className={person.absent_count?'danger':''}><b>{person.absent_count}</b>缺勤</span><span className={person.issue_count?'warn':''}><b>{person.issue_count}</b>有问题</span></div>
+    <div className="stats"><span><b>{person.report_count}</b>日报</span><span><b>{person.normal_count}</b>正常</span><span><b>{person.rest_count}</b>公休</span><span><b>{person.leave_count}</b>请假</span><span className={person.absent_count?'danger':''}><b>{person.absent_count}</b>缺席</span><span><b>{person.home_count||0}</b>回家</span><span className={person.issue_count?'warn':''}><b>{person.issue_count}</b>有问题</span></div>
     <div className="last"><small>最近记录</small><strong>{dateText(person.last_report_date)}</strong><button onClick={()=>onHistory(person)}>查看全部每天记录</button></div>
   </article>)}</section>
 }
@@ -418,7 +424,7 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
         {editor.members.length>0&&<div className="ot-auto-facts">{facts.filter(([,value])=>text(value)).map(([label,value])=><span key={label}><b>{label}</b>{value}</span>)}</div>}
       </section>
 
-      <section className="ot-form-section"><div className="section-title"><div><b>2. 填写组员当天工作情况</b><small>名单已经带入；休假或休息只需更改状态并填写必要批注</small></div><strong>{editor.members.length} 人</strong></div>
+      <section className="ot-form-section"><div className="section-title"><div><b>2. 填写组员当天工作情况</b><small>名单已经带入；公休无需原因，请假、缺席、回家必须填写原因</small></div><strong>{editor.members.length} 人</strong></div>
         {!editor.members.length?<div className="ot-no-members">{admin?'请选择一名线上培训人员，组员会立即自动出现。':'当前没有可填写的线上培训人员。'}</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} index={index} onChange={updateMember} onMetric={updateMetric} onProfile={onProfile}/>)}</div>}
       </section>
 
@@ -440,10 +446,10 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
 }
 
 function MemberEditor({member,index,onChange,onMetric,onProfile}){
-  const prompt=positionPrompts(member.position_name),normal=member.attendance_status==='normal'
+  const prompt=positionPrompts(member.position_name),normal=member.attendance_status==='normal',requiresReason=REASON_REQUIRED.has(member.attendance_status)
   return <article className="ot-member-editor">
     <header><button type="button" className="person" onClick={()=>onProfile(member.employee_id)}><span>{index+1}</span><div><strong>{member.employee_no} · {member.employee_name}</strong><small>{member.position_name||'未填写岗位'} · {member.team_name||'—'} · {member.shift_name||'—'}</small></div></button><em>排班自动带入</em></header>
-    <div className="ot-member-status"><label><span>当日状态</span><select value={member.attendance_status} onChange={e=>onChange(index,'attendance_status',e.target.value)}>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>{!normal&&<label className="note"><span>状态批注 {['leave','absent','transferred','not_applicable'].includes(member.attendance_status)?'*':''}</span><input value={member.status_note} onChange={e=>onChange(index,'status_note',e.target.value)} placeholder={member.attendance_status==='leave'?'例如：个人请假，当前为人工标记':'填写具体情况'}/></label>}</div>
+    <div className="ot-member-status"><label><span>当日状态</span><select value={member.attendance_status} onChange={e=>onChange(index,'attendance_status',e.target.value)}>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>{requiresReason&&<label className="note"><span>原因 *</span><input value={member.status_note} onChange={e=>onChange(index,'status_note',e.target.value)} placeholder={REASON_PLACEHOLDER[member.attendance_status]}/></label>}</div>
     {normal&&<div className="ot-member-fields compact">
       <label className="wide"><span>当天工作情况 / 培训评语 *</span><textarea rows="4" value={member.work_details} onChange={e=>onChange(index,'work_details',e.target.value)} placeholder={`${prompt.work}；也可以直接粘贴 Telegram 报告中的完整说明。`}/></label>
       <label className="wide"><span>岗位数据 / 首次响应（选填）</span><input value={member.metrics?.response_time||''} onChange={e=>onMetric(index,e.target.value)} placeholder={prompt.metric}/></label>
@@ -464,7 +470,7 @@ function ViewModal({row,onClose,onProfile,onOpenImage,onEdit,onDelete,onCopy,onR
     <div className="ot-modal-scroll">
       <div className="ot-view-head"><div className="date"><span>{dateText(row.report_date)}</span><strong>{row.platform||'未填写平台'} · {row.shift_name||'未填写班次'}</strong></div><div><span>提交人</span><strong>{row.author_name||'后台用户'}</strong><small>{row.author_employee_no||'后台账号'} · {timeText(row.created_at)}</small></div></div>
       <div className="ot-view-meta"><span>负责人：{row.leader_name||'—'}</span><span>培训：{row.trainer_name||'—'}</span><span>课程：{row.course_type||'—'}</span><span>人员：{row.members?.length||0}人</span></div>
-      <div className="ot-counts large"><b>排班记录</b><span>正常 {counts.normal||0}</span><span>休假 {counts.leave||0}</span><span>休息 {counts.rest||0}</span><span className={counts.absent?'danger':''}>缺勤 {counts.absent||0}</span></div>
+      <div className="ot-counts large"><b>排班记录</b><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div>
       {(row.report_summary||row.issues_summary||row.next_plan)&&<section className="ot-summary-box">{row.report_summary&&<div><b>整体培训总结</b><p>{row.report_summary}</p></div>}{row.issues_summary&&<div><b>共同问题</b><p>{row.issues_summary}</p></div>}{row.next_plan&&<div><b>下一步安排</b><p>{row.next_plan}</p></div>}</section>}
       <div className="ot-member-view-list">{(row.members||[]).map((member,index)=><MemberView key={member.id||member.employee_id} member={member} index={index} onProfile={onProfile}/>)}</div>
       <AttachmentGrid items={row.attachments} onOpen={onOpenImage}/>
@@ -478,7 +484,7 @@ function ViewModal({row,onClose,onProfile,onOpenImage,onEdit,onDelete,onCopy,onR
 function MemberView({member,index,onProfile}){
   const status=ATTENDANCE[member.attendance_status]||ATTENDANCE.normal
   return <article className="ot-member-view"><header><button onClick={()=>onProfile(member.employee_id)}><span>{index+1}</span><div><strong>{member.employee_no} · {member.employee_name}</strong><small>{member.position_name||'—'} · {member.team_name||'—'} · {member.shift_name||'—'}</small></div></button><em className={status.tone}>{status.label}</em></header>
-    {member.status_note&&<div className="status-note"><b>状态批注</b><p>{member.status_note}</p></div>}
+    {member.status_note&&<div className="status-note"><b>原因</b><p>{member.status_note}</p></div>}
     {member.attendance_status==='normal'&&<div className="ot-member-detail-grid">{member.work_details&&<div><b>今日工作</b><p>{member.work_details}</p></div>}{member.performance&&<div><b>工作表现</b><p>{member.performance}</p></div>}{member.issues&&<div><b>发现问题</b><p>{member.issues}</p></div>}{member.follow_up&&<div><b>后续安排</b><p>{member.follow_up}</p></div>}{text(member.metrics?.response_time)&&<div className="wide"><b>岗位数据 / 首次响应</b><p>{member.metrics.response_time}</p></div>}</div>}
   </article>
 }
