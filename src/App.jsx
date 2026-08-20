@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { supabase, configured } from './lib/supabase'
 import AdminLoginPage from './pages/AdminLoginPage'
-import AdminResetPasswordPage from './pages/AdminResetPasswordPage'
 import StaffLoginPage from './pages/StaffLoginPage'
 import StaffRegisterPage from './pages/StaffRegisterPage'
 import MfaPage from './pages/MfaPage'
@@ -54,7 +53,6 @@ export default function App() {
   return <Routes>
     <Route path="/" element={<Navigate to="/staff/login" replace />} />
     <Route path="/admin/login" element={<AdminLoginPage />} />
-    <Route path="/admin/reset-password" element={<AdminResetPasswordPage />} />
     <Route path="/staff/login" element={<StaffLoginPage />} />
     <Route path="/staff/register" element={<StaffRegisterPage />} />
     <Route path="/admin/mfa" element={<Protected mode="admin"><MfaPage /></Protected>} />
