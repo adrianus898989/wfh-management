@@ -45,7 +45,7 @@ function addStyles(){
   .rp-errors-table th:last-child,.rp-errors-table td:last-child{width:86px!important;max-width:86px!important;white-space:nowrap!important}
   .wfh-error-history-mask{position:fixed;inset:0;z-index:2600;background:rgba(14,29,49,.58);display:flex;align-items:center;justify-content:center;padding:22px}
   .wfh-error-history{width:min(1050px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 26px 80px rgba(7,23,46,.34)}
-  .wfh-error-history header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #e5ecf4}.wfh-error-history header h3{margin:0;color:#203a5b;font-size:16px}.wfh-error-history header button{width:34px;height:34px;border:0;border-radius:9px;background:#eef3f8;color:#667b95;font-size:20px;cursor:pointer}
+  .wfh-error-history header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;border-bottom:1px solid #e5ecf4}.wfh-error-history header h3{margin:0;color:#203a5b;font-size:16px;white-space:nowrap}.wfh-error-history-head-main{display:flex;align-items:center;gap:18px;min-width:0;flex:1}.wfh-error-history-stats{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}.wfh-error-history-stat{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:0 9px;border:1px solid #dce6f2;border-radius:8px;background:#f7faff;color:#71839a;font-size:9px;font-weight:750;white-space:nowrap}.wfh-error-history-stat b{color:#244a79;font-size:12px}.wfh-error-history header>button{flex:0 0 auto;width:34px;height:34px;border:0;border-radius:9px;background:#eef3f8;color:#667b95;font-size:20px;cursor:pointer}
   .wfh-error-history-body{overflow:auto;padding:12px 14px 16px}.wfh-error-history table{width:100%;border-collapse:collapse;font-size:10px}.wfh-error-history th{padding:8px;background:#f5f8fc;color:#687d98;text-align:left;white-space:nowrap}.wfh-error-history td{padding:8px;border-top:1px solid #edf1f6;color:#344d6a;vertical-align:top}.wfh-error-history .wrap{white-space:normal;word-break:break-word;min-width:180px}
   .wfh-employee-risk-filter{min-width:0}
   .wfh-employee-risk-filter select{width:100%;height:40px;border:1px solid #d5e0ec;border-radius:9px;background:#fff;padding:0 10px;color:#314b68;font-size:11px}
@@ -57,7 +57,7 @@ function addStyles(){
   .employee-master-table th{font-size:9px!important;white-space:nowrap!important}.employee-master-table td:nth-child(2),.employee-master-table td:nth-child(10),.employee-master-table td:nth-child(11){white-space:nowrap!important}
   .employee-master-table .operator-chip{max-width:125px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important}.employee-master-table .row-actions{white-space:nowrap}
   @media(max-width:1450px){.employee-core-search-grid{grid-template-columns:150px repeat(2,minmax(185px,1fr))!important}.v24-advanced-filter-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}.wfh-error-primary{grid-template-columns:repeat(5,minmax(140px,1fr))}.wfh-error-advanced{grid-template-columns:repeat(4,minmax(135px,1fr))}}
-  @media(max-width:1050px){.employee-core-search-grid{grid-template-columns:1fr 1fr!important}.v24-advanced-filter-grid{grid-template-columns:1fr 1fr!important}.wfh-error-primary,.wfh-error-advanced{grid-template-columns:1fr 1fr}.wfh-error-primary>input:first-child{grid-column:1/-1}.wfh-error-unified .meta{text-align:left}}
+  @media(max-width:1050px){.employee-core-search-grid{grid-template-columns:1fr 1fr!important}.v24-advanced-filter-grid{grid-template-columns:1fr 1fr!important}.wfh-error-primary,.wfh-error-advanced{grid-template-columns:1fr 1fr}.wfh-error-primary>input:first-child{grid-column:1/-1}.wfh-error-unified .meta{text-align:left}.wfh-error-history-head-main{align-items:flex-start;flex-direction:column;gap:8px}.wfh-error-history header h3{white-space:normal}}
   `
   document.head.appendChild(s)
 }
@@ -92,12 +92,30 @@ function styleChip(chip,summary){
 }
 function riskChip(id,summary,context,name){
   const chip=document.createElement('span');chip.className='wfh-stable-risk';styleChip(chip,summary)
-  if(context==='errors'||Number(summary?.month_error_count||0)>0){chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0;const open=()=>context==='errors'?filterErrorsTo(id):openErrorHistory(id,name||id);chip.addEventListener('click',e=>{e.stopPropagation();open()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}})}
+  if(context==='errors'||Number(summary?.month_error_count||0)>0){chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0;const open=()=>context==='errors'?filterErrorsTo(id):openErrorHistory(id,name||id,summary);chip.addEventListener('click',e=>{e.stopPropagation();open()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}})}
   return chip
+}
+
+function dedupeEmployeeRiskColumns(table){
+  if(!table?.classList.contains('employee-master-table'))return
+  const head=table.querySelector('thead tr');if(!head)return
+  const gradeIndexes=[...head.children].map((cell,index)=>text(cell.textContent)==='等级'?index:-1).filter(index=>index>=0)
+  for(const index of gradeIndexes.slice(1).sort((a,b)=>b-a)){
+    head.children[index]?.remove()
+    for(const row of table.querySelectorAll('tbody tr'))row.children[index]?.remove()
+  }
+  const kept=[...head.children].find(cell=>text(cell.textContent)==='等级')
+  if(kept){kept.classList.remove('wfh-v2722-risk-head');kept.classList.add('wfh-risk-head')}
+  for(const row of table.querySelectorAll('tbody tr')){
+    const extra=[...row.querySelectorAll(':scope > .wfh-risk-cell,:scope > .wfh-v2722-risk-cell')]
+    for(const cell of extra.slice(1))cell.remove()
+    if(extra[0]){extra[0].classList.remove('wfh-v2722-risk-cell');extra[0].classList.add('wfh-risk-cell')}
+  }
 }
 async function ensureRiskColumns(){
   const map=await getSummaryMap()
   for(const table of document.querySelectorAll('.employee-master-table,.rp-errors-table')){
+    dedupeEmployeeRiskColumns(table)
     const context=table.classList.contains('rp-errors-table')?'errors':'employees'
     const head=table.querySelector('thead tr')
     if(head&&!head.querySelector(':scope > .wfh-risk-head')){const th=document.createElement('th');th.className='wfh-risk-head';th.textContent='等级';th.title='0 正常 / 1–3 注意 / 4–9 重点 / 10+ 高频';head.insertBefore(th,head.firstChild)}
@@ -120,13 +138,14 @@ function filterErrorsTo(id){
   const mirror=document.querySelector('.wfh-error-unified input[data-role="employee"]')
   if(mirror)mirror.value=id
 }
-async function openErrorHistory(id,name){
+async function openErrorHistory(id,name,summary={}){
   document.querySelector('.wfh-error-history-mask')?.remove()
   const mask=document.createElement('div');mask.className='wfh-error-history-mask'
-  const modal=document.createElement('div');modal.className='wfh-error-history';modal.innerHTML=`<header><h3>${name||id} · ${id} · 错误记录</h3><button type="button">×</button></header><div class="wfh-error-history-body">读取中...</div>`;mask.appendChild(modal);document.body.appendChild(mask)
+  const initial={month:Number(summary?.month_error_count||0),last_3d:null,last_7d:null,last_30d:Number(summary?.last_30d_error_count||0),total:Number(summary?.total_error_count||0)}
+  const modal=document.createElement('div');modal.className='wfh-error-history';modal.innerHTML=`<header><div class="wfh-error-history-head-main"><h3>${name||id} · ${id} · 错误记录</h3><div class="wfh-error-history-stats"><span class="wfh-error-history-stat" data-stat="month">本月 <b>${initial.month}</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_3d">近3天 <b>…</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_7d">近7天 <b>…</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_30d">近30天 <b>${initial.last_30d}</b> 笔</span><span class="wfh-error-history-stat" data-stat="total">累计 <b>${initial.total}</b> 笔</span></div></div><button type="button">×</button></header><div class="wfh-error-history-body">读取中...</div>`;mask.appendChild(modal);document.body.appendChild(mask)
   mask.addEventListener('mousedown',e=>{if(e.target===mask)mask.remove()});modal.querySelector('header button')?.addEventListener('click',()=>mask.remove())
   const body=modal.querySelector('.wfh-error-history-body')
-  try{const {data,error}=await supabase.functions.invoke('admin-reports',{body:{action:'errors',employee_id:id,date_basis:'qc'}});if(error||data?.error)throw new Error(data?.error||error?.message||'读取失败');const rows=data?.rows||[];if(!rows.length){body.textContent='暂无错误记录';return}body.innerHTML=`<table><thead><tr><th>质检时间</th><th>错误类型</th><th>扣分</th><th>质检人</th><th>会员/订单号</th><th>金额</th><th>错误备注</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${text(r.qc_date)||'—'}</td><td>${text(r.error_type)||'—'}</td><td>${text(r.score)||'—'}</td><td>${text(r.qc_person)||'—'}</td><td>${text(r.member_order)||'—'}</td><td>${text(r.amount)||'—'}</td><td class="wrap">${text(r.error_note)||'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){body.textContent=e?.message||'读取失败'}
+  try{const {data,error}=await supabase.functions.invoke('admin-reports',{body:{action:'errors',employee_id:id,date_basis:'qc',page_size:500}});if(error||data?.error)throw new Error(data?.error||error?.message||'读取失败');const counts=data?.period_counts||{};for(const key of ['month','last_3d','last_7d','last_30d','total']){const value=Number(counts[key]);const target=modal.querySelector(`[data-stat="${key}"] b`);if(target&&Number.isFinite(value))target.textContent=String(value)}const rows=data?.rows||[];if(!rows.length){body.textContent='暂无错误记录';return}body.innerHTML=`<table><thead><tr><th>质检时间</th><th>错误类型</th><th>扣分</th><th>质检人</th><th>会员/订单号</th><th>金额</th><th>错误备注</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${text(r.qc_date)||'—'}</td><td>${text(r.error_type)||'—'}</td><td>${text(r.score)||'—'}</td><td>${text(r.qc_person)||'—'}</td><td>${text(r.member_order)||'—'}</td><td>${text(r.amount)||'—'}</td><td class="wrap">${text(r.error_note)||'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){body.textContent=e?.message||'读取失败'}
 }
 
 function originalErrorParts(){
@@ -183,6 +202,7 @@ function triggerEmployeeReload(){
 }
 function ensureEmployeeRiskFilter(){
   const grid=document.querySelector('.employee-core-search-grid');if(!grid)return
+  if(grid.querySelector('[data-native-risk-filter="1"]')){grid.querySelectorAll('.wfh-employee-risk-filter').forEach(box=>box.remove());return}
   let box=grid.querySelector('.wfh-employee-risk-filter')
   if(!box){box=document.createElement('label');box.className='pro-filter-field wfh-employee-risk-filter';const title=document.createElement('span');title.textContent='等级';const sel=document.createElement('select');sel.innerHTML='<option value="">全部等级</option><option value="excellent">优秀（0错误）</option><option value="normal">正常（1–8）</option><option value="attention">注意（9–15）</option><option value="watch">重点（16–30）</option><option value="high">高频（31+）</option>';sel.value=riskFilter;sel.addEventListener('change',()=>{riskFilter=sel.value;employeeListCache={key:'',at:0,rows:[]};triggerEmployeeReload()});box.append(title,sel);grid.insertBefore(box,grid.firstChild)}
 }
