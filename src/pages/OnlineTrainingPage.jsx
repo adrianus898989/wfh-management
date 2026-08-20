@@ -1,4 +1,4 @@
-import React,{useEffect,useMemo,useState} from 'react'
+import React,{useEffect,useState} from 'react'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
 import '../styles-online-training.css'
@@ -7,13 +7,14 @@ const BUCKET='online-training'
 const REPORT_PAGE_SIZE=12
 const PEOPLE_PAGE_SIZE=20
 const text=value=>String(value??'').trim()
-const lower=value=>text(value).toLocaleLowerCase('zh-CN')
 const isoToday=()=>{const now=new Date();return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10)}
 const dateText=value=>value?new Date(`${value}T00:00:00`).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}):'—'
 const timeText=value=>value?new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'
 const safeFileName=name=>text(name).replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'')||'screenshot'
 const cleanAttachment=item=>({path:text(item?.path),name:text(item?.name),size:Number(item?.size||0),type:text(item?.type)})
+const attachmentWithUrl=item=>({...cleanAttachment(item),url:text(item?.url)})
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
+const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 
 const ATTENDANCE={
   normal:{label:'正常上班',tone:'green'},
@@ -36,6 +37,16 @@ function blankReport(access={}){
   }
 }
 
+function reportWithRoster(draft,rows,trainerName=''){
+  const members=rows||[]
+  return {...draft,
+    trainer_name:trainerName||draft.trainer_name||rosterValue(members,'online_trainer'),
+    leader_name:rosterValue(members,'online_leader')||rosterValue(members,'responsible'),
+    shift_name:rosterValue(members,'shift'),team_name:rosterValue(members,'team'),
+    group_name:rosterValue(members,'group'),platform:rosterValue(members,'platform'),
+  }
+}
+
 function memberFromRoster(row,index=0){
   return {
     employee_id:row.id,employee_no:row.employee_no,employee_name:row.full_name,
@@ -52,7 +63,7 @@ function draftFromReport(row){
     shift_name:row.shift_name||'',team_name:row.team_name||'',group_name:row.group_name||'',
     leader_name:row.leader_name||'',trainer_name:row.trainer_name||'',course_type:row.course_type||'',
     report_summary:row.report_summary||'',issues_summary:row.issues_summary||'',next_plan:row.next_plan||'',
-    attachments:(row.attachments||[]).map(cleanAttachment),manager_filter:row.trainer_name||row.leader_name||'',
+    attachments:(row.attachments||[]).map(attachmentWithUrl),manager_filter:row.trainer_name||'',
     roster_shift:row.shift_name||'',roster_team:row.team_name||'',roster_position:'',roster_query:'',
   }
 }
@@ -85,22 +96,9 @@ function positionPrompts(position){
   return{work:'今天负责的工作及完成情况',performance:'工作表现、效率与配合情况',issues:'发现的问题或需要协助事项',follow:'改进方向与明日安排',metric:'填写岗位相关数据（选填）'}
 }
 
-function matchesManager(row,value){
-  if(!value)return true
-  return [row.responsible,row.online_leader,row.online_trainer].some(item=>text(item)===value)
-}
-
-function findSuggestedManager(options,aliases){
-  const normalized=(aliases||[]).map(lower).filter(Boolean)
-  return (options||[]).find(option=>{
-    const candidate=lower(option)
-    return normalized.some(alias=>candidate===alias||candidate.includes(alias)||alias.includes(candidate))
-  })||''
-}
-
-function AttachmentGrid({items,onOpen}){
+function AttachmentGrid({items,onOpen,compact=false}){
   if(!items?.length)return null
-  return <div className="ot-attachments">{items.map((item,index)=><button type="button" key={item.path||index} onClick={()=>onOpen(item)}>
+  return <div className={`ot-attachments ${compact?'compact':''}`}>{items.map((item,index)=><button type="button" key={item.path||index} onClick={()=>onOpen(item)} title="点击查看大图">
     {item.url?<img src={item.url} alt={item.name||'培训截图'}/>:<span>图片</span>}
     <small>{item.name||`截图 ${index+1}`}</small>
   </button>)}</div>
@@ -181,67 +179,39 @@ export default function OnlineTrainingPage(){
   },[editor,viewing,deleteTarget,profile,history,lightbox])
 
   const roster=bootstrap?.roster||[]
-  const options=useMemo(()=>({
-    shifts:uniq(roster.map(row=>row.shift)),teams:uniq(roster.map(row=>row.team)),
-    positions:uniq(roster.map(row=>row.position)),platforms:uniq(roster.map(row=>row.platform)),
-  }),[roster])
+  const myRoster=bootstrap?.my_roster||[]
+  const canAdminSelect=Boolean(bootstrap?.access?.is_founder||bootstrap?.access?.can_manage)
+  const canOpenSubmit=Boolean(bootstrap?.access?.can_submit&&(myRoster.length||canAdminSelect))
 
   const updateDraft=(key,value)=>setEditor(current=>({...current,draft:{...current.draft,[key]:value}}))
   const updateMember=(index,key,value)=>setEditor(current=>({...current,members:current.members.map((member,i)=>i===index?{...member,[key]:value}:member)}))
   const updateMetric=(index,value)=>setEditor(current=>({...current,members:current.members.map((member,i)=>i===index?{...member,metrics:{...(member.metrics||{}),response_time:value}}:member)}))
 
-  const candidateRoster=useMemo(()=>{
-    if(!editor)return[]
-    const d=editor.draft,q=lower(d.roster_query)
-    return roster.filter(row=>{
-      if(d.manager_filter&&!matchesManager(row,d.manager_filter))return false
-      if(d.roster_shift&&row.shift!==d.roster_shift)return false
-      if(d.roster_team&&row.team!==d.roster_team)return false
-      if(d.roster_position&&row.position!==d.roster_position)return false
-      if(q&&!lower([row.employee_no,row.full_name,row.position,row.team,row.group,row.platform].join(' ')).includes(q))return false
-      return true
-    })
-  },[editor?.draft?.manager_filter,editor?.draft?.roster_shift,editor?.draft?.roster_team,editor?.draft?.roster_position,editor?.draft?.roster_query,roster])
-
   const openCreate=()=>{
     if(!bootstrap?.access?.can_submit){setError('当前账号没有线上培训提交权限');return}
-    const draft=blankReport(bootstrap.access)
-    const suggested=findSuggestedManager(bootstrap.manager_options,bootstrap.identity_aliases)
-    draft.manager_filter=suggested
-    draft.trainer_name=suggested||bootstrap.access.employee_name||''
+    const assignmentMode=myRoster.length?'linked':canAdminSelect?'admin':'unmatched'
+    const sourceRows=assignmentMode==='linked'?myRoster:[]
+    const draft=reportWithRoster(blankReport(bootstrap.access),sourceRows,bootstrap.access.employee_name)
     setPendingFiles([])
-    setEditor({original:null,draft,members:[]})
+    setEditor({original:null,assignmentMode,draft,members:sourceRows.map(memberFromRoster)})
   }
 
   const openEdit=row=>{
     setPendingFiles([])
-    setEditor({original:row,draft:draftFromReport(row),members:(row.members||[]).map(memberFromReport)})
+    setEditor({original:row,assignmentMode:'edit',draft:draftFromReport(row),members:(row.members||[]).map(memberFromReport)})
   }
 
   const releasePending=items=>items.forEach(item=>URL.revokeObjectURL(item.preview))
   const closeEditor=()=>{releasePending(pendingFiles);setPendingFiles([]);setEditor(null)}
 
-  const loadRosterMembers=()=>{
-    if(!candidateRoster.length){setError('当前筛选没有匹配到排班人员');return}
-    if(candidateRoster.length>200&&!editor.draft.manager_filter&&!editor.draft.roster_team){
-      setError('请先选择排班负责人或团队，避免一次载入过多人员');return
-    }
-    const existing=new Map(editor.members.map(member=>[member.employee_id,member]))
-    const members=candidateRoster.map((row,index)=>existing.get(row.id)||memberFromRoster(row,index))
-    const first=candidateRoster[0]||{}
+  const selectAdminTrainer=value=>{
+    const selected=value?roster.filter(row=>text(row.online_trainer)===value):[]
     setEditor(current=>({...current,
-      draft:{...current.draft,
-        trainer_name:current.draft.trainer_name||current.draft.manager_filter||first.online_trainer||'',
-        leader_name:current.draft.leader_name||first.online_leader||first.responsible||'',
-        shift_name:current.draft.shift_name||current.draft.roster_shift||first.shift||'',
-        team_name:current.draft.team_name||current.draft.roster_team||(uniq(candidateRoster.map(x=>x.team)).length===1?first.team:''),
-        platform:current.draft.platform||(uniq(candidateRoster.map(x=>x.platform)).length===1?first.platform:''),
-      },members,
+      draft:reportWithRoster({...current.draft,manager_filter:value,trainer_name:value},selected,value),
+      members:selected.map(memberFromRoster),
     }))
     setError('')
   }
-
-  const removeMember=index=>setEditor(current=>({...current,members:current.members.filter((_,i)=>i!==index).map((m,i)=>({...m,sort_order:i}))}))
 
   const addFiles=event=>{
     const files=[...(event.target.files||[])];event.target.value=''
@@ -261,9 +231,9 @@ export default function OnlineTrainingPage(){
 
   const validate=()=>{
     if(!editor.draft.report_date)return'请选择报告日期'
-    if(!editor.members.length)return'请从居家排班表载入人员'
+    if(!editor.members.length)return editor.assignmentMode==='unmatched'?'居家排班表没有找到当前账号负责的线上培训人员':'请选择需要代填的线上培训人员'
     for(const member of editor.members){
-      if(member.attendance_status==='normal'&&![member.work_details,member.performance,member.issues,member.follow_up].some(text))return`${member.employee_no} 的正常上班记录尚未填写`
+      if(member.attendance_status==='normal'&&!text(member.work_details))return`${member.employee_no} 的当天工作情况尚未填写`
       if(['leave','absent','transferred','not_applicable'].includes(member.attendance_status)&&!text(member.status_note))return`${member.employee_no} 的状态需要填写批注`
     }
     return''
@@ -350,23 +320,22 @@ export default function OnlineTrainingPage(){
     catch{setError('浏览器未允许复制，请在报告详情中手动复制')}
   }
 
-  const statusCounts=members=>Object.fromEntries(Object.keys(ATTENDANCE).map(key=>[key,(members||[]).filter(m=>m.attendance_status===key).length]))
   const clearFilters=()=>setFilters({q:'',from:'',to:''})
 
   return <div className="content-page ot-page">
     <header className="ot-header">
       <div><div className="module-kicker">ONLINE TRAINING</div><h1>线上培训日报</h1><p>人员来自居家排班表；逐人记录当天表现、休假与后续安排。</p></div>
       <div className="ot-header-actions">
-        <span className={`ot-access ${bootstrap?.access?.can_submit?'ok':'read'}`}>{bootstrap?.access?.can_submit?'可提交日报':'仅查看'}</span>
+        <span className={`ot-access ${canOpenSubmit?'ok':'read'}`}>{myRoster.length?`已关联 ${myRoster.length} 名组员`:canAdminSelect?'管理员代填':'仅查看'}</span>
         <button onClick={()=>{loadBootstrap();loadList({silent:true})}}>刷新</button>
-        {bootstrap?.access?.can_submit&&<button className="primary" onClick={openCreate}>＋ 提交线上培训日报</button>}
+        {canOpenSubmit&&<button className="primary" onClick={openCreate}>＋ 提交线上培训日报</button>}
       </div>
     </header>
 
     {error&&<div className="ot-error"><span>{error}</span><button onClick={()=>setError('')}>×</button></div>}
 
     <section className="ot-kpis">
-      <div><span>可查看排班人员</span><strong>{roster.length}</strong><small>按账号管理范围</small></div>
+      <div><span>我负责的培训人员</span><strong>{myRoster.length||'—'}</strong><small>{myRoster.length?'按账号档案自动匹配':'主管账号仅查看或代填'}</small></div>
       <div><span>历史培训日报</span><strong>{mode==='reports'?result.total:'—'}</strong><small>当前搜索结果</small></div>
       <div><span>员工培训档案</span><strong>{mode==='people'?result.total:'—'}</strong><small>有日报记录的员工</small></div>
       <div><span>排班数据更新时间</span><strong className="date">{bootstrap?.roster_synced_at?timeText(bootstrap.roster_synced_at):'读取中'}</strong><small>保存日报时固定人员快照</small></div>
@@ -386,16 +355,16 @@ export default function OnlineTrainingPage(){
     {searching&&<div className="ot-searching"><i/><span>正在搜索线上培训记录…</span></div>}
 
     {loading&&!bootstrap?<div className="ot-loading"><i/><span>正在读取排班与线上培训记录…</span></div>:
-      mode==='reports'?<ReportList rows={result.rows} onView={setViewing} onEdit={openEdit} onDelete={setDeleteTarget} onProfile={openProfile}/>
+      mode==='reports'?<ReportList rows={result.rows} onView={setViewing} onEdit={openEdit} onDelete={setDeleteTarget} onProfile={openProfile} onOpenImage={setLightbox}/>
       :<PeopleList rows={result.rows} onHistory={openHistory} onProfile={openProfile}/>
     }
 
     {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={mode==='reports'?REPORT_PAGE_SIZE:PEOPLE_PAGE_SIZE} onPage={setPage}/>}
 
     {editor&&<EditorModal editor={editor} updateDraft={updateDraft} updateMember={updateMember} updateMetric={updateMetric}
-      candidates={candidateRoster} options={options} managerOptions={bootstrap.manager_options||[]} onLoadRoster={loadRosterMembers}
-      onRemoveMember={removeMember} pendingFiles={pendingFiles} onFiles={addFiles} onRemovePending={removePending}
-      onRemoveExisting={removeExisting} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/>} 
+      assignment={bootstrap.auto_assignment||{}} trainerOptions={bootstrap.manager_options||[]} onSelectTrainer={selectAdminTrainer}
+      rosterSyncedAt={bootstrap.roster_synced_at} pendingFiles={pendingFiles} onFiles={addFiles} onRemovePending={removePending}
+      onRemoveExisting={removeExisting} onOpenImage={setLightbox} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/>} 
     {viewing&&<ViewModal row={viewing} onClose={()=>setViewing(null)} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{setViewing(null);openEdit(viewing)}} onDelete={()=>{setViewing(null);setDeleteTarget(viewing)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/>} 
     {deleteTarget&&<ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/>} 
     {profile&&<ProfileDrawer state={profile} onClose={()=>setProfile(null)}/>} 
@@ -404,7 +373,7 @@ export default function OnlineTrainingPage(){
   </div>
 }
 
-function ReportList({rows,onView,onEdit,onDelete,onProfile}){
+function ReportList({rows,onView,onEdit,onDelete,onProfile,onOpenImage}){
   if(!rows?.length)return <div className="ot-empty"><span>培</span><h3>暂时没有匹配的线上培训日报</h3><p>提交后会在这里显示，并可按员工搜索全部历史。</p></div>
   return <section className="ot-report-grid">{rows.map(row=>{
     const counts=Object.fromEntries(Object.keys(ATTENDANCE).map(key=>[key,(row.members||[]).filter(m=>m.attendance_status===key).length]))
@@ -414,6 +383,7 @@ function ReportList({rows,onView,onEdit,onDelete,onProfile}){
       <p>{row.report_summary||row.issues_summary||'已完成逐人培训记录'}</p>
       <div className="ot-counts"><b>{row.members?.length||0} 人</b><span>正常 {counts.normal||0}</span><span>休假 {counts.leave||0}</span><span>休息 {counts.rest||0}</span><span className={counts.absent?'danger':''}>缺勤 {counts.absent||0}</span></div>
       <div className="ot-member-chips">{(row.members||[]).slice(0,8).map(member=><button key={member.id} onClick={()=>onProfile(member.employee_id)}>{member.employee_no} · {member.employee_name}</button>)}{row.members?.length>8&&<span>+{row.members.length-8}</span>}</div>
+      {row.attachments?.length>0&&<AttachmentGrid items={row.attachments.slice(0,4)} onOpen={onOpenImage} compact/>}
       <footer><div><strong>{row.author_name||'后台用户'}</strong><small>{row.author_employee_no||'后台账号'} · {timeText(row.created_at)}</small></div><div><button onClick={()=>onView(row)}>查看</button>{row.can_edit&&<button onClick={()=>onEdit(row)}>编辑</button>}{row.can_edit&&<button className="danger" onClick={()=>onDelete(row)}>删除</button>}</div></footer>
     </article>
   })}</section>
@@ -429,65 +399,59 @@ function PeopleList({rows,onHistory,onProfile}){
   </article>)}</section>
 }
 
-function EditorModal({editor,updateDraft,updateMember,updateMetric,candidates,options,managerOptions,onLoadRoster,onRemoveMember,pendingFiles,onFiles,onRemovePending,onRemoveExisting,onProfile,onClose,onSave,saving}){
+function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,trainerOptions,onSelectTrainer,rosterSyncedAt,pendingFiles,onFiles,onRemovePending,onRemoveExisting,onOpenImage,onProfile,onClose,onSave,saving}){
   const d=editor.draft
+  const linked=editor.assignmentMode==='linked',admin=editor.assignmentMode==='admin',editing=editor.assignmentMode==='edit'
+  const facts=[['线上培训',d.trainer_name],['团队',d.team_name],['组别',d.group_name],['班次',d.shift_name],['平台 / 盘口',d.platform]]
   return <div className="ot-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><div className="ot-modal ot-editor">
-    <header><div><span>{editor.original?'EDIT TRAINING REPORT':'NEW TRAINING REPORT'}</span><h2>{editor.original?'编辑线上培训日报':'提交线上培训日报'}</h2></div><button onClick={onClose}>×</button></header>
+    <header><div><span>{editor.original?'EDIT TRAINING REPORT':'NEW TRAINING REPORT'}</span><h2>{editor.original?'编辑线上培训日报':'提交线上培训日报'}</h2></div><button type="button" onClick={onClose}>×</button></header>
     <div className="ot-modal-scroll">
-      <section className="ot-form-section"><div className="section-title"><div><b>1. 报告基本信息</b><small>日期、班次与负责人会出现在报告抬头</small></div></div>
-        <div className="ot-form-grid">
+      <section className="ot-form-section ot-auto-roster"><div className="section-title"><div><b>1. 账号与居家排班已自动关联</b><small>人员以「居家排班表 · 填表」的线上培训字段为准，不需要自行筛选</small></div><strong>{editor.members.length} 名组员</strong></div>
+        <div className="ot-auto-top">
           <label><span>报告日期 *</span><input type="date" value={d.report_date} onChange={e=>{updateDraft('report_date',e.target.value);if(d.title.startsWith('线上培训日报 · '))updateDraft('title',`线上培训日报 · ${e.target.value}`)}}/></label>
-          <label><span>报告标题</span><input value={d.title} onChange={e=>updateDraft('title',e.target.value)}/></label>
-          <label><span>平台 / 盘口</span><input list="ot-platforms" value={d.platform} onChange={e=>updateDraft('platform',e.target.value)} placeholder="例如：92LOTTERY / VN168"/><datalist id="ot-platforms">{options.platforms.map(x=><option value={x} key={x}/>)}</datalist></label>
-          <label><span>班次</span><select value={d.shift_name} onChange={e=>updateDraft('shift_name',e.target.value)}><option value="">请选择班次</option>{options.shifts.map(x=><option key={x}>{x}</option>)}</select></label>
-          <label><span>团队负责人 / 组长</span><input value={d.leader_name} onChange={e=>updateDraft('leader_name',e.target.value)}/></label>
-          <label><span>线上培训</span><input value={d.trainer_name} onChange={e=>updateDraft('trainer_name',e.target.value)}/></label>
-          <label><span>团队</span><input value={d.team_name} onChange={e=>updateDraft('team_name',e.target.value)}/></label>
-          <label><span>课程类型</span><input value={d.course_type} onChange={e=>updateDraft('course_type',e.target.value)} placeholder="例如：轮盘课程 / 服务流程"/></label>
+          <div className="identity"><span>{text(d.trainer_name||assignment.trainer_name).slice(0,1).toUpperCase()||'培'}</span><div><small>当前提交人 / 线上培训</small><strong>{d.trainer_name||assignment.trainer_name||'管理员代填'}</strong><em>{assignment.employee_no||'管理账号'} · 排班更新 {timeText(rosterSyncedAt)}</em></div></div>
         </div>
+        {linked&&<div className="ot-assignment-ok"><b>✓ 已自动载入本人负责的 {editor.members.length} 名组员</b><span>账号一旦关联员工档案，以后打开日报都会直接显示这份名单。</span></div>}
+        {editing&&<div className="ot-assignment-ok edit"><b>正在编辑原日报</b><span>名单沿用提交当天保存的排班快照，不会被当前排班覆盖。</span></div>}
+        {admin&&<div className="ot-admin-picker"><label><span>管理员测试 / 代填线上培训</span><select value={d.manager_filter} onChange={e=>onSelectTrainer(e.target.value)}><option value="">请选择一名线上培训人员</option>{trainerOptions.map(x=><option key={x}>{x}</option>)}</select></label><small>普通线上培训账号不会看到这个选择框，系统会按其关联档案直接载入。</small></div>}
+        {editor.assignmentMode==='unmatched'&&<div className="ot-assignment-missing"><b>居家排班表暂时没有匹配到你的组员</b><span>当前账号已关联 {assignment.employee_no} · {assignment.trainer_name}，请检查排班表“线上培训”填写的姓名是否一致。</span></div>}
+        {editor.members.length>0&&<div className="ot-auto-facts">{facts.filter(([,value])=>text(value)).map(([label,value])=><span key={label}><b>{label}</b>{value}</span>)}</div>}
       </section>
 
-      <section className="ot-form-section roster"><div className="section-title"><div><b>2. 从居家排班表载入人员</b><small>不需要手填ID和姓名；休假或休息人员保留在名单内标注状态</small></div><strong>{candidates.length} 人匹配</strong></div>
-        <div className="ot-roster-filters">
-          <select value={d.manager_filter} onChange={e=>{updateDraft('manager_filter',e.target.value);if(!d.trainer_name)updateDraft('trainer_name',e.target.value)}}><option value="">全部负责人 / 线上组长 / 线上培训</option>{managerOptions.map(x=><option key={x}>{x}</option>)}</select>
-          <select value={d.roster_shift} onChange={e=>updateDraft('roster_shift',e.target.value)}><option value="">全部班次</option>{options.shifts.map(x=><option key={x}>{x}</option>)}</select>
-          <select value={d.roster_team} onChange={e=>updateDraft('roster_team',e.target.value)}><option value="">全部团队</option>{options.teams.map(x=><option key={x}>{x}</option>)}</select>
-          <select value={d.roster_position} onChange={e=>updateDraft('roster_position',e.target.value)}><option value="">全部岗位</option>{options.positions.map(x=><option key={x}>{x}</option>)}</select>
-          <input value={d.roster_query} onChange={e=>updateDraft('roster_query',e.target.value)} placeholder="搜索ID / 姓名"/>
-          <button type="button" onClick={onLoadRoster}>载入以上人员</button>
-        </div>
-        <div className="ot-roster-preview">{candidates.slice(0,12).map(row=><span key={row.id}>{row.employee_no} · {row.full_name}</span>)}{candidates.length>12&&<em>另有 {candidates.length-12} 人</em>}</div>
+      <section className="ot-form-section"><div className="section-title"><div><b>2. 填写组员当天工作情况</b><small>名单已经带入；休假或休息只需更改状态并填写必要批注</small></div><strong>{editor.members.length} 人</strong></div>
+        {!editor.members.length?<div className="ot-no-members">{admin?'请选择一名线上培训人员，组员会立即自动出现。':'当前没有可填写的线上培训人员。'}</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} index={index} onChange={updateMember} onMetric={updateMetric} onProfile={onProfile}/>)}</div>}
       </section>
 
-      <section className="ot-form-section"><div className="section-title"><div><b>3. 逐人填写当天情况</b><small>已载入 {editor.members.length} 人；不同岗位会显示对应填写提示</small></div></div>
-        {!editor.members.length?<div className="ot-no-members">请先按负责人、班次或团队筛选，然后点击“载入以上人员”。</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} index={index} onChange={updateMember} onMetric={updateMetric} onRemove={onRemoveMember} onProfile={onProfile}/>)}</div>}
-      </section>
-
-      <section className="ot-form-section"><div className="section-title"><div><b>4. 总结与截图</b><small>可选填团队整体情况，截图最多12张</small></div></div>
-        <div className="ot-form-grid">
+      <section className="ot-form-section"><div className="section-title"><div><b>3. 上传当日图片</b><small>页面平时只显示小图，点击缩略图才会打开大图；最多12张</small></div></div>
+        <div className="ot-upload"><div><strong>工作截图 / 培训截图</strong><small>JPG / PNG / WEBP / GIF，单张不超过10MB</small></div><label>选择图片<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={onFiles}/></label></div>
+        {(d.attachments.length>0||pendingFiles.length>0)&&<div className="ot-upload-list">
+          {d.attachments.map(item=><div key={item.path}><button type="button" className="preview" disabled={!item.url} onClick={()=>item.url&&onOpenImage(item)}>{item.url?<img src={item.url} alt={item.name}/>:<span>已上传</span>}<b>{item.name}</b><small>点击查看大图</small></button><button type="button" className="remove" onClick={()=>onRemoveExisting(item.path)}>移除</button></div>)}
+          {pendingFiles.map((item,index)=><div key={item.preview}><button type="button" className="preview" onClick={()=>onOpenImage({url:item.preview,name:item.file.name})}><img src={item.preview} alt={item.file.name}/><b>{item.file.name}</b><small>点击查看大图</small></button><button type="button" className="remove" onClick={()=>onRemovePending(index)}>移除</button></div>)}
+        </div>}
+        <details className="ot-optional-summary"><summary>可选：补充团队整体总结、共同问题或下一步安排</summary><div className="ot-form-grid">
           <label className="wide"><span>整体培训总结</span><textarea rows="3" value={d.report_summary} onChange={e=>updateDraft('report_summary',e.target.value)} placeholder="概括今天整体完成情况"/></label>
           <label className="wide"><span>共同问题</span><textarea rows="3" value={d.issues_summary} onChange={e=>updateDraft('issues_summary',e.target.value)} placeholder="多人出现的共同问题"/></label>
           <label className="wide"><span>下一步安排</span><textarea rows="3" value={d.next_plan} onChange={e=>updateDraft('next_plan',e.target.value)} placeholder="明日培训重点或需要主管跟进的事项"/></label>
-        </div>
-        <div className="ot-upload"><div><strong>报告截图</strong><small>JPG / PNG / WEBP / GIF，单张不超过10MB</small></div><label>选择截图<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={onFiles}/></label></div>
-        {(d.attachments.length>0||pendingFiles.length>0)&&<div className="ot-upload-list">{d.attachments.map(item=><div key={item.path}><span>已上传</span><b>{item.name}</b><button onClick={()=>onRemoveExisting(item.path)}>移除</button></div>)}{pendingFiles.map((item,index)=><div key={item.preview}><img src={item.preview} alt={item.file.name}/><b>{item.file.name}</b><button onClick={()=>onRemovePending(index)}>移除</button></div>)}</div>}
+        </div></details>
       </section>
     </div>
-    <footer className="ot-modal-actions"><button onClick={onClose} disabled={saving}>取消</button><button className="primary" onClick={onSave} disabled={saving}>{saving?'保存中…':editor.original?'保存修改':'提交日报'}</button></footer>
+    <footer className="ot-modal-actions"><button type="button" onClick={onClose} disabled={saving}>取消</button><button type="button" className="primary" onClick={onSave} disabled={saving||!editor.members.length}>{saving?'保存中…':editor.original?'保存修改':'提交日报'}</button></footer>
   </div></div>
 }
 
-function MemberEditor({member,index,onChange,onMetric,onRemove,onProfile}){
+function MemberEditor({member,index,onChange,onMetric,onProfile}){
   const prompt=positionPrompts(member.position_name),normal=member.attendance_status==='normal'
   return <article className="ot-member-editor">
-    <header><button className="person" onClick={()=>onProfile(member.employee_id)}><span>{index+1}</span><div><strong>{member.employee_no} · {member.employee_name}</strong><small>{member.position_name||'未填写岗位'} · {member.team_name||'—'} · {member.shift_name||'—'}</small></div></button><button className="remove" onClick={()=>onRemove(index)}>移除误选</button></header>
+    <header><button type="button" className="person" onClick={()=>onProfile(member.employee_id)}><span>{index+1}</span><div><strong>{member.employee_no} · {member.employee_name}</strong><small>{member.position_name||'未填写岗位'} · {member.team_name||'—'} · {member.shift_name||'—'}</small></div></button><em>排班自动带入</em></header>
     <div className="ot-member-status"><label><span>当日状态</span><select value={member.attendance_status} onChange={e=>onChange(index,'attendance_status',e.target.value)}>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>{!normal&&<label className="note"><span>状态批注 {['leave','absent','transferred','not_applicable'].includes(member.attendance_status)?'*':''}</span><input value={member.status_note} onChange={e=>onChange(index,'status_note',e.target.value)} placeholder={member.attendance_status==='leave'?'例如：个人请假，当前为人工标记':'填写具体情况'}/></label>}</div>
-    {normal&&<div className="ot-member-fields">
-      <label><span>今日工作</span><textarea rows="3" value={member.work_details} onChange={e=>onChange(index,'work_details',e.target.value)} placeholder={prompt.work}/></label>
-      <label><span>工作表现</span><textarea rows="3" value={member.performance} onChange={e=>onChange(index,'performance',e.target.value)} placeholder={prompt.performance}/></label>
-      <label><span>发现问题</span><textarea rows="3" value={member.issues} onChange={e=>onChange(index,'issues',e.target.value)} placeholder={prompt.issues}/></label>
-      <label><span>后续安排</span><textarea rows="3" value={member.follow_up} onChange={e=>onChange(index,'follow_up',e.target.value)} placeholder={prompt.follow}/></label>
-      <label className="wide"><span>岗位数据 / 首次响应</span><input value={member.metrics?.response_time||''} onChange={e=>onMetric(index,e.target.value)} placeholder={prompt.metric}/></label>
+    {normal&&<div className="ot-member-fields compact">
+      <label className="wide"><span>当天工作情况 / 培训评语 *</span><textarea rows="4" value={member.work_details} onChange={e=>onChange(index,'work_details',e.target.value)} placeholder={`${prompt.work}；也可以直接粘贴 Telegram 报告中的完整说明。`}/></label>
+      <label className="wide"><span>岗位数据 / 首次响应（选填）</span><input value={member.metrics?.response_time||''} onChange={e=>onMetric(index,e.target.value)} placeholder={prompt.metric}/></label>
+      <details className="ot-member-more wide"><summary>可选：分别补充工作表现、发现问题、后续安排</summary><div>
+        <label><span>工作表现</span><textarea rows="3" value={member.performance} onChange={e=>onChange(index,'performance',e.target.value)} placeholder={prompt.performance}/></label>
+        <label><span>发现问题</span><textarea rows="3" value={member.issues} onChange={e=>onChange(index,'issues',e.target.value)} placeholder={prompt.issues}/></label>
+        <label><span>后续安排</span><textarea rows="3" value={member.follow_up} onChange={e=>onChange(index,'follow_up',e.target.value)} placeholder={prompt.follow}/></label>
+      </div></details>
     </div>}
   </article>
 }
