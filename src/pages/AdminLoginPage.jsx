@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 
-function withTimeout(promise, ms = 20000) {
+function withTimeout(promise, ms = 120000) {
   let timer
   const timeout = new Promise((_, reject) => {
     timer = window.setTimeout(() => reject(new Error('TIMEOUT')), ms)
