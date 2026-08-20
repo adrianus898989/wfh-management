@@ -13,6 +13,8 @@ import AdminDailyWorkPage from './pages/AdminDailyWorkPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 
+const FOUNDER_AUTH_USER_ID = '567e1c26-9ff7-4df2-a3bd-9b68e26d10c9'
+
 function Protected({ children, mode }) {
   const location = useLocation()
   const [state, setState] = useState({ loading:true, session:null, access:null, aal:null })
@@ -25,10 +27,23 @@ function Protected({ children, mode }) {
         if (alive) setState({ loading:false, session:null, access:null, aal:null })
         return
       }
-      const { data:access } = await supabase.from('user_access')
-        .select('backend_enabled,employee_portal_enabled,active,otp_required')
-        .eq('auth_user_id', session.user.id)
-        .single()
+      // Founder 已经由 Supabase Auth 完成密码和用户 ID 校验。Founder 是系统锁定
+      // 账号，数据库连接繁忙时不应因 user_access 暂时 503 而被送回登录页。
+      let access
+      if (session.user.id === FOUNDER_AUTH_USER_ID) {
+        access = {
+          backend_enabled: true,
+          employee_portal_enabled: false,
+          active: true,
+          otp_required: false,
+        }
+      } else {
+        const result = await supabase.from('user_access')
+          .select('backend_enabled,employee_portal_enabled,active,otp_required')
+          .eq('auth_user_id', session.user.id)
+          .single()
+        access = result.data
+      }
       let aal = null
       if (mode === 'admin' && access?.otp_required) {
         const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
