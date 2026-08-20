@@ -55,6 +55,29 @@ function between(date: string, from: string, to: string) {
   return true
 }
 
+function isoDayOffset(date: string, offset: number) {
+  const value = new Date(`${date}T00:00:00Z`)
+  value.setUTCDate(value.getUTCDate() + offset)
+  return value.toISOString().slice(0, 10)
+}
+
+function periodCounts(rows: any[]) {
+  const today = new Date().toISOString().slice(0, 10)
+  const month = today.slice(0, 7)
+  const from3 = isoDayOffset(today, -2)
+  const from7 = isoDayOffset(today, -6)
+  const from30 = isoDayOffset(today, -29)
+  const dates = rows.map(row => normalizeDate(row.qc_date)).filter(Boolean)
+  return {
+    month: dates.filter(date => date.startsWith(month) && date <= today).length,
+    last_3d: dates.filter(date => date >= from3 && date <= today).length,
+    last_7d: dates.filter(date => date >= from7 && date <= today).length,
+    last_30d: dates.filter(date => date >= from30 && date <= today).length,
+    total: rows.length,
+    as_of: today,
+  }
+}
+
 function unique(values: unknown[]) {
   return [...new Set((values || []).map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
 }
@@ -266,6 +289,7 @@ Deno.serve(async req => {
     const requestedSize = Number(body.page_size || 30)
     const pageSize = pageSizeOptions.includes(requestedSize) ? requestedSize : 30
     const total = allRows.length
+    const counts = periodCounts(allRows)
     const pages = Math.max(1, Math.ceil(total / pageSize))
     const page = Math.min(Math.max(1, Number(body.page || 1)), pages)
     const start = (page - 1) * pageSize
@@ -280,6 +304,7 @@ Deno.serve(async req => {
       source_synced_at: sourceSyncedAt,
       rows: pageRows,
       total,
+      period_counts: counts,
       page,
       page_size: pageSize,
       pages,
