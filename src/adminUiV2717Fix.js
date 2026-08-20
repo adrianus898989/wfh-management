@@ -107,7 +107,7 @@ function addStyles(){
     .rp-errors-table td:nth-child(3){font-weight:650!important;color:#2b4564!important}
     .rp-errors-table .rp-cell-clamp{max-width:100%!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
 
-    /* Order statistics: while scrolling right, always keep employee ID + name visible. */
+    /* Order statistics: while scrolling right, always keep hire date + employee ID + name visible. */
     .rp-order-scroll{position:relative!important;overflow:auto!important}
     .rp-order-table{border-collapse:separate!important;border-spacing:0!important}
     .rp-order-table th:nth-child(1),.rp-order-table td:nth-child(1){
@@ -117,14 +117,19 @@ function addStyles(){
     }
     .rp-order-table th:nth-child(2),.rp-order-table td:nth-child(2){
       position:sticky!important;left:104px!important;z-index:5!important;
+      width:104px!important;min-width:104px!important;max-width:104px!important;
+      background:#fff!important;
+    }
+    .rp-order-table th:nth-child(3),.rp-order-table td:nth-child(3){
+      position:sticky!important;left:208px!important;z-index:5!important;
       width:190px!important;min-width:190px!important;max-width:190px!important;
       background:#fff!important;
       box-shadow:8px 0 12px -12px rgba(20,48,82,.55)!important;
     }
-    .rp-order-table thead th:nth-child(1),.rp-order-table thead th:nth-child(2){
+    .rp-order-table thead th:nth-child(1),.rp-order-table thead th:nth-child(2),.rp-order-table thead th:nth-child(3){
       z-index:8!important;background:#f2f6fb!important;
     }
-    .rp-order-table tbody tr:hover td:nth-child(1),.rp-order-table tbody tr:hover td:nth-child(2){background:#f8fbff!important}
+    .rp-order-table tbody tr:hover td:nth-child(1),.rp-order-table tbody tr:hover td:nth-child(2),.rp-order-table tbody tr:hover td:nth-child(3){background:#f8fbff!important}
   `
   document.head.appendChild(s)
 }
