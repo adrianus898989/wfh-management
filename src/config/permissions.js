@@ -1,6 +1,7 @@
 export const ROLES = {
   FOUNDER: 'founder',
   SUPERVISOR: 'supervisor',
+  SENIOR_TEAM_LEADER: 'senior_team_leader',
   TEAM_LEADER: 'team_leader',
   TRAINER: 'trainer',
   ASSISTANT: 'assistant',
@@ -10,6 +11,7 @@ export const ROLES = {
 export const ROLE_LABELS = {
   founder: 'Founder / 创办人',
   supervisor: '主管',
+  senior_team_leader: '大组长',
   team_leader: '组长',
   trainer: '培训老师',
   assistant: '助理',
@@ -53,6 +55,10 @@ export const PERMISSIONS = {
   REPORT_EDIT: 'report.edit',
   DAILY_WORK_SUBMIT: 'daily_work.submit',
   DAILY_WORK_MANAGE: 'daily_work.manage',
+  ONLINE_TRAINING_VIEW: 'online_training.view',
+  ONLINE_TRAINING_SUBMIT: 'online_training.submit',
+  ONLINE_TRAINING_REVIEW: 'online_training.review',
+  ONLINE_TRAINING_MANAGE: 'online_training.manage',
   ADJUSTMENT_CREATE: 'adjustment.create',
   ADJUSTMENT_APPROVE: 'adjustment.approve',
 
@@ -111,6 +117,9 @@ export const ROLE_TEMPLATES = {
       PERMISSIONS.LEAVE_APPROVE,
       PERMISSIONS.REPORT_VIEW,
       PERMISSIONS.DAILY_WORK_SUBMIT,
+      PERMISSIONS.ONLINE_TRAINING_VIEW,
+      PERMISSIONS.ONLINE_TRAINING_SUBMIT,
+      PERMISSIONS.ONLINE_TRAINING_REVIEW,
       PERMISSIONS.ADJUSTMENT_CREATE,
       PERMISSIONS.EXAM_VIEW,
       PERMISSIONS.PAYROLL_VIEW,
@@ -133,6 +142,29 @@ export const ROLE_TEMPLATES = {
       PERMISSIONS.REPORT_VIEW,
       PERMISSIONS.REPORT_EDIT,
       PERMISSIONS.DAILY_WORK_SUBMIT,
+      PERMISSIONS.ONLINE_TRAINING_VIEW,
+      PERMISSIONS.ONLINE_TRAINING_SUBMIT,
+      PERMISSIONS.ONLINE_TRAINING_REVIEW,
+      PERMISSIONS.ADJUSTMENT_CREATE,
+      PERMISSIONS.USER_DISABLE_EMPLOYEE
+    ]
+  },
+
+  senior_team_leader: {
+    backendEnabled: true,
+    employeePortalEnabled: true,
+    dataScope: DATA_SCOPES.ASSIGNED_TEAMS,
+    permissions: [
+      PERMISSIONS.EMPLOYEE_VIEW,
+      PERMISSIONS.TEAM_VIEW,
+      PERMISSIONS.SCHEDULE_VIEW,
+      PERMISSIONS.ATTENDANCE_VIEW,
+      PERMISSIONS.LEAVE_APPROVE,
+      PERMISSIONS.REPORT_VIEW,
+      PERMISSIONS.DAILY_WORK_SUBMIT,
+      PERMISSIONS.ONLINE_TRAINING_VIEW,
+      PERMISSIONS.ONLINE_TRAINING_SUBMIT,
+      PERMISSIONS.ONLINE_TRAINING_REVIEW,
       PERMISSIONS.ADJUSTMENT_CREATE,
       PERMISSIONS.USER_DISABLE_EMPLOYEE
     ]
@@ -147,6 +179,8 @@ export const ROLE_TEMPLATES = {
       PERMISSIONS.REPORT_VIEW,
       PERMISSIONS.REPORT_EDIT,
       PERMISSIONS.DAILY_WORK_SUBMIT,
+      PERMISSIONS.ONLINE_TRAINING_VIEW,
+      PERMISSIONS.ONLINE_TRAINING_SUBMIT,
       PERMISSIONS.EXAM_VIEW,
       PERMISSIONS.EXAM_MANAGE,
       PERMISSIONS.EXAM_GRADE
@@ -210,6 +244,10 @@ export const PERMISSION_GROUPS = [
       [PERMISSIONS.REPORT_EDIT, '填写/编辑日报'],
       [PERMISSIONS.DAILY_WORK_SUBMIT, '提交每日工作'],
       [PERMISSIONS.DAILY_WORK_MANAGE, '管理全部每日工作'],
+      [PERMISSIONS.ONLINE_TRAINING_VIEW, '查看范围内线上培训日报'],
+      [PERMISSIONS.ONLINE_TRAINING_SUBMIT, '提交线上培训日报'],
+      [PERMISSIONS.ONLINE_TRAINING_REVIEW, '批注线上培训日报'],
+      [PERMISSIONS.ONLINE_TRAINING_MANAGE, '管理全部线上培训日报'],
       [PERMISSIONS.ADJUSTMENT_CREATE, '录入出错/扣款/奖金'],
       [PERMISSIONS.ADJUSTMENT_APPROVE, '审核出错/扣款/奖金']
     ]

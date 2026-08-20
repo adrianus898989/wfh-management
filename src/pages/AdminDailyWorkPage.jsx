@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
+import OnlineTrainingPage from './OnlineTrainingPage'
 import '../styles-daily-work.css'
 
 const BUCKET = 'daily-work'
@@ -9,7 +10,6 @@ const PAGE_SIZE = 12
 const TABS = [
   { label:'每日工作报告', value:'work', icon:'工', color:'blue' },
   { label:'线上培训报告', value:'training', icon:'培', color:'violet' },
-  { label:'交接记录', value:'handover', icon:'交', color:'amber' },
 ]
 const TYPE_MAP = Object.fromEntries(TABS.map(item => [item.value, item]))
 const STATUS_MAP = {
@@ -88,7 +88,7 @@ function AttachmentGrid({ attachments, onOpen, compact=false }) {
   </div>
 }
 
-export default function AdminDailyWorkPage() {
+function LegacyDailyWorkPage() {
   const [searchParams,setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const tab = TABS.find(item => item.label === requestedTab) || TABS[0]
@@ -370,7 +370,7 @@ export default function AdminDailyWorkPage() {
       <div>
         <div className="module-kicker">DAILY WORKSPACE</div>
         <h1>每日工作</h1>
-        <p>负责人、组长与线上培训在系统提交每日工作、培训情况和交接记录。</p>
+        <p>负责人和组长在系统提交每日工作情况；线上培训使用独立的排班关联日报。</p>
       </div>
       <div className="dw-header-actions">
         <span className={'dw-access-pill ' + (access.canSubmit ? 'ok' : 'read')}>
@@ -386,8 +386,6 @@ export default function AdminDailyWorkPage() {
     <section className="dw-summary-grid">
       <div><span>今日提交</span><strong>{summary.today}</strong><em>份报告</em></div>
       <div><span>工作报告</span><strong>{summary.work}</strong><em>累计记录</em></div>
-      <div><span>线上培训</span><strong>{summary.training}</strong><em>累计记录</em></div>
-      <div><span>交接记录</span><strong>{summary.handover}</strong><em>累计记录</em></div>
     </section>
 
     <nav className="dw-tabs" aria-label="每日工作子页面">
@@ -492,9 +490,7 @@ export default function AdminDailyWorkPage() {
           <button className="dw-close" onClick={closeEditor} disabled={saving}>×</button>
         </div>
         <div className="dw-editor-scroll">
-          <div className="dw-type-switch">
-            {TABS.map(item=><button type="button" key={item.value} className={modal.draft.report_type===item.value?'active '+item.color:''} onClick={()=>updateDraft('report_type',item.value)}><span>{item.icon}</span>{item.label}</button>)}
-          </div>
+          <div className="dw-type-switch"><button type="button" className="active blue"><span>工</span>每日工作报告</button></div>
           <div className="dw-form-grid">
             <label className="wide"><span>报告标题 *</span><input value={modal.draft.title} maxLength={160} onChange={event=>updateDraft('title',event.target.value)} placeholder="例如：AR 夜班客服团队每日工作报告"/></label>
             <label><span>日期起 *</span><input type="date" value={modal.draft.report_date} onChange={event=>updateDraft('report_date',event.target.value)}/></label>
@@ -543,4 +539,9 @@ export default function AdminDailyWorkPage() {
       <span>{lightbox.name||'报告截图'}</span>
     </div>}
   </div>
+}
+
+export default function AdminDailyWorkPage(){
+  const [searchParams]=useSearchParams()
+  return searchParams.get('tab')==='线上培训报告'?<OnlineTrainingPage/>:<LegacyDailyWorkPage/>
 }

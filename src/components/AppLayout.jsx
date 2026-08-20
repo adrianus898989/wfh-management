@@ -32,7 +32,6 @@ const ADMIN_NAV = [
   { to:'/admin/daily', label:'每日工作', icon:'日', children:[
     ['每日工作报告', `/admin/daily?tab=${enc('每日工作报告')}`],
     ['线上培训报告', `/admin/daily?tab=${enc('线上培训报告')}`],
-    ['交接记录', `/admin/daily?tab=${enc('交接记录')}`],
   ]},
   { to:'/admin/training', label:'培训与考试', icon:'训', children:[
     ['考试概览', `/admin/training?tab=${enc('考试概览')}`],

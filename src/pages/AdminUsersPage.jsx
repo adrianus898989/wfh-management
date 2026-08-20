@@ -144,12 +144,17 @@ export default function AdminUsersPage() {
     const { mode, form } = accountModal
     setError('')
     try {
+      const selectedRole = roles.find(role => role.id === form.role_id)
+      if (['supervisor','team_leader','senior_team_leader','trainer'].includes(selectedRole?.code) && !form.employee_id) {
+        throw new Error('主管、组长和培训账号必须关联员工档案，才能自动识别本人和下属')
+      }
       if (mode === 'create') {
         await call({ action: 'create_backend', ...form })
       } else {
         await call({
           action: 'update_backend',
           auth_user_id: form.auth_user_id,
+          employee_id: form.employee_id,
           role_id: form.role_id,
           data_scope: form.data_scope,
           team_ids: form.team_ids,
@@ -294,13 +299,14 @@ export default function AdminUsersPage() {
           {tab === 'backend' && (
             <div className="data-card table-scroll">
               <table className="data-table">
-                <thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>范围</th><th>OTP</th><th>状态</th><th>操作</th></tr></thead>
+                <thead><tr><th>用户名</th><th>关联员工ID</th><th>姓名</th><th>角色</th><th>范围</th><th>OTP</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody>
                   {backend.map(a => {
                     const role = getRole(a)
                     const founder = role?.code === 'founder'
                     return <tr key={a.auth_user_id}>
                       <td><strong>{a.login_username || '-'}</strong></td>
+                      <td><strong>{a.employee?.employee_no || '未关联'}</strong></td>
                       <td>{a.employee?.full_name || '-'}</td>
                       <td>{role?.name || '-'}</td>
                       <td>{scopeLabel(a.data_scope)}</td>
@@ -379,13 +385,13 @@ export default function AdminUsersPage() {
             </div>
 
             <div className="form-grid">
+              <label>关联员工档案
+                <select value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value}}))}>
+                  <option value="">不关联（不能自动识别下属）</option>
+                  {employees.map(e => <option key={e.id} value={e.id}>{e.employee_no} · {e.full_name}</option>)}
+                </select>
+              </label>
               {accountModal.mode === 'create' && <>
-                <label>关联员工
-                  <select value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value}}))}>
-                    <option value="">不关联</option>
-                    {employees.map(e => <option key={e.id} value={e.id}>{e.employee_no} · {e.full_name}</option>)}
-                  </select>
-                </label>
                 <label>用户名
                   <input value={accountModal.form.username} onChange={e => setAccountModal(x => ({...x, form:{...x.form, username:e.target.value.toLowerCase()}}))}/>
                 </label>
