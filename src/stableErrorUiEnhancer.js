@@ -196,7 +196,7 @@ function patchInvoke(){
   supabase.functions.__wfhStableRiskPatched=true
 }
 
-async function run(){if(stopped)return;scheduled=false;buildErrorFilter();await ensureRiskColumns();compactErrorTable()}
+async function run(){if(stopped)return;scheduled=false;if(document.querySelector('.rp-errors-table[data-native-errors-v2723]'))return;buildErrorFilter();await ensureRiskColumns();compactErrorTable()}
 function schedule(){if(stopped||scheduled)return;scheduled=true;setTimeout(run,120)}
 export function startStableErrorUiEnhancer(){
   if(window.__WFH_STABLE_ERROR_UI__)return

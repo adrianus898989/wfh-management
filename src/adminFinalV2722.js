@@ -225,7 +225,7 @@ async function injectDrawerRisk(){
     const id=upper(drawer.querySelector('.employee-id-line')?.textContent);if(!id||id.includes('读取'))continue
     drawer.querySelector('.profile-status-line.is-complete')?.remove()
     const map=await getSummary(),s=map.get(id)||{},isReport=drawer.closest('.wfh-v2721-employee-mask')
-    const label=isReport?reportGradeLabel(reportGradeKey(s.month_error_count||0)):employeeRiskLabel(employeeRiskKey(s.month_error_count||0))
+    const label=reportGradeLabel(text(s.risk_level)||reportGradeKey(s.month_error_count||0))
     let box=drawer.querySelector('.wfh-v2722-risk-summary')
     if(!box){box=document.createElement('div');box.className='wfh-v2722-risk-summary';const hero=drawer.querySelector('.employee-hero');hero?.insertAdjacentElement('afterend',box)}
     if(!box)continue
@@ -239,6 +239,7 @@ function forceReportRefreshOnce(){if(!isReports()||forceReportReloaded||!errorCa
 async function run(){
   if(stopped)return;scheduled=false
   if(isReports()){
+    if(document.querySelector('.rp-errors-table[data-native-errors-v2723]')){patchChartTooltips();return}
     ensureErrorFilters();forceReportRefreshOnce();patchChartTooltips();await decorateReportGrades();await injectDrawerRisk();return
   }
   document.querySelector('.rp-filterbar')?.style.removeProperty('display')

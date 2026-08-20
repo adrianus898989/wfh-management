@@ -7,6 +7,12 @@ const OPS=['总汇','人员','排班表','盘口人数','统计','错误统计']
 const SPECIAL_POSITIONS=['出款','彩金','客服','查单']
 const blankFilters=()=>({q:'',shift:'',team:'',group:'',position:'',country:'',supervisor:'',platform:''})
 const uniq=arr=>[...new Set((arr||[]).map(text).filter(Boolean))]
+const ERROR_GRADE_CHOICES=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
+const errorGradeLabel=value=>({excellent:'优秀',normal:'正常',attention:'注意',watch:'重点',high:'高频'}[text(value)]||'优秀')
+const employeeStatusName=value=>({active:'在职',probation:'试用',suspended:'停用',inactive:'停用',resigned:'离职'}[text(value)]||text(value)||'—')
+const employeeTypeName=value=>({home_ph:'纯居家菲律宾',onsite_to_home:'现场转居家',home_vn:'纯居家越南',home_id:'纯居家印尼',home_mm:'纯居家缅甸'}[text(value)]||text(value)||'—')
+const formatDate=value=>text(value).slice(0,10)||'—'
+const formatDateTime=value=>{if(!text(value))return'—';const d=new Date(value);return Number.isNaN(d.getTime())?text(value):d.toLocaleString('zh-CN',{hour12:false})}
 const personKey=r=>text(r.name)
 const uniqueCount=rows=>new Set((rows||[]).map(personKey).filter(Boolean)).size
 const fmtPct=(n,d)=>d?`${((Number(n)||0)/(Number(d)||1)*100).toFixed(2)}%`:'0.00%'
@@ -64,15 +70,15 @@ export default function AdminReportsPage(){
     </div>
     {error&&<div className="rp-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <div className="rp-tabs">{OPS.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}</div>
-    <GlobalFilters value={filters} onChange={setFilters} options={overview?.options||{}} meta={`${overview?.roster?.length||0} 行 · 当前筛选 ${roster.length} 行 · ${uniqueCount(roster)} 人`}/>
-    <div className="rp-source-strip"><span><i/>人员：居家排班表 / 填表 {syncRoster?.row_count?`· ${syncRoster.row_count} 行`:''}</span><span><i/>账号映射：居家排班表 / 账号</span><span><i/>效率：效率表 / 网站数据（工作表4 + 填表） {syncOrders?.row_count?`· ${syncOrders.row_count} 行`:''}</span><span><i/>错误：效率表 / 员工错误</span></div>
+    {tab!=='错误统计'&&<GlobalFilters value={filters} onChange={setFilters} options={overview?.options||{}} meta={`${overview?.roster?.length||0} 行 · 当前筛选 ${roster.length} 行 · ${uniqueCount(roster)} 人`}/>}
+    {tab!=='错误统计'&&<div className="rp-source-strip"><span><i/>人员：居家排班表 / 填表 {syncRoster?.row_count?`· ${syncRoster.row_count} 行`:''}</span><span><i/>账号映射：居家排班表 / 账号</span><span><i/>效率：效率表 / 网站数据（工作表4 + 填表） {syncOrders?.row_count?`· ${syncOrders.row_count} 行`:''}</span><span><i/>错误：效率表 / 员工错误</span></div>}
     {loading&&!overview?<Loading/>:<>
       {tab==='总汇'&&<Overview data={overview} rows={roster}/>} 
       {tab==='人员'&&<People rows={roster}/>} 
       {tab==='排班表'&&<Schedule rows={roster}/>} 
       {tab==='盘口人数'&&<Platforms rows={roster}/>} 
       {tab==='统计'&&<Orders invoke={invoke} roster={roster} onError={setError}/>} 
-      {tab==='错误统计'&&<Errors invoke={invoke} roster={roster} onError={setError}/>} 
+      {tab==='错误统计'&&<Errors onError={setError}/>}
     </>}
   </div>
 }
@@ -103,43 +109,66 @@ function Platforms({rows}){const [modal,setModal]=useState(null),total=uniqueCou
 
 function Orders({invoke,roster,onError}){const [range,setRange]=useState({from:'',to:''}),[position,setPosition]=useState(''),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'total',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[mistakes,setMistakes]=useState(null);const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'orders',date_from:next.from,date_to:next.to});setData(d);onError('')}catch(e){onError(e.message||'统计读取失败')}finally{setLoading(false)}};useEffect(()=>{load()},[]);useEffect(()=>{const t=setInterval(()=>load(range),60000);return()=>clearInterval(t)},[range.from,range.to]);const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster]);const rows=useMemo(()=>{let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id)&&(!position||r.position===position));x=[...x].sort((a,b)=>{const av=Number(a[sort.key]||0),bv=Number(b[sort.key]||0);return sort.asc?av-bv:bv-av});return x},[data,allowed,position,sort]);useEffect(()=>setPage(1),[position,sort,size,roster]);const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size),dates=data?.dates||[];const changeSort=key=>setSort(s=>({key,asc:s.key===key?!s.asc:false}));const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)};const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:range.from,date_to:range.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){onError(e.message||'错误记录读取失败')}};return <section className="rp-card"><div className="rp-card-title"><div><h2>员工订单处理统计</h2><p>与原版同源：效率表「网站数据」（由 工作表4 + 填表 生成）+ 居家排班表「账号」做后台账号 → ID 映射。</p></div><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'读取中'}</span></div><div className="rp-order-toolbar"><label>日期起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>日期止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><Select value={position} onChange={setPosition} options={data?.options?.positions||[]} all="全部岗位"/><button className="primary" onClick={()=>load()}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>{loading&&!data?<div className="rp-loading-inline">读取订单统计…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th>入职时间</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td>{r.hire_date||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section>}
 
-function Errors({invoke,roster,onError}){
-  const [range,setRange]=useState({from:'',to:''}),[data,setData]=useState(null),[loading,setLoading]=useState(true),[q,setQ]=useState(''),[type,setType]=useState(''),[qc,setQc]=useState(''),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null)
-  const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'errors',date_from:next.from,date_to:next.to});setData(d);onError('')}catch(e){onError(e.message||'错误统计读取失败')}finally{setLoading(false)}}
-  useEffect(()=>{load()},[])
-  useEffect(()=>{const t=setInterval(()=>load(range),60000);return()=>clearInterval(t)},[range.from,range.to])
-  const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])
-  const rosterFilterActive=Boolean(data)&&allowed.size<Number(data?.current_roster_employee_count||allowed.size)
-  const setSortKey=key=>setSort(prev=>({key,asc:prev.key===key?!prev.asc:true}))
+const blankErrorFilters=()=>({employee_id:'',employee_name:'',risk_level:'',error_type:'',qc_person:'',shift:'',team:'',group:'',position:'',country:'',manager:'',platform:''})
+
+function Errors({onError}){
+  const [range,setRange]=useState({from:'',to:''}),[filters,setFilters]=useState(blankErrorFilters()),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null),[employeeNo,setEmployeeNo]=useState('')
+  const load=async({nextRange=range,nextFilters=filters,nextSort=sort,nextPage=page,nextSize=size,silent=false}={})=>{
+    if(!silent)setLoading(true)
+    try{
+      const {data:result,error}=await supabase.functions.invoke('admin-report-errors',{body:{date_from:nextRange.from,date_to:nextRange.to,...nextFilters,page:nextPage,page_size:nextSize,sort_key:nextSort.key,sort_dir:nextSort.asc?'asc':'desc'}})
+      if(error||result?.error)throw new Error(result?.error||error?.message||'错误统计读取失败')
+      setData(result);setPage(Number(result?.page||nextPage));onError('')
+    }catch(e){onError(e.message||'错误统计读取失败')}
+    finally{if(!silent)setLoading(false)}
+  }
+  useEffect(()=>{load({nextPage:1})},[])
+  useEffect(()=>{const timer=setInterval(()=>load({silent:true}),60000);return()=>clearInterval(timer)},[range,filters,sort,page,size])
+  const updateFilter=(key,value,runNow=false)=>{const next={...filters,[key]:value};setFilters(next);setPage(1);if(runNow)load({nextFilters:next,nextPage:1})}
+  const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);setPage(1);load({nextRange:next,nextPage:1})}
+  const reset=()=>{const nextFilters=blankErrorFilters(),nextRange={from:'',to:''},nextSort={key:'qc_date',asc:false};setFilters(nextFilters);setRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1})}
+  const setSortKey=key=>{const next={key,asc:sort.key===key?!sort.asc:true};setSort(next);setPage(1);load({nextSort:next,nextPage:1})}
+  const changePage=next=>{setPage(next);load({nextPage:next})}
+  const changeSize=next=>{setSize(next);setPage(1);load({nextSize:next,nextPage:1})}
   const sortMark=key=>sort.key===key?(sort.asc?' ↑':' ↓'):' ↕'
-  const rows=useMemo(()=>{
-    let x=(data?.rows||[]).filter(r=>!rosterFilterActive||allowed.has(r.employee_id))
-    const qq=q.trim().toLowerCase()
-    if(qq)x=x.filter(r=>[r.employee_id,r.name].map(text).join(' ').toLowerCase().includes(qq))
-    if(type)x=x.filter(r=>r.error_type===type)
-    if(qc)x=x.filter(r=>r.qc_person===qc)
-    x=[...x].sort((a,b)=>{
-      if(sort.key==='score'){
-        const av=Number(a.score||0),bv=Number(b.score||0)
-        return sort.asc?av-bv:bv-av
-      }
-      const av=text(a?.[sort.key]),bv=text(b?.[sort.key])
-      return sort.asc?av.localeCompare(bv,'zh-CN',{numeric:true}):bv.localeCompare(av,'zh-CN',{numeric:true})
-    })
-    return x
-  },[data,allowed,q,type,qc,sort])
-  useEffect(()=>setPage(1),[q,type,qc,sort,size,roster])
-  const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size)
-  const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)}
   const SortTh=({field,children})=><th><button className="rp-sort-head" onClick={()=>setSortKey(field)}>{children}{sortMark(field)}</button></th>
-  return <section className="rp-card">
-    <div className="rp-card-title"><div><h2>员工错误统计</h2><p>主表只保留管理重点；会员/订单号、金额、错误备注、正确操作方式统一放进「查看」详情。</p></div><span>{rows.length} 条</span></div>
-    <div className="rp-order-toolbar"><label>质检时间起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>质检时间止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><button className="primary" onClick={()=>load()}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>
-    <div className="rp-error-filters"><input value={q} onChange={e=>setQ(e.target.value)} placeholder="输入员工ID / 姓名"/><Select value={type} onChange={setType} options={data?.options?.error_types||[]} all="全部错误类型"/><Select value={qc} onChange={setQc} options={data?.options?.qc_people||[]} all="全部质检人"/><button onClick={()=>{setQ('');setType('');setQc('')}}>重置</button></div>
-    {loading&&!data?<div className="rp-loading-inline">读取员工错误…</div>:<><div className="rp-table-scroll rp-errors-scroll"><table className="rp-table rp-errors-table"><thead><tr><SortTh field="employee_id">员工ID</SortTh><SortTh field="name">姓名</SortTh><SortTh field="team">团队</SortTh><SortTh field="position">岗位</SortTh><SortTh field="platform">盘口</SortTh><SortTh field="error_type">错误类型</SortTh><SortTh field="score">扣分</SortTh><SortTh field="qc_person">质检人</SortTh><SortTh field="qc_date">质检时间</SortTh><SortTh field="leader_review">小组长复审</SortTh><SortTh field="qc_result">质检人对/错</SortTh><SortTh field="review_date">复检时间</SortTh><th>操作</th></tr></thead><tbody>{slice.map(r=><tr key={r.key}><td><button className="rp-link" onClick={()=>setDetail(r)}>{r.employee_id}</button></td><td>{r.name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td><div className="rp-cell-clamp" title={r.platform}>{r.platform||'—'}</div></td><td><div className="rp-cell-clamp" title={r.error_type}>{r.error_type||'—'}</div></td><td>{text(r.score)===''?'—':r.score}</td><td>{r.qc_person||'—'}</td><td>{r.qc_date||'—'}</td><td><div className="rp-cell-clamp">{r.leader_review||'—'}</div></td><td><div className="rp-cell-clamp">{r.qc_result||'—'}</div></td><td>{r.review_date||'—'}</td><td><button className="rp-view-error" onClick={()=>setDetail(r)}>查看</button></td></tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}
+  const options=data?.options||{}
+  const total=Number(data?.total||0),pages=Math.max(1,Number(data?.pages||1)),rows=data?.rows||[]
+
+  return <section className="rp-card rp-native-errors-card">
+    <div className="rp-card-title"><div><h2>员工错误统计</h2><p>员工档案与错误统计独立；ID 在本页直接打开员工档案，查看按钮只看该笔错误。</p></div><span>{loading&&!data?'读取中…':loading?`更新中 · 共 ${total} 条`:`共 ${total} 条`}</span></div>
+    <div className="rp-order-toolbar"><label>质检时间起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>质检时间止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><button className="primary" onClick={()=>{setPage(1);load({nextPage:1})}}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>
+    <div className="rp-native-error-filters primary"><input value={filters.employee_id} onChange={e=>updateFilter('employee_id',e.target.value)} onKeyDown={e=>{if(e.key==='Enter')load({nextPage:1})}} placeholder="输入员工ID"/><input value={filters.employee_name} onChange={e=>updateFilter('employee_name',e.target.value)} onKeyDown={e=>{if(e.key==='Enter')load({nextPage:1})}} placeholder="输入姓名"/><select value={filters.risk_level} onChange={e=>updateFilter('risk_level',e.target.value,true)}>{ERROR_GRADE_CHOICES.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select><Select value={filters.error_type} onChange={value=>updateFilter('error_type',value,true)} options={options.error_types||[]} all="全部错误类型"/><Select value={filters.qc_person} onChange={value=>updateFilter('qc_person',value,true)} options={options.qc_people||[]} all="全部质检人"/><button onClick={reset}>重置</button></div>
+    <div className="rp-native-error-filters advanced"><Select value={filters.shift} onChange={value=>updateFilter('shift',value,true)} options={options.shifts||[]} all="全部班次"/><Select value={filters.team} onChange={value=>updateFilter('team',value,true)} options={options.teams||[]} all="全部团队"/><Select value={filters.group} onChange={value=>updateFilter('group',value,true)} options={options.groups||[]} all="全部组别"/><Select value={filters.position} onChange={value=>updateFilter('position',value,true)} options={options.positions||[]} all="全部岗位"/><Select value={filters.country} onChange={value=>updateFilter('country',value,true)} options={options.countries||[]} all="全部国家"/><input list="rp-error-managers" value={filters.manager} onChange={e=>updateFilter('manager',e.target.value)} onBlur={()=>load({nextPage:1})} placeholder="负责人 / 培训 / 组长"/><datalist id="rp-error-managers">{(options.managers||[]).map(value=><option key={value} value={value}/>)}</datalist><Select value={filters.platform} onChange={value=>updateFilter('platform',value,true)} options={options.platforms||[]} all="全部盘口"/></div>
+    {loading&&!data?<div className="rp-loading-inline">正在读取员工错误统计…</div>:<><div className="rp-table-scroll rp-errors-scroll"><table className="rp-table rp-errors-table" data-native-errors-v2723="1"><thead><tr><th>等级</th><SortTh field="employee_id">员工ID</SortTh><SortTh field="name">姓名</SortTh><SortTh field="team">团队</SortTh><SortTh field="position">岗位</SortTh><SortTh field="platform">盘口</SortTh><SortTh field="error_type">错误类型</SortTh><SortTh field="score">扣分</SortTh><SortTh field="qc_person">质检人</SortTh><SortTh field="qc_date">质检时间</SortTh><SortTh field="leader_review">小组长复审</SortTh><SortTh field="qc_result">质检人对/错</SortTh><SortTh field="review_date">复检时间</SortTh><th>操作</th></tr></thead><tbody>{rows.map(r=><tr key={r.key}><td><span className="rp-error-grade" data-grade={errorGradeLabel(r.risk_level)}>{errorGradeLabel(r.risk_level)}</span></td><td><button className="rp-link rp-employee-profile-link" onClick={()=>setEmployeeNo(r.employee_id)}>{r.employee_id}</button></td><td>{r.name||'—'}</td><td>{r.team||'—'}</td><td>{r.position||'—'}</td><td><div className="rp-cell-clamp" title={r.platform}>{r.platform||'—'}</div></td><td><div className="rp-cell-clamp" title={r.error_type}>{r.error_type||'—'}</div></td><td>{text(r.score)===''?'—':r.score}</td><td>{r.qc_person||'—'}</td><td>{r.qc_date||'—'}</td><td><div className="rp-cell-clamp">{r.leader_review||'—'}</div></td><td><div className="rp-cell-clamp">{r.qc_result||'—'}</div></td><td>{r.review_date||'—'}</td><td><button className="rp-view-error" onClick={()=>setDetail(r)}>查看错误</button></td></tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={total} pageSize={size} loading={loading} onPage={changePage} onPageSize={changeSize}/></>}
     {detail&&<ErrorDetailModal row={detail} onClose={()=>setDetail(null)}/>} 
+    {employeeNo&&<ReportEmployeeDrawer employeeNo={employeeNo} onClose={()=>setEmployeeNo('')}/>}
   </section>
 }
+
+function ReportEmployeeDrawer({employeeNo,onClose}){
+  const [state,setState]=useState({loading:true,error:'',detail:null,summary:null})
+  useEffect(()=>{let alive=true;(async()=>{try{
+    const found=await supabase.functions.invoke('admin-employees',{body:{action:'list',page:1,page_size:20,filters:{employee_no:employeeNo,status:''}}})
+    if(found.error||found.data?.error)throw new Error(found.data?.error||found.error?.message||'员工读取失败')
+    const row=(found.data?.rows||[]).find(item=>upperText(item.employee_no)===upperText(employeeNo))||(found.data?.rows||[])[0]
+    if(!row?.id)throw new Error('找不到对应员工档案')
+    const [profile,summaryResult]=await Promise.all([supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:row.id}}),supabase.from('employee_error_summary').select('employee_no,month_error_count,last_30d_error_count,total_error_count,last_error_date,main_error_type,risk_level').eq('employee_no',employeeNo).maybeSingle()])
+    if(profile.error||profile.data?.error)throw new Error(profile.data?.error||profile.error?.message||'员工档案读取失败')
+    if(alive)setState({loading:false,error:'',detail:profile.data,summary:summaryResult.data||null})
+  }catch(error){if(alive)setState({loading:false,error:error.message||'员工档案读取失败',detail:null,summary:null})}})();return()=>{alive=false}},[employeeNo])
+  const detail=state.detail||{},employee=detail.employee||{},contact=detail.contact||{},payment=detail.payment||{},compensation=detail.compensation||{},summary=state.summary||{},missing=detail.missing_fields||[],grade=errorGradeLabel(summary.risk_level)
+  return <div className="modal-mask detail-mask wfh-report-employee-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={event=>event.stopPropagation()}>
+    <div className="employee-hero"><div className="employee-avatar">{text(employee.full_name).slice(0,1).toUpperCase()||'E'}</div><div className="employee-hero-copy"><div className="employee-id-line">{employeeNo}</div><h2>{employee.full_name||'读取员工档案...'}</h2>{employee.id&&<div className="employee-tags"><span>{employeeTypeName(employee.employment_type)}</span><span>{employee.teams?.name||'未匹配团队'}</span><span>{employee.positions?.name||'未设置主档岗位'}</span></div>}</div><div className="drawer-head-actions"><button className="drawer-close" onClick={onClose}>×</button></div></div>
+    {state.loading?<div className="empty-state">读取完整员工档案...</div>:state.error?<div className="empty-state">{state.error}</div>:<>
+      <div className="wfh-v2722-risk-summary" data-grade={grade}><div className="risk-grade"><span>等级</span><strong>{grade}</strong></div><div><span>本月错误</span><strong>{Number(summary.month_error_count||0)} 笔</strong></div><div><span>近30天错误</span><strong>{Number(summary.last_30d_error_count||0)} 笔</strong></div><div><span>总错误</span><strong>{Number(summary.total_error_count||0)} 笔</strong></div><div><span>主要错误 / 最近错误</span><strong>{text(summary.main_error_type)||'—'}{summary.last_error_date?` · ${formatDate(summary.last_error_date)}`:''}</strong></div></div>
+      {missing.length>0&&<div className="profile-status-line has-missing"><div><strong>资料待完善 {missing.length} 项</strong><span>{missing.join(' · ')}</span></div></div>}
+      <div className="detail-sections detail-sections-v11"><EmployeeInfoPanel title="基本资料" rows={[['员工ID',employee.employee_no],['姓名',employee.full_name],['员工国家',employee.country||employee.nationality],['员工类型',employeeTypeName(employee.employment_type)],['状态',employeeStatusName(employee.status)],['入职日期',formatDate(employee.hire_date)],['录入时间',formatDateTime(employee.created_at)],['离职日期',formatDate(employee.resign_date)],...(employee.status==='resigned'?[['离职原因',detail.resignation_reason||'—']]:[])]}/><EmployeeInfoPanel title="组织与排班" rows={[['团队',employee.teams?.name],['主档岗位',employee.positions?.name],['排班岗位',employee.schedule_position],['班次',employee.shift_name],['负责人 / 组长',employee.leader_name],['培训老师',employee.trainer_name],['盘口',employee.platform_scope],['工作内容',employee.work_content]]}/><EmployeeInfoPanel title="联系方式" rows={[['工作TG',employee.work_tg],['后台账号',employee.backend_accounts],['Telegram',contact.telegram_username],['Workfolio邮箱',contact.work_email],['Zoom邮箱',contact.zoom_email],['Facebook',contact.facebook],['WhatsApp',contact.whatsapp_phone]]}/><EmployeeInfoPanel title="工资设置" rows={[['底薪',compensation.base_salary],['日薪',compensation.daily_rate],['默认绩效',compensation.performance_default],['餐补',compensation.meal_allowance],['备注',compensation.note]]}/><EmployeeInfoPanel title="收款资料" rows={[['收款方式',payment.transfer_using||payment.mode],['银行卡 / 钱包账号',payment.bank_wallet_account],['收款姓名',payment.account_name],['USDT 地址',payment.usdt_address],['联系电话',payment.contact_phone],['WhatsApp',payment.whatsapp_number],['员工地址',payment.employee_address]]}/></div>
+    </>}
+  </div></div>
+}
+const upperText=value=>text(value).toUpperCase()
+function EmployeeInfoPanel({title,rows}){return <section className="detail-panel"><div className="detail-panel-head"><h3>{title}</h3></div><div className="info-rows">{rows.map(([label,value])=><div className="info-row" key={label}><span>{label}</span><strong>{text(value)||'—'}</strong></div>)}</div></section>}
 
 function RosterTable({rows}){return <div className="rp-table-scroll"><table className="rp-table rp-roster-table"><thead><tr><th>负责人</th><th>现场培训</th><th>线上组长</th><th>线上培训</th><th>团队</th><th>组别</th><th>班次</th><th>岗位</th><th>姓名</th><th>ID</th><th>国家</th><th>盘口</th><th>工作内容</th></tr></thead><tbody>{(rows||[]).map((r,i)=><tr key={r.key||`${r.employee_id}-${i}`}><td>{r.responsible||'—'}</td><td>{r.onsite_trainer||'—'}</td><td>{r.online_leader||'—'}</td><td>{r.online_trainer||'—'}</td><td>{r.team||'—'}</td><td>{r.group||'—'}</td><td>{r.shift||'—'}</td><td>{r.position||'—'}</td><td><strong>{r.name||'—'}</strong></td><td>{r.employee_id||'—'}</td><td>{r.country||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td className="rp-wrap">{r.work_content||'—'}</td></tr>)}</tbody></table></div>}
 function RosterModal({title,rows,onClose}){return <Modal title={`${title}（${uniqueCount(rows)} 人）`} onClose={onClose} wide><RosterTable rows={sortPeopleRows(rows)}/></Modal>}

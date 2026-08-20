@@ -19,7 +19,6 @@ import { startUiPolishV2713Fix } from './uiPolishV2713Fix'
 import { startUiV2714Enhancer } from './uiV2714Enhancer'
 import { startAdminCompactV2716 } from './adminCompactV2716'
 import { startAdminUiV2717Fix } from './adminUiV2717Fix'
-import { startReportErrorsStableV2721 } from './reportErrorsStableV2721'
 import { startAdminFinalV2722 } from './adminFinalV2722'
 
 for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles]')) old.remove()
@@ -33,7 +32,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><B
 
 startReportWorkloadEnhancerV2714()
 startUiV2714Enhancer()
-startReportErrorsStableV2721()
 
 // Legacy observers are still useful when the first loaded route is employee management.
 // The v27.22 final layer is path-aware and always starts last so SPA navigation cannot

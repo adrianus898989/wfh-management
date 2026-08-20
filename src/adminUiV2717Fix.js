@@ -275,6 +275,7 @@ function openEmployeeArchive(id){
 function ensureErrorIdLinks(){
   const table=document.querySelector('.rp-errors-table')
   if(!table)return
+  if(table.matches('[data-native-errors-v2723]'))return
   for(const tr of table.querySelectorAll('tbody tr')){
     const buttons=[...tr.querySelectorAll('button.rp-link')]
     const btn=buttons.find(b=>/^[A-Z]{1,6}\d+/i.test(text(b.textContent)))
