@@ -2,6 +2,14 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 
+function withTimeout(promise, ms = 20000) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error('TIMEOUT')), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer))
+}
+
 export default function AdminLoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -17,27 +25,34 @@ export default function AdminLoginPage() {
     if (!configured) return setError('暂时无法登录')
 
     setLoading(true)
-    const { data, error } = await supabase.functions.invoke('admin-login', {
-      body: {
-        username: username.trim().toLowerCase(),
-        password,
-      },
-    })
+    try {
+      const { data, error } = await withTimeout(
+        supabase.functions.invoke('admin-login', {
+          body: {
+            username: username.trim().toLowerCase(),
+            password,
+          },
+        })
+      )
 
-    if (error || !data?.access_token || !data?.refresh_token) {
+      if (error || !data?.access_token || !data?.refresh_token) {
+        return setError(data?.error || '用户名或密码错误')
+      }
+
+      const { error: sessionError } = await withTimeout(supabase.auth.setSession({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+      }))
+
+      if (sessionError) return setError('登录失败，请重试')
+      navigate('/admin', { replace: true })
+    } catch (requestError) {
+      setError(requestError?.message === 'TIMEOUT'
+        ? '登录服务响应超时，请稍后重试'
+        : '登录服务暂不可用，请稍后重试')
+    } finally {
       setLoading(false)
-      return setError(data?.error || '用户名或密码错误')
     }
-
-    const { error: sessionError } = await supabase.auth.setSession({
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-    })
-
-    setLoading(false)
-
-    if (sessionError) return setError('登录失败，请重试')
-    navigate('/admin', { replace: true })
   }
 
   return (
