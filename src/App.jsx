@@ -9,6 +9,7 @@ import AdminEmployeesPage from './pages/AdminEmployeesPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import ModulePage from './pages/ModulePage'
 import AdminReportsPage from './pages/AdminReportsPage'
+import AdminDailyWorkPage from './pages/AdminDailyWorkPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 
@@ -58,7 +59,7 @@ export default function App() {
     <Route path="/admin" element={<Protected mode="admin"><AppLayout mode="admin"><AdminHome /></AppLayout></Protected>} />
     <Route path="/admin/employees" element={<Protected mode="admin"><AppLayout mode="admin"><AdminEmployeesPage /></AppLayout></Protected>} />
     <Route path="/admin/schedule" element={<Protected mode="admin"><AppLayout mode="admin"><ModulePage module="schedule" /></AppLayout></Protected>} />
-    <Route path="/admin/daily" element={<Protected mode="admin"><AppLayout mode="admin"><ModulePage module="daily" /></AppLayout></Protected>} />
+    <Route path="/admin/daily" element={<Protected mode="admin"><AppLayout mode="admin"><AdminDailyWorkPage /></AppLayout></Protected>} />
     <Route path="/admin/training" element={<Protected mode="admin"><AppLayout mode="admin"><ModulePage module="training" /></AppLayout></Protected>} />
     <Route path="/admin/payroll" element={<Protected mode="admin"><AppLayout mode="admin"><ModulePage module="payroll" /></AppLayout></Protected>} />
     <Route path="/admin/reports" element={<Protected mode="admin"><AppLayout mode="admin"><AdminReportsPage /></AppLayout></Protected>} />
