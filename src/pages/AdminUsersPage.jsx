@@ -97,6 +97,8 @@ export default function AdminUsersPage() {
   const [staffModal, setStaffModal] = useState(null)
   const [roleModal, setRoleModal] = useState(null)
   const [newRoleName, setNewRoleName] = useState('')
+  const [searchDraft, setSearchDraft] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const call = async (body) => {
     const { data, error } = await supabase.functions.invoke('admin-accounts', { body })
@@ -123,6 +125,8 @@ export default function AdminUsersPage() {
 
   const setTab = next => {
     setTabState(next)
+    setSearchDraft('')
+    setSearchQuery('')
     setSearchParams(next === 'backend' ? {} : { tab: next }, { replace: true })
   }
 
@@ -138,6 +142,14 @@ export default function AdminUsersPage() {
   const scopeEmployees = data?.scope_employees || []
 
   const editableRoles = roles.filter(r => !['founder', 'employee'].includes(r.code))
+  const normalizedSearch = searchQuery.trim().toLowerCase()
+  const matchesSearch = (...values) => !normalizedSearch || values.some(value => String(value || '').toLowerCase().includes(normalizedSearch))
+  const visibleBackend = backend.filter(a => {
+    const role = getRole(a)
+    return matchesSearch(a.login_username, a.employee?.employee_no, a.employee?.full_name, role?.name, scopeLabel(a.data_scope))
+  })
+  const visibleStaff = staff.filter(a => matchesSearch(a.login_username, a.employee?.employee_no, a.employee?.full_name, a.employee?.teams?.name, a.employee?.positions?.name))
+  const visibleRoles = roles.filter(r => r.code !== 'employee' && matchesSearch(r.name, r.code))
 
   const rolePermissionMap = useMemo(() => {
     const map = new Map()
@@ -336,6 +348,7 @@ export default function AdminUsersPage() {
         .role-card h3{margin:0;font-size:15px}.role-card small{color:#8995a6}
         .role-card-actions{display:flex;gap:7px;margin-top:13px}.role-card-actions button{border:1px solid #dbe3ed;background:#fff;border-radius:8px;padding:7px 10px}
         .create-role-row{display:flex;gap:8px;margin-bottom:14px}.create-role-row input{height:40px;border:1px solid #d8e1eb;border-radius:9px;padding:0 11px}
+        .access-searchbar{display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;min-width:260px;flex:1;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
         .scope-panel{grid-column:1/-1;border:1px solid #e3e9f1;border-radius:11px;padding:12px;background:#fafbfd}
         .scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.check-list{max-height:180px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px;background:#fff;padding:8px}
         .check-list label{display:flex;gap:8px;align-items:center;padding:7px 5px;font-size:12px;color:#46566d}
@@ -350,8 +363,6 @@ export default function AdminUsersPage() {
 
       <div className="page-toolbar">
         <h1>用户与权限</h1>
-        {tab === 'backend' && <button className="primary-action" onClick={openCreate}>+ 新增后台账号</button>}
-        {tab === 'staff' && <button className="primary-action" onClick={openCreateStaff}>+ 新增员工账号</button>}
       </div>
 
       <div className="access-tabs">
@@ -362,6 +373,17 @@ export default function AdminUsersPage() {
 
       {error && <div className="page-error">{error}</div>}
 
+      {tab !== 'roles' && <div className="access-searchbar">
+        <input value={searchDraft} onChange={e => setSearchDraft(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && setSearchQuery(searchDraft)}
+          placeholder={tab === 'backend' ? '搜索用户名、员工ID、姓名、角色或管理范围' : '搜索用户名、员工ID、姓名、团队或岗位'} />
+        <button className="primary-action" onClick={() => setSearchQuery(searchDraft)}>查询</button>
+        <button className="secondary-action" onClick={() => { setSearchDraft(''); setSearchQuery('') }}>重置</button>
+        <button className="primary-action" onClick={tab === 'backend' ? openCreate : openCreateStaff}>
+          {tab === 'backend' ? '＋ 新增后台账号' : '＋ 新增员工账号'}
+        </button>
+      </div>}
+
       {loading ? <div className="data-card"><div className="empty-state">读取中...</div></div> : (
         <>
           {tab === 'backend' && (
@@ -369,7 +391,7 @@ export default function AdminUsersPage() {
               <table className="data-table">
                 <thead><tr><th>用户名</th><th>关联员工ID</th><th>姓名</th><th>角色</th><th>范围</th><th>OTP</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody>
-                  {backend.map(a => {
+                  {visibleBackend.map(a => {
                     const role = getRole(a)
                     const founder = role?.code === 'founder'
                     return <tr key={a.auth_user_id}>
@@ -403,7 +425,7 @@ export default function AdminUsersPage() {
               {staff.length === 0 ? <div className="empty-state">暂无员工账号</div> :
               <table className="data-table">
                 <thead><tr><th>登录用户名</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody>{staff.map(a => <tr key={a.auth_user_id}>
+                <tbody>{visibleStaff.map(a => <tr key={a.auth_user_id}>
                   <td><strong>{a.login_username || '-'}</strong></td>
                   <td><strong>{a.employee?.employee_no || '-'}</strong></td>
                   <td>{a.employee?.full_name || '-'}</td>
@@ -428,7 +450,7 @@ export default function AdminUsersPage() {
                 <button className="primary-action" onClick={createRole}>新增角色</button>
               </div>}
               <div className="role-list">
-                {roles.filter(r => r.code !== 'employee').map(role => (
+                {visibleRoles.map(role => (
                   <div className="role-card" key={role.id}>
                     <div className="role-card-head">
                       <div><h3>{role.name}</h3><small>{role.code === 'founder' ? '系统角色' : '可编辑'}</small></div>
