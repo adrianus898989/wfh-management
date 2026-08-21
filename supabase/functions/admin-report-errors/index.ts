@@ -82,6 +82,22 @@ function unique(values: unknown[]) {
   return [...new Set((values || []).map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
 }
 
+async function loadPagedTable(service: any, table: string, columns: string, orderColumn: string) {
+  const rows: any[] = []
+  const pageSize = 1000
+  for (let offset = 0; offset < 50000; offset += pageSize) {
+    const { data, error } = await service.from(table)
+      .select(columns)
+      .order(orderColumn, { ascending: true })
+      .range(offset, offset + pageSize - 1)
+    if (error) return { data: null, error }
+    const page = data || []
+    rows.push(...page)
+    if (page.length < pageSize) break
+  }
+  return { data: rows, error: null }
+}
+
 async function authorize(req: Request) {
   const auth = req.headers.get('Authorization') || ''
   if (!auth.startsWith('Bearer ')) throw new Error('UNAUTHORIZED')
@@ -158,10 +174,10 @@ Deno.serve(async req => {
       service.from('report_sheet_snapshots').select('payload,row_count,synced_at,note').eq('source', '效率表/员工错误').maybeSingle(),
       service.from('report_sheet_snapshot_chunks').select('payload,row_count,synced_at,chunk_index').eq('source', '效率表/员工错误').order('chunk_index'),
       service.from('report_sheet_snapshots').select('payload,synced_at').eq('source', '居家排班表/填表').maybeSingle(),
-      service.from('employees').select('employee_no,full_name,country,nationality,status,team_id,position_id,shift_name,platform_scope').limit(5000),
+      loadPagedTable(service, 'employees', 'employee_no,full_name,country,nationality,status,team_id,position_id,shift_name,platform_scope', 'employee_no'),
       service.from('teams').select('id,name'),
       service.from('positions').select('id,name'),
-      service.from('employee_error_summary').select('employee_no,month_error_count,total_error_count,risk_level').limit(5000),
+      loadPagedTable(service, 'employee_error_summary', 'employee_no,month_error_count,total_error_count,risk_level', 'employee_no'),
     ])
     if (snapshotError) throw snapshotError
     if (chunkError) throw chunkError

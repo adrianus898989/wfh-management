@@ -1,4 +1,6 @@
 import { supabase } from './lib/supabase'
+import { getAllErrorSummaryMap } from './lib/errorSummaryStore'
+import { openEmployeeErrorHistory } from './stableErrorUiEnhancer'
 
 const rawInvoke=supabase.functions.invoke.bind(supabase.functions)
 const text=v=>String(v??'').trim()
@@ -99,8 +101,7 @@ function hasAdvancedReportFilter(){const host=document.querySelector('.wfh-v2722
 
 async function getSummary(force=false){
   if(!force&&Date.now()-summaryCache.at<20000&&summaryCache.map.size)return summaryCache.map
-  const {data,error}=await supabase.from('employee_error_summary').select('employee_no,month_key,month_error_count,last_30d_error_count,total_error_count,last_error_date,main_error_type,risk_level').limit(5000)
-  if(!error)summaryCache={at:Date.now(),map:new Map((data||[]).map(r=>[upper(r.employee_no),r]))}
+  try{summaryCache={at:Date.now(),map:await getAllErrorSummaryMap(force)}}catch{}
   return summaryCache.map
 }
 
@@ -227,7 +228,12 @@ async function ensureEmployeeRiskColumn(){
     let cell=tr.querySelector('.wfh-v2722-risk-cell')
     if(!cell){cell=document.createElement('td');cell.className='wfh-v2722-risk-cell';tr.insertBefore(cell,tr.firstChild)}
     const idCell=cell.nextElementSibling,id=upper(idCell?.textContent);if(!id)continue
-    const s=map.get(id),label=employeeRiskLabel(employeeRiskKey(s?.total_error_count||0));let chip=cell.querySelector('.wfh-v2722-employee-chip');if(!chip){chip=document.createElement('span');chip.className='wfh-v2722-employee-chip';cell.appendChild(chip)}chip.dataset.grade=label;chip.textContent=label;chip.title=`累计 ${Number(s?.total_error_count||0)} · 本月 ${Number(s?.month_error_count||0)} · 近30天 ${Number(s?.last_30d_error_count||0)}`
+    const name=text(idCell?.nextElementSibling?.textContent),s=map.get(id),label=employeeRiskLabel(employeeRiskKey(s?.total_error_count||0));let chip=cell.querySelector('.wfh-v2722-employee-chip')
+    if(!chip||chip.tagName!=='BUTTON'){
+      const next=document.createElement('button');next.type='button';next.className='wfh-v2722-employee-chip';chip?.replaceWith(next);if(!chip)cell.appendChild(next);chip=next
+      chip.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();const employeeId=upper(chip.dataset.employee);if(employeeId)openEmployeeErrorHistory(employeeId,chip.dataset.name||employeeId,map.get(employeeId)||{})})
+    }
+    chip.dataset.employee=id;chip.dataset.name=name;chip.dataset.grade=label;chip.textContent=label;chip.disabled=Number(s?.total_error_count||0)===0;chip.title=`累计 ${Number(s?.total_error_count||0)} · 本月 ${Number(s?.month_error_count||0)} · 近30天 ${Number(s?.last_30d_error_count||0)}${Number(s?.total_error_count||0)>0?' · 点击查看错误记录':''}`
   }
 }
 

@@ -1,4 +1,5 @@
 import { supabase } from './lib/supabase'
+import { getAllErrorSummaryMap } from './lib/errorSummaryStore'
 
 const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
@@ -76,9 +77,10 @@ async function getSummaryMap(force=false){
   if(!force&&now-summaries.at<120000)return summaries.map
   if(summaryRequest)return summaryRequest
   summaryRequest=(async()=>{
-    const {data,error}=await supabase.from('employee_error_summary').select('employee_no,month_key,month_error_count,last_30d_error_count,total_error_count,last_error_date,main_error_type,risk_level').limit(5000)
-    if(error){summaries={...summaries,at:Date.now(),retryAt:Date.now()+60000};return summaries.map}
-    summaries={at:Date.now(),retryAt:0,map:new Map((data||[]).map(x=>[upper(x.employee_no),x]))}
+    try{
+      const map=await getAllErrorSummaryMap(force)
+      summaries={at:Date.now(),retryAt:0,map}
+    }catch(error){summaries={...summaries,at:Date.now(),retryAt:Date.now()+60000}}
     return summaries.map
   })()
   try{return await summaryRequest}finally{summaryRequest=null}
@@ -92,7 +94,7 @@ function styleChip(chip,summary){
 }
 function riskChip(id,summary,context,name){
   const chip=document.createElement('span');chip.className='wfh-stable-risk';styleChip(chip,summary)
-  if(context==='errors'||Number(summary?.total_error_count||0)>0){chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0;const open=()=>context==='errors'?filterErrorsTo(id):openErrorHistory(id,name||id,summary);chip.addEventListener('click',e=>{e.stopPropagation();open()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}})}
+  if(context==='errors'||Number(summary?.total_error_count||0)>0){chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0;const open=()=>context==='errors'?filterErrorsTo(id):openEmployeeErrorHistory(id,name||id,summary);chip.addEventListener('click',e=>{e.stopPropagation();open()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}})}
   return chip
 }
 
@@ -138,14 +140,15 @@ function filterErrorsTo(id){
   const mirror=document.querySelector('.wfh-error-unified input[data-role="employee"]')
   if(mirror)mirror.value=id
 }
-async function openErrorHistory(id,name,summary={}){
+export async function openEmployeeErrorHistory(id,name,summary={}){
+  addStyles()
   document.querySelector('.wfh-error-history-mask')?.remove()
   const mask=document.createElement('div');mask.className='wfh-error-history-mask'
   const initial={month:Number(summary?.month_error_count||0),last_3d:null,last_7d:null,last_30d:Number(summary?.last_30d_error_count||0),total:Number(summary?.total_error_count||0)}
   const modal=document.createElement('div');modal.className='wfh-error-history';modal.innerHTML=`<header><div class="wfh-error-history-head-main"><h3>${name||id} · ${id} · 错误记录</h3><div class="wfh-error-history-stats"><span class="wfh-error-history-stat" data-stat="month">本月 <b>${initial.month}</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_3d">近3天 <b>…</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_7d">近7天 <b>…</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_30d">近30天 <b>${initial.last_30d}</b> 笔</span><span class="wfh-error-history-stat" data-stat="total">累计 <b>${initial.total}</b> 笔</span></div></div><button type="button">×</button></header><div class="wfh-error-history-body">读取中...</div>`;mask.appendChild(modal);document.body.appendChild(mask)
   mask.addEventListener('mousedown',e=>{if(e.target===mask)mask.remove()});modal.querySelector('header button')?.addEventListener('click',()=>mask.remove())
   const body=modal.querySelector('.wfh-error-history-body')
-  try{const {data,error}=await supabase.functions.invoke('admin-reports',{body:{action:'errors',employee_id:id,date_basis:'qc',page_size:500}});if(error||data?.error)throw new Error(data?.error||error?.message||'读取失败');const counts=data?.period_counts||{};for(const key of ['month','last_3d','last_7d','last_30d','total']){const value=Number(counts[key]);const target=modal.querySelector(`[data-stat="${key}"] b`);if(target&&Number.isFinite(value))target.textContent=String(value)}const rows=data?.rows||[];if(!rows.length){body.textContent='暂无错误记录';return}body.innerHTML=`<table><thead><tr><th>质检时间</th><th>错误类型</th><th>扣分</th><th>质检人</th><th>会员/订单号</th><th>金额</th><th>错误备注</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${text(r.qc_date)||'—'}</td><td>${text(r.error_type)||'—'}</td><td>${text(r.score)||'—'}</td><td>${text(r.qc_person)||'—'}</td><td>${text(r.member_order)||'—'}</td><td>${text(r.amount)||'—'}</td><td class="wrap">${text(r.error_note)||'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){body.textContent=e?.message||'读取失败'}
+  try{const {data,error}=await supabase.functions.invoke('admin-report-errors',{body:{employee_id:id,date_basis:'qc',page_size:500}});if(error||data?.error)throw new Error(data?.error||error?.message||'读取失败');const counts=data?.period_counts||{};for(const key of ['month','last_3d','last_7d','last_30d','total']){const value=Number(counts[key]);const target=modal.querySelector(`[data-stat="${key}"] b`);if(target&&Number.isFinite(value))target.textContent=String(value)}const rows=data?.rows||[];if(!rows.length){body.textContent='暂无错误记录';return}body.innerHTML=`<table><thead><tr><th>质检时间</th><th>错误类型</th><th>扣分</th><th>质检人</th><th>会员/订单号</th><th>金额</th><th>错误备注</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${text(r.qc_date)||'—'}</td><td>${text(r.error_type)||'—'}</td><td>${text(r.score)||'—'}</td><td>${text(r.qc_person)||'—'}</td><td>${text(r.member_order)||'—'}</td><td>${text(r.amount)||'—'}</td><td class="wrap">${text(r.error_note)||'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){body.textContent=e?.message||'读取失败'}
 }
 
 function originalErrorParts(){

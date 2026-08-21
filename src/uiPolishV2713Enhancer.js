@@ -1,4 +1,5 @@
 import { supabase } from './lib/supabase'
+import { getAllErrorSummaryMap } from './lib/errorSummaryStore'
 
 const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
@@ -34,7 +35,7 @@ function addStyles(){
   `;document.head.appendChild(s)
 }
 function nativeSet(el,value,eventName='input'){if(!el)return;const proto=el instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;if(setter)setter.call(el,value);else el.value=value;el.dispatchEvent(new Event(eventName,{bubbles:true}))}
-async function summaries(force=false){if(!force&&Date.now()-summaryCache.at<20000&&summaryCache.map.size)return summaryCache.map;const {data,error}=await supabase.from('employee_error_summary').select('employee_no,month_error_count,last_30d_error_count,total_error_count').limit(5000);if(!error)summaryCache={at:Date.now(),map:new Map((data||[]).map(x=>[upper(x.employee_no),x]))};return summaryCache.map}
+async function summaries(force=false){if(!force&&Date.now()-summaryCache.at<20000&&summaryCache.map.size)return summaryCache.map;try{summaryCache={at:Date.now(),map:await getAllErrorSummaryMap(force)}}catch{}return summaryCache.map}
 function makePicker(value,onChange){const root=document.createElement('div');root.className='wfh-grade-picker';const trigger=document.createElement('button');trigger.type='button';trigger.className='wfh-grade-trigger';const menu=document.createElement('div');menu.className='wfh-grade-menu';const render=()=>{const c=choices.find(x=>x[0]===value)||choices[0],m=grades[value];trigger.innerHTML=`${m?`<i class="wfh-grade-dot" style="--grade-color:${m.color}"></i>`:''}${c[1]}`;[...menu.children].forEach((b,i)=>b.classList.toggle('active',choices[i][0]===value))};choices.forEach(([k,l])=>{const b=document.createElement('button');b.type='button';b.textContent=l;b.addEventListener('click',e=>{e.stopPropagation();value=k;render();root.classList.remove('open');onChange(k)});menu.appendChild(b)});trigger.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.wfh-grade-picker.open').forEach(x=>{if(x!==root)x.classList.remove('open')});root.classList.toggle('open')});root.append(trigger,menu);render();return root}
 function employeeIdInput(){const grid=document.querySelector('.employee-core-search-grid');for(const l of grid?.querySelectorAll('label')||[])if(text(l.querySelector('span')?.textContent)==='员工ID')return l.querySelector('input');return null}
 function forceEmployeeReload(){const input=employeeIdInput();if(!input)return;const cur=input.value||'';nativeSet(input,cur+' ');setTimeout(()=>nativeSet(input,cur),90)}

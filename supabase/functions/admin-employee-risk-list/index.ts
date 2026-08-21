@@ -93,6 +93,19 @@ function basicMissing(employee: any) {
   return missing
 }
 
+async function loadPagedQuery(makeQuery: () => any) {
+  const rows: any[] = []
+  const pageSize = 1000
+  for (let offset = 0; offset < 50000; offset += pageSize) {
+    const { data, error } = await makeQuery().range(offset, offset + pageSize - 1)
+    if (error) throw error
+    const page = data || []
+    rows.push(...page)
+    if (page.length < pageSize) break
+  }
+  return rows
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
@@ -125,34 +138,36 @@ Deno.serve(async req => {
       if (!positionIds.length) return json({ rows: [], total: 0, page, page_size: pageSize, pages: 1 })
     }
 
-    let query = service.from('employees').select(`
-      id,employee_no,full_name,country,nationality,employment_type,status,team_id,position_id,
-      shift_name,group_name,platform_scope,work_content,work_tg,backend_accounts,hire_date,
-      resign_date,leader_name,trainer_name,profile_status,official_id_pending,source_type,
-      source_sheet,created_at,teams:team_id(id,name,country,status),positions:position_id(id,name,code,status)
-    `)
-    query = applyScope(query, scope)
-    if (text(filters.employee_no)) query = query.ilike('employee_no', `%${text(filters.employee_no)}%`)
-    if (text(filters.full_name)) query = query.ilike('full_name', `%${text(filters.full_name)}%`)
-    if (text(filters.work_tg)) query = query.ilike('work_tg', `%${text(filters.work_tg)}%`)
-    if (text(filters.backend_account)) query = query.ilike('backend_accounts', `%${text(filters.backend_account)}%`)
-    if (teamIds.length) query = query.in('team_id', teamIds)
-    if (positionIds.length) query = query.in('position_id', positionIds)
-    if (text(filters.country)) query = query.ilike('country', `%${text(filters.country)}%`)
-    if (text(filters.status)) query = query.eq('status', filters.status)
-    if (text(filters.employment_type)) query = query.ilike('employment_type', `%${text(filters.employment_type)}%`)
-    if (text(filters.shift_name)) query = query.ilike('shift_name', `%${text(filters.shift_name)}%`)
-    if (text(filters.leader)) query = query.ilike('leader_name', `%${text(filters.leader)}%`)
-    if (text(filters.hire_from)) query = query.gte('hire_date', filters.hire_from)
-    if (text(filters.hire_to)) query = query.lte('hire_date', filters.hire_to)
+    const buildEmployeeQuery = () => {
+      let query = service.from('employees').select(`
+        id,employee_no,full_name,country,nationality,employment_type,status,team_id,position_id,
+        shift_name,group_name,platform_scope,work_content,work_tg,backend_accounts,hire_date,
+        resign_date,leader_name,trainer_name,profile_status,official_id_pending,source_type,
+        source_sheet,created_at,teams:team_id(id,name,country,status),positions:position_id(id,name,code,status)
+      `)
+      query = applyScope(query, scope)
+      if (text(filters.employee_no)) query = query.ilike('employee_no', `%${text(filters.employee_no)}%`)
+      if (text(filters.full_name)) query = query.ilike('full_name', `%${text(filters.full_name)}%`)
+      if (text(filters.work_tg)) query = query.ilike('work_tg', `%${text(filters.work_tg)}%`)
+      if (text(filters.backend_account)) query = query.ilike('backend_accounts', `%${text(filters.backend_account)}%`)
+      if (teamIds.length) query = query.in('team_id', teamIds)
+      if (positionIds.length) query = query.in('position_id', positionIds)
+      if (text(filters.country)) query = query.ilike('country', `%${text(filters.country)}%`)
+      if (text(filters.status)) query = query.eq('status', filters.status)
+      if (text(filters.employment_type)) query = query.ilike('employment_type', `%${text(filters.employment_type)}%`)
+      if (text(filters.shift_name)) query = query.ilike('shift_name', `%${text(filters.shift_name)}%`)
+      if (text(filters.leader)) query = query.ilike('leader_name', `%${text(filters.leader)}%`)
+      if (text(filters.hire_from)) query = query.gte('hire_date', filters.hire_from)
+      if (text(filters.hire_to)) query = query.lte('hire_date', filters.hire_to)
+      return query.order('employee_no', { ascending: true })
+    }
 
-    const { data: allEmployees, error: employeeError } = await query.order('employee_no').limit(5000)
-    if (employeeError) throw employeeError
-
-    const { data: summaryRows, error: summaryError } = await service.from('employee_error_summary')
-      .select('employee_no,month_error_count,total_error_count,risk_level')
-      .limit(5000)
-    if (summaryError) throw summaryError
+    const [allEmployees, summaryRows] = await Promise.all([
+      loadPagedQuery(buildEmployeeQuery),
+      loadPagedQuery(() => service.from('employee_error_summary')
+        .select('employee_no,month_error_count,total_error_count,risk_level')
+        .order('employee_no', { ascending: true })),
+    ])
 
     const summaryMap = new Map((summaryRows || []).map((row: any) => [upper(row.employee_no), row]))
     const matched = (allEmployees || []).filter((employee: any) => {

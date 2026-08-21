@@ -1,4 +1,5 @@
 import { supabase } from './lib/supabase'
+import { getAllErrorSummaryMap } from './lib/errorSummaryStore'
 
 const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
@@ -39,8 +40,7 @@ function nativeSet(el,value,eventName='change'){
 
 async function getSummaryMap(force=false){
   if(!force&&Date.now()-summaryCache.at<15000&&summaryCache.map.size)return summaryCache.map
-  const {data,error}=await supabase.from('employee_error_summary').select('employee_no,month_error_count,last_30d_error_count,total_error_count').limit(5000)
-  if(!error)summaryCache={at:Date.now(),map:new Map((data||[]).map(r=>[upper(r.employee_no),r]))}
+  try{summaryCache={at:Date.now(),map:await getAllErrorSummaryMap(force)}}catch{}
   return summaryCache.map
 }
 
