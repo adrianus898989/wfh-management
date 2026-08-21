@@ -16,6 +16,12 @@ const blankAccount = () => ({
   employee_ids: [],
 })
 
+const blankStaffAccount = () => ({
+  employee_id: '',
+  username: '',
+  password: '',
+})
+
 const actionLabels = {
   view: '查看',
   create: '新增',
@@ -30,6 +36,29 @@ const actionLabels = {
   otp_toggle: 'OTP开关',
   mfa_reset: '重置OTP',
 }
+
+const moduleLabels = {
+  account: '账号安全',
+  user: '用户与权限',
+  employee: '员工档案',
+  'employee.compensation': '员工薪资资料',
+  team: '团队管理',
+  schedule: '排班表',
+  attendance: '考勤管理',
+  leave: '请假与离岗',
+  daily_work: '每日工作报告',
+  online_training: '线上培训报告',
+  report: '统计报表',
+  exam: '培训与考试',
+  adjustment: '调整与奖惩',
+  payroll: '工资中心',
+  'payroll.rule': '工资规则',
+  audit: '操作日志',
+  export: '数据导出',
+  sensitive: '敏感资料',
+}
+
+const permissionActionOrder = ['view', 'create', 'submit', 'edit', 'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable', 'reset_password', 'otp_toggle', 'mfa_reset']
 
 function getRole(a) {
   return Array.isArray(a?.roles) ? a.roles[0] : a?.roles
@@ -57,6 +86,7 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [accountModal, setAccountModal] = useState(null)
+  const [staffModal, setStaffModal] = useState(null)
   const [roleModal, setRoleModal] = useState(null)
   const [newRoleName, setNewRoleName] = useState('')
 
@@ -117,10 +147,15 @@ export default function AdminUsersPage() {
       if (!groups.has(s.module)) groups.set(s.module, [])
       groups.get(s.module).push({ ...p, actionKey: s.action })
     }
-    return [...groups.entries()].map(([module, items]) => ({ module, items }))
+    return [...groups.entries()].map(([module, items]) => ({
+      module,
+      label: moduleLabels[module] || module,
+      items: [...items].sort((a, b) => permissionActionOrder.indexOf(a.actionKey) - permissionActionOrder.indexOf(b.actionKey)),
+    }))
   }, [permissions])
 
   const openCreate = () => setAccountModal({ mode: 'create', form: blankAccount() })
+  const openCreateStaff = () => setStaffModal({ form: blankStaffAccount() })
 
   const openEdit = (a) => {
     const role = getRole(a)
@@ -144,10 +179,6 @@ export default function AdminUsersPage() {
     const { mode, form } = accountModal
     setError('')
     try {
-      const selectedRole = roles.find(role => role.id === form.role_id)
-      if (['supervisor','team_leader','senior_team_leader','trainer'].includes(selectedRole?.code) && !form.employee_id) {
-        throw new Error('主管、组长和培训账号必须关联员工档案，才能自动识别本人和下属')
-      }
       if (mode === 'create') {
         await call({ action: 'create_backend', ...form })
       } else {
@@ -166,6 +197,15 @@ export default function AdminUsersPage() {
     } catch (e) {
       setError(e.message)
     }
+  }
+
+  const saveStaffAccount = async () => {
+    setError('')
+    try {
+      await call({ action: 'create_staff', ...staffModal.form })
+      setStaffModal(null)
+      await load()
+    } catch (e) { setError(e.message) }
   }
 
   const toggleOtp = async (a) => {
@@ -284,6 +324,7 @@ export default function AdminUsersPage() {
       <div className="page-toolbar">
         <h1>用户与权限</h1>
         {tab === 'backend' && <button className="primary-action" onClick={openCreate}>+ 新增后台账号</button>}
+        {tab === 'staff' && <button className="primary-action" onClick={openCreateStaff}>+ 新增员工账号</button>}
       </div>
 
       <div className="access-tabs">
@@ -334,11 +375,13 @@ export default function AdminUsersPage() {
             <div className="data-card table-scroll">
               {staff.length === 0 ? <div className="empty-state">暂无员工账号</div> :
               <table className="data-table">
-                <thead><tr><th>员工ID</th><th>姓名</th><th>邮箱</th><th>状态</th><th>操作</th></tr></thead>
+                <thead><tr><th>登录用户名</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody>{staff.map(a => <tr key={a.auth_user_id}>
+                  <td><strong>{a.login_username || '-'}</strong></td>
                   <td><strong>{a.employee?.employee_no || '-'}</strong></td>
                   <td>{a.employee?.full_name || '-'}</td>
-                  <td>{a.login_email || '-'}</td>
+                  <td>{a.employee?.teams?.name || '-'}</td>
+                  <td>{a.employee?.positions?.name || '-'}</td>
                   <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{a.active ? '正常' : '停用'}</span></td>
                   <td><div className="access-grid-actions">
                     <button onClick={() => resetPassword(a)}>重置密码</button>
@@ -454,6 +497,37 @@ export default function AdminUsersPage() {
         </div>
       )}
 
+      {staffModal && (
+        <div className="modal-mask" onMouseDown={() => setStaffModal(null)}>
+          <div className="modal-card" onMouseDown={e => e.stopPropagation()}>
+            <div className="modal-head">
+              <div><h2>新增员工前端账号</h2><small>员工账号必须关联唯一员工档案，登录后自动读取本人团队、岗位及考试。</small></div>
+              <button onClick={() => setStaffModal(null)}>×</button>
+            </div>
+            <div className="form-grid">
+              <label className="form-span">关联员工档案（必选）
+                <select value={staffModal.form.employee_id} onChange={e => setStaffModal(x => ({...x, form:{...x.form, employee_id:e.target.value}}))}>
+                  <option value="">请选择尚未开通账号的员工</option>
+                  {employees.filter(emp => !staff.some(a => a.employee_id === emp.id)).map(emp => (
+                    <option key={emp.id} value={emp.id}>{emp.employee_no} · {emp.full_name} · {emp.teams?.name || '未分团队'} · {emp.positions?.name || '未分岗位'}</option>
+                  ))}
+                </select>
+              </label>
+              <label>登录用户名
+                <input placeholder="3-32位字母或数字" value={staffModal.form.username} onChange={e => setStaffModal(x => ({...x, form:{...x.form, username:e.target.value.toLowerCase()}}))}/>
+              </label>
+              <label>临时密码
+                <input type="password" placeholder="至少10位，含大小写、数字和符号" value={staffModal.form.password} onChange={e => setStaffModal(x => ({...x, form:{...x.form, password:e.target.value}}))}/>
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button className="secondary-action" onClick={() => setStaffModal(null)}>取消</button>
+              <button className="primary-action" onClick={saveStaffAccount}>创建账号</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {roleModal && (
         <div className="modal-mask" onMouseDown={() => setRoleModal(null)}>
           <div className="modal-card role-modal" onMouseDown={e => e.stopPropagation()}>
@@ -469,11 +543,11 @@ export default function AdminUsersPage() {
 
             <div className="permission-matrix" style={{marginTop:14}}>
               <table>
-                <thead><tr><th>模块 / 权限</th><th>权限项</th></tr></thead>
+                <thead><tr><th>对应页面 / 功能</th><th>允许操作</th></tr></thead>
                 <tbody>
                   {groupedPermissions.map(group => (
                     <tr key={group.module} className={group.items.some(x=>x.sensitive) ? 'sensitive-row' : ''}>
-                      <td><strong>{group.module}</strong></td>
+                      <td><strong>{group.label}</strong><small style={{display:'block',marginTop:3,color:'#98a4b3'}}>{group.module}</small></td>
                       <td>
                         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
                           {group.items.map(p => (

@@ -52,8 +52,8 @@ function isInvalidCredentials(error: any) {
   return code === 'invalid_credentials' || message.includes('invalid login credentials')
 }
 
-async function findAccess(admin: any, username: string) {
-  if (username === 'founder') {
+async function findAccess(admin: any, username: string, mode: string) {
+  if (username === 'founder' && mode === 'admin') {
     return { access: founderAccess, unavailable: false }
   }
 
@@ -62,7 +62,7 @@ async function findAccess(admin: any, username: string) {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const { data, error } = await admin
       .from('user_access')
-      .select('auth_user_id,login_email,backend_enabled,active')
+      .select('auth_user_id,login_email,backend_enabled,employee_portal_enabled,active')
       .ilike('login_username', username)
       .maybeSingle()
 
@@ -121,6 +121,7 @@ Deno.serve(async (req) => {
     const body = await req.json()
     const username = String(body.username || '').trim().toLowerCase()
     const password = String(body.password || '')
+    const mode = body.mode === 'staff' ? 'staff' : 'admin'
 
     if (!/^[a-z0-9._-]{3,32}$/.test(username) || !password) {
       return json(req, { error: '用户名或密码错误' }, 401)
@@ -142,13 +143,14 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     })
 
-    const { access, unavailable } = await findAccess(admin, username)
+    const { access, unavailable } = await findAccess(admin, username, mode)
 
     if (unavailable) {
       return json(req, { error: '登录服务繁忙，请稍后重试' }, 503)
     }
 
-    if (!access || !access.active || !access.backend_enabled || !access.login_email) {
+    const entryEnabled = mode === 'staff' ? access?.employee_portal_enabled : access?.backend_enabled
+    if (!access || !access.active || !entryEnabled || !access.login_email) {
       return json(req, { error: '用户名或密码错误' }, 401)
     }
 
@@ -191,8 +193,8 @@ Deno.serve(async (req) => {
         actor_user_id: authData.user.id,
         employee_id: null,
         module: 'auth',
-        action: 'admin_login',
-        reason: '后台用户名登录成功',
+        action: mode === 'staff' ? 'staff_login' : 'admin_login',
+        reason: mode === 'staff' ? '员工前端用户名登录成功' : '后台用户名登录成功',
       }),
     ).then(({ error }: any) => {
       if (error) console.error('ADMIN_LOGIN_AUDIT_ERROR', error.message)

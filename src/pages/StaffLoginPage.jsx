@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 
 export default function StaffLoginPage() {
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
@@ -18,20 +18,28 @@ export default function StaffLoginPage() {
 
     setLoading(true)
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
+    const { data, error } = await supabase.functions.invoke('admin-login', {
+      body: { username: username.trim().toLowerCase(), password, mode: 'staff' },
     })
 
-    if (error) {
+    if (error || !data?.access_token || !data?.refresh_token) {
       setLoading(false)
-      return setError('邮箱或密码错误')
+      return setError(data?.error || '用户名或密码错误')
+    }
+
+    const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+    })
+    if (sessionError || !sessionData.user) {
+      setLoading(false)
+      return setError('登录失败，请重试')
     }
 
     const { data: access, error: accessError } = await supabase
       .from('user_access')
       .select('employee_portal_enabled,active')
-      .eq('auth_user_id', data.user.id)
+      .eq('auth_user_id', sessionData.user.id)
       .single()
 
     setLoading(false)
@@ -56,12 +64,11 @@ export default function StaffLoginPage() {
           <div className="login-title">员工登录</div>
 
           <label className="login-field">
-            邮箱
+            用户名
             <div className="login-input">
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
                 autoComplete="username"
                 required
               />

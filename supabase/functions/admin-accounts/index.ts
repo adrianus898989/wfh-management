@@ -343,9 +343,6 @@ Deno.serve(async (req) => {
       if (role.code === 'founder' || role.code === 'employee') {
         return json(req, { error: '该角色不能用于新增后台账号' }, 400)
       }
-      if (['supervisor','team_leader','senior_team_leader','trainer'].includes(role.code) && !employeeId) {
-        return json(req, { error: '主管、组长和培训账号必须关联员工档案' }, 400)
-      }
 
       const { data: exists } = await admin.from('user_access')
         .select('auth_user_id').ilike('login_username', username).maybeSingle()
@@ -418,9 +415,6 @@ Deno.serve(async (req) => {
       if (!role || !role.active || ['founder','employee'].includes(role.code)) {
         return json(req, { error: '角色不可用' }, 400)
       }
-      if (['supervisor','team_leader','senior_team_leader','trainer'].includes(role.code) && !employeeId) {
-        return json(req, { error: '主管、组长和培训账号必须关联员工档案' }, 400)
-      }
 
       const { error } = await admin.from('user_access')
         .update({ employee_id: employeeId, role_id: roleId, data_scope: dataScope })
@@ -432,6 +426,67 @@ Deno.serve(async (req) => {
       else await saveScope(target, [], [])
 
       await audit('backend_account_update', `编辑后台账号 ${target}`)
+      return json(req, { ok: true })
+    }
+
+    if (action === 'create_staff') {
+      if (!can('account.create')) return json(req, { error: '无创建账号权限' }, 403)
+
+      const employeeId = cleanString(body.employee_id)
+      const username = cleanString(body.username).toLowerCase()
+      const password = String(body.password || '')
+
+      if (!employeeId) return json(req, { error: '员工前端账号必须关联员工档案' }, 400)
+      if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
+        return json(req, { error: '用户名只允许3-32位字母、数字、._-' }, 400)
+      }
+      if (!passwordOk(password)) {
+        return json(req, { error: '密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
+      }
+
+      const [{ data: employee }, { data: usernameExists }, { data: linkedExists }, { data: employeeRole }] = await Promise.all([
+        admin.from('employees').select('id,employee_no,full_name,status').eq('id', employeeId).maybeSingle(),
+        admin.from('user_access').select('auth_user_id').ilike('login_username', username).maybeSingle(),
+        admin.from('user_access').select('auth_user_id').eq('employee_id', employeeId).eq('employee_portal_enabled', true).maybeSingle(),
+        admin.from('roles').select('id').eq('code', 'employee').eq('active', true).maybeSingle(),
+      ])
+
+      if (!employee) return json(req, { error: '关联的员工档案不存在' }, 404)
+      if (usernameExists) return json(req, { error: '用户名已存在' }, 409)
+      if (linkedExists) return json(req, { error: '该员工已开通过前端账号' }, 409)
+      if (!employeeRole) return json(req, { error: '员工角色未配置' }, 500)
+
+      const internalEmail = `${username}.${crypto.randomUUID().slice(0, 8)}@staff.wfh.invalid`
+      const { data: created, error: createError } = await admin.auth.admin.createUser({
+        email: internalEmail,
+        password,
+        email_confirm: true,
+      })
+      if (createError || !created.user) {
+        return json(req, { error: createError?.message || '创建员工登录账号失败' }, 400)
+      }
+
+      const { error: insertError } = await admin.from('user_access').insert({
+        auth_user_id: created.user.id,
+        employee_id: employeeId,
+        role_id: employeeRole.id,
+        login_username: username,
+        login_email: internalEmail,
+        backend_enabled: false,
+        employee_portal_enabled: true,
+        otp_required: false,
+        data_scope: 'self',
+        active: true,
+        must_change_password: true,
+        account_created_by: userData.user.id,
+      })
+
+      if (insertError) {
+        await admin.auth.admin.deleteUser(created.user.id)
+        return json(req, { error: insertError.message }, 400)
+      }
+
+      await audit('staff_account_create', `创建员工前端账号 ${employee.employee_no} / ${username}`)
       return json(req, { ok: true })
     }
 
