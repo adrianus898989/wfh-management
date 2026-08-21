@@ -30,8 +30,7 @@ const ADMIN_NAV = [
     ['换班记录', `/admin/schedule?tab=${enc('换班记录')}`],
   ]},
   { to:'/admin/daily', label:'每日工作', icon:'日', children:[
-    ['每日工作报告', `/admin/daily?tab=${enc('每日工作报告')}`],
-    ['线上培训报告', `/admin/daily?tab=${enc('线上培训报告')}`],
+    ['线上培训报告', '/admin/daily'],
   ]},
   { to:'/admin/training', label:'培训与考试', icon:'训', children:[
     ['考试概览', `/admin/training?tab=${enc('考试概览')}`],

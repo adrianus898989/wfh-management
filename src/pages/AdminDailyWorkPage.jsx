@@ -543,6 +543,5 @@ function LegacyDailyWorkPage() {
 }
 
 export default function AdminDailyWorkPage(){
-  const [searchParams]=useSearchParams()
-  return searchParams.get('tab')==='线上培训报告'?<OnlineTrainingPage/>:<LegacyDailyWorkPage/>
+  return <OnlineTrainingPage/>
 }

@@ -7,6 +7,9 @@ import '../styles-online-training.css'
 const BUCKET='online-training'
 const REPORT_PAGE_SIZE=12
 const PEOPLE_PAGE_SIZE=20
+const MAX_ATTACHMENTS=6
+const MAX_IMAGE_BYTES=4*1024*1024
+const MAX_IMAGE_EDGE=1600
 const text=value=>String(value??'').trim()
 const isoToday=()=>{const now=new Date();return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10)}
 const dateText=value=>value?new Date(`${value}T00:00:00`).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}):'—'
@@ -21,6 +24,39 @@ const defaultFilters=()=>{const today=isoToday();return {...EMPTY_FILTERS,from:t
 const delay=ms=>new Promise(resolve=>window.setTimeout(resolve,ms))
 const isTransientError=error=>/failed to fetch|networkerror|network request failed|load failed|connection|timeout/i.test(text(error?.message||error))
 const readableError=(error,fallback)=>isTransientError(error)?'连接短暂中断，请点击“重新读取”':text(error?.message)||fallback
+
+function parseIsoDateOnly(value){
+  const match=text(value).match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return match?new Date(Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3]),12)):null
+}
+
+function tenureDurationLabel(hireDate){
+  const start=parseIsoDateOnly(hireDate)
+  if(!start)return '—'
+  const end=parseIsoDateOnly(isoToday())
+  const totalDays=Math.max(0,Math.floor((end-start)/86400000))
+  let cursor=new Date(start),years=0,months=0
+  while(true){const next=new Date(cursor);next.setUTCFullYear(next.getUTCFullYear()+1);if(next>end)break;cursor=next;years+=1}
+  while(true){const next=new Date(cursor);next.setUTCMonth(next.getUTCMonth()+1);if(next>end)break;cursor=next;months+=1}
+  const days=Math.max(0,Math.floor((end-cursor)/86400000))
+  return `${years?`${years}年 `:''}${months?`${months}个月 `:''}${days}天 · 共 ${totalDays} 天`
+}
+
+async function optimiseUpload(file){
+  if(file.type==='image/gif'||typeof createImageBitmap!=='function')return file
+  try{
+    const bitmap=await createImageBitmap(file)
+    const scale=Math.min(1,MAX_IMAGE_EDGE/Math.max(bitmap.width,bitmap.height))
+    if(scale===1&&file.size<=MAX_IMAGE_BYTES){bitmap.close();return file}
+    const canvas=document.createElement('canvas')
+    canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale))
+    canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close()
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',.82))
+    if(!blob||blob.size>=file.size)return file
+    const base=file.name.replace(/\.[^.]+$/,'')||'screenshot'
+    return new File([blob],`${base}.webp`,{type:'image/webp',lastModified:file.lastModified})
+  }catch{return file}
+}
 
 const ATTENDANCE={
   normal:{label:'正常上班',tone:'green'},
@@ -187,7 +223,7 @@ export default function OnlineTrainingPage(){
         :await readCall('online_training_search_reports',{
           p_filters:filters,p_page:nextPage,p_page_size:REPORT_PAGE_SIZE,
         })
-      const rows=mode==='reports'?await hydrateAttachments(data?.rows||[]):data?.rows||[]
+      const rows=data?.rows||[]
       setResult({...data,rows})
       setError('')
     }catch(err){setError(readableError(err,'线上培训记录读取失败'))}
@@ -239,10 +275,17 @@ export default function OnlineTrainingPage(){
     setEditor({original:null,assignmentMode,rosterLoading:false,validation:null,draft,members:sourceRows.map(memberFromRoster)})
   }
 
-  const openEdit=row=>{
+  const openView=async row=>{
+    const [hydrated]=await hydrateAttachments([row])
+    setViewing(hydrated||row)
+  }
+
+  const openEdit=async row=>{
+    const [hydrated]=await hydrateAttachments([row])
+    const source=hydrated||row
     setError('')
     setPendingFiles([])
-    setEditor({original:row,assignmentMode:'edit',rosterLoading:false,validation:null,draft:draftFromReport(row),members:(row.members||[]).map(memberFromReport)})
+    setEditor({original:source,assignmentMode:'edit',rosterLoading:false,validation:null,draft:draftFromReport(source),members:(source.members||[]).map(memberFromReport)})
   }
 
   const releasePending=items=>items.forEach(item=>URL.revokeObjectURL(item.preview))
@@ -267,17 +310,20 @@ export default function OnlineTrainingPage(){
     }
   }
 
-  const addFiles=event=>{
+  const addFiles=async event=>{
     const files=[...(event.target.files||[])];event.target.value=''
-    const slots=12-(editor?.draft?.attachments?.length||0)-pendingFiles.length
-    if(slots<=0){setEditor(current=>({...current,validation:{message:'每份报告最多上传12张截图',issues:[]}}));return}
+    const slots=MAX_ATTACHMENTS-(editor?.draft?.attachments?.length||0)-pendingFiles.length
+    if(slots<=0){setEditor(current=>({...current,validation:{message:`每份报告最多上传${MAX_ATTACHMENTS}张关键截图`,issues:[]}}));return}
     const accepted=[]
-    files.slice(0,slots).forEach(file=>{
-      if(!['image/jpeg','image/png','image/webp','image/gif'].includes(file.type)){setEditor(current=>({...current,validation:{message:`${file.name} 不是支持的图片格式`,issues:[]}}));return}
-      if(file.size>10*1024*1024){setEditor(current=>({...current,validation:{message:`${file.name} 超过10MB`,issues:[]}}));return}
+    let message=''
+    for(const source of files.slice(0,slots)){
+      if(!['image/jpeg','image/png','image/webp','image/gif'].includes(source.type)){message=`${source.name} 不是支持的图片格式`;continue}
+      const file=await optimiseUpload(source)
+      if(file.size>MAX_IMAGE_BYTES){message=`${source.name} 压缩后仍超过4MB，请换一张较小的图片`;continue}
       accepted.push({file,preview:URL.createObjectURL(file)})
-    })
+    }
     setPendingFiles(current=>[...current,...accepted])
+    if(message)setEditor(current=>({...current,validation:{message,issues:[]}}))
   }
 
   const removePending=index=>setPendingFiles(current=>{const next=[...current];const [removed]=next.splice(index,1);if(removed)URL.revokeObjectURL(removed.preview);return next})
@@ -357,7 +403,7 @@ export default function OnlineTrainingPage(){
         p_query:'',p_date_from:null,p_date_to:null,
         p_employee_id:person.employee_id,p_page:1,p_page_size:50,
       })
-      setHistory({person,loading:false,rows:await hydrateAttachments(data?.rows||[]),error:''})
+      setHistory({person,loading:false,rows:data?.rows||[],error:''})
     }catch(err){setHistory({person,loading:false,rows:[],error:err.message||'员工历史记录读取失败'})}
   }
 
@@ -393,7 +439,7 @@ export default function OnlineTrainingPage(){
 
   return <div className="content-page ot-page">
     <header className="ot-header">
-      <div><div className="module-kicker">ONLINE TRAINING</div><h1>线上培训日报</h1><p>人员来自居家排班表；逐人记录当天表现、公休、请假、缺席或回家情况。</p></div>
+      <div><div className="module-kicker">ONLINE TRAINING</div><h1>线上培训日报</h1></div>
       <div className="ot-header-actions">
         <span className={`ot-access ${canOpenSubmit?'ok':'read'}`}>{myRoster.length?`已关联 ${myRoster.length} 名组员`:canAdminSelect?'管理员代填':'仅查看'}</span>
         <button onClick={loadBootstrap} disabled={loading||searching}>{loading?'读取中…':'刷新'}</button>
@@ -407,12 +453,12 @@ export default function OnlineTrainingPage(){
       <div><span>我负责的培训人员</span><strong>{myRoster.length||'—'}</strong><small>{myRoster.length?'按账号档案自动匹配':'主管账号仅查看或代填'}</small></div>
       <div><span>历史培训日报</span><strong>{mode==='reports'?result.total:'—'}</strong><small>当前搜索结果</small></div>
       <div><span>员工培训档案</span><strong>{mode==='people'?result.total:'—'}</strong><small>有日报记录的员工</small></div>
-      <div><span>排班数据更新时间</span><strong className="date">{bootstrap?.roster_synced_at?timeText(bootstrap.roster_synced_at):'读取中'}</strong><small>保存日报时固定人员快照</small></div>
+      <div><span>排班数据最近同步</span><strong className="date">{bootstrap?.roster_synced_at?timeText(bootstrap.roster_synced_at):'读取中'}</strong><small>系统每10分钟检查并同步</small></div>
     </section>
 
     <div className="ot-view-tabs">
-      <button className={mode==='reports'?'active':''} onClick={()=>setMode('reports')}>日报记录</button>
-      <button className={mode==='people'?'active':''} onClick={()=>setMode('people')}>员工培训记录</button>
+      <button className={mode==='reports'?'active':''} onClick={()=>setMode('reports')}>培训日报记录</button>
+      <button className={mode==='people'?'active':''} onClick={()=>setMode('people')}>人员详细记录</button>
     </div>
 
     <form className="ot-filters" onSubmit={event=>{event.preventDefault();queryFilters()}}>
@@ -438,7 +484,7 @@ export default function OnlineTrainingPage(){
     {searching&&<div className="ot-searching"><i/><span>正在搜索线上培训记录…</span></div>}
 
     {loading&&!bootstrap?<div className="ot-loading"><i/><span>正在读取排班与线上培训记录…</span></div>:
-      mode==='reports'?<ReportList rows={result.rows} onView={setViewing} onEdit={openEdit} onDelete={setDeleteTarget} onProfile={openProfile} onOpenImage={setLightbox}/>
+      mode==='reports'?<ReportList rows={result.rows} onView={openView} onEdit={openEdit} onDelete={setDeleteTarget}/>
       :<PeopleList rows={result.rows} onHistory={openHistory} onProfile={openProfile}/>
     }
 
@@ -451,12 +497,12 @@ export default function OnlineTrainingPage(){
     {viewing&&<OverlayPortal><ViewModal row={viewing} onClose={()=>setViewing(null)} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{setViewing(null);openEdit(viewing)}} onDelete={()=>{setViewing(null);setDeleteTarget(viewing)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>} 
     {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/></OverlayPortal>} 
     {profile&&<OverlayPortal><ProfileDrawer state={profile} onClose={()=>setProfile(null)}/></OverlayPortal>} 
-    {history&&<OverlayPortal><HistoryModal state={history} onClose={()=>setHistory(null)} onView={row=>{setHistory(null);setViewing(row)}} onProfile={openProfile}/></OverlayPortal>} 
+    {history&&<OverlayPortal><HistoryModal state={history} onClose={()=>setHistory(null)} onView={row=>{setHistory(null);openView(row)}} onProfile={openProfile}/></OverlayPortal>} 
     {lightbox&&<OverlayPortal><div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div></OverlayPortal>}
   </div>
 }
 
-function ReportList({rows,onView,onEdit,onDelete,onProfile,onOpenImage}){
+function ReportList({rows,onView,onEdit,onDelete}){
   if(!rows?.length)return <div className="ot-empty"><span>培</span><h3>暂时没有匹配的线上培训日报</h3><p>提交后会在这里显示，并可按员工搜索全部历史。</p></div>
   return <section className="ot-report-grid">{rows.map(row=>{
     const counts=Object.fromEntries(Object.keys(ATTENDANCE).map(key=>[key,(row.members||[]).filter(m=>m.attendance_status===key).length]))
@@ -464,9 +510,7 @@ function ReportList({rows,onView,onEdit,onDelete,onProfile,onOpenImage}){
       <div className="ot-card-top"><div><span>{dateText(row.report_date)}</span><strong>{row.title}</strong></div><em className={`review ${row.review_status}`}>{REVIEW[row.review_status]||'待查看'}</em></div>
       <div className="ot-meta"><span>{row.platform||'未填写平台'}</span><span>{row.shift_name||'未填写班次'}</span><span>{row.trainer_name||row.author_name}</span></div>
       <p>{row.report_summary||row.issues_summary||'已完成逐人培训记录'}</p>
-      <div className="ot-counts"><b>{row.members?.length||0} 人</b><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div>
-      <div className="ot-member-chips">{(row.members||[]).slice(0,8).map(member=><button key={member.id} onClick={()=>onProfile(member.employee_id)}>{member.employee_no} · {member.employee_name}</button>)}{row.members?.length>8&&<span>+{row.members.length-8}</span>}</div>
-      {row.attachments?.length>0&&<AttachmentGrid items={row.attachments.slice(0,4)} onOpen={onOpenImage} compact/>}
+      <div className="ot-counts"><b>{row.members?.length||0} 人</b><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span>{row.attachments?.length>0&&<span className="ot-photo-count">截图 {row.attachments.length}</span>}</div>
       <footer><div><strong>{row.author_name||'后台用户'}</strong><small>{row.author_employee_no||'后台账号'} · {timeText(row.created_at)}</small></div><div><button onClick={()=>onView(row)}>查看</button>{row.can_edit&&<button onClick={()=>onEdit(row)}>编辑</button>}{row.can_edit&&<button className="danger" onClick={()=>onDelete(row)}>删除</button>}</div></footer>
     </article>
   })}</section>
@@ -509,8 +553,8 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
         {!editor.members.length?<div className={`ot-no-members ${editor.rosterLoading?'loading':''}`}>{editor.rosterLoading?'正在从居家排班表读取该培训负责的人员…':admin?'请选择一名线上培训人员，组员会立即自动出现。':'当前没有可填写的线上培训人员。'}</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} index={index} invalid={invalidIndexes.has(index)} onChange={updateMember} onMetric={updateMetric} onProfile={onProfile}/>)}</div>}
       </section>
 
-      <section className="ot-form-section"><div className="section-title"><div><b>3. 上传当日图片</b><small>页面平时只显示小图，点击缩略图才会打开大图；最多12张</small></div></div>
-        <div className="ot-upload"><div><strong>工作截图 / 培训截图</strong><small>JPG / PNG / WEBP / GIF，单张不超过10MB</small></div><label>选择图片<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={onFiles}/></label></div>
+      <section className="ot-form-section"><div className="section-title"><div><b>3. 上传关键图片</b><small>只上传必要证据；系统会自动压缩，列表不预加载大图；最多{MAX_ATTACHMENTS}张</small></div></div>
+        <div className="ot-upload"><div><strong>工作截图 / 培训截图</strong><small>JPG / PNG / WEBP / GIF，自动压缩至1600px / 4MB以内</small></div><label>选择图片<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={onFiles}/></label></div>
         {(d.attachments.length>0||pendingFiles.length>0)&&<div className="ot-upload-list">
           {d.attachments.map(item=><div key={item.path}><button type="button" className="preview" disabled={!item.url} onClick={()=>item.url&&onOpenImage(item)}>{item.url?<img src={item.url} alt={item.name}/>:<span>已上传</span>}<b>{item.name}</b><small>点击查看大图</small></button><button type="button" className="remove" onClick={()=>onRemoveExisting(item.path)}>移除</button></div>)}
           {pendingFiles.map((item,index)=><div key={item.preview}><button type="button" className="preview" onClick={()=>onOpenImage({url:item.preview,name:item.file.name})}><img src={item.preview} alt={item.file.name}/><b>{item.file.name}</b><small>点击查看大图</small></button><button type="button" className="remove" onClick={()=>onRemovePending(index)}>移除</button></div>)}
@@ -572,7 +616,8 @@ function MemberView({member,index,onProfile}){
 
 function ProfileDrawer({state,onClose}){
   const p=state.data||{}
-  const rows=[['员工ID',p.employee_no],['姓名',p.full_name],['状态',p.status==='active'?'在职':p.status],['国家',p.country],['员工类型',p.employment_type],['入职日期',p.hire_date],['团队',p.team],['组别',p.group],['岗位',p.position],['班次',p.shift],['盘口',p.platform],['负责人',p.responsible],['线上组长',p.online_leader],['线上培训',p.online_trainer],['工作内容',p.work_content]]
+  const tenure=tenureDurationLabel(p.hire_date)
+  const rows=[['员工ID',p.employee_no],['姓名',p.full_name],['状态',p.status==='active'?'在职':p.status],['国家',p.country],['员工类型',p.employment_type],['入职日期',p.hire_date],['入职时长',tenure],['团队',p.team],['组别',p.group],['岗位',p.position],['班次',p.shift],['盘口',p.platform],['负责人',p.responsible],['线上组长',p.online_leader],['线上培训',p.online_trainer],['工作内容',p.work_content]]
   return <div className="ot-backdrop drawer-mask" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><aside className="ot-profile-drawer"><header><div><span>{text(p.full_name).slice(0,1).toUpperCase()||'人'}</span><div><small>安全员工档案</small><h2>{p.full_name||'读取中…'}</h2><b>{p.employee_no||'—'}</b></div></div><button onClick={onClose}>×</button></header>
     {state.loading?<div className="ot-drawer-state">正在读取员工基础档案…</div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:<><div className="ot-sensitive-note"><strong>敏感资料已隐藏</strong><span>此处不会返回工资、收款账户、联系方式、地址或后台账号。</span></div><div className="ot-profile-rows">{rows.map(([label,value])=><div key={label}><span>{label}</span><strong>{text(value)||'—'}</strong></div>)}</div></>}
   </aside></div>
