@@ -10,16 +10,18 @@ const blankAccount = () => ({
   username: '',
   password: '',
   role_id: '',
-  data_scope: 'own_team',
+  data_scope: 'all',
   otp_required: false,
   team_ids: [],
   employee_ids: [],
+  scope_team_search: '',
+  scope_employee_search: '',
 })
 
 const blankStaffAccount = () => ({
   employee_id: '',
   employee_search: '',
-  username: '',
+  email: '',
   password: '',
 })
 
@@ -154,7 +156,7 @@ export default function AdminUsersPage() {
     const role = getRole(a)
     return matchesSearch(a.login_username, a.employee?.employee_no, a.employee?.full_name, role?.name, scopeLabel(a.data_scope))
   })
-  const visibleStaff = staff.filter(a => matchesSearch(a.login_username, a.employee?.employee_no, a.employee?.full_name, a.employee?.teams?.name, a.employee?.positions?.name))
+  const visibleStaff = staff.filter(a => matchesSearch(a.login_email, a.employee?.employee_no, a.employee?.full_name, a.employee?.teams?.name, a.employee?.positions?.name))
   const visibleRoles = roles.filter(r => r.code !== 'employee' && matchesSearch(r.name, r.code))
 
   const rolePermissionMap = useMemo(() => {
@@ -180,13 +182,15 @@ export default function AdminUsersPage() {
     }))
   }, [permissions])
 
-  const openCreate = () => setAccountModal({ mode: 'create', form: blankAccount() })
-  const openCreateStaff = () => setStaffModal({ form: blankStaffAccount(), error: '' })
+  const openCreate = () => setAccountModal({ mode: 'create', form: blankAccount(), error: '', saving: false })
+  const openCreateStaff = () => setStaffModal({ form: blankStaffAccount(), error: '', saving: false })
 
   const openEdit = (a) => {
     const role = getRole(a)
     setAccountModal({
       mode: 'edit',
+      error: '',
+      saving: false,
       form: {
         auth_user_id: a.auth_user_id,
         employee_id: a.employee_id || '',
@@ -197,13 +201,15 @@ export default function AdminUsersPage() {
         otp_required: Boolean(a.otp_required),
         team_ids: scopeTeams.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.team_id),
         employee_ids: scopeEmployees.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.employee_id),
+        scope_team_search: '',
+        scope_employee_search: '',
       }
     })
   }
 
   const saveAccount = async () => {
     const { mode, form } = accountModal
-    setError('')
+    setAccountModal(x => ({ ...x, error: '', saving: true }))
     try {
       if (mode === 'create') {
         await call({ action: 'create_backend', ...form })
@@ -221,29 +227,29 @@ export default function AdminUsersPage() {
       setAccountModal(null)
       await load()
     } catch (e) {
-      setError(e.message)
+      setAccountModal(x => ({ ...x, error: e.message, saving: false }))
     }
   }
 
   const saveStaffAccount = async () => {
-    setStaffModal(x => ({ ...x, error: '' }))
+    setStaffModal(x => ({ ...x, error: '', saving: true }))
     if (!staffModal.form.employee_id) {
-      setStaffModal(x => ({ ...x, error: '请先输入员工ID或姓名，并从搜索建议中确认员工档案。' }))
+      setStaffModal(x => ({ ...x, error: '请先输入员工ID或姓名，并从搜索建议中确认员工档案。', saving: false }))
       return
     }
-    if (!staffModal.form.username.trim()) {
-      setStaffModal(x => ({ ...x, error: '请填写登录用户名。' }))
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(staffModal.form.email.trim())) {
+      setStaffModal(x => ({ ...x, error: '请填写正确的登录邮箱格式。', saving: false }))
       return
     }
     if (!staffModal.form.password) {
-      setStaffModal(x => ({ ...x, error: '请填写临时密码。' }))
+      setStaffModal(x => ({ ...x, error: '请填写临时密码。', saving: false }))
       return
     }
     try {
       await call({ action: 'create_staff', ...staffModal.form })
       setStaffModal(null)
       await load()
-    } catch (e) { setStaffModal(x => ({ ...x, error: e.message })) }
+    } catch (e) { setStaffModal(x => ({ ...x, error: e.message, saving: false })) }
   }
 
   const toggleOtp = async (a) => {
@@ -366,9 +372,10 @@ export default function AdminUsersPage() {
         .role-card h3{margin:0;font-size:15px}.role-card small{color:#8995a6}
         .role-card-actions{display:flex;gap:7px;margin-top:13px}.role-card-actions button{border:1px solid #dbe3ed;background:#fff;border-radius:8px;padding:7px 10px}
         .create-role-row{display:flex;gap:8px;margin-bottom:14px}.create-role-row input{height:40px;border:1px solid #d8e1eb;border-radius:9px;padding:0 11px}
-        .access-searchbar{display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;min-width:260px;flex:1;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
+        .access-searchbar{display:grid;grid-template-columns:minmax(300px,1fr) auto auto auto;align-items:center;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
+        .account-modal{width:min(760px,94vw);max-height:min(760px,88vh);display:flex;flex-direction:column;overflow:hidden}.account-modal .modal-head{flex:0 0 auto}.account-modal .account-modal-body{overflow:auto;padding:2px 3px 8px}.account-modal .modal-actions{flex:0 0 auto;position:sticky;bottom:0;background:#fff;border-top:1px solid #edf1f5;padding-top:12px;margin-top:6px;z-index:2}
         .scope-panel{grid-column:1/-1;border:1px solid #e3e9f1;border-radius:11px;padding:12px;background:#fafbfd}
-        .scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.check-list{max-height:180px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px;background:#fff;padding:8px}
+        .scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.scope-column-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}.scope-column-head span{font-size:10px;color:#5873a1}.scope-search{width:100%;height:36px!important;margin-bottom:7px}.check-list{max-height:180px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px;background:#fff;padding:8px}
         .check-list label{display:flex;gap:8px;align-items:center;padding:7px 5px;font-size:12px;color:#46566d}
         .permission-matrix{overflow:auto;border:1px solid #e1e8f0;border-radius:11px}.permission-matrix table{width:100%;border-collapse:collapse}
         .permission-matrix th,.permission-matrix td{padding:10px 11px;border-bottom:1px solid #edf1f5;font-size:12px;text-align:center}.permission-matrix th:first-child,.permission-matrix td:first-child{text-align:left}
@@ -376,7 +383,8 @@ export default function AdminUsersPage() {
         .permission-matrix td.permission-cell{min-width:110px;vertical-align:top}.permission-empty{color:#c2cad5}
         .permission-choice{display:flex;align-items:flex-start;gap:6px;text-align:left;margin:2px 0;color:#3e4f66}.permission-choice input{margin-top:2px}.permission-choice em{font-size:9px;color:#a96019;background:#fff1dc;padding:1px 4px;border-radius:4px;font-style:normal}
         .role-modal{width:min(920px,96vw)}
-        @media(max-width:900px){.role-list{grid-template-columns:1fr}.scope-columns{grid-template-columns:1fr}}
+        .employee-search-results{grid-column:1/-1;max-height:235px;overflow:auto;border:1px solid #dce5ef;border-radius:10px;background:#fff;padding:5px}.employee-search-option{width:100%;display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;border:0;border-bottom:1px solid #edf1f5;background:#fff;padding:10px;text-align:left;cursor:pointer}.employee-search-option:hover{background:#f3f7ff}.employee-search-option:last-child{border-bottom:0}.employee-search-option strong{color:#24415f}.employee-search-option small{color:#738198}.employee-search-option span{font-size:11px;color:#376ac5}.linked-employee{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #bfe6d0;background:#f0fbf5;border-radius:9px;color:#18784a;font-size:12px}.linked-employee button{border:0;background:transparent;color:#b34b4b;cursor:pointer}
+        @media(max-width:900px){.role-list{grid-template-columns:1fr}.scope-columns{grid-template-columns:1fr}.access-searchbar{grid-template-columns:1fr 1fr}.access-searchbar input{grid-column:1/-1}.employee-search-option{grid-template-columns:95px 1fr}}
       `}</style>
 
       <div className="page-toolbar">
@@ -442,9 +450,9 @@ export default function AdminUsersPage() {
             <div className="data-card table-scroll">
               {staff.length === 0 ? <div className="empty-state">暂无员工账号</div> :
               <table className="data-table">
-                <thead><tr><th>登录用户名</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>状态</th><th>操作</th></tr></thead>
+                <thead><tr><th>登录邮箱</th><th>员工ID</th><th>姓名</th><th>团队</th><th>岗位</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody>{visibleStaff.map(a => <tr key={a.auth_user_id}>
-                  <td><strong>{a.login_username || '-'}</strong></td>
+                  <td><strong>{a.login_email || '-'}</strong></td>
                   <td><strong>{a.employee?.employee_no || '-'}</strong></td>
                   <td>{a.employee?.full_name || '-'}</td>
                   <td>{a.employee?.teams?.name || '-'}</td>
@@ -488,16 +496,17 @@ export default function AdminUsersPage() {
 
       {accountModal && (
         <div className="modal-mask" onMouseDown={() => setAccountModal(null)}>
-          <div className="modal-card" onMouseDown={e => e.stopPropagation()}>
+          <div className="modal-card account-modal" onMouseDown={e => e.stopPropagation()}>
             <div className="modal-head">
               <h2>{accountModal.mode === 'create' ? '新增后台账号' : '编辑后台账号'}</h2>
               <button onClick={() => setAccountModal(null)}>×</button>
             </div>
 
-            <div className="form-grid">
+            {accountModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{accountModal.error}</div>}
+            <div className="account-modal-body"><div className="form-grid">
               <label>关联员工档案
-                <select value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value}}))}>
-                  <option value="">不关联（不能自动识别下属）</option>
+                <select value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value, data_scope:!e.target.value&&x.form.data_scope==='own_team'?'all':x.form.data_scope}}))}>
+                  <option value="">不关联（请选择全部或指定范围）</option>
                   {employees.map(e => <option key={e.id} value={e.id}>{e.employee_no} · {e.full_name}</option>)}
                 </select>
               </label>
@@ -519,9 +528,9 @@ export default function AdminUsersPage() {
 
               <label>管理范围
                 <select value={accountModal.form.data_scope} onChange={e => setAccountModal(x => ({...x, form:{...x.form, data_scope:e.target.value}}))}>
-                  <option value="own_team">自己团队</option>
-                  <option value="assigned">指定范围</option>
-                  <option value="all">全部</option>
+                  {accountModal.form.employee_id && <option value="own_team">关联员工所在团队</option>}
+                  <option value="assigned">指定团队 / 指定员工</option>
+                  <option value="all">全部数据</option>
                 </select>
               </label>
 
@@ -535,16 +544,16 @@ export default function AdminUsersPage() {
               {accountModal.form.data_scope === 'assigned' && (
                 <div className="scope-panel">
                   <div className="scope-columns">
-                    <div><strong>团队</strong><div className="check-list">
-                      {teams.length === 0 ? <div className="empty-state">暂无团队</div> : teams.map(t => (
+                    <div><div className="scope-column-head"><strong>团队</strong><span>已选 {accountModal.form.team_ids.length}</span></div><input className="scope-search" placeholder="搜索团队" value={accountModal.form.scope_team_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_team_search:e.target.value}}))}/><div className="check-list">
+                      {teams.length === 0 ? <div className="empty-state">暂无团队</div> : teams.filter(t=>String(t.name||'').toLowerCase().includes(accountModal.form.scope_team_search.toLowerCase())).map(t => (
                         <label key={t.id}><input type="checkbox"
                           checked={accountModal.form.team_ids.includes(t.id)}
                           onChange={e => setAccountModal(x => ({...x,form:{...x.form,team_ids:e.target.checked?[...x.form.team_ids,t.id]:x.form.team_ids.filter(id=>id!==t.id)}}))}
                         />{t.name}</label>
                       ))}
                     </div></div>
-                    <div><strong>指定员工</strong><div className="check-list">
-                      {employees.length === 0 ? <div className="empty-state">暂无员工</div> : employees.map(emp => (
+                    <div><div className="scope-column-head"><strong>指定员工</strong><span>已选 {accountModal.form.employee_ids.length}</span></div><input className="scope-search" placeholder="搜索员工ID或姓名" value={accountModal.form.scope_employee_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_search:e.target.value}}))}/><div className="check-list">
+                      {employees.length === 0 ? <div className="empty-state">暂无员工</div> : employees.filter(emp=>`${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(accountModal.form.scope_employee_search.toLowerCase())).slice(0,100).map(emp => (
                         <label key={emp.id}><input type="checkbox"
                           checked={accountModal.form.employee_ids.includes(emp.id)}
                           onChange={e => setAccountModal(x => ({...x,form:{...x.form,employee_ids:e.target.checked?[...x.form.employee_ids,emp.id]:x.form.employee_ids.filter(id=>id!==emp.id)}}))}
@@ -554,11 +563,11 @@ export default function AdminUsersPage() {
                   </div>
                 </div>
               )}
-            </div>
+            </div></div>
 
             <div className="modal-actions">
               <button className="secondary-action" onClick={() => setAccountModal(null)}>取消</button>
-              <button className="primary-action" onClick={saveAccount}>保存</button>
+              <button className="primary-action" disabled={accountModal.saving} onClick={saveAccount}>{accountModal.saving?'保存中…':'保存'}</button>
             </div>
           </div>
         </div>
@@ -573,26 +582,21 @@ export default function AdminUsersPage() {
             </div>
             {staffModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{staffModal.error}</div>}
             <div className="form-grid">
-              <label className="form-span">搜索并关联员工档案（必选）
-                <input list="staff-employee-options" placeholder="手动输入员工ID或姓名搜索"
+              <label className="form-span">搜索并关联在职员工（必选）
+                <input placeholder="输入员工ID或姓名；输入后显示匹配结果"
                   value={staffModal.form.employee_search}
                   onChange={e => {
                     const value = e.target.value
-                    const available = employees.filter(emp => !staff.some(a => a.employee_id === emp.id))
-                    const matched = available.find(emp => value === `${emp.employee_no} · ${emp.full_name}` || value.toLowerCase() === String(emp.employee_no).toLowerCase())
-                    setStaffModal(x => ({...x, error:'', form:{...x.form, employee_search:value, employee_id:matched?.id || ''}}))
+                    setStaffModal(x => ({...x, error:'', form:{...x.form, employee_search:value, employee_id:''}}))
                   }} />
-                <datalist id="staff-employee-options">
-                  {employees.filter(emp => !staff.some(a => a.employee_id === emp.id)).map(emp => (
-                    <option key={emp.id} value={`${emp.employee_no} · ${emp.full_name}`}>{emp.teams?.name || '未分团队'} · {emp.positions?.name || '未分岗位'}</option>
-                  ))}
-                </datalist>
-                {staffModal.form.employee_id
-                  ? <small style={{color:'#198754'}}>已确认关联此员工档案</small>
-                  : <small>请输入后从建议结果中选择；不存在的员工不能创建前端账号。</small>}
+                <small>已开账号及离职人员不会出现在结果中，同一员工ID不能重复开户。</small>
               </label>
-              <label>登录用户名
-                <input placeholder="3-32位字母或数字" value={staffModal.form.username} onChange={e => setStaffModal(x => ({...x, form:{...x.form, username:e.target.value.toLowerCase()}}))}/>
+              {staffModal.form.employee_id ? <div className="linked-employee"><strong>✓ 已确认：{staffModal.form.employee_search}</strong><button type="button" onClick={()=>setStaffModal(x=>({...x,form:{...x.form,employee_id:'',employee_search:''}}))}>重新选择</button></div> : staffModal.form.employee_search.trim() && <div className="employee-search-results">
+                {employees.filter(emp => !staff.some(a => a.employee_id === emp.id)).filter(emp => `${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(staffModal.form.employee_search.trim().toLowerCase())).slice(0,8).map(emp => <button type="button" className="employee-search-option" key={emp.id} onClick={()=>setStaffModal(x=>({...x,error:'',form:{...x.form,employee_id:emp.id,employee_search:`${emp.employee_no} · ${emp.full_name}`}}))}><strong>{emp.employee_no}</strong><small>{emp.full_name}</small><span>{emp.teams?.name||'未分团队'} · {emp.positions?.name||'未分岗位'}</span></button>)}
+                {employees.filter(emp => !staff.some(a => a.employee_id === emp.id)).filter(emp => `${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(staffModal.form.employee_search.trim().toLowerCase())).length===0 && <div className="empty-state">没有可开户的在职员工；可能已开户、已离职或ID不存在。</div>}
+              </div>}
+              <label>登录邮箱
+                <input type="email" placeholder="例如 name@example.com" value={staffModal.form.email} onChange={e => setStaffModal(x => ({...x,error:'',form:{...x.form,email:e.target.value.toLowerCase()}}))}/>
               </label>
               <label>临时密码
                 <input type="password" placeholder="至少10位，含大小写、数字和符号" value={staffModal.form.password} onChange={e => setStaffModal(x => ({...x, form:{...x.form, password:e.target.value}}))}/>
@@ -600,7 +604,7 @@ export default function AdminUsersPage() {
             </div>
             <div className="modal-actions">
               <button className="secondary-action" onClick={() => setStaffModal(null)}>取消</button>
-              <button className="primary-action" onClick={saveStaffAccount}>创建账号</button>
+              <button className="primary-action" disabled={staffModal.saving} onClick={saveStaffAccount}>{staffModal.saving?'创建中…':'创建账号'}</button>
             </div>
           </div>
         </div>

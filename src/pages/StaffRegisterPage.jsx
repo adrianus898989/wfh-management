@@ -46,7 +46,12 @@ export default function StaffRegisterPage() {
 
     setLoading(false)
 
-    if (error || data?.error) return setError(data?.error || '注册失败，请检查激活码')
+    if (error) {
+      let detail = ''
+      try { detail = (await error.context?.json())?.error || '' } catch {}
+      return setError(detail || data?.error || '注册失败，请检查激活码')
+    }
+    if (data?.error) return setError(data.error)
     setResult(data)
   }
 

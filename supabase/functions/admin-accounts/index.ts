@@ -34,6 +34,12 @@ function cleanString(v: unknown) {
   return String(v ?? '').trim()
 }
 
+async function sha256(text: string) {
+  const data = new TextEncoder().encode(text)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: cors(req.headers.get('origin')) })
@@ -338,6 +344,15 @@ Deno.serve(async (req) => {
       if (!passwordOk(password)) {
         return json(req, { error: '密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
       }
+      if (!['all', 'own_team', 'assigned'].includes(dataScope)) {
+        return json(req, { error: '管理范围不正确' }, 400)
+      }
+      if (!employeeId && dataScope === 'own_team') {
+        return json(req, { error: '未关联员工档案时，请选择“全部数据”或“指定范围”' }, 400)
+      }
+      if (dataScope === 'assigned' && !teamIds.length && !employeeIds.length) {
+        return json(req, { error: '指定范围至少选择一个团队或一名员工' }, 400)
+      }
 
       const { data: role } = await admin.from('roles').select('id,code,active').eq('id', roleId).maybeSingle()
       if (!role || !role.active) return json(req, { error: '角色不可用' }, 400)
@@ -404,6 +419,10 @@ Deno.serve(async (req) => {
       const teamIds = Array.isArray(body.team_ids) ? body.team_ids.map(cleanString) : []
       const employeeIds = Array.isArray(body.employee_ids) ? body.employee_ids.map(cleanString) : []
 
+      if (!['all', 'own_team', 'assigned'].includes(dataScope)) return json(req, { error: '管理范围不正确' }, 400)
+      if (!employeeId && dataScope === 'own_team') return json(req, { error: '未关联员工档案时，请选择“全部数据”或“指定范围”' }, 400)
+      if (dataScope === 'assigned' && !teamIds.length && !employeeIds.length) return json(req, { error: '指定范围至少选择一个团队或一名员工' }, 400)
+
       const { data: current } = await admin.from('user_access')
         .select('auth_user_id,role_id,roles(code)')
         .eq('auth_user_id', target).maybeSingle()
@@ -434,32 +453,32 @@ Deno.serve(async (req) => {
       if (!can('account.create')) return json(req, { error: '无创建账号权限' }, 403)
 
       const employeeId = cleanString(body.employee_id)
-      const username = cleanString(body.username).toLowerCase()
+      const email = cleanString(body.email).toLowerCase()
       const password = String(body.password || '')
 
       if (!employeeId) return json(req, { error: '员工前端账号必须关联员工档案' }, 400)
-      if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
-        return json(req, { error: '用户名只允许3-32位字母、数字、._-' }, 400)
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return json(req, { error: '请填写正确的登录邮箱格式' }, 400)
       }
       if (!passwordOk(password)) {
         return json(req, { error: '密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
       }
 
-      const [{ data: employee }, { data: usernameExists }, { data: linkedExists }, { data: employeeRole }] = await Promise.all([
+      const [{ data: employee }, { data: emailExists }, { data: linkedExists }, { data: employeeRole }] = await Promise.all([
         admin.from('employees').select('id,employee_no,full_name,status').eq('id', employeeId).maybeSingle(),
-        admin.from('user_access').select('auth_user_id').ilike('login_username', username).maybeSingle(),
+        admin.from('user_access').select('auth_user_id').ilike('login_email', email).maybeSingle(),
         admin.from('user_access').select('auth_user_id').eq('employee_id', employeeId).eq('employee_portal_enabled', true).maybeSingle(),
         admin.from('roles').select('id').eq('code', 'employee').eq('active', true).maybeSingle(),
       ])
 
       if (!employee) return json(req, { error: '关联的员工档案不存在' }, 404)
-      if (usernameExists) return json(req, { error: '用户名已存在' }, 409)
+      if (employee.status !== 'active') return json(req, { error: '只有在职员工可以开通前端账号' }, 400)
+      if (emailExists) return json(req, { error: '此邮箱已经注册过账号' }, 409)
       if (linkedExists) return json(req, { error: '该员工已开通过前端账号' }, 409)
       if (!employeeRole) return json(req, { error: '员工角色未配置' }, 500)
 
-      const internalEmail = `${username}.${crypto.randomUUID().slice(0, 8)}@staff.wfh.invalid`
       const { data: created, error: createError } = await admin.auth.admin.createUser({
-        email: internalEmail,
+        email,
         password,
         email_confirm: true,
       })
@@ -471,8 +490,8 @@ Deno.serve(async (req) => {
         auth_user_id: created.user.id,
         employee_id: employeeId,
         role_id: employeeRole.id,
-        login_username: username,
-        login_email: internalEmail,
+        login_username: email,
+        login_email: email,
         backend_enabled: false,
         employee_portal_enabled: true,
         otp_required: false,
@@ -487,8 +506,36 @@ Deno.serve(async (req) => {
         return json(req, { error: insertError.message }, 400)
       }
 
-      await audit('staff_account_create', `创建员工前端账号 ${employee.employee_no} / ${username}`)
+      await audit('staff_account_create', `创建员工前端账号 ${employee.employee_no} / ${email}`)
       return json(req, { ok: true })
+    }
+
+    if (action === 'generate_activation_code') {
+      if (!can('account.create')) return json(req, { error: '无生成激活码权限' }, 403)
+      const employeeNo = cleanString(body.employee_no).toUpperCase()
+      const hours = Math.max(1, Math.min(Number(body.valid_hours) || 72, 168))
+      const employees = await getScopedEmployees()
+      const employee = employees.find((x: any) => cleanString(x.employee_no).toUpperCase() === employeeNo)
+      if (!employee) return json(req, { error: '找不到可管理的在职员工，或该员工已经离职' }, 404)
+
+      const { data: linked } = await admin.from('user_access')
+        .select('auth_user_id').eq('employee_id', employee.id).eq('employee_portal_enabled', true).maybeSingle()
+      if (linked) return json(req, { error: '该员工已经开通过前端账号，不能重复生成激活码' }, 409)
+
+      const code = `${crypto.randomUUID().replaceAll('-', '').slice(0, 6)}-${crypto.randomUUID().replaceAll('-', '').slice(0, 6)}`.toUpperCase()
+      const expiresAt = new Date(Date.now() + hours * 3600000).toISOString()
+      await admin.from('employee_activation_codes').update({ revoked_at: new Date().toISOString() })
+        .eq('employee_id', employee.id).is('used_at', null).is('revoked_at', null)
+      const { error } = await admin.from('employee_activation_codes').insert({
+        employee_id: employee.id,
+        code_hash: await sha256(code),
+        code_hint: code.slice(-4),
+        expires_at: expiresAt,
+        created_by: userData.user.id,
+      })
+      if (error) return json(req, { error: error.message }, 400)
+      await audit('activation_code_generate', `生成员工激活码 ${employee.employee_no}`)
+      return json(req, { ok: true, employee_no: employee.employee_no, employee_name: employee.full_name, activation_code: code, expires_at: expiresAt })
     }
 
     if (action === 'toggle_otp') {

@@ -60,11 +60,11 @@ async function findAccess(admin: any, username: string, mode: string) {
   let lastError: any = null
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const { data, error } = await admin
+    let query = admin
       .from('user_access')
       .select('auth_user_id,login_email,backend_enabled,employee_portal_enabled,active')
-      .ilike('login_username', username)
-      .maybeSingle()
+    query = mode === 'staff' ? query.ilike('login_email', username) : query.ilike('login_username', username)
+    const { data, error } = await query.maybeSingle()
 
     if (!error) return { access: data, unavailable: false }
 
@@ -123,7 +123,10 @@ Deno.serve(async (req) => {
     const password = String(body.password || '')
     const mode = body.mode === 'staff' ? 'staff' : 'admin'
 
-    if (!/^[a-z0-9._-]{3,32}$/.test(username) || !password) {
+    const loginValid = mode === 'staff'
+      ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)
+      : /^[a-z0-9._-]{3,32}$/.test(username)
+    if (!loginValid || !password) {
       return json(req, { error: '用户名或密码错误' }, 401)
     }
 
@@ -194,7 +197,7 @@ Deno.serve(async (req) => {
         employee_id: null,
         module: 'auth',
         action: mode === 'staff' ? 'staff_login' : 'admin_login',
-        reason: mode === 'staff' ? '员工前端用户名登录成功' : '后台用户名登录成功',
+        reason: mode === 'staff' ? '员工前端邮箱登录成功' : '后台用户名登录成功',
       }),
     ).then(({ error }: any) => {
       if (error) console.error('ADMIN_LOGIN_AUDIT_ERROR', error.message)

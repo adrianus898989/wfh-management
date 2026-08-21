@@ -347,6 +347,7 @@ export default function AdminEmployeesPage(){
   const [error,setError]=useState('')
   const [refreshing,setRefreshing]=useState(false)
   const [generated,setGenerated]=useState(null)
+  const [activationError,setActivationError]=useState('')
   const [showFilters,setShowFilters]=useState(true)
   const [filters,setFilters]=useState(blankEmployeeFilters)
   const [appliedFilters,setAppliedFilters]=useState(blankEmployeeFilters)
@@ -893,10 +894,15 @@ export default function AdminEmployeesPage(){
   }
 
   const generateCode=async employeeNo=>{
-    setGenerated(null); setError('')
-    const {data,error}=await supabase.rpc('generate_employee_activation_code',{p_employee_no:employeeNo,p_valid_hours:72})
-    if(error) return setError(error.message)
-    setGenerated(data?.[0]||null)
+    setGenerated(null); setActivationError('')
+    const {data,error}=await supabase.functions.invoke('admin-accounts',{body:{action:'generate_activation_code',employee_no:employeeNo,valid_hours:72}})
+    if(error){
+      let detail=''
+      try{ detail=(await error.context?.json())?.error||'' }catch{}
+      return setActivationError(detail||data?.error||error.message||'激活码生成失败')
+    }
+    if(data?.error) return setActivationError(data.error)
+    setGenerated(data||null)
   }
 
   const pages=Math.max(1,Math.ceil(total/pageSize))
@@ -1011,7 +1017,8 @@ export default function AdminEmployeesPage(){
         onCountry={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'country',value:name,filters:{}})}
       />
 
-      {generated&&<div className="activation-banner"><div><span>{generated.employee_no} · {generated.employee_name}</span><strong>{generated.activation_code}</strong></div><button onClick={()=>navigator.clipboard.writeText(generated.activation_code)}>复制激活码</button></div>}
+      {activationError&&<div className="page-error" style={{marginBottom:12}}>{activationError}</div>}
+      {generated&&<div className="activation-banner"><div><span>{generated.employee_no} · {generated.employee_name}（72小时有效）</span><strong>{generated.activation_code}</strong></div><button onClick={()=>navigator.clipboard.writeText(generated.activation_code)}>复制激活码</button></div>}
 
       <div className="data-card">
         {loading?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">

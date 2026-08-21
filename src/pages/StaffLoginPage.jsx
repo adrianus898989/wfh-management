@@ -64,12 +64,13 @@ export default function StaffLoginPage() {
           <div className="login-title">员工登录</div>
 
           <label className="login-field">
-            用户名
+            邮箱
             <div className="login-input">
               <input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
+                type="email"
+                autoComplete="email"
                 required
               />
             </div>
