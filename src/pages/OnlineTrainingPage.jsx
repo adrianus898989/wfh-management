@@ -1,4 +1,5 @@
-import React,{useEffect,useState} from 'react'
+import React,{useEffect,useMemo,useState} from 'react'
+import {createPortal} from 'react-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
 import '../styles-online-training.css'
@@ -15,6 +16,10 @@ const cleanAttachment=item=>({path:text(item?.path),name:text(item?.name),size:N
 const attachmentWithUrl=item=>({...cleanAttachment(item),url:text(item?.url)})
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
+const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
+const delay=ms=>new Promise(resolve=>window.setTimeout(resolve,ms))
+const isTransientError=error=>/failed to fetch|networkerror|network request failed|load failed|connection|timeout/i.test(text(error?.message||error))
+const readableError=(error,fallback)=>isTransientError(error)?'连接短暂中断，请点击“重新读取”':text(error?.message)||fallback
 
 const ATTENDANCE={
   normal:{label:'正常上班',tone:'green'},
@@ -106,11 +111,15 @@ function AttachmentGrid({items,onOpen,compact=false}){
   </button>)}</div>
 }
 
+function OverlayPortal({children}){
+  return createPortal(children,document.body)
+}
+
 export default function OnlineTrainingPage(){
   const [bootstrap,setBootstrap]=useState(null)
   const [mode,setMode]=useState('reports')
-  const [filters,setFilters]=useState({q:'',from:'',to:''})
-  const [draftFilters,setDraftFilters]=useState({q:'',from:'',to:''})
+  const [filters,setFilters]=useState({...EMPTY_FILTERS})
+  const [draftFilters,setDraftFilters]=useState({...EMPTY_FILTERS})
   const [searchVersion,setSearchVersion]=useState(0)
   const [page,setPage]=useState(1)
   const [result,setResult]=useState({rows:[],total:0,pages:1})
@@ -129,9 +138,12 @@ export default function OnlineTrainingPage(){
   const hydrateAttachments=async rows=>{
     const paths=uniq((rows||[]).flatMap(row=>(row.attachments||[]).map(item=>item.path)))
     if(!paths.length)return rows||[]
-    const {data}=await supabase.storage.from(BUCKET).createSignedUrls(paths,3600)
-    const urls=new Map((data||[]).map(item=>[item.path,item.signedUrl]))
-    return (rows||[]).map(row=>({...row,attachments:(row.attachments||[]).map(item=>({...cleanAttachment(item),url:urls.get(item.path)||''}))}))
+    try{
+      const {data,error:storageError}=await supabase.storage.from(BUCKET).createSignedUrls(paths,3600)
+      if(storageError)return rows||[]
+      const urls=new Map((data||[]).map(item=>[item.path,item.signedUrl]))
+      return (rows||[]).map(row=>({...row,attachments:(row.attachments||[]).map(item=>({...cleanAttachment(item),url:urls.get(item.path)||''}))}))
+    }catch{return rows||[]}
   }
 
   const call=async(name,args={})=>{
@@ -140,13 +152,27 @@ export default function OnlineTrainingPage(){
     return data
   }
 
+  const readCall=async(name,args={})=>{
+    let lastError
+    for(let attempt=0;attempt<3;attempt+=1){
+      try{return await call(name,args)}
+      catch(error){
+        lastError=error
+        if(!isTransientError(error)||attempt===2)throw error
+        await delay(250+(attempt*350))
+      }
+    }
+    throw lastError
+  }
+
   const loadBootstrap=async()=>{
     setLoading(true)
     try{
-      const data=await call('online_training_bootstrap')
+      const data=await readCall('online_training_context')
       setBootstrap(data)
       setError('')
-    }catch(err){setError(err.message||'线上培训模块读取失败')}
+      return data
+    }catch(err){setError(readableError(err,'线上培训模块读取失败'));return null}
     finally{setLoading(false)}
   }
 
@@ -154,18 +180,16 @@ export default function OnlineTrainingPage(){
     if(silent)setSearching(true);else setLoading(true)
     try{
       const data=mode==='people'
-        ?await call('online_training_people_search',{
-          p_query:filters.q,p_date_from:filters.from||null,p_date_to:filters.to||null,
-          p_page:nextPage,p_page_size:PEOPLE_PAGE_SIZE,
+        ?await readCall('online_training_search_people',{
+          p_filters:filters,p_page:nextPage,p_page_size:PEOPLE_PAGE_SIZE,
         })
-        :await call('online_training_list',{
-          p_query:filters.q,p_date_from:filters.from||null,p_date_to:filters.to||null,
-          p_employee_id:null,p_page:nextPage,p_page_size:REPORT_PAGE_SIZE,
+        :await readCall('online_training_search_reports',{
+          p_filters:filters,p_page:nextPage,p_page_size:REPORT_PAGE_SIZE,
         })
       const rows=mode==='reports'?await hydrateAttachments(data?.rows||[]):data?.rows||[]
       setResult({...data,rows})
       setError('')
-    }catch(err){setError(err.message||'线上培训记录读取失败')}
+    }catch(err){setError(readableError(err,'线上培训记录读取失败'))}
     finally{setLoading(false);setSearching(false)}
   }
 
@@ -182,8 +206,17 @@ export default function OnlineTrainingPage(){
     return()=>{document.body.style.overflow=prior}
   },[editor,viewing,deleteTarget,profile,history,lightbox])
 
-  const roster=bootstrap?.roster||[]
   const myRoster=bootstrap?.my_roster||[]
+  const filterOptions=useMemo(()=>{
+    const supplied=bootstrap?.filter_options||{}
+    const roster=bootstrap?.roster||[]
+    const fallback={
+      trainer:roster.map(row=>row.online_trainer),team:roster.map(row=>row.team),
+      group:roster.map(row=>row.group),position:roster.map(row=>row.position),
+      shift:roster.map(row=>row.shift),platform:roster.map(row=>row.platform),
+    }
+    return Object.fromEntries(Object.keys(fallback).map(key=>[key,uniq((supplied[key]||fallback[key]||[]))]))
+  },[bootstrap])
   const canAdminSelect=Boolean(bootstrap?.access?.is_founder||bootstrap?.access?.can_manage)
   const canOpenSubmit=Boolean(bootstrap?.access?.can_submit&&(myRoster.length||canAdminSelect))
 
@@ -201,24 +234,34 @@ export default function OnlineTrainingPage(){
     const sourceRows=assignmentMode==='linked'?myRoster:[]
     const draft=reportWithRoster(blankReport(bootstrap.access),sourceRows,bootstrap.access.employee_name)
     setPendingFiles([])
-    setEditor({original:null,assignmentMode,draft,members:sourceRows.map(memberFromRoster)})
+    setEditor({original:null,assignmentMode,rosterLoading:false,draft,members:sourceRows.map(memberFromRoster)})
   }
 
   const openEdit=row=>{
     setPendingFiles([])
-    setEditor({original:row,assignmentMode:'edit',draft:draftFromReport(row),members:(row.members||[]).map(memberFromReport)})
+    setEditor({original:row,assignmentMode:'edit',rosterLoading:false,draft:draftFromReport(row),members:(row.members||[]).map(memberFromReport)})
   }
 
   const releasePending=items=>items.forEach(item=>URL.revokeObjectURL(item.preview))
   const closeEditor=()=>{releasePending(pendingFiles);setPendingFiles([]);setEditor(null)}
 
-  const selectAdminTrainer=value=>{
-    const selected=value?roster.filter(row=>text(row.online_trainer)===value):[]
-    setEditor(current=>({...current,
-      draft:reportWithRoster({...current.draft,manager_filter:value,trainer_name:value},selected,value),
-      members:selected.map(memberFromRoster),
-    }))
+  const selectAdminTrainer=async value=>{
+    if(!value){
+      setEditor(current=>({...current,rosterLoading:false,rosterError:'',draft:{...current.draft,manager_filter:'',trainer_name:'',leader_name:'',shift_name:'',team_name:'',group_name:'',platform:''},members:[]}))
+      return
+    }
+    setEditor(current=>({...current,rosterLoading:true,rosterError:'',draft:{...current.draft,manager_filter:value,trainer_name:value},members:[]}))
     setError('')
+    try{
+      const selected=await readCall('online_training_roster_for_trainer',{p_trainer_name:value})||[]
+      setEditor(current=>current?({...current,rosterLoading:false,
+        draft:reportWithRoster({...current.draft,manager_filter:value,trainer_name:value},selected,value),
+        members:selected.map(memberFromRoster),
+      }):current)
+    }catch(err){
+      const message=readableError(err,'线上培训人员读取失败')
+      setEditor(current=>current?({...current,rosterLoading:false,rosterError:message}):current)
+    }
   }
 
   const addFiles=event=>{
@@ -328,20 +371,27 @@ export default function OnlineTrainingPage(){
     catch{setError('浏览器未允许复制，请在报告详情中手动复制')}
   }
 
-  const queryFilters=()=>{setFilters({...draftFilters});setPage(1);setSearchVersion(version=>version+1)}
-  const clearFilters=()=>{const next={q:'',from:'',to:''};setDraftFilters(next);setFilters(next);setPage(1);setSearchVersion(version=>version+1)}
+  const setDraftFilter=(key,value)=>setDraftFilters(current=>({...current,[key]:value}))
+  const queryFilters=()=>{
+    if(draftFilters.from&&draftFilters.to&&draftFilters.from>draftFilters.to){setError('日期起不能晚于日期止');return}
+    const next=Object.fromEntries(Object.entries(draftFilters).map(([key,value])=>[key,text(value)]))
+    setFilters(next);setPage(1);setSearchVersion(version=>version+1)
+  }
+  const clearFilters=()=>{const next={...EMPTY_FILTERS};setDraftFilters(next);setFilters(next);setPage(1);setSearchVersion(version=>version+1)}
+  const filterDirty=JSON.stringify(draftFilters)!==JSON.stringify(filters)
+  const activeFilterCount=Object.values(filters).filter(Boolean).length
 
   return <div className="content-page ot-page">
     <header className="ot-header">
       <div><div className="module-kicker">ONLINE TRAINING</div><h1>线上培训日报</h1><p>人员来自居家排班表；逐人记录当天表现、公休、请假、缺席或回家情况。</p></div>
       <div className="ot-header-actions">
         <span className={`ot-access ${canOpenSubmit?'ok':'read'}`}>{myRoster.length?`已关联 ${myRoster.length} 名组员`:canAdminSelect?'管理员代填':'仅查看'}</span>
-        <button onClick={()=>{loadBootstrap();loadList({silent:true})}}>刷新</button>
+        <button onClick={loadBootstrap} disabled={loading||searching}>{loading?'读取中…':'刷新'}</button>
         {canOpenSubmit&&<button className="primary" onClick={openCreate}>＋ 提交线上培训日报</button>}
       </div>
     </header>
 
-    {error&&<div className="ot-error"><span>{error}</span><button onClick={()=>setError('')}>×</button></div>}
+    {error&&<div className="ot-error"><span>{error}</span><div>{error.includes('重新读取')&&<button className="retry" onClick={loadBootstrap}>重新读取</button>}<button className="close" onClick={()=>setError('')}>×</button></div></div>}
 
     <section className="ot-kpis">
       <div><span>我负责的培训人员</span><strong>{myRoster.length||'—'}</strong><small>{myRoster.length?'按账号档案自动匹配':'主管账号仅查看或代填'}</small></div>
@@ -355,12 +405,26 @@ export default function OnlineTrainingPage(){
       <button className={mode==='people'?'active':''} onClick={()=>setMode('people')}>员工培训记录</button>
     </div>
 
-    <section className="ot-filters">
-      <div className="search"><span>⌕</span><input value={draftFilters.q} onChange={event=>setDraftFilters({...draftFilters,q:event.target.value})} onKeyDown={event=>{if(event.key==='Enter')queryFilters()}} placeholder={mode==='people'?'搜索员工ID或姓名，查看全部每天记录':'搜索员工ID、姓名、提交人、平台或报告内容'}/></div>
-      <label>日期起<input type="date" value={draftFilters.from} onChange={event=>setDraftFilters({...draftFilters,from:event.target.value})}/></label>
-      <label>日期止<input type="date" value={draftFilters.to} onChange={event=>setDraftFilters({...draftFilters,to:event.target.value})}/></label>
-      <div className="ot-filter-actions"><button className="query" onClick={queryFilters} disabled={searching}>{searching?'查询中…':'查询'}</button><button onClick={clearFilters} disabled={searching}>重置</button></div>
-    </section>
+    <form className="ot-filters" onSubmit={event=>{event.preventDefault();queryFilters()}}>
+      <div className="ot-filter-row primary-row">
+        <label><span>员工ID</span><input value={draftFilters.employee_no} onChange={event=>setDraftFilter('employee_no',event.target.value)} placeholder="输入员工ID"/></label>
+        <label><span>员工姓名</span><input value={draftFilters.employee_name} onChange={event=>setDraftFilter('employee_name',event.target.value)} placeholder="输入姓名"/></label>
+        <label><span>提交人 / 线上培训</span><input value={draftFilters.trainer} onChange={event=>setDraftFilter('trainer',event.target.value)} placeholder="输入提交人或培训"/></label>
+        <label className="keyword"><span>报告内容</span><input value={draftFilters.keyword} onChange={event=>setDraftFilter('keyword',event.target.value)} placeholder="搜索平台、报告、评语或问题"/></label>
+        <label><span>日期起</span><input type="date" value={draftFilters.from} onChange={event=>setDraftFilter('from',event.target.value)}/></label>
+        <label><span>日期止</span><input type="date" value={draftFilters.to} onChange={event=>setDraftFilter('to',event.target.value)}/></label>
+      </div>
+      <div className="ot-filter-row secondary-row">
+        <label><span>团队</span><select value={draftFilters.team} onChange={event=>setDraftFilter('team',event.target.value)}><option value="">全部团队</option>{filterOptions.team.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>组别</span><select value={draftFilters.group} onChange={event=>setDraftFilter('group',event.target.value)}><option value="">全部组别</option>{filterOptions.group.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>岗位</span><select value={draftFilters.position} onChange={event=>setDraftFilter('position',event.target.value)}><option value="">全部岗位</option>{filterOptions.position.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>班次</span><select value={draftFilters.shift} onChange={event=>setDraftFilter('shift',event.target.value)}><option value="">全部班次</option>{filterOptions.shift.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>盘口</span><select value={draftFilters.platform} onChange={event=>setDraftFilter('platform',event.target.value)}><option value="">全部盘口</option>{filterOptions.platform.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>当日状态</span><select value={draftFilters.attendance} onChange={event=>setDraftFilter('attendance',event.target.value)}><option value="">全部状态</option>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>
+        <div className="ot-filter-actions"><button type="submit" className="query" disabled={searching}>{searching?'查询中…':filterDirty?'查询新条件':'查询'}</button><button type="button" onClick={clearFilters} disabled={searching}>重置</button></div>
+      </div>
+      <div className="ot-filter-foot"><span>首次进入自动读取；修改条件后点击“查询”</span><strong>{activeFilterCount?`已应用 ${activeFilterCount} 项条件 · `:''}共 ${result.total||0} 条</strong></div>
+    </form>
     {searching&&<div className="ot-searching"><i/><span>正在搜索线上培训记录…</span></div>}
 
     {loading&&!bootstrap?<div className="ot-loading"><i/><span>正在读取排班与线上培训记录…</span></div>:
@@ -370,15 +434,15 @@ export default function OnlineTrainingPage(){
 
     {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={mode==='reports'?REPORT_PAGE_SIZE:PEOPLE_PAGE_SIZE} onPage={setPage}/>}
 
-    {editor&&<EditorModal editor={editor} updateDraft={updateDraft} updateMember={updateMember} updateMetric={updateMetric}
+    {editor&&<OverlayPortal><EditorModal editor={editor} updateDraft={updateDraft} updateMember={updateMember} updateMetric={updateMetric}
       assignment={bootstrap.auto_assignment||{}} trainerOptions={bootstrap.manager_options||[]} onSelectTrainer={selectAdminTrainer}
       rosterSyncedAt={bootstrap.roster_synced_at} pendingFiles={pendingFiles} onFiles={addFiles} onRemovePending={removePending}
-      onRemoveExisting={removeExisting} onOpenImage={setLightbox} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/>} 
-    {viewing&&<ViewModal row={viewing} onClose={()=>setViewing(null)} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{setViewing(null);openEdit(viewing)}} onDelete={()=>{setViewing(null);setDeleteTarget(viewing)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/>} 
-    {deleteTarget&&<ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/>} 
-    {profile&&<ProfileDrawer state={profile} onClose={()=>setProfile(null)}/>} 
-    {history&&<HistoryModal state={history} onClose={()=>setHistory(null)} onView={row=>{setHistory(null);setViewing(row)}} onProfile={openProfile}/>} 
-    {lightbox&&<div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div>}
+      onRemoveExisting={removeExisting} onOpenImage={setLightbox} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/></OverlayPortal>} 
+    {viewing&&<OverlayPortal><ViewModal row={viewing} onClose={()=>setViewing(null)} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{setViewing(null);openEdit(viewing)}} onDelete={()=>{setViewing(null);setDeleteTarget(viewing)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>} 
+    {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/></OverlayPortal>} 
+    {profile&&<OverlayPortal><ProfileDrawer state={profile} onClose={()=>setProfile(null)}/></OverlayPortal>} 
+    {history&&<OverlayPortal><HistoryModal state={history} onClose={()=>setHistory(null)} onView={row=>{setHistory(null);setViewing(row)}} onProfile={openProfile}/></OverlayPortal>} 
+    {lightbox&&<OverlayPortal><div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div></OverlayPortal>}
   </div>
 }
 
@@ -422,13 +486,14 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
         </div>
         {linked&&<div className="ot-assignment-ok"><b>✓ 已自动载入本人负责的 {editor.members.length} 名组员</b><span>账号一旦关联员工档案，以后打开日报都会直接显示这份名单。</span></div>}
         {editing&&<div className="ot-assignment-ok edit"><b>正在编辑原日报</b><span>名单沿用提交当天保存的排班快照，不会被当前排班覆盖。</span></div>}
-        {admin&&<div className="ot-admin-picker"><label><span>管理员测试 / 代填线上培训</span><select value={d.manager_filter} onChange={e=>onSelectTrainer(e.target.value)}><option value="">请选择一名线上培训人员</option>{trainerOptions.map(x=><option key={x}>{x}</option>)}</select></label><small>普通线上培训账号不会看到这个选择框，系统会按其关联档案直接载入。</small></div>}
+        {admin&&<div className="ot-admin-picker"><label><span>管理员测试 / 代填线上培训</span><select value={d.manager_filter} onChange={e=>onSelectTrainer(e.target.value)} disabled={editor.rosterLoading}><option value="">{editor.rosterLoading?'正在读取负责人员…':'请选择一名线上培训人员'}</option>{trainerOptions.map(x=><option key={x}>{x}</option>)}</select></label><small>普通线上培训账号不会看到这个选择框，系统会按其关联档案直接载入。</small></div>}
+        {editor.rosterError&&<div className="ot-assignment-missing"><b>人员读取失败</b><span>{editor.rosterError}，请重新选择该线上培训人员。</span></div>}
         {editor.assignmentMode==='unmatched'&&<div className="ot-assignment-missing"><b>居家排班表暂时没有匹配到你的组员</b><span>当前账号已关联 {assignment.employee_no} · {assignment.trainer_name}，请检查排班表“线上培训”填写的姓名是否一致。</span></div>}
         {editor.members.length>0&&<div className="ot-auto-facts">{facts.filter(([,value])=>text(value)).map(([label,value])=><span key={label}><b>{label}</b>{value}</span>)}</div>}
       </section>
 
       <section className="ot-form-section"><div className="section-title"><div><b>2. 填写组员当天工作情况</b><small>名单已经带入；公休无需原因，请假、缺席、回家必须填写原因</small></div><strong>{editor.members.length} 人</strong></div>
-        {!editor.members.length?<div className="ot-no-members">{admin?'请选择一名线上培训人员，组员会立即自动出现。':'当前没有可填写的线上培训人员。'}</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} index={index} onChange={updateMember} onMetric={updateMetric} onProfile={onProfile}/>)}</div>}
+        {!editor.members.length?<div className={`ot-no-members ${editor.rosterLoading?'loading':''}`}>{editor.rosterLoading?'正在从居家排班表读取该培训负责的人员…':admin?'请选择一名线上培训人员，组员会立即自动出现。':'当前没有可填写的线上培训人员。'}</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} index={index} onChange={updateMember} onMetric={updateMetric} onProfile={onProfile}/>)}</div>}
       </section>
 
       <section className="ot-form-section"><div className="section-title"><div><b>3. 上传当日图片</b><small>页面平时只显示小图，点击缩略图才会打开大图；最多12张</small></div></div>
