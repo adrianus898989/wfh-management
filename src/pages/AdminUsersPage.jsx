@@ -59,6 +59,14 @@ const moduleLabels = {
 }
 
 const permissionActionOrder = ['view', 'create', 'submit', 'edit', 'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable', 'reset_password', 'otp_toggle', 'mfa_reset']
+const permissionColumns = [
+  { key: 'view', label: '查看', actions: ['view'] },
+  { key: 'create', label: '新增 / 提交', actions: ['create', 'submit'] },
+  { key: 'edit', label: '编辑', actions: ['edit'] },
+  { key: 'delete', label: '删除', actions: ['delete'] },
+  { key: 'manage', label: '审批 / 管理', actions: ['approve', 'manage', 'grade', 'publish'] },
+  { key: 'other', label: '其他', actions: ['export', 'disable', 'reset_password', 'otp_toggle', 'mfa_reset'] },
+]
 
 function getRole(a) {
   return Array.isArray(a?.roles) ? a.roles[0] : a?.roles
@@ -294,6 +302,23 @@ export default function AdminUsersPage() {
     } catch (e) { setError(e.message) }
   }
 
+  const permissionToggle = (p) => (
+    <label key={p.id} className="permission-choice">
+      <input type="checkbox"
+        disabled={roleModal.role.code === 'founder'}
+        checked={roleModal.role.code === 'founder' || roleModal.permission_ids.includes(p.id)}
+        onChange={e => setRoleModal(x => ({
+          ...x,
+          permission_ids: e.target.checked
+            ? [...x.permission_ids, p.id]
+            : x.permission_ids.filter(id => id !== p.id)
+        }))}
+      />
+      <span>{p.name || actionLabels[p.actionKey] || p.actionKey}</span>
+      {p.sensitive && <em>敏感</em>}
+    </label>
+  )
+
   return (
     <div className="content-page access-page">
       <style>{`
@@ -317,6 +342,8 @@ export default function AdminUsersPage() {
         .permission-matrix{overflow:auto;border:1px solid #e1e8f0;border-radius:11px}.permission-matrix table{width:100%;border-collapse:collapse}
         .permission-matrix th,.permission-matrix td{padding:10px 11px;border-bottom:1px solid #edf1f5;font-size:12px;text-align:center}.permission-matrix th:first-child,.permission-matrix td:first-child{text-align:left}
         .permission-matrix th{background:#f8fafc;color:#67778d;position:sticky;top:0}.sensitive-row{background:#fff9f1}
+        .permission-matrix td.permission-cell{min-width:110px;vertical-align:top}.permission-empty{color:#c2cad5}
+        .permission-choice{display:flex;align-items:flex-start;gap:6px;text-align:left;margin:2px 0;color:#3e4f66}.permission-choice input{margin-top:2px}.permission-choice em{font-size:9px;color:#a96019;background:#fff1dc;padding:1px 4px;border-radius:4px;font-style:normal}
         .role-modal{width:min(920px,96vw)}
         @media(max-width:900px){.role-list{grid-template-columns:1fr}.scope-columns{grid-template-columns:1fr}}
       `}</style>
@@ -543,31 +570,15 @@ export default function AdminUsersPage() {
 
             <div className="permission-matrix" style={{marginTop:14}}>
               <table>
-                <thead><tr><th>对应页面 / 功能</th><th>允许操作</th></tr></thead>
+                <thead><tr><th>对应页面 / 功能</th>{permissionColumns.map(col => <th key={col.key}>{col.label}</th>)}</tr></thead>
                 <tbody>
                   {groupedPermissions.map(group => (
                     <tr key={group.module} className={group.items.some(x=>x.sensitive) ? 'sensitive-row' : ''}>
                       <td><strong>{group.label}</strong><small style={{display:'block',marginTop:3,color:'#98a4b3'}}>{group.module}</small></td>
-                      <td>
-                        <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-                          {group.items.map(p => (
-                            <label key={p.id} style={{display:'inline-flex',gap:6,alignItems:'center'}}>
-                              <input type="checkbox"
-                                disabled={roleModal.role.code === 'founder'}
-                                checked={roleModal.role.code === 'founder' || roleModal.permission_ids.includes(p.id)}
-                                onChange={e => setRoleModal(x => ({
-                                  ...x,
-                                  permission_ids: e.target.checked
-                                    ? [...x.permission_ids, p.id]
-                                    : x.permission_ids.filter(id => id !== p.id)
-                                }))}
-                              />
-                              {p.name || actionLabels[p.actionKey] || p.actionKey}
-                              {p.sensitive && <span style={{color:'#b76a21'}}>敏感</span>}
-                            </label>
-                          ))}
-                        </div>
-                      </td>
+                      {permissionColumns.map(col => {
+                        const items = group.items.filter(p => col.actions.includes(p.actionKey))
+                        return <td key={col.key} className="permission-cell">{items.length ? items.map(permissionToggle) : <span className="permission-empty">—</span>}</td>
+                      })}
                     </tr>
                   ))}
                 </tbody>
