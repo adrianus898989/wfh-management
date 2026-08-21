@@ -123,6 +123,7 @@ Deno.serve(async (req) => {
       const { data: allEmployees, error } = await admin
         .from('employees')
         .select('id,employee_no,full_name,status,team_id,position_id,teams(id,name),positions(id,name)')
+        .eq('status', 'active')
         .order('employee_no')
         .limit(5000)
 

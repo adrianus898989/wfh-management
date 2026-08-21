@@ -18,6 +18,7 @@ const blankAccount = () => ({
 
 const blankStaffAccount = () => ({
   employee_id: '',
+  employee_search: '',
   username: '',
   password: '',
 })
@@ -102,7 +103,12 @@ export default function AdminUsersPage() {
 
   const call = async (body) => {
     const { data, error } = await supabase.functions.invoke('admin-accounts', { body })
-    if (error || data?.error) throw new Error(data?.error || error?.message || '操作失败')
+    if (error) {
+      let detail = ''
+      try { detail = (await error.context?.json())?.error || '' } catch {}
+      throw new Error(detail || data?.error || error?.message || '操作失败')
+    }
+    if (data?.error) throw new Error(data.error)
     return data
   }
 
@@ -175,7 +181,7 @@ export default function AdminUsersPage() {
   }, [permissions])
 
   const openCreate = () => setAccountModal({ mode: 'create', form: blankAccount() })
-  const openCreateStaff = () => setStaffModal({ form: blankStaffAccount() })
+  const openCreateStaff = () => setStaffModal({ form: blankStaffAccount(), error: '' })
 
   const openEdit = (a) => {
     const role = getRole(a)
@@ -220,12 +226,24 @@ export default function AdminUsersPage() {
   }
 
   const saveStaffAccount = async () => {
-    setError('')
+    setStaffModal(x => ({ ...x, error: '' }))
+    if (!staffModal.form.employee_id) {
+      setStaffModal(x => ({ ...x, error: '请先输入员工ID或姓名，并从搜索建议中确认员工档案。' }))
+      return
+    }
+    if (!staffModal.form.username.trim()) {
+      setStaffModal(x => ({ ...x, error: '请填写登录用户名。' }))
+      return
+    }
+    if (!staffModal.form.password) {
+      setStaffModal(x => ({ ...x, error: '请填写临时密码。' }))
+      return
+    }
     try {
       await call({ action: 'create_staff', ...staffModal.form })
       setStaffModal(null)
       await load()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setStaffModal(x => ({ ...x, error: e.message })) }
   }
 
   const toggleOtp = async (a) => {
@@ -553,14 +571,25 @@ export default function AdminUsersPage() {
               <div><h2>新增员工前端账号</h2><small>员工账号必须关联唯一员工档案，登录后自动读取本人团队、岗位及考试。</small></div>
               <button onClick={() => setStaffModal(null)}>×</button>
             </div>
+            {staffModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{staffModal.error}</div>}
             <div className="form-grid">
-              <label className="form-span">关联员工档案（必选）
-                <select value={staffModal.form.employee_id} onChange={e => setStaffModal(x => ({...x, form:{...x.form, employee_id:e.target.value}}))}>
-                  <option value="">请选择尚未开通账号的员工</option>
+              <label className="form-span">搜索并关联员工档案（必选）
+                <input list="staff-employee-options" placeholder="手动输入员工ID或姓名搜索"
+                  value={staffModal.form.employee_search}
+                  onChange={e => {
+                    const value = e.target.value
+                    const available = employees.filter(emp => !staff.some(a => a.employee_id === emp.id))
+                    const matched = available.find(emp => value === `${emp.employee_no} · ${emp.full_name}` || value.toLowerCase() === String(emp.employee_no).toLowerCase())
+                    setStaffModal(x => ({...x, error:'', form:{...x.form, employee_search:value, employee_id:matched?.id || ''}}))
+                  }} />
+                <datalist id="staff-employee-options">
                   {employees.filter(emp => !staff.some(a => a.employee_id === emp.id)).map(emp => (
-                    <option key={emp.id} value={emp.id}>{emp.employee_no} · {emp.full_name} · {emp.teams?.name || '未分团队'} · {emp.positions?.name || '未分岗位'}</option>
+                    <option key={emp.id} value={`${emp.employee_no} · ${emp.full_name}`}>{emp.teams?.name || '未分团队'} · {emp.positions?.name || '未分岗位'}</option>
                   ))}
-                </select>
+                </datalist>
+                {staffModal.form.employee_id
+                  ? <small style={{color:'#198754'}}>已确认关联此员工档案</small>
+                  : <small>请输入后从建议结果中选择；不存在的员工不能创建前端账号。</small>}
               </label>
               <label>登录用户名
                 <input placeholder="3-32位字母或数字" value={staffModal.form.username} onChange={e => setStaffModal(x => ({...x, form:{...x.form, username:e.target.value.toLowerCase()}}))}/>
