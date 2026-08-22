@@ -34,13 +34,24 @@ function normalizeOrders(raw:any[]){const m=new Map<string,any>();raw.forEach((r
 let ordersLoading:Promise<any[]>|null=null
 async function loadAllOrders(service:any){const key='orders-combined-v298',hit=cache.get(key);if(hit&&Date.now()-hit.at<300000)return hit.value;if(ordersLoading)return ordersLoading;ordersLoading=(async()=>{try{const csv=await Promise.all(ORDER_SHEETS.map(fetchOrderCsv)),merged=new Map<string,any>();let sourceRows=0;csv.forEach(raw=>{sourceRows+=mergeOrderCsv(raw,merged)});const out=[...merged.values()].sort((a,b)=>a.date.localeCompare(b.date));cache.set(key,{at:Date.now(),value:out});await recordSnapshot(service,'效率表/网站数据',null,sourceRows,'直接合并 Google 效率表「工作表4 + 填表」；按后台账号与日期汇总，不再读取不存在的「网站数据」工作表');return out}catch(e){if(hit?.value?.length)return hit.value;throw e}finally{ordersLoading=null}})();return ordersLoading}
 async function loadSyncedOrderSummary(service:any,dateFrom:string,dateTo:string,accounts:string[]){
-  const {data,error}=await service.rpc('report_order_account_summary',{
-    p_date_from:dateFrom||null,
-    p_date_to:dateTo||null,
-    p_accounts:accounts,
-  })
-  if(error)throw new Error(`Supabase 订单统计读取失败: ${error.message}`)
-  return data||{available_from:'',available_to:'',dates:[],rows:[]}
+  let lastError:any=null
+  for(let attempt=1;attempt<=2;attempt++){
+    const {data,error}=await service.rpc('report_order_account_summary',{
+      p_date_from:dateFrom||null,
+      p_date_to:dateTo||null,
+      p_accounts:accounts,
+    })
+    if(!error)return data||{available_from:'',available_to:'',dates:[],rows:[]}
+    lastError=error
+    console.error(`[admin-reports] order summary attempt ${attempt}`,{
+      code:error.code,
+      message:error.message,
+      details:error.details,
+      hint:error.hint,
+    })
+    if(attempt<2)await delay(300)
+  }
+  throw new Error(`Supabase 订单统计读取失败: ${lastError?.hint||lastError?.details||lastError?.message||'未知错误'}`)
 }
 function normalizeErrors(raw:any[]){return raw.map((r:any,i:number)=>({key:`err-${i+2}`,record_key:text(r.record_key),source_row:Number(r.source_row||i+2),employee_id:pick(r,['employee_id','ID']).toUpperCase(),member_order:pick(r,['member_order','会员/id /订单号','會員/id /訂單號']),amount:pick(r,['amount','金额','金額']),error_note:pick(r,['error_note','错误备注','錯誤備註']),correct_action:pick(r,['correct_action','正确操作方式','正確操作方式']),error_type:pick(r,['error_type','错误类型','錯誤類型']),score:pick(r,['score','扣分']),qc_person:pick(r,['qc_person','质检人','質檢人']),qc_date:normalizeDate(pick(r,['qc_date','质检时间','質檢時間'])),leader_review:pick(r,['leader_review','小组长复审','小組長複審']),qc_result:pick(r,['qc_result','质检人对错','质检人对/错','質檢人對錯']),review_date:normalizeDate(pick(r,['review_date','复检时间','複檢時間']))})).filter(r=>r.employee_id&&(r.qc_date||r.review_date||r.error_type||r.error_note))}
 async function loadAllErrors(service:any){const chunks=await getChunkedSnapshot(service,'效率表/员工错误');if(chunks?.length)return normalizeErrors(chunks);const snap=await getSnapshot(service,'效率表/员工错误',Number.POSITIVE_INFINITY);if(snap)return normalizeErrors(snap);const raw=await fetchJson(MISTAKE_URL,'errors',60000);return normalizeErrors(raw)}
@@ -81,4 +92,4 @@ async function orders(service:any,body:any){
 }
 async function errors(service:any,body:any){const ctx=await buildContext(service),all=await loadAllErrors(service);let from=normalizeDate(body.date_from),to=normalizeDate(body.date_to);if(from&&to&&from>to)[from,to]=[to,from];const employeeFilter=text(body.employee_id).toUpperCase(),basis=text(body.date_basis)==='review'?'review':'qc',rows:any[]=[];all.forEach(e=>{const person=ctx.rosterById.get(e.employee_id);if(!person)return;if(employeeFilter&&e.employee_id!==employeeFilter)return;const basisDate=basis==='review'?(e.review_date||e.qc_date):e.qc_date;if((from||to)&&!between(basisDate,from,to))return;rows.push({...e,name:person.name||'-',team:person.team,position:person.position,country:person.country,shift:person.shift,platform:person.platform})});rows.sort((a,b)=>(b.qc_date||'').localeCompare(a.qc_date||''));const dates=all.map(e=>e.qc_date).filter(Boolean).sort();return {updated_at:new Date().toISOString(),source:'supabase_error_snapshot',from:from||'',to:to||'',available_from:dates[0]||'',available_to:dates[dates.length-1]||'',rows,options:{error_types:uniq(rows.map(r=>r.error_type)).sort(),qc_people:uniq(rows.map(r=>r.qc_person)).sort()},sync_state:await syncState(service)}}
 async function authorize(req:Request){const auth=req.headers.get('Authorization')||'';if(!auth.startsWith('Bearer '))throw new Error('UNAUTHORIZED');const client=createClient(Deno.env.get('SUPABASE_URL')||'',Deno.env.get('SUPABASE_ANON_KEY')||'',{global:{headers:{Authorization:auth}}});const {data:{user},error}=await client.auth.getUser();if(error||!user)throw new Error('UNAUTHORIZED');const {data:access}=await client.from('user_access').select('backend_enabled,active').eq('auth_user_id',user.id).maybeSingle();if(!access?.active||!access?.backend_enabled)throw new Error('FORBIDDEN')}
-Deno.serve(async req=>{if(req.method==='OPTIONS')return new Response('ok',{headers:corsHeaders});try{await authorize(req);const service=createClient(Deno.env.get('SUPABASE_URL')||'',Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||'',{auth:{persistSession:false}});const body=await req.json().catch(()=>({})),action=text(body.action)||'overview';if(action==='overview')return json(await overview(service));if(action==='orders'||action==='efficiency')return json(await orders(service,body));if(action==='errors')return json(await errors(service,body));return json({error:'未知操作'},400)}catch(e){const msg=e instanceof Error?e.message:String(e);if(msg==='UNAUTHORIZED')return json({error:'登录已失效，请重新登录'},401);if(msg==='FORBIDDEN')return json({error:'当前账号没有后台访问权限'},403);console.error(e);return json({error:msg||'统计数据读取失败'},500)}})
+Deno.serve(async req=>{if(req.method==='OPTIONS')return new Response('ok',{headers:corsHeaders});let action='overview';try{await authorize(req);const service=createClient(Deno.env.get('SUPABASE_URL')||'',Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||'',{auth:{persistSession:false}});const body=await req.json().catch(()=>({}));action=text(body.action)||'overview';if(action==='overview')return json(await overview(service));if(action==='orders'||action==='efficiency')return json(await orders(service,body));if(action==='errors')return json(await errors(service,body));return json({error:'未知操作'},400)}catch(e){const msg=e instanceof Error?e.message:String(e);if(msg==='UNAUTHORIZED')return json({error:'登录已失效，请重新登录'},401);if(msg==='FORBIDDEN')return json({error:'当前账号没有后台访问权限'},403);console.error(`[admin-reports] action=${action}`,e);return json({error:msg||'统计数据读取失败'},500)}})
