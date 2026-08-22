@@ -113,12 +113,14 @@ function Protected({ children, mode }) {
       if (alive && session) setState(current => ({ ...current, session, error:'' }))
     }
     const onVisible = () => { if (!document.hidden) recover() }
+    const onOnline = () => recover()
+    const onFocus = () => recover()
     const onActivity = () => touchSessionActivity()
     const onAuthCheck = () => recover(true)
     const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut() }, 60*1000)
     document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener('online', recover)
-    window.addEventListener('focus', recover)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('focus', onFocus)
     ;['pointerdown','keydown','input','touchstart','scroll'].forEach(name=>window.addEventListener(name,onActivity,{passive:true}))
     window.addEventListener('wfh:auth-check-needed', onAuthCheck)
     return () => {
@@ -126,8 +128,8 @@ function Protected({ children, mode }) {
       authSubscription?.unsubscribe()
       window.clearInterval(idleTimer)
       document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('online', recover)
-      window.removeEventListener('focus', recover)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('focus', onFocus)
       ;['pointerdown','keydown','input','touchstart','scroll'].forEach(name=>window.removeEventListener(name,onActivity))
       window.removeEventListener('wfh:auth-check-needed', onAuthCheck)
     }
