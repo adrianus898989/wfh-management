@@ -16,22 +16,25 @@ import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 
 const FOUNDER_AUTH_USER_ID = '567e1c26-9ff7-4df2-a3bd-9b68e26d10c9'
+const accessCache = new Map()
 
 function Protected({ children, mode }) {
   const location = useLocation()
-  const [state, setState] = useState({ loading:true, session:null, access:null, aal:null })
+  const [state, setState] = useState({ loading:true, session:null, access:null, aal:null, error:'' })
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
     let alive = true
-    ;(async () => {
+    let authSubscription
+    const bootstrap = async () => {
       const { data:{ session } } = await supabase.auth.getSession()
       if (!session) {
-        if (alive) setState({ loading:false, session:null, access:null, aal:null })
+        if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
         return
       }
       // Founder 已经由 Supabase Auth 完成密码和用户 ID 校验。Founder 是系统锁定
       // 账号，数据库连接繁忙时不应因 user_access 暂时 503 而被送回登录页。
-      let access
+      let access = accessCache.get(session.user.id)
       if (session.user.id === FOUNDER_AUTH_USER_ID) {
         access = {
           backend_enabled: true,
@@ -39,24 +42,39 @@ function Protected({ children, mode }) {
           active: true,
           otp_required: false,
         }
-      } else {
+      } else if (!access) {
         const result = await supabase.from('user_access')
           .select('backend_enabled,employee_portal_enabled,active,otp_required')
           .eq('auth_user_id', session.user.id)
-          .single()
+          .maybeSingle()
+        if (result.error) {
+          if (alive) setState({ loading:false, session, access:null, aal:null, error:'权限验证暂时失败，请重试。登录状态仍为你保留。' })
+          return
+        }
         access = result.data
       }
+      if (access) accessCache.set(session.user.id, access)
       let aal = null
       if (mode === 'admin' && access?.otp_required) {
         const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
         aal = data?.currentLevel || null
       }
-      if (alive) setState({ loading:false, session, access, aal })
-    })()
-    return () => { alive = false }
-  }, [mode, location.pathname])
+      if (alive) setState({ loading:false, session, access, aal, error:'' })
+    }
+    bootstrap()
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!alive) return
+      if (event === 'SIGNED_OUT') {
+        accessCache.clear()
+        setState({ loading:false, session:null, access:null, aal:null, error:'' })
+      } else if (session) setState(current => ({ ...current, session }))
+    })
+    authSubscription = data.subscription
+    return () => { alive = false; authSubscription?.unsubscribe() }
+  }, [mode, retryKey])
 
   if (state.loading) return <div className="center-screen">Loading...</div>
+  if (state.error) return <div className="center-screen auth-retry"><div><strong>连接暂时不稳定</strong><p>{state.error}</p><button onClick={() => { setState(s => ({...s,loading:true,error:''})); setRetryKey(x=>x+1) }}>重新验证</button></div></div>
   const login = mode === 'admin' ? '/admin/login' : '/staff/login'
   if (!state.session || !state.access?.active) return <Navigate to={login} replace />
   if (mode === 'admin' && !state.access.backend_enabled) return <Navigate to="/admin/login" replace />

@@ -212,6 +212,7 @@ const staffDate = value => value ? String(value).slice(0,10) : '—'
 export const StaffHome = () => {
   const [data,setData] = useState(null), [loading,setLoading] = useState(true), [error,setError] = useState('')
   const [errorHistory,setErrorHistory] = useState({rows:[],total:0,page:1,pages:1}), [errorPage,setErrorPage] = useState(1), [errorsLoading,setErrorsLoading] = useState(false)
+  const [revealed,setRevealed] = useState({}), [revealLoading,setRevealLoading] = useState('')
   const load = async () => {
     setLoading(true); setError('')
     const { data:result,error:loadError } = await supabase.rpc('staff_portal_home')
@@ -221,13 +222,26 @@ export const StaffHome = () => {
   useEffect(()=>{load()},[])
   useEffect(()=>{let alive=true;(async()=>{setErrorsLoading(true);const {data:result,error:e}=await supabase.rpc('staff_portal_errors',{p_page:errorPage,p_page_size:20});if(!alive)return;if(e)setError(e.message||'错误记录读取失败');else setErrorHistory(result||{rows:[],total:0,page:1,pages:1});setErrorsLoading(false)})();return()=>{alive=false}},[errorPage])
   if(loading)return <div className="staff-portal-page"><div className="staff-portal-loading">正在读取我的资料…</div></div>
-  const p=data?.profile||{}, summary=data?.error_summary||{}, exam=data?.exam_summary||{}, errors=errorHistory?.rows||[]
+  const p=data?.profile||{}, pay=data?.payment||{}, summary=data?.error_summary||{}, exam=data?.exam_summary||{}, errors=errorHistory?.rows||[]
+  const toggleSensitive = async field => {
+    if(revealed[field]) { setRevealed(current=>({...current,[field]:''})); return }
+    setRevealLoading(field); setError('')
+    const {data:value,error:e}=await supabase.rpc('staff_portal_reveal_payment',{p_field:field})
+    if(e)setError(e.message||'敏感资料读取失败'); else setRevealed(current=>({...current,[field]:value||'—'}))
+    setRevealLoading('')
+  }
   const fields=[['员工ID',p.employee_no],['员工国家',p.country||p.nationality],['员工类型',p.employment_type],['状态',p.status==='active'?'在职':p.status],['入职日期',staffDate(p.hire_date)],['入职时长',staffTenure(p.hire_date)],['团队',p.team_name],['组别',p.group_name],['岗位',p.position_name],['班次',p.shift_name],['负责人 / 组长',p.person_in_charge||p.leader_name],['培训老师',p.online_trainer||p.trainer_name],['盘口 / 平台',p.platform_scope],['工作内容',p.work_content]]
   return <div className="staff-portal-page">
     <header className="staff-portal-hero"><div className="staff-avatar">{(p.full_name||'W').slice(0,1).toUpperCase()}</div><div><small>MY WORKSPACE</small><h1>{p.full_name||'我的首页'}</h1><p>{p.employee_no||'—'} · {p.team_name||'未设置团队'} · {p.position_name||'未设置岗位'}</p><div className="staff-hero-tags"><span>{p.shift_name||'班次未设置'}</span><span>{staffTenure(p.hire_date)}</span></div></div><button onClick={load}>↻ 刷新资料</button></header>
     {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <section className="staff-dashboard-metrics"><div><span>累计错误</span><strong>{summary.total_error_count||0}</strong><small>仅本人可见</small></div><div><span>本月错误</span><strong>{summary.month_error_count||0}</strong><small>近30天 {summary.last_30d_error_count||0} 笔</small></div><div><span>考试记录</span><strong>{exam.total||0}</strong><small>通过 {exam.passed||0} 次</small></div><div><span>平均成绩</span><strong>{exam.average||0}%</strong><small>已批改 {exam.completed||0} 次</small></div></section>
-    <div className="staff-portal-columns"><section className="staff-profile-panel"><header><div><small>PERSONAL PROFILE</small><h2>我的员工档案</h2></div><span>敏感资料已隐藏</span></header><div className="staff-profile-fields">{fields.map(([label,value])=><div key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section>
+    <div className="staff-portal-columns"><div className="staff-profile-stack"><section className="staff-profile-panel"><header><div><small>PERSONAL PROFILE</small><h2>我的员工档案</h2></div><span>仅本人可见</span></header><div className="staff-profile-fields">{fields.map(([label,value])=><div key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section>
+    <section className="staff-payment-panel"><header><div><small>PAYMENT & CONTACT</small><h2>我的收款与联系资料</h2></div><span>🔒 已安全隐藏</span></header><p className="staff-privacy-note">敏感账号默认脱敏；点击查看仅临时展示给当前登录的本人。</p><div className="staff-payment-grid">
+      <div><span>收款方式</span><strong>{pay.transfer_using||pay.payment_mode||'—'}</strong></div><div><span>收款姓名</span><strong>{pay.account_name||'—'}</strong></div>
+      <div className="staff-sensitive-row"><span>银行卡 / 钱包账号</span><strong>{revealed.bank_account||pay.bank_account_masked||'—'}</strong>{pay.bank_account_masked&&<button onClick={()=>toggleSensitive('bank_account')} disabled={revealLoading==='bank_account'}>{revealLoading==='bank_account'?'读取中':revealed.bank_account?'隐藏':'查看'}</button>}</div>
+      <div className="staff-sensitive-row"><span>USDT 地址</span><strong>{revealed.usdt_address||pay.usdt_address_masked||'—'}</strong>{pay.usdt_address_masked&&<button onClick={()=>toggleSensitive('usdt_address')} disabled={revealLoading==='usdt_address'}>{revealLoading==='usdt_address'?'读取中':revealed.usdt_address?'隐藏':'查看'}</button>}</div>
+      <div><span>联系电话</span><strong>{pay.contact_phone||'—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number||'—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook||'—'}</strong></div><div><span>联系地址</span><strong>{pay.employee_address||'—'}</strong></div>
+    </div></section></div>
     <section className="staff-quick-panel"><header><small>QUICK ACCESS</small><h2>快捷入口</h2></header><Link to="/staff/exams"><b>我的考试</b><span>参加岗位考试、查看历史成绩 →</span></Link><Link to="/staff/schedule"><b>我的排班</b><span>查看本人排班 →</span></Link><Link to="/staff/attendance"><b>我的出勤</b><span>查看本人出勤 →</span></Link></section></div>
     <section className="staff-own-errors"><header><div><small>MY ERROR RECORDS</small><h2>我的完整错误记录</h2><p>只显示与你本人员工ID关联的记录，按日期从新到旧排列。</p></div><span>共 {errorHistory.total||0} 条</span></header>{errorsLoading?<div className="staff-history-empty">正在读取错误记录…</div>:errors.length?<><div className="staff-error-list">{errors.map((row,index)=><article key={`${row.qc_date}-${row.first_seen_at||index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type||'未分类错误'}</span></div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><span className="staff-error-score">{row.score==null?'—':`${row.score} 分`}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage<=1} onClick={()=>setErrorPage(x=>Math.max(1,x-1))}>上一页</button><span>第 {errorHistory.page||1} / {errorHistory.pages||1} 页</span><button disabled={errorPage>=(errorHistory.pages||1)} onClick={()=>setErrorPage(x=>x+1)}>下一页</button></div></>:<div className="staff-history-empty">目前没有与你员工ID关联的错误记录。</div>}</section>
   </div>

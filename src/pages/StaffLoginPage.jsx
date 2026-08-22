@@ -44,7 +44,12 @@ export default function StaffLoginPage() {
 
     setLoading(false)
 
-    if (accessError || !access?.active || !access?.employee_portal_enabled) {
+    if (accessError) {
+      navigate('/staff', { replace: true })
+      return
+    }
+
+    if (!access?.active || !access?.employee_portal_enabled) {
       await supabase.auth.signOut()
       return setError('账号不可用')
     }
