@@ -80,8 +80,20 @@ export default function AdminTrainingPage(){
 }
 
 function Overview({counts,data,onTab,onEmployee}){
-  const cards=[['题库题目',counts.questions||0,'题库'],['考试记录',(data?.sessions||[]).length,'考试记录'],['待人工批改',counts.pending_grading||0,'人工批改'],['已完成考试',counts.completed||0,'考试记录']]
-  return <><div className="exam-metrics">{cards.map(([l,v,t])=><button key={l} onClick={()=>onTab(t)}><span>{l}</span><strong>{v}</strong><small>查看详情 →</small></button>)}</div><div className="exam-two"><section className="exam-panel"><h2>最近考试</h2><Sessions rows={(data?.sessions||[]).slice(0,8)} compact onEmployee={onEmployee}/></section><section className="exam-panel adaptive-rule-panel"><h2>员工自适应考试规则</h2><div><b>14 题</b><span>随机抽取</span></div><div><b>100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>开始后连续计时，答案自动保存</span></div></section></div></>
+  const analytics=data?.analytics||{},summary=analytics.summary||{}
+  const cards=[['题库题目',counts.questions||0,'题库'],['考试记录',counts.total_sessions||0,'考试记录'],['待人工批改',counts.pending_grading||0,'人工批改'],['已完成考试',counts.completed||0,'考试记录']]
+  return <><div className="exam-metrics">{cards.map(([l,v,t])=><button key={l} onClick={()=>onTab(t)}><span>{l}</span><strong>{v}</strong><small>查看详情 →</small></button>)}</div><div className="exam-two"><section className="exam-panel"><h2>最近考试</h2><Sessions rows={(data?.sessions||[]).slice(0,8)} compact onEmployee={onEmployee}/></section><section className="exam-panel adaptive-rule-panel"><h2>员工自适应考试规则</h2><div><b>14 题</b><span>随机抽取</span></div><div><b>100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>开始后连续计时，答案自动保存</span></div></section></div><ExamAnalytics summary={summary} series={analytics.series||[]} positions={analytics.positions||[]}/></>
+}
+
+function ExamAnalytics({summary,series,positions}){
+  const duration=Number(summary.avg_duration_seconds||0),durationText=duration?`${Math.floor(duration/60)}分${Math.round(duration%60)}秒`:'—'
+  const facts=[['考试总次数',summary.total_attempts||0,'次'],['平均分',score(summary.avg_score),'分'],['平均用时',durationText,''],['通过率',score(summary.pass_rate),'%'],['已通过',summary.pass_count||0,'次'],['未通过',summary.fail_count||0,'次']]
+  return <section className="exam-panel exam-analytics"><div className="exam-analytics-title"><div><small>EXAM ANALYTICS</small><h2>考试数据统计</h2><p>按真实答题明细实时汇总；半对、错误和待评分均单独计算。</p></div><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-analytics-facts">{facts.map(([label,value,unit])=><div key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>)}</div><div className="exam-analytics-charts"><AnalyticsBars title="盘口 / 系列平均分" rows={series}/><AnalyticsBars title="岗位平均分" rows={positions}/></div></section>
+}
+
+function AnalyticsBars({title,rows}){
+  const visible=(rows||[]).slice(0,18)
+  return <div className="exam-bar-card"><header><h3>{title}</h3><span>{rows?.length||0} 类</span></header>{visible.length?<div className="exam-bars">{visible.map(row=><div key={row.name}><div><b title={row.name}>{row.name||'未分类'}</b><span>{score(row.average)} 分 · {row.attempts} 次</span></div><i><em style={{width:`${Math.max(0,Math.min(100,Number(row.average)||0))}%`}}/></i></div>)}</div>:<div className="exam-empty compact">暂无已完成考试数据</div>}{(rows?.length||0)>visible.length&&<small className="exam-chart-note">显示前 {visible.length} 类，共 {rows.length} 类</small>}</div>
 }
 
 function FilterBar({draft,setDraft,data,onApply,onReset}){return <section className="exam-filter"><label className="exam-search-field"><span>题目搜索</span><input value={draft.search} onChange={e=>setDraft({...draft,search:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="题目ID / 英文 / 中文 / 越南文"/></label><label><span>团队</span><select value={draft.team} onChange={e=>setDraft({...draft,team:e.target.value})}><option value="">全部团队</option>{(data?.teams||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>岗位</span><select value={draft.position} onChange={e=>setDraft({...draft,position:e.target.value})}><option value="">全部岗位</option>{(data?.positions||[]).map(x=><option key={x}>{x}</option>)}</select></label><div className="exam-filter-actions"><button className="primary" onClick={onApply}>查询</button><button onClick={onReset}>重置</button></div></section>}
