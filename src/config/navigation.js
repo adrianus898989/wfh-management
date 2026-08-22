@@ -39,7 +39,6 @@ export const adminNavigation = [
     children: [
       { label: '考试总览', path: '/admin/exams', permission: PERMISSIONS.EXAM_VIEW },
       { label: '题库同步', path: '/admin/question-bank', permission: PERMISSIONS.EXAM_MANAGE },
-      { label: '创建 / 分配考试', path: '/admin/exam-assignments', permission: PERMISSIONS.EXAM_MANAGE },
       { label: '批改 / 成绩', path: '/admin/grading', permission: PERMISSIONS.EXAM_GRADE }
     ]
   },
