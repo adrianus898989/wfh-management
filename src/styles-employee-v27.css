@@ -183,6 +183,95 @@
 .employee-refresh-action:disabled{opacity:.58;cursor:wait}
 @media(max-width:680px){.employee-title-actions{width:100%;justify-content:flex-start}.employee-title-actions>button{flex:1}}
 
+/* ===== V28.3 — one-line desktop filters and activation-code dialog ===== */
+@media(min-width:1450px){
+  .employee-page .employee-core-search-grid{
+    grid-template-columns:112px 132px 150px 150px minmax(180px,1fr) 132px auto!important;
+    gap:8px 10px!important;
+    align-items:end!important;
+  }
+  .employee-page .employee-core-search-grid>.archive-filter-actions{
+    grid-column:auto!important;
+    align-self:end!important;
+    min-height:34px!important;
+    margin:0!important;
+    padding:0!important;
+    border:0!important;
+    flex-wrap:nowrap!important;
+  }
+  .employee-page .v24-advanced-filter-grid{
+    grid-template-columns:repeat(8,minmax(108px,1fr))!important;
+  }
+  .employee-page .people-filter-grid{
+    grid-template-columns:120px 140px 140px 155px 155px 155px 145px minmax(290px,1.6fr) auto!important;
+    gap:8px!important;
+  }
+  .employee-page .people-date-range-field,
+  .employee-page .people-filter-actions{
+    grid-column:auto!important;
+  }
+  .employee-page .people-filter-actions{
+    min-width:138px!important;
+    flex-wrap:nowrap!important;
+  }
+}
+
+.employee-master-table .row-actions .table-action:disabled{
+  opacity:.58;
+  cursor:wait;
+}
+.activation-code-mask{
+  z-index:10300!important;
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  padding:22px!important;
+  background:rgba(16,35,59,.56)!important;
+  backdrop-filter:blur(2px);
+}
+.activation-code-modal{
+  width:min(460px,calc(100vw - 32px));
+  overflow:hidden;
+  border:1px solid #dce6f2;
+  border-radius:17px;
+  background:#fff;
+  box-shadow:0 28px 80px rgba(12,34,64,.28);
+}
+.activation-code-modal-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  padding:18px 20px 15px;
+  border-bottom:1px solid #e8eef5;
+}
+.activation-code-modal-head span{display:block;color:#8394a9;font-size:8px;font-weight:850;letter-spacing:1.5px}
+.activation-code-modal-head h2{margin:5px 0 0;color:#1f3b60;font-size:19px}
+.activation-code-modal-head>button{width:34px;height:34px;border:0;border-radius:9px;background:#eef3f8;color:#60748e;font-size:21px;cursor:pointer}
+.activation-code-employee{display:flex;align-items:center;gap:9px;padding:15px 20px 9px;color:#647991;font-size:11px}
+.activation-code-employee strong{color:#214a82;font-size:12px}
+.activation-code-copy-box{
+  display:grid;
+  width:calc(100% - 40px);
+  gap:8px;
+  margin:0 20px;
+  padding:16px;
+  border:1px dashed #8db3ef;
+  border-radius:12px;
+  background:#f4f8ff;
+  color:#245ec7;
+  text-align:center;
+  cursor:pointer;
+}
+.activation-code-copy-box:hover{background:#edf5ff;border-color:#4f86df}
+.activation-code-copy-box small{color:#7187a3;font-size:9px;font-weight:750}
+.activation-code-copy-box b{font-size:24px;letter-spacing:.12em;overflow-wrap:anywhere}
+.activation-copy-feedback{min-height:18px;margin:10px 20px 0;color:#6f8299;font-size:10px;text-align:center}
+.activation-copy-feedback.has-error{color:#c24141}
+.activation-code-modal-actions{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px 18px}
+.activation-code-modal-actions button{min-width:96px}
+@media(max-width:520px){.activation-code-copy-box b{font-size:19px}.activation-code-modal-actions button{flex:1}}
+
 /* ===== V28.2 — drawer action stacking / tenure / date stability ===== */
 .employee-action-modal-mask,
 .employee-form-mask{
@@ -206,4 +295,3 @@
   line-height:1.35;
   padding:4px 8px!important;
 }
-
