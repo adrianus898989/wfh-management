@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
-const TABS=['考试概览','考试记录','题库','创建 / 分配考试','人工批改','成绩统计']
+const TABS=['考试概览','考试记录','题库','人工批改','成绩统计']
 const blankQuestion={team_name:'',position_name:'',question_en:'',question_zh:'',question_vi:'',points:5,difficulty:1,image_urls:[],active:true}
 const message=e=>e?.message||String(e||'操作失败')
 const fmt=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—'
@@ -19,8 +19,6 @@ export default function AdminTrainingPage(){
   const [error,setError]=useState('')
   const [question,setQuestion]=useState(null)
   const [questionView,setQuestionView]=useState(null)
-  const [assignment,setAssignment]=useState(null)
-  const [preview,setPreview]=useState(null)
   const [grading,setGrading]=useState(null)
 
   const load=async()=>{
@@ -46,21 +44,18 @@ export default function AdminTrainingPage(){
       <section className="exam-panel"><div className="exam-section-title"><div><h2>考试题库</h2><p>Google 表格中的“盘口”对应团队，题目仅匹配同团队、同岗位员工。</p></div><button className="primary" onClick={()=>setQuestion({...blankQuestion,team_name:draft.team,position_name:draft.position})}>＋ 新增题目</button></div>
       <QuestionTable data={data} loading={loading} page={page} setPage={setPage} pageSize={pageSize} setPageSize={x=>{setPage(1);setPageSize(x)}} onView={setQuestionView} onEdit={setQuestion} onChanged={load} setError={setError}/></section>
     </>}
-    {tab==='创建 / 分配考试'&&<Assignments data={data} onNew={()=>setAssignment({title:'',team_name:'',position_name:'',employee_id:'',duration_minutes:60,pass_score:60,max_attempts:1,status:'draft',question_rules:{5:10,10:3,20:1},start_at:new Date().toISOString().slice(0,16),end_at:''})} onEdit={setAssignment} onPreview={setPreview} onChanged={load} setError={setError}/>} 
     {tab==='考试记录'&&<Sessions rows={data?.sessions||[]} onOpen={open=>setGrading({session:open,detail:null})}/>} 
     {tab==='人工批改'&&<Sessions rows={(data?.sessions||[]).filter(x=>['submitted','grading'].includes(x.status))} onOpen={open=>setGrading({session:open,detail:null})} grading/>}
     {tab==='成绩统计'&&<Stats rows={data?.sessions||[]}/>} 
     {question&&<QuestionModal value={question} teams={data?.teams||[]} positions={data?.positions||[]} onClose={()=>setQuestion(null)} onSaved={()=>{setQuestion(null);load()}}/>}
     {questionView&&<QuestionView value={questionView} onClose={()=>setQuestionView(null)} onEdit={()=>{setQuestion(questionView);setQuestionView(null)}}/>}
-    {assignment&&<AssignmentModal value={assignment} teams={data?.teams||[]} positions={data?.positions||[]} onClose={()=>setAssignment(null)} onSaved={()=>{setAssignment(null);load()}}/>}
-    {preview&&<ExamPreview value={preview} onClose={()=>setPreview(null)}/>} 
     {grading&&<GradeModal session={grading.session} onClose={()=>setGrading(null)} onChanged={load}/>} 
   </div>
 }
 
 function Overview({counts,data,onTab}){
-  const cards=[['题库题目',counts.questions||0,'题库'],['已发布考试',counts.assignments||0,'创建 / 分配考试'],['待人工批改',counts.pending_grading||0,'人工批改'],['已完成考试',counts.completed||0,'考试记录']]
-  return <><div className="exam-metrics">{cards.map(([l,v,t])=><button key={l} onClick={()=>onTab(t)}><span>{l}</span><strong>{v}</strong><small>查看详情 →</small></button>)}</div><div className="exam-two"><section className="exam-panel"><h2>最近考试</h2><Sessions rows={(data?.sessions||[]).slice(0,8)} compact/></section><section className="exam-panel"><h2>当前分配</h2>{(data?.assignments||[]).slice(0,8).map(a=><div className="exam-line" key={a.id}><div><strong>{a.title}</strong><small>{a.team_name} · {a.position_name}</small></div><span>{a.status==='published'?'进行中':a.status}</span></div>)}</section></div></>
+  const cards=[['题库题目',counts.questions||0,'题库'],['考试记录',(data?.sessions||[]).length,'考试记录'],['待人工批改',counts.pending_grading||0,'人工批改'],['已完成考试',counts.completed||0,'考试记录']]
+  return <><div className="exam-metrics">{cards.map(([l,v,t])=><button key={l} onClick={()=>onTab(t)}><span>{l}</span><strong>{v}</strong><small>查看详情 →</small></button>)}</div><div className="exam-two"><section className="exam-panel"><h2>最近考试</h2><Sessions rows={(data?.sessions||[]).slice(0,8)} compact/></section><section className="exam-panel adaptive-rule-panel"><h2>员工自适应考试规则</h2><p>员工进入前端后，系统直接读取本人员工档案，严格按团队＋岗位映射题库。</p><div><b>14 题</b><span>随机抽取</span></div><div><b>100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>开始后连续计时，答案自动保存</span></div><small>不需要在后台逐个创建或分配考试；题库范围不足时不会跨团队、跨岗位补题。</small></section></div></>
 }
 
 function FilterBar({draft,setDraft,data,onApply,onReset}){return <section className="exam-filter"><label className="exam-search-field"><span>题目搜索</span><input value={draft.search} onChange={e=>setDraft({...draft,search:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="题目ID / 英文 / 中文 / 越南文"/></label><label><span>团队</span><select value={draft.team} onChange={e=>setDraft({...draft,team:e.target.value})}><option value="">全部团队</option>{(data?.teams||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>岗位</span><select value={draft.position} onChange={e=>setDraft({...draft,position:e.target.value})}><option value="">全部岗位</option>{(data?.positions||[]).map(x=><option key={x}>{x}</option>)}</select></label><div className="exam-filter-actions"><button className="primary" onClick={onApply}>查询</button><button onClick={onReset}>重置</button></div></section>}
