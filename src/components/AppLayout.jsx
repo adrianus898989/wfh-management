@@ -36,7 +36,6 @@ const ADMIN_NAV = [
     ['考试概览', `/admin/training?tab=${enc('考试概览')}`],
     ['考试记录', `/admin/training?tab=${enc('考试记录')}`],
     ['题库', `/admin/training?tab=${enc('题库')}`],
-    ['创建 / 分配考试', `/admin/training?tab=${enc('创建 / 分配考试')}`],
     ['人工批改', `/admin/training?tab=${enc('人工批改')}`],
     ['成绩统计', `/admin/training?tab=${enc('成绩统计')}`],
   ]},
