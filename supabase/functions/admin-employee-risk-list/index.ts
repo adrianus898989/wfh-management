@@ -119,7 +119,8 @@ Deno.serve(async req => {
     const scope = await scopeInfo(service, current)
     const body = await req.json().catch(() => ({}))
     const filters = body.filters || {}
-    const risk = text(filters.risk_level || body.risk_level) || 'normal'
+    const risk = text(filters.risk_level || body.risk_level)
+    const accountStatus = text(filters.account_status)
     const page = Math.max(1, Number(body.page || 1))
     const allowedSizes = [20, 30, 50, 100, 500]
     const requestedSize = Number(body.page_size || 20)
@@ -162,34 +163,35 @@ Deno.serve(async req => {
       return query.order('employee_no', { ascending: true })
     }
 
-    const [allEmployees, summaryRows] = await Promise.all([
+    const [allEmployees, summaryRows, allAccountRows] = await Promise.all([
       loadPagedQuery(buildEmployeeQuery),
       loadPagedQuery(() => service.from('employee_error_summary')
         .select('employee_no,month_error_count,total_error_count,risk_level')
         .order('employee_no', { ascending: true })),
+      loadPagedQuery(() => service.from('user_access')
+        .select('employee_id,employee_portal_enabled,active')
+        .eq('employee_portal_enabled', true)
+        .eq('active', true)),
     ])
 
     const summaryMap = new Map((summaryRows || []).map((row: any) => [upper(row.employee_no), row]))
+    const accountSet = new Set((allAccountRows || []).map((row: any) => row.employee_id))
     const matched = (allEmployees || []).filter((employee: any) => {
       const summary: any = summaryMap.get(upper(employee.employee_no))
       const currentRisk = riskKey(summary?.total_error_count || 0)
-      return currentRisk === risk
+      if (risk && currentRisk !== risk) return false
+      if (accountStatus === 'activated' && !accountSet.has(employee.id)) return false
+      if (accountStatus === 'unactivated' && accountSet.has(employee.id)) return false
+      return true
     })
 
     const total = matched.length
     const start = (page - 1) * pageSize
     const rows = matched.slice(start, start + pageSize)
     const ids = rows.map((row: any) => row.id)
-    const [{ data: accountRows }, { data: operatorRows }] = ids.length
-      ? await Promise.all([
-          service.from('user_access').select('employee_id,employee_portal_enabled,active').in('employee_id', ids),
-          service.from('employee_audit_logs').select('employee_id,actor_username,created_at').in('employee_id', ids).order('created_at', { ascending: false }).limit(500),
-        ])
-      : [{ data: [] }, { data: [] }]
-
-    const accountSet = new Set((accountRows || [])
-      .filter((row: any) => row.employee_portal_enabled && row.active)
-      .map((row: any) => row.employee_id))
+    const { data: operatorRows } = ids.length
+      ? await service.from('employee_audit_logs').select('employee_id,actor_username,created_at').in('employee_id', ids).order('created_at', { ascending: false }).limit(500)
+      : { data: [] }
     const operatorMap = new Map<string, string>()
     for (const row of operatorRows || []) {
       if (!operatorMap.has(row.employee_id)) operatorMap.set(row.employee_id, text(row.actor_username))

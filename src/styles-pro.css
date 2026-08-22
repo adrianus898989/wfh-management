@@ -45,7 +45,7 @@
 .employee-master-table{min-width:1500px}
 .profile-chip{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:999px;background:#eef4ff;color:#4e6d9d;font-size:9px;font-weight:750}
 .profile-chip.warn{background:#fff6df;color:#a77924}
-.row-actions{display:flex;gap:5px}
+.row-actions{display:flex;gap:5px;flex-wrap:nowrap;white-space:nowrap}
 .section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:17px 18px 13px;border-bottom:1px solid #edf1f5}
 .section-head h2{margin:0 0 5px;color:#26384f;font-size:15px}
 .section-head p{margin:0;color:#8b98aa;font-size:10px}
@@ -957,7 +957,7 @@
 
 .v24-filter-card{padding:14px 15px!important}
 .field-search-grid,.people-filter-grid,.analytics-detail-filterbar,.resignation-analysis-filterbar{display:grid;gap:10px 12px;align-items:end}
-.employee-core-search-grid{grid-template-columns:repeat(4,minmax(170px,1fr)) auto}
+.employee-core-search-grid{grid-template-columns:repeat(6,minmax(130px,1fr)) auto}
 .pro-filter-field{display:flex;min-width:0;flex-direction:column;gap:5px;color:#6e8198;font-size:9px;font-weight:850;letter-spacing:.01em}
 .pro-filter-field>span{display:block;white-space:nowrap}
 .pro-input-shell{height:40px;display:flex;align-items:center;gap:7px;padding:0 11px;border:1px solid #d5e0ec;border-radius:9px;background:#fff;box-shadow:0 1px 1px rgba(30,50,75,.02);transition:.15s ease}
@@ -971,10 +971,13 @@
 .pro-date-range b{color:#9ba8b8;font-size:9px;font-weight:700}
 .filter-toolbar-actions{height:40px;display:flex;align-items:center;justify-content:flex-end;gap:8px;white-space:nowrap}
 .filter-toolbar-actions .secondary-action{height:40px;padding:0 14px;border-radius:9px}
+.archive-filter-actions{margin:0;justify-content:flex-end}
+.archive-filter-actions button{white-space:nowrap}
+.employee-master-table th:last-child,.employee-master-table td:last-child{min-width:112px}
 .v24-advanced-filter-grid{grid-template-columns:repeat(5,minmax(0,1fr))!important;margin-top:13px!important;padding-top:13px!important}
 
 .v24-analytics-filter-panel{padding:14px 15px!important}
-.people-filter-grid{grid-template-columns:repeat(4,minmax(165px,1fr))}
+.people-filter-grid{grid-template-columns:repeat(6,minmax(130px,1fr))}
 .people-date-range-field{grid-column:span 2}
 .people-filter-actions{grid-column:span 2;justify-content:flex-end}
 

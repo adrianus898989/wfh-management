@@ -29,7 +29,7 @@ const dedupeAnalysisRows = rows => {
 }
 const analysisViews=['总览','团队分析','岗位分析','国家分析','班次分析','离职分析']
 const blankEmployeeFilters=()=>({
-  employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',team:'',position:'',country:'',status:'active',
+  employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',account_status:'',team:'',position:'',country:'',status:'active',
   employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
 })
 const blankPeopleFilters=()=>({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
@@ -518,12 +518,13 @@ export default function AdminEmployeesPage(){
   }
 
   const fetchEmployeeListData=async(nextPage,nextSize,nextFilters=appliedFilters)=>{
-    if(text(nextFilters?.risk_level)){
-      const {data,error}=await supabase.functions.invoke('admin-employee-risk-list',{body:{action:'list',page:nextPage,page_size:nextSize,filters:nextFilters,risk_level:nextFilters.risk_level}})
+    const archiveFilters={...nextFilters,status:'active'}
+    if(text(archiveFilters.risk_level)||text(archiveFilters.account_status)){
+      const {data,error}=await supabase.functions.invoke('admin-employee-risk-list',{body:{action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters,risk_level:archiveFilters.risk_level}})
       if(error||data?.error) throw new Error(data?.error||error?.message||'等级筛选读取失败')
       return data
     }
-    return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:nextFilters})
+    return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters})
   }
 
   const loadList=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters}={})=>{
@@ -990,7 +991,7 @@ export default function AdminEmployeesPage(){
     {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
     {tab==='员工档案'&&<>
       <div className="archive-compact-head">
-        <div><h2>员工档案</h2><span>当前在职 {meta.active||0} · 全部档案 {meta.total||0}</span></div>
+        <div><h2>员工档案</h2><span>当前仅显示在职员工 · 共 {meta.active||0} 人</span></div>
       </div>
       <div className="filter-card archive-filter-card v24-filter-card">
         <div className="field-search-grid employee-core-search-grid">
@@ -999,6 +1000,8 @@ export default function AdminEmployeesPage(){
           <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={filters.full_name} onChange={e=>setFilters({...filters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
           <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={filters.work_tg} onChange={e=>setFilters({...filters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>
           <label className="pro-filter-field"><span>后台账号</span><div className="pro-input-shell"><i>⌕</i><input value={filters.backend_account} onChange={e=>setFilters({...filters,backend_account:e.target.value})} placeholder="输入后台账号"/></div></label>
+          <label className="pro-filter-field"><span>账号激活状态</span><select value={filters.account_status||''} onChange={e=>setFilters({...filters,account_status:e.target.value})}><option value="">全部账号</option><option value="activated">已激活</option><option value="unactivated">未激活</option></select></label>
+          <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="primary-action" onClick={applyEmployeeFilters} disabled={loading}>{loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetEmployeeFilters} disabled={loading}>重置</button></div>
         </div>
         {showFilters&&<div className="filter-grid employee-filter-grid v24-advanced-filter-grid">
           <label>团队<FilterCombo value={filters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="employee-team-filter"/></label>
@@ -1007,11 +1010,9 @@ export default function AdminEmployeesPage(){
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
           <label>班次<FilterCombo value={filters.shift_name} options={cleanShiftOptions((analytics.shifts||[]).map(x=>x.name).length?(analytics.shifts||[]).map(x=>x.name):(meta.options?.shifts||[]))} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="employee-shift-filter"/></label>
           <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人 / 输入搜索" listId="employee-leader-filter"/></label>
-          <label>状态<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">全部</option><option value="active">在职</option><option value="probation">试用</option><option value="suspended">停用</option><option value="resigned">离职</option></select></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
         </div>}
-        <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="primary-action" onClick={applyEmployeeFilters} disabled={loading}>{loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetEmployeeFilters} disabled={loading}>重置</button></div>
       </div>
 
       <div className="module-summary-grid employee-summary-grid employee-kpi-grid archive-kpi-strip">
@@ -1022,13 +1023,6 @@ export default function AdminEmployeesPage(){
         <MetricSummary label="近7天离职" value={archiveStats.kpis?.resign_7d??analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-6),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
         <MetricSummary label="近30天净增" value={archiveStats.kpis?.net_30d??analytics.kpis?.net_30d??'—'} hint={`入 ${archiveStats.kpis?.join_30d??analytics.kpis?.join_30d??'—'} / 离 ${archiveStats.kpis?.resign_30d??analytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-29),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
       </div>
-
-      <ArchiveStructureStats
-        data={archiveStats}
-        onTenure={(bucket,label)=>openArchiveTenureDetail(bucket,label)}
-        onPosition={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'position',value:name,filters:{}})}
-        onCountry={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'country',value:name,filters:{}})}
-      />
 
       {activationError&&<div className="page-error" style={{marginBottom:12}}>{activationError}</div>}
       {generated&&<div className="activation-banner"><div><span>{generated.employee_no} · {generated.employee_name}（72小时有效）</span><strong>{generated.activation_code}</strong></div><button onClick={()=>navigator.clipboard.writeText(generated.activation_code)}>复制激活码</button></div>}
@@ -1090,6 +1084,12 @@ export default function AdminEmployeesPage(){
             <MetricSummary label="近30天净增" value={peopleAnalytics.kpis?.net_30d??'—'} hint={`入 ${peopleAnalytics.kpis?.join_30d??'—'} / 离 ${peopleAnalytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.as_of})}/>
           </>}
         </div>
+        <ArchiveStructureStats
+          data={archiveStats}
+          onTenure={(bucket,label)=>openArchiveTenureDetail(bucket,label)}
+          onPosition={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'position',value:name,filters:appliedAnalysisFilters})}
+          onCountry={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'country',value:name,filters:appliedAnalysisFilters})}
+        />
         <EmployeeAnalyticsOverview
           analytics={peopleAnalytics}
           onTeam={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'team',value:name,filters:appliedAnalysisFilters})}
@@ -1512,6 +1512,7 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <div className="detail-sections detail-sections-v11">
+        <EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
@@ -1530,7 +1531,6 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
           {paymentMode==='usdt'?<div className="payment-primary"><span>USDT 地址</span><strong>{text(p.usdt_address)||'—'}</strong><small>收款方式：{p.transfer_using||'USDT'}</small></div>:paymentMode==='bank_wallet'?<div className="info-rows"><InfoRow label="收款方式" value={p.transfer_using}/><InfoRow label="银行卡 / 钱包账号" value={p.bank_wallet_account} mono/><InfoRow label="收款姓名" value={p.account_name}/></div>:null}
           <div className="payment-secondary"><InfoRow label="联系电话" value={p.contact_phone}/><InfoRow label="WhatsApp" value={p.whatsapp_number}/><InfoRow label="员工地址" value={p.employee_address}/></div>
         </section>
-        <EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>
       </div>
     </>}
   </div></div>
