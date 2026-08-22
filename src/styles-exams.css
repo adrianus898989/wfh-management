@@ -89,5 +89,5 @@
 
 /* Keep high-score labels inside the plot instead of clipping them above 100. */
 .exam-page .exam-column-plot{padding-top:25px}
-.exam-page .exam-columns{overflow-y:visible}
+.exam-page .exam-columns{padding-top:18px;overflow-y:visible}
 .exam-page .exam-columns em{top:-15px;padding:1px 3px;border-radius:4px;background:rgba(255,255,255,.94);font-weight:800;line-height:1.15}
