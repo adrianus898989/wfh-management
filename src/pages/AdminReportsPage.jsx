@@ -1,4 +1,4 @@
-import React,{useEffect,useMemo,useState} from 'react'
+import React,{useEffect,useMemo,useRef,useState} from 'react'
 import {useSearchParams} from 'react-router-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
@@ -84,7 +84,16 @@ export default function AdminReportsPage(){
 
   const invoke=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-reports',{body})
-    if(error||data?.error)throw new Error(data?.error||error?.message||'统计数据读取失败')
+    if(error){
+      let detail=''
+      try{
+        const response=error.context?.clone?error.context.clone():error.context
+        const payload=await response?.json?.()
+        detail=text(payload?.error||payload?.message)
+      }catch{}
+      throw new Error(detail||error.message||'统计数据读取失败')
+    }
+    if(data?.error)throw new Error(data.error)
     return data
   }
   const load=async(silent=false)=>{
@@ -179,13 +188,19 @@ function OrdersManualQuery({invoke,roster,onError}){
   const [page,setPage]=useState(1)
   const [size,setSize]=useState(30)
   const [mistakes,setMistakes]=useState(null)
+  const requestRef=useRef(0)
   const load=async(nextRange=appliedRange,nextPosition=appliedPosition)=>{
+    const requestId=++requestRef.current
     setLoading(true)
     try{
-      const d=await invoke({action:'orders',date_from:nextRange.from,date_to:nextRange.to,employee_ids:uniq(roster.map(row=>row.employee_id).filter(Boolean))})
+      // Read the synchronized dataset once and apply the current employee scope
+      // locally. This keeps the request body small and prevents an older request
+      // from overwriting a newer result when several admin windows refresh.
+      const d=await invoke({action:'orders',date_from:nextRange.from,date_to:nextRange.to})
+      if(requestId!==requestRef.current)return
       setData(d);setAppliedRange(nextRange);setAppliedPosition(nextPosition);setPage(1);onError('')
-    }catch(e){onError(e.message||'统计读取失败')}
-    finally{setLoading(false)}
+    }catch(e){if(requestId===requestRef.current)onError(e.message||'统计读取失败')}
+    finally{if(requestId===requestRef.current)setLoading(false)}
   }
   useEffect(()=>{load({from:'',to:''},'')},[])
   useEffect(()=>{const t=setInterval(()=>{if(!document.hidden)load(appliedRange,appliedPosition)},300000);return()=>clearInterval(t)},[appliedRange.from,appliedRange.to,appliedPosition])
