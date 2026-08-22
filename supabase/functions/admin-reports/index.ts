@@ -29,7 +29,7 @@ async function syncState(service:any){const {data}=await service.from('report_sh
 function normalizeRoster(raw:any[]){return raw.map((r:any,i:number)=>({key:`roster-${i+2}`,source_row:i+2,responsible:pick(r,['负责人','負責人','Owner']),onsite_trainer:pick(r,['现场培训','現場培訓','Onsite Training']),online_leader:pick(r,['线上组长','線上組長','Online Leader','组长','組長']),online_trainer:pick(r,['线上培训','線上培訓','Online Training']),group:pick(r,['组别','組別','Group']),team:pick(r,['团队','團隊','Team']),name:pick(r,['姓名','员工姓名','員工姓名','Name']),employee_id:pick(r,['ID','员工ID','員工ID']).toUpperCase(),shift:pick(r,['班次','Shift']),country:pick(r,['国家','國家','Country']),position:pick(r,['岗位','崗位','Position']),platform:pick(r,['盘口','盤口','ID WORKFOLIO','Workfolio','盘口ID']),work_content:pick(r,['工作内容','工作內容','Work Content','Job Content','Content'])})).filter(r=>validName(r.name))}
 async function loadRoster(service:any){const snap=await getSnapshot(service,'居家排班表/填表');if(snap)return snap.map((r:any,i:number)=>({...r,key:r.key||`roster-${r.source_row||i+2}`}));const raw=await fetchJson(ROSTER_URL,'roster',20000);const out=normalizeRoster(raw);await recordSnapshot(service,'居家排班表/填表',out,out.length,'后备实时读取 opensheet');return out}
 function splitAccounts(raw:any){return text(raw).split(/[\/,;、\s]+/).map(a=>a.replace(/^[^0-9a-zA-Z]+|[^0-9a-zA-Z]+$/g,'').trim().toLowerCase()).filter(Boolean)}
-async function loadAccountDirectory(service:any){let normalized=await getSnapshot(service,'居家排班表/账号');if(!normalized){const raw=await fetchJson(ACCOUNT_URL,'accounts',30000);normalized=raw.map((r:any,i:number)=>({employee_id:pick(r,['ID','员工ID','員工ID']).toUpperCase(),backend_accounts:pick(r,['后台账号','後台賬號']),hire_date:normalizeDate(pick(r,['入职时间','入職時間','Join Date'])),source_row:i+2})).filter((x:any)=>x.employee_id&&x.employee_id!=='ID');await recordSnapshot(service,'居家排班表/账号',normalized,normalized.length,'后备实时读取 opensheet')}const byId=new Map<string,any>(),accountToId=new Map<string,string>(),idToAccounts=new Map<string,string[]>();normalized.forEach((x:any)=>{byId.set(x.employee_id,x);const accounts=splitAccounts(x.backend_accounts);idToAccounts.set(x.employee_id,accounts);accounts.forEach(acc=>{if(!accountToId.has(acc))accountToId.set(acc,x.employee_id)})});return {byId,accountToId,idToAccounts}}
+async function loadAccountDirectory(service:any){let normalized=await getSnapshot(service,'居家排班表/账号');if(!normalized){const raw=await fetchJson(ACCOUNT_URL,'accounts',30000);normalized=raw.map((r:any,i:number)=>({employee_id:pick(r,['ID','员工ID','員工ID']).toUpperCase(),backend_accounts:pick(r,['后台账号','後台賬號']),hire_date:normalizeDate(pick(r,['入职时间','入職時間','Join Date'])),source_row:i+2})).filter((x:any)=>x.employee_id&&x.employee_id!=='ID');await recordSnapshot(service,'居家排班表/账号',normalized,normalized.length,'后备实时读取 opensheet')}const byId=new Map<string,any>(),accountToId=new Map<string,string>(),idToAccounts=new Map<string,string[]>();normalized.forEach((x:any)=>{byId.set(x.employee_id,x);const accounts=uniq([...splitAccounts(x.backend_accounts),lower(x.employee_id)]);idToAccounts.set(x.employee_id,accounts);accounts.forEach(acc=>{if(!accountToId.has(acc))accountToId.set(acc,x.employee_id)})});return {byId,accountToId,idToAccounts}}
 function normalizeOrders(raw:any[]){const m=new Map<string,any>();raw.forEach((r:any)=>{const d=normalizeDate(pick(r,['日期','date','Date'])),a=lower(pick(r,['后台账号','後台賬號','account']));if(!d||!a)return;const key=`${d}|${a}`,cur=m.get(key)||{date:d,account:a,processed:0,rejected:0};cur.processed+=asNumber(pick(r,['已处理','已處理','processed']));cur.rejected+=asNumber(pick(r,['驳回','駁回','reject','rejected']));m.set(key,cur)});return [...m.values()].sort((a,b)=>a.date.localeCompare(b.date))}
 let ordersLoading:Promise<any[]>|null=null
 async function loadAllOrders(service:any){const key='orders-combined-v298',hit=cache.get(key);if(hit&&Date.now()-hit.at<300000)return hit.value;if(ordersLoading)return ordersLoading;ordersLoading=(async()=>{try{const csv=await Promise.all(ORDER_SHEETS.map(fetchOrderCsv)),merged=new Map<string,any>();let sourceRows=0;csv.forEach(raw=>{sourceRows+=mergeOrderCsv(raw,merged)});const out=[...merged.values()].sort((a,b)=>a.date.localeCompare(b.date));cache.set(key,{at:Date.now(),value:out});await recordSnapshot(service,'效率表/网站数据',null,sourceRows,'直接合并 Google 效率表「工作表4 + 填表」；按后台账号与日期汇总，不再读取不存在的「网站数据」工作表');return out}catch(e){if(hit?.value?.length)return hit.value;throw e}finally{ordersLoading=null}})();return ordersLoading}
@@ -77,14 +77,22 @@ async function orders(service:any,body:any){
     const person=ctx.rosterById.get(id)
     if(!person)return
     const cur=byId.get(id)||{...person,total:0,valid_days:new Set<string>(),daily:{}}
+    const directEmployeeId=lower(accountRow.account)===lower(id)
     Object.entries(accountRow.daily||{}).forEach(([date,value]:any)=>{
-      const day=cur.daily[date]||{success:0,reject:0}
-      day.success+=Number(value?.success||0);day.reject+=Number(value?.reject||0)
-      cur.daily[date]=day
+      const day=cur.daily[date]||{success:0,reject:0,direct:false}
+      // Newer efficiency rows can already contain the employee ID as a fully
+      // consolidated daily total. Prefer that row for the date; otherwise sum
+      // the employee's historical backend-account aliases.
+      if(directEmployeeId){
+        cur.daily[date]={success:Number(value?.success||0),reject:Number(value?.reject||0),direct:true}
+      }else if(!day.direct){
+        day.success+=Number(value?.success||0);day.reject+=Number(value?.reject||0)
+        cur.daily[date]=day
+      }
     })
     byId.set(id,cur)
   })
-  byId.forEach(person=>{Object.entries(person.daily).forEach(([date,value]:any)=>{const dayTotal=Number(value.success||0)+Number(value.reject||0);if((!person.hire_date||date>=person.hire_date)&&dayTotal>0){person.total+=dayTotal;person.valid_days.add(date)}})})
+  byId.forEach(person=>{Object.entries(person.daily).forEach(([date,value]:any)=>{delete value.direct;const dayTotal=Number(value.success||0)+Number(value.reject||0);if((!person.hire_date||date>=person.hire_date)&&dayTotal>0){person.total+=dayTotal;person.valid_days.add(date)}})})
   const mistakeCount=new Map<string,number>()
   allErrors.forEach(e=>{const d=e.review_date||'';if(d&&activeSet.has(d)&&allowedIds.has(e.employee_id))mistakeCount.set(e.employee_id,(mistakeCount.get(e.employee_id)||0)+1)})
   const rows=[...byId.values()].map(r=>({key:`order-${r.employee_id}`,employee_id:r.employee_id,name:r.name,team:r.team,shift:r.shift,country:r.country,position:r.position,platform:r.platform,hire_date:r.hire_date,total:r.total,avg:r.valid_days.size?Math.round(r.total/r.valid_days.size):0,mistake_count:mistakeCount.get(r.employee_id)||0,daily:r.daily})).sort((a,b)=>b.total-a.total||a.employee_id.localeCompare(b.employee_id))
