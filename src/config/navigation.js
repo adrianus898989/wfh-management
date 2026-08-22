@@ -35,7 +35,7 @@ export const adminNavigation = [
     ]
   },
   {
-    label: '培训与考试', icon: GraduationCap,
+    label: '考试管理', icon: GraduationCap,
     children: [
       { label: '考试总览', path: '/admin/exams', permission: PERMISSIONS.EXAM_VIEW },
       { label: '题库同步', path: '/admin/question-bank', permission: PERMISSIONS.EXAM_MANAGE },

@@ -253,7 +253,7 @@ export const PERMISSION_GROUPS = [
     ]
   },
   {
-    title: '培训与考试',
+    title: '考试管理',
     items: [
       [PERMISSIONS.EXAM_VIEW, '查看考试'],
       [PERMISSIONS.EXAM_MANAGE, '创建/分配考试'],

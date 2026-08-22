@@ -52,7 +52,7 @@ const moduleLabels = {
   daily_work: '每日工作报告',
   online_training: '线上培训报告',
   report: '统计报表',
-  exam: '培训与考试',
+  exam: '考试管理',
   adjustment: '调整与奖惩',
   payroll: '工资中心',
   'payroll.rule': '工资规则',

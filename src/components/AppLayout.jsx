@@ -32,12 +32,11 @@ const ADMIN_NAV = [
   { to:'/admin/daily', label:'每日工作', icon:'日', children:[
     ['线上培训报告', '/admin/daily'],
   ]},
-  { to:'/admin/training', label:'培训与考试', icon:'训', children:[
+  { to:'/admin/training', label:'考试管理', icon:'考', children:[
     ['考试概览', `/admin/training?tab=${enc('考试概览')}`],
     ['考试记录', `/admin/training?tab=${enc('考试记录')}`],
     ['题库', `/admin/training?tab=${enc('题库')}`],
     ['人工批改', `/admin/training?tab=${enc('人工批改')}`],
-    ['成绩统计', `/admin/training?tab=${enc('成绩统计')}`],
   ]},
   { to:'/admin/payroll', label:'工资中心', icon:'薪', children:[
     ['工资计算', `/admin/payroll?tab=${enc('工资计算')}`],

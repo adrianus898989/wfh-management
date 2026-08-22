@@ -329,6 +329,8 @@ function bundleToForm(detail){
 
 export default function AdminEmployeesPage(){
   const [sp,setSp]=useSearchParams()
+  const requestedEmployeeId=sp.get('employee')||''
+  const requestedEmployeeRef=useRef('')
   const tabs=['员工档案','人员分析','团队管理','岗位管理','离职记录','操作日志']
   const initialTab=sp.get('tab')==='入离职记录'?'离职记录':sp.get('tab')
   const [tab,setTabState]=useState(tabs.includes(initialTab)?initialTab:'员工档案')
@@ -415,6 +417,17 @@ export default function AdminEmployeesPage(){
     if(error||data?.error) throw new Error(data?.error||error?.message||'操作失败')
     return data
   }
+
+  useEffect(()=>{
+    if(!requestedEmployeeId||requestedEmployeeRef.current===requestedEmployeeId)return
+    requestedEmployeeRef.current=requestedEmployeeId
+    setSelected({employee:{id:requestedEmployeeId},missing_fields:[]})
+    setDetailLoading(true)
+    invoke({action:'detail',employee_id:requestedEmployeeId})
+      .then(setSelected)
+      .catch(e=>{setError(e.message);setSelected(null);requestedEmployeeRef.current=''})
+      .finally(()=>setDetailLoading(false))
+  },[requestedEmployeeId])
 
   const writeEmployee=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employee-write',{body})
@@ -1235,7 +1248,16 @@ export default function AdminEmployeesPage(){
 
     {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={row=>openHistoryDetail(row)}/>}
 
-    {selected&&<EmployeeDrawer detail={selected} loading={detailLoading} onClose={()=>setSelected(null)} returnToAnalysis={Boolean(analysisDetail)} onReturn={()=>setSelected(null)} onEdit={openEdit} onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})} onCancelHire={()=>setCancelHireModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,confirm_text:''})}/>}
+    {selected&&<EmployeeDrawer
+      detail={selected}
+      loading={detailLoading}
+      onClose={()=>{setSelected(null);if(requestedEmployeeId){const next=new URLSearchParams(sp);next.delete('employee');setSp(next,{replace:true});requestedEmployeeRef.current=''}}}
+      returnToAnalysis={Boolean(analysisDetail)}
+      onReturn={()=>setSelected(null)}
+      onEdit={openEdit}
+      onResign={()=>setResignModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,resign_date:'',reason:'',disable_portal:true})}
+      onCancelHire={()=>setCancelHireModal({employee_id:selected.employee.id,employee_no:selected.employee.employee_no,full_name:selected.employee.full_name,confirm_text:''})}
+    />}
     {employeeModal&&<EmployeeFormModal state={employeeModal} setState={setEmployeeModal} meta={meta} onClose={()=>setEmployeeModal(null)} onSave={saveEmployee} onCheckIdentity={checkEmployeeIdentity}/>}
     {resignModal&&<ResignModal state={resignModal} setState={setResignModal} onClose={()=>setResignModal(null)} onSave={submitResign}/>}
     {editResignModal&&<EditResignationModal state={editResignModal} setState={setEditResignModal} onClose={()=>setEditResignModal(null)} onSave={submitResignEdit}/>}
@@ -1456,10 +1478,23 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
 
 function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn}){
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
+  const [examData,setExamData]=useState(null)
+  const [examLoading,setExamLoading]=useState(false)
+  const [examError,setExamError]=useState('')
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
   const paymentTitle=paymentMode==='usdt'?'USDT 收款资料':'银行卡 / 钱包收款资料'
+  useEffect(()=>{
+    if(!e.id){setExamData(null);return}
+    let alive=true
+    setExamLoading(true);setExamError('')
+    supabase.rpc('admin_employee_exam_history',{p_employee_id:e.id}).then(({data,error})=>{
+      if(!alive)return
+      if(error)setExamError(error.message);else setExamData(data)
+    }).finally(()=>alive&&setExamLoading(false))
+    return()=>{alive=false}
+  },[e.id])
 
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
@@ -1495,9 +1530,22 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
           {paymentMode==='usdt'?<div className="payment-primary"><span>USDT 地址</span><strong>{text(p.usdt_address)||'—'}</strong><small>收款方式：{p.transfer_using||'USDT'}</small></div>:paymentMode==='bank_wallet'?<div className="info-rows"><InfoRow label="收款方式" value={p.transfer_using}/><InfoRow label="银行卡 / 钱包账号" value={p.bank_wallet_account} mono/><InfoRow label="收款姓名" value={p.account_name}/></div>:null}
           <div className="payment-secondary"><InfoRow label="联系电话" value={p.contact_phone}/><InfoRow label="WhatsApp" value={p.whatsapp_number}/><InfoRow label="员工地址" value={p.employee_address}/></div>
         </section>
+        <EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>
       </div>
     </>}
   </div></div>
+}
+
+function EmployeeExamPanel({data,loading,error}){
+  const summary=data?.summary||{}, rows=data?.history||[]
+  const examStatus=x=>({in_progress:'答题中',submitted:'待批改',grading:'批改中',graded:'已完成',expired:'已过期'}[x]||x||'—')
+  const result=x=>x.status==='graded'?(x.passed?'通过':'未通过'):examStatus(x.status)
+  return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{summary.attempts||0} 次</span></div>
+    {loading?<div className="employee-exam-empty">正在读取考试记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:<>
+      <div className="employee-exam-summary"><span><small>考试次数</small><b>{summary.attempts||0}</b></span><span><small>已评分</small><b>{summary.graded||0}</b></span><span><small>通过次数</small><b>{summary.passed||0}</b></span><span><small>平均分</small><b>{summary.average==null?'—':`${summary.average}%`}</b></span></div>
+      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th></tr></thead><tbody>{rows.map(x=><tr key={x.id}><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>对 {x.correct_count||0} · 半对 {x.partial_count||0} · 错 {x.wrong_count||0} · 待评 {x.pending_count||0}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
+    </>}
+  </section>
 }
 
 function ResignModal({state,setState,onClose,onSave}){

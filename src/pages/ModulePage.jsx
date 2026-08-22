@@ -16,8 +16,8 @@ const CONFIG = {
     subtitle:'这里将承载组长日报、培训反馈、员工问题、评论和跨班交接。',
   },
   training:{
-    title:'培训与考试',
-    tabs:['考试概览','考试记录','题库','人工批改','成绩统计'],
+    title:'考试管理',
+    tabs:['考试概览','考试记录','题库','人工批改'],
     subtitle:'题库将读取现有 Google Sheet，考试结果与员工 ID 关联。',
   },
   payroll:{
@@ -185,7 +185,7 @@ function DailyPreview({tab,teamStats}){
 }
 
 function TrainingPreview({tab}){
-  return <><div className="workflow-strip">{['题库同步','分配考试','员工答题','人工批改','成绩 / 复训'].map((x,i)=><div key={x}><b>{String(i+1).padStart(2,'0')}</b><span>{x}</span></div>)}</div><DataPending title={`培训与考试 · ${tab}`} text="保留 Google Sheet 题库同步、图片题目、多语言、人工批改和历史成绩。"/></>
+  return <><div className="workflow-strip">{['题库同步','员工答题','人工批改','成绩 / 复训'].map((x,i)=><div key={x}><b>{String(i+1).padStart(2,'0')}</b><span>{x}</span></div>)}</div><DataPending title={`考试管理 · ${tab}`} text="保留 Google Sheet 题库同步、图片题目、多语言、人工批改和历史成绩。"/></>
 }
 
 function PayrollPreview({tab}){
