@@ -101,11 +101,35 @@ create or replace function public.legacy_exam_refresh_employee_matches()
 returns integer language plpgsql security definer set search_path='' as $$
 declare v_count integer;
 begin
-  with matched as(
-    select l.id,case when count(e.id)=1 then min(e.id::text)::uuid end employee_id,
-      case when count(e.id)=1 then 'matched' when count(e.id)>1 then 'ambiguous' else 'unmatched' end match_status
-    from public.legacy_exam_sessions l left join public.employees e
-      on lower(btrim(e.employee_no))=lower(btrim(l.employee_no)) group by l.id
+  with employee_no_keys as materialized(
+    select public.exam_norm(e.employee_no) match_key,count(distinct e.id) match_count,
+      case when count(distinct e.id)=1 then min(e.id::text)::uuid end employee_id
+    from public.employees e where nullif(public.exam_norm(e.employee_no),'') is not null group by 1
+  ),employee_name_keys as materialized(
+    select public.exam_norm(e.full_name) match_key,count(distinct e.id) match_count,
+      case when count(distinct e.id)=1 then min(e.id::text)::uuid end employee_id
+    from public.employees e where nullif(public.exam_norm(e.full_name),'') is not null group by 1
+  ),name_candidates as(
+    select l.id,n.match_count,n.employee_id from public.legacy_exam_sessions l
+    join employee_name_keys n on n.match_key=public.exam_norm(l.employee_name)
+    where nullif(public.exam_norm(l.employee_name),'') is not null
+    union all
+    select l.id,n.match_count,n.employee_id from public.legacy_exam_sessions l
+    join employee_name_keys n on n.match_key=public.exam_norm(l.employee_no)
+    where nullif(public.exam_norm(l.employee_no),'') is not null
+  ),name_matches as(
+    select id,case when bool_or(match_count>1) then 2 else count(distinct employee_id) end match_count,
+      case when not bool_or(match_count>1) and count(distinct employee_id)=1 then min(employee_id::text)::uuid end employee_id
+    from name_candidates group by id
+  ),matched as(
+    select l.id,
+      case when id_match.match_count=1 then id_match.employee_id
+        when coalesce(id_match.match_count,0)=0 and name_match.match_count=1 then name_match.employee_id end employee_id,
+      case when id_match.match_count=1 then 'matched' when id_match.match_count>1 then 'ambiguous'
+        when name_match.match_count=1 then 'matched' when name_match.match_count>1 then 'ambiguous' else 'unmatched' end match_status
+    from public.legacy_exam_sessions l
+    left join employee_no_keys id_match on id_match.match_key=public.exam_norm(l.employee_no)
+    left join name_matches name_match on name_match.id=l.id
   )
   update public.legacy_exam_sessions l set employee_id=m.employee_id,employee_match_status=m.match_status,
     synced_at=case when l.employee_id is distinct from m.employee_id or l.employee_match_status is distinct from m.match_status then now() else l.synced_at end
