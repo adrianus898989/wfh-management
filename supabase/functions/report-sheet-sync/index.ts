@@ -4,6 +4,8 @@ const ROSTER_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrp
 const ACCOUNT_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA/账号'
 const MISTAKE_URL = 'https://opensheet.elk.sh/1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM/员工错误'
 const EFF_ID = '1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM'
+const ORDER_SHEETS = ['工作表4', '填表']
+const ORDER_CHUNK_SIZE = 5_000
 const FETCH_TIMEOUT_MS = 25_000
 
 const text = (value: unknown) => String(value ?? '').trim()
@@ -95,6 +97,66 @@ async function latestCsv(sheet: string, column: string) {
   if (!response.ok) return ''
   const rows = csvParse(body)
   return text(rows?.[1]?.[0] || rows?.[0]?.[0])
+}
+
+function orderCsvUrl(sheet: string) {
+  const url = new URL(`https://docs.google.com/spreadsheets/d/${EFF_ID}/gviz/tq`)
+  url.searchParams.set('tqx', 'out:csv')
+  url.searchParams.set('sheet', sheet)
+  url.searchParams.set('range', 'A:D')
+  return url.toString()
+}
+
+async function fetchOrderCsv(sheet: string) {
+  const response = await fetch(orderCsvUrl(sheet), {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(70_000),
+  })
+  const body = await response.text()
+  if (!response.ok) throw new Error(`效率表「${sheet}」读取失败 ${response.status}`)
+  if (!body || /^\s*</.test(body)) throw new Error(`效率表「${sheet}」返回格式异常`)
+  return body
+}
+
+function eachCsvRow(raw: string, visit: (row: string[], rowNumber: number) => void) {
+  let row: string[] = []
+  let cell = ''
+  let quoted = false
+  let rowNumber = 1
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index]
+    if (quoted) {
+      if (char === '"') {
+        if (raw[index + 1] === '"') {
+          cell += '"'
+          index += 1
+        } else quoted = false
+      } else cell += char
+      continue
+    }
+    if (char === '"') {
+      quoted = true
+      continue
+    }
+    if (char === ',') {
+      row.push(cell)
+      cell = ''
+      continue
+    }
+    if (char === '\n') {
+      row.push(cell.replace(/\r$/, ''))
+      visit(row, rowNumber)
+      rowNumber += 1
+      row = []
+      cell = ''
+      continue
+    }
+    cell += char
+  }
+  if (cell.length || row.length) {
+    row.push(cell.replace(/\r$/, ''))
+    visit(row, rowNumber)
+  }
 }
 
 function normalizeDate(value: unknown) {
@@ -257,6 +319,7 @@ async function loadSnapshotStates(service: any) {
       '居家排班表/填表',
       '居家排班表/账号',
       '效率表/网站数据状态',
+      '效率表/订单处理',
       '效率表/员工错误状态',
     ])
   if (error) throw new Error(`snapshot states: ${error.message}`)
@@ -395,6 +458,90 @@ async function syncChangedSummaries(service: any, summaries: any[]) {
   return changedRows.length
 }
 
+function orderRowsFromCsv(raw: string) {
+  const chunks = new Map<number, any[]>()
+  let sourceRows = 0
+  let validRows = 0
+  let latestDate = ''
+  eachCsvRow(raw, (cells, rowNumber) => {
+    if (rowNumber === 1) return
+    sourceRows = Math.max(sourceRows, rowNumber - 1)
+    const workDate = normalizeDate(cells[0])
+    const account = text(cells[1]).toLowerCase()
+    if (!workDate || !account) return
+    const processed = Math.max(0, Math.trunc(scoreNumber(cells[2])))
+    const rejected = Math.max(0, Math.trunc(scoreNumber(cells[3])))
+    const chunkIndex = Math.floor((rowNumber - 2) / ORDER_CHUNK_SIZE)
+    if (!chunks.has(chunkIndex)) chunks.set(chunkIndex, [])
+    chunks.get(chunkIndex)!.push({
+      source_row: rowNumber,
+      work_date: workDate,
+      account,
+      processed,
+      rejected,
+      content_hash: hash32(`${workDate}|${account}|${processed}|${rejected}`),
+    })
+    validRows += 1
+    if (!latestDate || workDate > latestDate) latestDate = workDate
+  })
+  return { chunks, sourceRows, validRows, latestDate }
+}
+
+async function syncOrderSheets(service: any) {
+  const { data: existingRows, error: existingError } = await service
+    .from('report_order_sync_chunks')
+    .select('source_sheet,chunk_index,content_hash')
+  if (existingError) throw new Error(`订单同步状态读取失败: ${existingError.message}`)
+  const existing = new Map((existingRows || []).map((row: any) => [
+    `${text(row.source_sheet)}|${Number(row.chunk_index)}`,
+    text(row.content_hash),
+  ]))
+  const results: any[] = []
+  let latestDate = ''
+  let totalRows = 0
+  let changedChunks = 0
+
+  for (const sourceSheet of ORDER_SHEETS) {
+    const parsed = orderRowsFromCsv(await fetchOrderCsv(sourceSheet))
+    latestDate = parsed.latestDate > latestDate ? parsed.latestDate : latestDate
+    totalRows += parsed.validRows
+    const chunkCount = Math.ceil(parsed.sourceRows / ORDER_CHUNK_SIZE)
+    const changes: Array<{ chunkIndex: number, hash: string, rows: any[] }> = []
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      const rows = parsed.chunks.get(chunkIndex) || []
+      const hash = payloadHash(rows)
+      if (existing.get(`${sourceSheet}|${chunkIndex}`) !== hash) {
+        changes.push({ chunkIndex, hash, rows })
+      }
+    }
+
+    for (let index = 0; index < changes.length; index += 3) {
+      const batch = changes.slice(index, index + 3)
+      await Promise.all(batch.map(async change => {
+        const { error } = await service.rpc('sync_report_order_chunk', {
+          p_source_sheet: sourceSheet,
+          p_chunk_index: change.chunkIndex,
+          p_chunk_size: ORDER_CHUNK_SIZE,
+          p_content_hash: change.hash,
+          p_rows: change.rows,
+        })
+        if (error) throw new Error(`订单同步 ${sourceSheet} #${change.chunkIndex}: ${error.message}`)
+      }))
+    }
+    changedChunks += changes.length
+    results.push({
+      source_sheet: sourceSheet,
+      source_rows: parsed.sourceRows,
+      valid_rows: parsed.validRows,
+      chunks: chunkCount,
+      changed_chunks: changes.length,
+      latest_date: parsed.latestDate,
+    })
+  }
+
+  return { sources: results, rows: totalRows, changed_chunks: changedChunks, latest_date: latestDate }
+}
+
 Deno.serve(async (request) => {
   const startedAt = Date.now()
   try {
@@ -408,11 +555,10 @@ Deno.serve(async (request) => {
       { auth: { persistSession: false } },
     )
 
-    const [rawRoster, rawAccounts, rawErrors, latestOrders] = await Promise.all([
+    const [rawRoster, rawAccounts, rawErrors] = await Promise.all([
       fetchJson(ROSTER_URL),
       fetchJson(ACCOUNT_URL),
       fetchJson(MISTAKE_URL),
-      latestCsv('网站数据', 'A'),
     ])
 
     const roster = rawRoster.map((row: Record<string, unknown>, index: number) => ({
@@ -448,6 +594,7 @@ Deno.serve(async (request) => {
       .at(-1) || ''
 
     const errorChunkResult = await writeChunkedSnapshot(service, '效率表/员工错误', errors)
+    const orderSyncResult = await syncOrderSheets(service)
     const states = await loadSnapshotStates(service)
     const summaryHash = payloadHash(summaries)
     const previousSummaryHash = noteSummaryHash(states.get('效率表/员工错误状态')?.note)
@@ -464,8 +611,14 @@ Deno.serve(async (request) => {
       ],
       [
         '效率表/网站数据状态',
-        [{ latest_date: latestOrders }],
-        '检查网站数据最新日期；完整统计按需读取原版数据源',
+        [{ latest_date: orderSyncResult.latest_date, rows: orderSyncResult.rows }],
+        '工作表4 + 填表已完整同步到 Supabase 订单明细',
+      ],
+      [
+        '效率表/订单处理',
+        orderSyncResult.sources,
+        `两张效率工作表分块增量同步；changed:${orderSyncResult.changed_chunks}`,
+        orderSyncResult.rows,
       ],
     ]
     const snapshotResults = []
@@ -496,7 +649,8 @@ Deno.serve(async (request) => {
       summary_changes: summaryChanges,
       error_chunks: errorChunkResult,
       snapshot_changes: snapshotResults.filter((result) => result.changed).map((result) => result.source),
-      latest_orders: latestOrders,
+      latest_orders: orderSyncResult.latest_date,
+      order_sync: orderSyncResult,
       latest_errors: latestErrors,
       duration_ms: Date.now() - startedAt,
       at: new Date().toISOString(),
