@@ -350,6 +350,8 @@ export default function AdminEmployeesPage(){
   const [refreshing,setRefreshing]=useState(false)
   const [generated,setGenerated]=useState(null)
   const [activationError,setActivationError]=useState('')
+  const [activationLoading,setActivationLoading]=useState('')
+  const [activationCopyStatus,setActivationCopyStatus]=useState('')
   const [showFilters,setShowFilters]=useState(true)
   const [filters,setFilters]=useState(blankEmployeeFilters)
   const [appliedFilters,setAppliedFilters]=useState(blankEmployeeFilters)
@@ -908,15 +910,52 @@ export default function AdminEmployeesPage(){
   }
 
   const generateCode=async employeeNo=>{
-    setGenerated(null); setActivationError('')
-    const {data,error}=await supabase.functions.invoke('admin-accounts',{body:{action:'generate_activation_code',employee_no:employeeNo,valid_hours:72}})
-    if(error){
-      let detail=''
-      try{ detail=(await error.context?.json())?.error||'' }catch{}
-      return setActivationError(detail||data?.error||error.message||'激活码生成失败')
+    const target=text(employeeNo)
+    setGenerated(null); setActivationError(''); setActivationCopyStatus(''); setActivationLoading(target)
+    try{
+      const {data,error}=await supabase.functions.invoke('admin-accounts',{body:{action:'generate_activation_code',employee_no:target,valid_hours:72}})
+      if(error){
+        let detail=''
+        try{ detail=(await error.context?.json())?.error||'' }catch{}
+        throw new Error(detail||data?.error||error.message||'激活码生成失败')
+      }
+      if(data?.error) throw new Error(data.error)
+      if(!text(data?.activation_code)) throw new Error('激活码生成成功，但服务未返回可复制的激活码')
+      setGenerated(data)
+    }catch(e){
+      setActivationError(e.message||'激活码生成失败')
+    }finally{
+      setActivationLoading('')
     }
-    if(data?.error) return setActivationError(data.error)
-    setGenerated(data||null)
+  }
+
+  const closeActivationCode=()=>{
+    setGenerated(null)
+    setActivationCopyStatus('')
+  }
+
+  const copyActivationCode=async()=>{
+    const code=text(generated?.activation_code)
+    if(!code) return
+    try{
+      if(navigator.clipboard?.writeText){
+        await navigator.clipboard.writeText(code)
+      }else{
+        const input=document.createElement('textarea')
+        input.value=code
+        input.setAttribute('readonly','')
+        input.style.position='fixed'
+        input.style.opacity='0'
+        document.body.appendChild(input)
+        input.select()
+        const copied=document.execCommand('copy')
+        input.remove()
+        if(!copied) throw new Error('copy failed')
+      }
+      setActivationCopyStatus('已复制，可直接发给员工')
+    }catch{
+      setActivationCopyStatus('复制失败，请选中激活码后手动复制')
+    }
   }
 
   const pages=Math.max(1,Math.ceil(total/pageSize))
@@ -1025,8 +1064,6 @@ export default function AdminEmployeesPage(){
       </div>
 
       {activationError&&<div className="page-error" style={{marginBottom:12}}>{activationError}</div>}
-      {generated&&<div className="activation-banner"><div><span>{generated.employee_no} · {generated.employee_name}（72小时有效）</span><strong>{generated.activation_code}</strong></div><button onClick={()=>navigator.clipboard.writeText(generated.activation_code)}>复制激活码</button></div>}
-
       <div className="data-card">
         {loading?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
@@ -1035,12 +1072,13 @@ export default function AdminEmployeesPage(){
               <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
               <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
-              <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" onClick={()=>generateCode(r.employee_no)}>激活码</button>}</div></td>
+              <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
             </tr>)}</tbody>
           </table>
         </div>}
         <Pagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={p=>{setPage(p);loadList(p,pageSize)}} onPageSize={setPageSize}/>
       </div>
+      {generated&&<ActivationCodeModal data={generated} copyStatus={activationCopyStatus} onCopy={copyActivationCode} onClose={closeActivationCode}/>}
     </>}
 
     {tab==='人员分析'&&<>
@@ -1474,6 +1512,24 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
 
     <div className="modal-actions employee-form-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" disabled={Boolean(idConflict)||Boolean(nameConflict)||identityChecking||!identityCheck||Boolean(identityCheck?.check_error)} onClick={onSave}>{identityChecking?'正在检查…':state.mode==='create'?'创建员工':'保存修改'}</button></div>
   </div></div>
+}
+
+function ActivationCodeModal({data,copyStatus,onCopy,onClose}){
+  return <div className="modal-mask activation-code-mask" onMouseDown={onClose}>
+    <div className="activation-code-modal" role="dialog" aria-modal="true" aria-labelledby="activation-code-title" onMouseDown={e=>e.stopPropagation()}>
+      <div className="activation-code-modal-head">
+        <div><span>EMPLOYEE ACCOUNT</span><h2 id="activation-code-title">员工激活码已生成</h2></div>
+        <button type="button" aria-label="关闭" onClick={onClose}>×</button>
+      </div>
+      <div className="activation-code-employee"><strong>{data.employee_no}</strong><span>{data.employee_name||'—'}</span></div>
+      <button type="button" className="activation-code-copy-box" onClick={onCopy} title="点击复制激活码">
+        <small>72 小时内有效 · 点击复制</small>
+        <b>{data.activation_code}</b>
+      </button>
+      <p className={`activation-copy-feedback ${copyStatus?.includes('失败')?'has-error':''}`}>{copyStatus||'复制后发送给对应员工，用于首次开通账号。'}</p>
+      <div className="activation-code-modal-actions"><button type="button" className="secondary-action" onClick={onClose}>关闭</button><button type="button" className="primary-action" onClick={onCopy}>{copyStatus?.startsWith('已复制')?'再次复制':'复制激活码'}</button></div>
+    </div>
+  </div>
 }
 
 function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn}){
