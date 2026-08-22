@@ -331,8 +331,9 @@ export default function AdminEmployeesPage(){
   const [sp,setSp]=useSearchParams()
   const requestedEmployeeId=sp.get('employee')||''
   const requestedEmployeeRef=useRef('')
-  const tabs=['员工档案','人员分析','团队管理','岗位管理','离职记录','操作日志']
-  const initialTab=sp.get('tab')==='入离职记录'?'离职记录':sp.get('tab')
+  const tabs=['员工档案','人员分析','离职记录','操作日志']
+  const requestedTab=sp.get('tab')
+  const initialTab=requestedTab==='入离职记录'?'离职记录':['团队管理','岗位管理'].includes(requestedTab)?'人员分析':requestedTab
   const [tab,setTabState]=useState(tabs.includes(initialTab)?initialTab:'员工档案')
 
   const [meta,setMeta]=useState({
@@ -381,7 +382,7 @@ export default function AdminEmployeesPage(){
   const [appliedAnalysisFilters,setAppliedAnalysisFilters]=useState(blankPeopleFilters)
   const [analysisDetail,setAnalysisDetail]=useState(null)
   const [analysisDetailLoading,setAnalysisDetailLoading]=useState(false)
-  const [analysisView,setAnalysisView]=useState('总览')
+  const [analysisView,setAnalysisView]=useState(requestedTab==='团队管理'?'团队分析':requestedTab==='岗位管理'?'岗位分析':'总览')
   const [resignationAnalytics,setResignationAnalytics]=useState({loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[]})
   const [resignationAnalyticsFilters,setResignationAnalyticsFilters]=useState(blankResignationAnalyticsFilters)
   const [appliedResignationAnalyticsFilters,setAppliedResignationAnalyticsFilters]=useState(blankResignationAnalyticsFilters)
@@ -608,7 +609,10 @@ export default function AdminEmployeesPage(){
   useEffect(()=>{
     const raw=sp.get('tab')
     const t=raw==='入离职记录'?'离职记录':raw
-    if(tabs.includes(t)) setTabState(t)
+    if(t==='团队管理'||t==='岗位管理'){
+      setTabState('人员分析')
+      setAnalysisView(t==='团队管理'?'团队分析':'岗位分析')
+    }else if(tabs.includes(t)) setTabState(t)
   },[sp])
 
   useEffect(()=>{
@@ -975,7 +979,12 @@ export default function AdminEmployeesPage(){
     loadList(1,pageSize,{nextFilters:next})
   }
   const applyAnalysisFilters=()=>{
-    const next={...analysisFilters}
+    const next={...blankPeopleFilters(),date_from:analysisFilters.date_from,date_to:analysisFilters.date_to}
+    if(analysisView==='总览') Object.assign(next,analysisFilters)
+    if(analysisView==='团队分析') next.team=analysisFilters.team
+    if(analysisView==='岗位分析') Object.assign(next,{team:analysisFilters.team,position:analysisFilters.position})
+    if(analysisView==='国家分析') next.country=analysisFilters.country
+    if(analysisView==='班次分析') next.shift_name=analysisFilters.shift_name
     setAppliedAnalysisFilters(next)
     loadPeopleAnalytics(next)
   }
@@ -984,6 +993,13 @@ export default function AdminEmployeesPage(){
     setAnalysisFilters(next)
     setAppliedAnalysisFilters(next)
     loadPeopleAnalytics(next)
+  }
+  const changeAnalysisView=view=>{
+    const next={...blankPeopleFilters(),date_from:analysisFilters.date_from,date_to:analysisFilters.date_to}
+    setAnalysisView(view)
+    setAnalysisFilters(next)
+    setAppliedAnalysisFilters(next)
+    if(view!=='离职分析') loadPeopleAnalytics(next)
   }
   const applyResignationAnalyticsFilters=()=>{
     const next={...resignationAnalyticsFilters}
@@ -1039,7 +1055,7 @@ export default function AdminEmployeesPage(){
           <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={filters.full_name} onChange={e=>setFilters({...filters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
           <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={filters.work_tg} onChange={e=>setFilters({...filters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>
           <label className="pro-filter-field"><span>后台账号</span><div className="pro-input-shell"><i>⌕</i><input value={filters.backend_account} onChange={e=>setFilters({...filters,backend_account:e.target.value})} placeholder="输入后台账号"/></div></label>
-          <label className="pro-filter-field"><span>账号激活状态</span><select value={filters.account_status||''} onChange={e=>setFilters({...filters,account_status:e.target.value})}><option value="">全部账号</option><option value="activated">已激活</option><option value="unactivated">未激活</option></select></label>
+          <label className="pro-filter-field"><span>账号激活状态</span><select className="pro-native-select" value={filters.account_status||''} onChange={e=>setFilters({...filters,account_status:e.target.value})}><option value="">全部账号</option><option value="activated">已激活</option><option value="unactivated">未激活</option></select></label>
           <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="primary-action" onClick={applyEmployeeFilters} disabled={loading}>{loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetEmployeeFilters} disabled={loading}>重置</button></div>
         </div>
         {showFilters&&<div className="filter-grid employee-filter-grid v24-advanced-filter-grid">
@@ -1088,18 +1104,16 @@ export default function AdminEmployeesPage(){
       </div>
 
       <div className="employee-analysis-subtabs" role="tablist" aria-label="人员分析子目录">
-        {analysisViews.map(x=><button type="button" key={x} className={analysisView===x?'active':''} onClick={()=>setAnalysisView(x)}>{x}</button>)}
+        {analysisViews.map(x=><button type="button" key={x} className={analysisView===x?'active':''} onClick={()=>changeAnalysisView(x)}>{x}</button>)}
       </div>
 
       {analysisView!=='离职分析'&&<div className="analytics-filter-panel v24-analytics-filter-panel">
-        <div className="people-filter-grid">
-          <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.employee_no} onChange={e=>setAnalysisFilters({...analysisFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
-          <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.full_name} onChange={e=>setAnalysisFilters({...analysisFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
-          <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.work_tg} onChange={e=>setAnalysisFilters({...analysisFilters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>
-          <label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>
-          <label className="pro-filter-field"><span>岗位</span><FilterCombo value={analysisFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/></label>
-          <label className="pro-filter-field"><span>员工国家</span><FilterCombo value={analysisFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="analysis-country"/></label>
-          <label className="pro-filter-field"><span>班次</span><FilterCombo value={analysisFilters.shift_name} options={cleanShiftOptions((analytics.shifts||[]).map(x=>x.name))} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/></label>
+        <div className={`people-filter-grid view-${analysisView}`}>
+          {analysisView==='总览'&&<><label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.employee_no} onChange={e=>setAnalysisFilters({...analysisFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label><label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.full_name} onChange={e=>setAnalysisFilters({...analysisFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label><label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.work_tg} onChange={e=>setAnalysisFilters({...analysisFilters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label></>}
+          {['总览','团队分析','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>}
+          {['总览','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>岗位</span><FilterCombo value={analysisFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/></label>}
+          {['总览','国家分析'].includes(analysisView)&&<label className="pro-filter-field"><span>员工国家</span><FilterCombo value={analysisFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="analysis-country"/></label>}
+          {['总览','班次分析'].includes(analysisView)&&<label className="pro-filter-field"><span>班次</span><FilterCombo value={analysisFilters.shift_name} options={cleanShiftOptions((analytics.shifts||[]).map(x=>x.name))} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/></label>}
           <label className="pro-filter-field people-date-range-field"><span>分析日期区间</span><div className="pro-date-range"><input type="date" value={analysisFilters.date_from} onChange={e=>setAnalysisFilters({...analysisFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={analysisFilters.date_to} onChange={e=>setAnalysisFilters({...analysisFilters,date_to:e.target.value})}/></div></label>
           <div className="filter-toolbar-actions people-filter-actions"><button className="primary-action" onClick={applyAnalysisFilters} disabled={peopleAnalytics.loading}>{peopleAnalytics.loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetAnalysisFilters} disabled={peopleAnalytics.loading}>重置</button></div>
         </div>
@@ -1139,20 +1153,6 @@ export default function AdminEmployeesPage(){
         />
       </>}
 
-      {analysisView==='团队分析'&&<DimensionAnalysisDirectory
-        title="团队分析" subtitle="按团队查看当前人数、占比、近7天 / 近30天人员流动。"
-        rows={peopleAnalytics.teams||[]} loading={peopleAnalytics.loading}
-        onPeople={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'team',value:name,filters:appliedAnalysisFilters})}
-        onResign={name=>openAnalysisDetail({title:`${name} · 近30天离职人员`,event_type:'resign',dimension:'team',value:name,date_from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.as_of,filters:appliedAnalysisFilters})}
-      />}
-
-      {analysisView==='岗位分析'&&<DimensionAnalysisDirectory
-        title="岗位分析" subtitle="按岗位查看当前人数、占比和人员流动。"
-        rows={peopleAnalytics.positions||[]} loading={peopleAnalytics.loading}
-        onPeople={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'position',value:name,filters:appliedAnalysisFilters})}
-        onResign={name=>openAnalysisDetail({title:`${name} · 近30天离职人员`,event_type:'resign',dimension:'position',value:name,date_from:isoAdd(peopleAnalytics.as_of,-29),date_to:peopleAnalytics.as_of,filters:appliedAnalysisFilters})}
-      />}
-
       {analysisView==='国家分析'&&<>
         <CountryTenurePanel analytics={peopleAnalytics} filters={appliedAnalysisFilters} onOpen={args=>openAnalysisDetail(args)}/>
         <CountryPeopleAnalytics
@@ -1179,7 +1179,7 @@ export default function AdminEmployeesPage(){
         onOpen={args=>openAnalysisDetail({...args,filters:appliedResignationAnalyticsFilters})}
       />}
     </>}
-    {tab==='团队管理'&&<>
+    {tab==='人员分析'&&analysisView==='团队分析'&&<>
       <div className="analysis-head-row">
         <div><h2>团队结构分析</h2><p>团队人数、占全体比例、人员流动和团队内部岗位构成。</p></div>
         <div className="analysis-badge">{analytics.teams?.length||0} 个团队</div>
@@ -1196,7 +1196,7 @@ export default function AdminEmployeesPage(){
       </div>
     </>}
 
-    {tab==='岗位管理'&&<>
+    {tab==='人员分析'&&analysisView==='岗位分析'&&<>
       <div className="analysis-head-row">
         <div><h2>岗位结构分析</h2><p>岗位人数、占全体比例、人员流动和岗位在各团队的分布。</p></div>
         <div className="analysis-badge">{analytics.positions?.length||0} 个岗位</div>
@@ -1609,7 +1609,7 @@ function EmployeeExamPanel({data,loading,error}){
   return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{summary.attempts||0} 次</span></div>
     {loading?<div className="employee-exam-empty">正在读取考试记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:<>
       <div className="employee-exam-summary"><span><small>考试次数</small><b>{summary.attempts||0}</b></span><span><small>本系统 / 旧考试</small><b>{summary.current_attempts||0} / {summary.legacy_attempts||0}</b></span><span><small>已评分 / 待完成</small><b>{summary.graded||0} / {summary.pending||0}</b></span><span><small>通过次数</small><b>{summary.passed||0}</b></span><span><small>平均分</small><b>{summary.average==null?'—':`${summary.average}%`}</b></span></div>
-      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{x.source_system==='legacy'?'旧系统未提供可靠逐题判定':`对 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
+      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{x.source_system==='legacy'?(x.answer_detail_available?`有得分 ${x.scored_answer_count||0} · 零分 ${x.zero_score_answer_count||0} · 待评 ${x.pending_count||0}`:'逐题答案尚未同步'):`对 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
     </>}
     {examDetail&&<EmployeeExamDetailModal detail={examDetail} loading={detailLoading} error={detailError} onClose={()=>setExamDetail(null)}/>}
   </section>
