@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { EmployeeDrawer } from './AdminEmployeesPage'
 
 const TABS=['考试概览','考试记录','题库','人工批改']
 const blankQuestion={series_name:'',team_name:'',position_name:'',question_en:'',question_zh:'',question_vi:'',points:5,difficulty:1,image_urls:[],active:true}
@@ -11,7 +12,6 @@ const score=v=>v==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDi
 const breakdown=x=>`正确 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错误 ${x.wrong_count||0}`
 
 export default function AdminTrainingPage(){
-  const navigate=useNavigate()
   const [params,setParams]=useSearchParams()
   const tab=TABS.includes(params.get('tab'))?params.get('tab'):TABS[0]
   const [draft,setDraft]=useState({search:'',team:'',position:''})
@@ -30,6 +30,8 @@ export default function AdminTrainingPage(){
   const [sessionPageSize,setSessionPageSize]=useState(30)
   const [sessionData,setSessionData]=useState({rows:[],total:0})
   const [sessionLoading,setSessionLoading]=useState(false)
+  const [employeeDetail,setEmployeeDetail]=useState(null)
+  const [employeeDetailLoading,setEmployeeDetailLoading]=useState(false)
 
   const load=async()=>{
     setLoading(true);setError('')
@@ -64,7 +66,14 @@ export default function AdminTrainingPage(){
     const next={...blankSessionFilters,employeeNo:s.employee_no||''}
     setSessionDraft(next);setSessionFilters(next);setSessionPage(1);setTab('考试记录')
   }
-  const openEmployee=s=>s.employee_id&&navigate(`/admin/employees?tab=${encodeURIComponent('员工档案')}&employee=${encodeURIComponent(s.employee_id)}`)
+  const openEmployee=async s=>{
+    if(!s.employee_id)return
+    setEmployeeDetail({employee:{id:s.employee_id,employee_no:s.employee_no,full_name:s.employee_name},missing_fields:[]})
+    setEmployeeDetailLoading(true);setError('')
+    const {data:detail,error:e}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:s.employee_id}})
+    if(e||detail?.error){setError(message(e||detail?.error));setEmployeeDetail(null)}else setEmployeeDetail(detail)
+    setEmployeeDetailLoading(false)
+  }
   const counts=data?.counts||{}
 
   return <div className="exam-page">
@@ -84,6 +93,7 @@ export default function AdminTrainingPage(){
     {question&&<QuestionModal value={question} series={data?.series||[]} teams={data?.teams||[]} positions={data?.positions||[]} onClose={()=>setQuestion(null)} onSaved={()=>{setQuestion(null);load()}}/>}
     {questionView&&<QuestionView value={questionView} onClose={()=>setQuestionView(null)} onEdit={()=>{setQuestion(questionView);setQuestionView(null)}}/>}
     {grading&&<GradeModal session={grading.session} onClose={()=>setGrading(null)} onChanged={()=>{load();loadSessions()}}/>} 
+    {employeeDetail&&<EmployeeDrawer detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>setEmployeeDetail(null)}/>}
   </div>
 }
 
@@ -99,7 +109,7 @@ function ExamAnalytics({analytics,onEmployee}){
   const duration=Number(summary.avg_duration_seconds||0),durationText=duration?`${Math.floor(duration/60)}分${Math.round(duration%60)}秒`:'—'
   const facts=[['考试总次数',summary.total_attempts||0,'次'],['平均分',score(summary.avg_score),'分'],['平均用时',durationText,''],['通过率',score(summary.pass_rate),'%'],['已通过',summary.pass_count||0,'次'],['未通过',summary.fail_count||0,'次']]
   const graded=Number(summary.graded_attempts||0),bandRows=[['优秀 90–100',bands.excellent||0,'excellent'],['良好 80–89',bands.good||0,'good'],['及格 60–79',bands.pass||0,'pass'],['未通过 0–59',bands.fail||0,'fail']]
-  return <section className="exam-panel exam-analytics"><div className="exam-analytics-title"><div><small>EXAM INTELLIGENCE</small><h2>考试数据分析中心</h2><p>成绩、答题质量、团队表现与排行榜统一汇总，点击排名可查看该员工全部考试记录。</p></div><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-analytics-facts">{facts.map(([label,value,unit])=><div key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>)}</div><div className="exam-analytics-visuals"><AnalyticsColumnChart title="盘口 / 系列平均分" rows={series}/><AnalyticsColumnChart title="岗位平均分" rows={positions} green/><div className="exam-distribution-card"><header><div><h3>成绩分布</h3><p>已完成评分的考试</p></div><b>{graded}<small>份</small></b></header><div className="exam-score-bands">{bandRows.map(([label,value,tone])=><div key={label}><span>{label}</span><i><em className={tone} style={{width:`${graded?Math.max(3,value/graded*100):0}%`}}/></i><b>{value}</b></div>)}</div></div><TrendChart rows={trend}/></div><div className="exam-analytics-charts"><AnalyticsBars title="团队平均分" rows={teams}/><Leaderboard rows={leaderboard} onEmployee={onEmployee}/></div></section>
+  return <section className="exam-panel exam-analytics"><div className="exam-analytics-title"><div><small>EXAM INTELLIGENCE</small><h2>考试数据分析中心</h2><p>成绩、答题质量、团队表现与排行榜统一汇总；仅“查看记录”按钮会打开该员工记录。</p></div><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-analytics-facts">{facts.map(([label,value,unit])=><div key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>)}</div><div className="exam-analytics-visuals"><AnalyticsColumnChart title="盘口 / 系列平均分" rows={series}/><AnalyticsColumnChart title="岗位平均分" rows={positions} green/><div className="exam-distribution-card"><header><div><h3>成绩分布</h3><p>已完成评分的考试</p></div><b>{graded}<small>份</small></b></header><div className="exam-score-bands">{bandRows.map(([label,value,tone])=><div key={label}><span>{label}</span><i><em className={tone} style={{width:`${graded?Math.max(3,value/graded*100):0}%`}}/></i><b>{value}</b></div>)}</div></div><TrendChart rows={trend}/></div><div className="exam-analytics-charts"><AnalyticsBars title="团队平均分" rows={teams}/><Leaderboard rows={leaderboard} onEmployee={onEmployee}/></div></section>
 }
 
 function AnalyticsColumnChart({title,rows,green=false}){
@@ -109,12 +119,19 @@ function AnalyticsColumnChart({title,rows,green=false}){
 
 function TrendChart({rows}){
   const visible=(rows||[]).slice(-12),max=Math.max(100,...visible.map(x=>Number(x.average)||0))
-  return <div className="exam-trend-card"><header><div><h3>近 30 天成绩趋势</h3><p>按完成日期统计平均分</p></div><span>{visible.reduce((n,x)=>n+Number(x.attempts||0),0)} 次</span></header>{visible.length?<div className="exam-trend-bars">{visible.map(x=><div key={x.day} title={`${x.day} · ${score(x.average)}分 · ${x.attempts}次`}><i style={{height:`${Math.max(5,(Number(x.average)||0)/max*100)}%`}}/><span>{String(x.day).slice(5)}</span></div>)}</div>:<div className="exam-empty compact">暂无趋势数据</div>}</div>
+  return <div className="exam-trend-card"><header><div><h3>近 30 天成绩趋势</h3><p>按完成日期统计平均分</p></div><span>{visible.reduce((n,x)=>n+Number(x.attempts||0),0)} 次</span></header>{visible.length?<div className="exam-trend-bars">{visible.map((x,index)=>{const day=x.day||x.trend_day||'';return <div key={`${day}-${index}`} title={`${day} · ${score(x.average)}分 · ${x.attempts}次`}><i style={{height:`${Math.max(5,(Number(x.average)||0)/max*100)}%`}}/><span>{day?String(day).slice(5):'—'}</span></div>})}</div>:<div className="exam-empty compact">暂无趋势数据</div>}</div>
 }
 
 function Leaderboard({rows,onEmployee}){
+  const [showAll,setShowAll]=useState(false)
+  const [rankSearch,setRankSearch]=useState('')
   const visible=(rows||[]).slice(0,20)
-  return <div className="exam-leaderboard"><header><div><h3>考试排行榜</h3><p>合并本系统与旧考试，按平均分、最高分和考试次数综合排序</p></div><span>TOP {visible.length}</span></header>{visible.length?<div className="exam-leaderboard-list">{visible.map(row=>{const rank=Number(row.rank??row.rank_no);return <button key={row.employee_id||row.employee_no} onClick={()=>onEmployee?.(row)}><b className={`rank r${rank}`}>{rank<=3?['🥇','🥈','🥉'][rank-1]:rank}</b><span><strong>{row.employee_name}</strong><small>{row.employee_no} · {row.team_name}{row.legacy_attempts?` · 旧考试 ${row.legacy_attempts}`:''}</small></span><em>{score(row.average_score)}<small>平均分</small></em><em>{score(row.best_score)}<small>最高分</small></em><em>{row.attempts}<small>次数</small></em><i>查看记录 →</i></button>})}</div>:<div className="exam-empty compact">暂无排行榜数据</div>}</div>
+  const allRows=(rows||[]).filter(row=>!rankSearch||`${row.employee_name||''} ${row.employee_no||''} ${row.team_name||''}`.toLowerCase().includes(rankSearch.toLowerCase()))
+  return <><div className="exam-leaderboard"><header><div><h3>考试排行榜</h3><p>合并本系统与旧考试，姓名和员工 ID 可直接选择复制</p></div><div className="exam-leaderboard-actions"><span>TOP {visible.length}</span>{(rows?.length||0)>visible.length&&<button onClick={()=>setShowAll(true)}>查看全部</button>}</div></header>{visible.length?<LeaderboardRows rows={visible} onEmployee={onEmployee}/>:<div className="exam-empty compact">暂无排行榜数据</div>}</div>{showAll&&<Modal title={`考试排行榜 · 全部 ${rows.length} 人`} onClose={()=>setShowAll(false)} wide><div className="exam-leaderboard-modal-tools"><input value={rankSearch} onChange={e=>setRankSearch(e.target.value)} placeholder="搜索姓名 / 员工ID / 团队"/><span>显示 {allRows.length} 人</span></div><div className="exam-leaderboard-modal-note">姓名和员工 ID 可以复制；点击右侧按钮才会打开考试记录。</div><LeaderboardRows rows={allRows} onEmployee={row=>{setShowAll(false);onEmployee?.(row)}}/><footer><button onClick={()=>setShowAll(false)}>关闭</button></footer></Modal>}</>
+}
+
+function LeaderboardRows({rows,onEmployee}){
+  return <div className="exam-leaderboard-list">{(rows||[]).map(row=>{const rank=Number(row.rank??row.rank_no);return <article key={`${row.employee_id||row.employee_no}-${rank}`}><b className={`rank r${rank}`}>{rank<=3?['🥇','🥈','🥉'][rank-1]:rank}</b><span><strong>{row.employee_name}</strong><small>{row.employee_no} · {row.team_name}{row.legacy_attempts?` · 旧考试 ${row.legacy_attempts}`:''}</small></span><em>{score(row.average_score)}<small>平均分</small></em><em>{score(row.best_score)}<small>最高分</small></em><em>{row.attempts}<small>次数</small></em><button onClick={()=>onEmployee?.(row)}>查看记录 →</button></article>})}</div>
 }
 
 function AnalyticsBars({title,rows}){

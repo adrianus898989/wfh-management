@@ -1532,7 +1532,7 @@ function ActivationCodeModal({data,copyStatus,onCopy,onClose}){
   </div>
 }
 
-function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn}){
+export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn,readOnly=false}){
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
   const [examData,setExamData]=useState(null)
   const [examLoading,setExamLoading]=useState(false)
@@ -1558,10 +1558,10 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
       <div className="employee-hero-copy"><div className="employee-id-line">{e.employee_no}</div><h2>{e.full_name||'读取中...'}</h2><div className="employee-tags"><span>{typeName(e.employment_type)}</span><span>{e.teams?.name||'未匹配团队'}</span><span>{e.positions?.name||'未设置主档岗位'}</span>{e.schedule_position&&e.schedule_position!==e.positions?.name&&<span>排班：{e.schedule_position}</span>}{e.hire_date&&<span className="employee-tenure-chip">{tenureDurationLabel(e.hire_date,e.resign_date,e.status)}</span>}</div></div>
       <div className="drawer-head-actions">
         {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
-        {e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
-        {e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
-        {(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status)||detail.actions?.can_edit)&&<button className="cancel-hire-outline" title="不符合撤销条件时系统会安全拒绝，不会删除员工资料" onClick={onCancelHire}>撤销入职</button>}
-        {detail.actions?.can_edit&&<button className="edit-outline" onClick={onEdit}>编辑</button>}
+        {!readOnly&&e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
+        {!readOnly&&e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
+        {!readOnly&&(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status)||detail.actions?.can_edit)&&<button className="cancel-hire-outline" title="不符合撤销条件时系统会安全拒绝，不会删除员工资料" onClick={onCancelHire}>撤销入职</button>}
+        {!readOnly&&detail.actions?.can_edit&&<button className="edit-outline" onClick={onEdit}>编辑</button>}
         <button className="drawer-close" onClick={onClose}>×</button>
       </div>
     </div>
@@ -1594,14 +1594,36 @@ function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,ret
 
 function EmployeeExamPanel({data,loading,error}){
   const summary=data?.summary||{}, rows=data?.history||[]
+  const [examDetail,setExamDetail]=useState(null)
+  const [detailLoading,setDetailLoading]=useState(false)
+  const [detailError,setDetailError]=useState('')
   const examStatus=x=>({in_progress:'答题中',submitted:'待批改',grading:'批改中',graded:'已完成',expired:'已过期'}[x]||x||'—')
   const result=x=>x.status==='graded'?(x.passed?'通过':'未通过'):examStatus(x.status)
+  const openExam=async row=>{
+    setExamDetail({session:row,answers:[]});setDetailLoading(true);setDetailError('')
+    const fn=row.source_system==='legacy'?'admin_legacy_exam_session_detail':'admin_exam_session_detail'
+    const {data:detail,error:e}=await supabase.rpc(fn,{p_session_id:row.id})
+    if(e)setDetailError(e.message);else setExamDetail(detail)
+    setDetailLoading(false)
+  }
   return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{summary.attempts||0} 次</span></div>
     {loading?<div className="employee-exam-empty">正在读取考试记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:<>
-      <div className="employee-exam-summary"><span><small>考试次数</small><b>{summary.attempts||0}</b></span><span><small>已评分</small><b>{summary.graded||0}</b></span><span><small>通过次数</small><b>{summary.passed||0}</b></span><span><small>平均分</small><b>{summary.average==null?'—':`${summary.average}%`}</b></span></div>
-      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th></tr></thead><tbody>{rows.map(x=><tr key={x.id}><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>对 {x.correct_count||0} · 半对 {x.partial_count||0} · 错 {x.wrong_count||0} · 待评 {x.pending_count||0}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
+      <div className="employee-exam-summary"><span><small>考试次数</small><b>{summary.attempts||0}</b></span><span><small>本系统 / 旧考试</small><b>{summary.current_attempts||0} / {summary.legacy_attempts||0}</b></span><span><small>已评分 / 待完成</small><b>{summary.graded||0} / {summary.pending||0}</b></span><span><small>通过次数</small><b>{summary.passed||0}</b></span><span><small>平均分</small><b>{summary.average==null?'—':`${summary.average}%`}</b></span></div>
+      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>对 {x.correct_count||0} · 半对 {x.partial_count||0} · 错 {x.wrong_count||0} · 待评 {x.pending_count||0}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
     </>}
+    {examDetail&&<EmployeeExamDetailModal detail={examDetail} loading={detailLoading} error={detailError} onClose={()=>setExamDetail(null)}/>}
   </section>
+}
+
+function EmployeeExamDetailModal({detail,loading,error,onClose}){
+  const session=detail?.session||{},answers=detail?.answers||[]
+  return <div className="modal-mask employee-action-modal-mask" onMouseDown={onClose}><div className="modal-card employee-exam-detail-modal" onMouseDown={e=>e.stopPropagation()}>
+    <div className="modal-head"><div><span className="modal-kicker">EXAM RECORD</span><h2>{session.title||'考试详细记录'}</h2><p>{session.employee_no||''} · {session.source_label||'本系统'} · 第 {session.attempt_no||'—'} 次</p></div><button onClick={onClose}>×</button></div>
+    {loading?<div className="employee-exam-empty">正在读取完整答卷...</div>:error?<div className="employee-exam-empty error">{error}</div>:<div className="employee-exam-detail-body">
+      <div className="employee-exam-summary"><span><small>成绩</small><b>{session.percentage==null?'—':`${Number(session.percentage).toFixed(1)}%`}</b></span><span><small>得分</small><b>{session.earned_score==null?'—':`${session.earned_score}/${session.total_score}`}</b></span><span><small>状态</small><b>{session.status||'—'}</b></span><span><small>评分完成</small><b>{formatDateTime(session.graded_at)}</b></span></div>
+      <div className="employee-exam-answer-list">{answers.length?answers.map((a,index)=><article key={a.answer_id||a.question_id||index}><header><b>第 {a.ordinality||index+1} 题</b><span>{a.awarded_score==null?'待评分':`${a.awarded_score}/${a.points||0} 分`}</span></header><p>{a.question_zh||a.question_en||a.question_vi||'题目内容未保留'}</p><div><small>员工答案</small><strong>{a.answer_text||'未作答'}</strong></div>{a.grader_feedback&&<div><small>评分说明</small><strong>{a.grader_feedback}</strong></div>}</article>):<div className="employee-exam-empty">此记录没有可显示的逐题答卷</div>}</div>
+    </div>}
+  </div></div>
 }
 
 function ResignModal({state,setState,onClose,onSave}){

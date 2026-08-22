@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { supabase, configured } from './lib/supabase'
+import { clearSessionActivity, configured, isSessionIdleExpired, supabase, touchSessionActivity } from './lib/supabase'
 import AdminLoginPage from './pages/AdminLoginPage'
 import StaffLoginPage from './pages/StaffLoginPage'
 import StaffRegisterPage from './pages/StaffRegisterPage'
@@ -26,12 +26,31 @@ function Protected({ children, mode }) {
   useEffect(() => {
     let alive = true
     let authSubscription
+    const localSignOut = async () => {
+      accessCache.clear()
+      clearSessionActivity()
+      try { await supabase.auth.signOut({ scope:'local' }) } catch (_) {}
+      if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
+    }
+    const terminalAuthError = error => /refresh token|invalid.*token|jwt|session.*missing|not authenticated/i.test(error?.message || '')
     const freshSession = async (force = false) => {
+      if (isSessionIdleExpired()) {
+        await localSignOut()
+        return { session:null, error:null }
+      }
       const { data, error } = await supabase.auth.getSession()
+      if (terminalAuthError(error)) {
+        await localSignOut()
+        return { session:null, error:null }
+      }
       let session = data?.session || null
       if (!error && session && (force || Number(session.expires_at || 0) * 1000 - Date.now() < 10 * 60 * 1000)) {
         const refreshed = await supabase.auth.refreshSession(session)
         if (!refreshed.error && refreshed.data?.session) session = refreshed.data.session
+        else if (terminalAuthError(refreshed.error)) {
+          await localSignOut()
+          return { session:null, error:null }
+        }
       }
       return { session, error }
     }
@@ -45,6 +64,7 @@ function Protected({ children, mode }) {
         if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
         return
       }
+      touchSessionActivity()
       // Founder 已经由 Supabase Auth 完成密码和用户 ID 校验。Founder 是系统锁定
       // 账号，数据库连接繁忙时不应因 user_access 暂时 503 而被送回登录页。
       let access = accessCache.get(session.user.id)
@@ -79,25 +99,37 @@ function Protected({ children, mode }) {
       if (!alive) return
       if (event === 'SIGNED_OUT') {
         accessCache.clear()
+        clearSessionActivity()
         setState({ loading:false, session:null, access:null, aal:null, error:'' })
-      } else if (session) setState(current => ({ ...current, session }))
+      } else if (session) {
+        if (event === 'SIGNED_IN') touchSessionActivity(true)
+        setState(current => ({ ...current, session }))
+      }
     })
     authSubscription = data.subscription
-    const recover = async () => {
+    const recover = async (force = false) => {
       if (document.hidden || !navigator.onLine) return
-      const { session } = await freshSession()
+      const { session } = await freshSession(force)
       if (alive && session) setState(current => ({ ...current, session, error:'' }))
     }
     const onVisible = () => { if (!document.hidden) recover() }
+    const onActivity = () => touchSessionActivity()
+    const onAuthCheck = () => recover(true)
+    const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut() }, 60*1000)
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('online', recover)
     window.addEventListener('focus', recover)
+    ;['pointerdown','keydown','input','touchstart','scroll'].forEach(name=>window.addEventListener(name,onActivity,{passive:true}))
+    window.addEventListener('wfh:auth-check-needed', onAuthCheck)
     return () => {
       alive = false
       authSubscription?.unsubscribe()
+      window.clearInterval(idleTimer)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('online', recover)
       window.removeEventListener('focus', recover)
+      ;['pointerdown','keydown','input','touchstart','scroll'].forEach(name=>window.removeEventListener(name,onActivity))
+      window.removeEventListener('wfh:auth-check-needed', onAuthCheck)
     }
   }, [mode, retryKey])
 
