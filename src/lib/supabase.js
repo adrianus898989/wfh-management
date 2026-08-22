@@ -3,7 +3,8 @@ const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
 export const SESSION_IDLE_LIMIT_MS=24*60*60*1000
-const SESSION_ACTIVITY_KEY='wfh_session_last_activity'
+const portal=typeof window!=='undefined'&&window.location.pathname.startsWith('/admin')?'admin':'staff'
+const SESSION_ACTIVITY_KEY=`wfh_${portal}_session_last_activity`
 let lastActivityWrite=0
 
 export const touchSessionActivity=(force=false)=>{
@@ -31,6 +32,8 @@ const authenticatedFetch=async(input,init)=>{
 }
 
 export const supabase=configured?createClient(url,key,{
-  auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true},
+  // Admin and staff are often opened in two tabs on the same browser. Keeping
+  // separate storage namespaces prevents either login replacing the other JWT.
+  auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,storageKey:`wfh-${portal}-auth-token`},
   global:{fetch:authenticatedFetch},
 }):null

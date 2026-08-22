@@ -86,3 +86,8 @@
 @media(max-width:1250px){.exam-session-filter.compact{grid-template-columns:repeat(4,minmax(135px,1fr))}}
 @media(max-width:850px){.exam-session-filter.compact{grid-template-columns:repeat(2,minmax(0,1fr))}.exam-answer-block{min-width:0}.exam-analytics-title{align-items:flex-start;flex-direction:column}.exam-answer-source{justify-content:flex-start}.exam-answer-source>b{text-align:left}}
 @media(max-width:560px){.exam-session-filter.compact,.exam-filter{grid-template-columns:1fr}.exam-session-filter.compact label.wide{grid-column:auto}}
+
+/* Keep high-score labels inside the plot instead of clipping them above 100. */
+.exam-page .exam-column-plot{padding-top:25px}
+.exam-page .exam-columns{overflow-y:visible}
+.exam-page .exam-columns em{top:-15px;padding:1px 3px;border-radius:4px;background:rgba(255,255,255,.94);font-weight:800;line-height:1.15}

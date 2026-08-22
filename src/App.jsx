@@ -95,6 +95,13 @@ function Protected({ children, mode }) {
       if (alive) setState({ loading:false, session, access, aal, error:'' })
     }
     bootstrap()
+    let bootstrapTimer
+    const scheduleBootstrap = () => {
+      window.clearTimeout(bootstrapTimer)
+      // Avoid awaiting Supabase calls inside its auth callback. Re-run the full
+      // access check on the next task so stale permissions never stay visible.
+      bootstrapTimer = window.setTimeout(() => { bootstrap() }, 0)
+    }
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (!alive) return
       if (event === 'SIGNED_OUT') {
@@ -103,7 +110,7 @@ function Protected({ children, mode }) {
         setState({ loading:false, session:null, access:null, aal:null, error:'' })
       } else if (session) {
         if (event === 'SIGNED_IN') touchSessionActivity(true)
-        setState(current => ({ ...current, session }))
+        scheduleBootstrap()
       }
     })
     authSubscription = data.subscription
@@ -125,6 +132,7 @@ function Protected({ children, mode }) {
     window.addEventListener('wfh:auth-check-needed', onAuthCheck)
     return () => {
       alive = false
+      window.clearTimeout(bootstrapTimer)
       authSubscription?.unsubscribe()
       window.clearInterval(idleTimer)
       document.removeEventListener('visibilitychange', onVisible)
