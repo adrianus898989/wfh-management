@@ -33,8 +33,11 @@ export default function AdminTrainingPage(){
 
   const load=async()=>{
     setLoading(true);setError('')
-    const {data:result,error:e}=await supabase.rpc('admin_exam_dashboard',{p_search:filters.search,p_team:filters.team,p_position:filters.position,p_page:page,p_page_size:pageSize})
-    if(e)setError(message(e)); else setData(result)
+    const [dashboard,analytics]=await Promise.all([
+      supabase.rpc('admin_exam_dashboard',{p_search:filters.search,p_team:filters.team,p_position:filters.position,p_page:page,p_page_size:pageSize}),
+      supabase.rpc('admin_exam_analytics_v2')
+    ])
+    if(dashboard.error)setError(message(dashboard.error)); else setData({...dashboard.data,analytics:analytics.data||dashboard.data?.analytics})
     setLoading(false)
   }
   useEffect(()=>{load()},[filters,page,pageSize])
@@ -82,13 +85,30 @@ export default function AdminTrainingPage(){
 function Overview({counts,data,onTab,onEmployee}){
   const analytics=data?.analytics||{},summary=analytics.summary||{}
   const cards=[['题库题目',counts.questions||0,'题库'],['考试记录',counts.total_sessions||0,'考试记录'],['待人工批改',counts.pending_grading||0,'人工批改'],['已完成考试',counts.completed||0,'考试记录']]
-  return <><div className="exam-metrics">{cards.map(([l,v,t])=><button key={l} onClick={()=>onTab(t)}><span>{l}</span><strong>{v}</strong><small>查看详情 →</small></button>)}</div><div className="exam-two"><section className="exam-panel"><h2>最近考试</h2><Sessions rows={(data?.sessions||[]).slice(0,8)} compact onEmployee={onEmployee}/></section><section className="exam-panel adaptive-rule-panel"><h2>员工自适应考试规则</h2><div><b>14 题</b><span>随机抽取</span></div><div><b>100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>开始后连续计时，答案自动保存</span></div></section></div><ExamAnalytics summary={summary} series={analytics.series||[]} positions={analytics.positions||[]}/></>
+  return <><div className="exam-metrics">{cards.map(([l,v,t])=><button key={l} onClick={()=>onTab(t)}><span>{l}</span><strong>{v}</strong><small>查看详情 →</small></button>)}</div><div className="exam-two"><section className="exam-panel"><h2>最近考试</h2><Sessions rows={(data?.sessions||[]).slice(0,8)} compact onEmployee={onEmployee}/></section><section className="exam-panel adaptive-rule-panel"><h2>员工自适应考试规则</h2><div><b>仅匹配团队</b><span>员工自行选择岗位与盘口</span></div><div><b>14 题 · 100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>开始后连续计时，答案自动保存</span></div></section></div><ExamAnalytics analytics={analytics} onEmployee={onEmployee}/></>
 }
 
-function ExamAnalytics({summary,series,positions}){
+function ExamAnalytics({analytics,onEmployee}){
+  const summary=analytics.summary||{},series=analytics.series||[],positions=analytics.positions||[],teams=analytics.teams||[],leaderboard=analytics.leaderboard||[],bands=analytics.score_bands||{},trend=analytics.trend||[]
   const duration=Number(summary.avg_duration_seconds||0),durationText=duration?`${Math.floor(duration/60)}分${Math.round(duration%60)}秒`:'—'
   const facts=[['考试总次数',summary.total_attempts||0,'次'],['平均分',score(summary.avg_score),'分'],['平均用时',durationText,''],['通过率',score(summary.pass_rate),'%'],['已通过',summary.pass_count||0,'次'],['未通过',summary.fail_count||0,'次']]
-  return <section className="exam-panel exam-analytics"><div className="exam-analytics-title"><div><small>EXAM ANALYTICS</small><h2>考试数据统计</h2><p>按真实答题明细实时汇总；半对、错误和待评分均单独计算。</p></div><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-analytics-facts">{facts.map(([label,value,unit])=><div key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>)}</div><div className="exam-analytics-charts"><AnalyticsBars title="盘口 / 系列平均分" rows={series}/><AnalyticsBars title="岗位平均分" rows={positions}/></div></section>
+  const graded=Number(summary.graded_attempts||0),bandRows=[['优秀 90–100',bands.excellent||0,'excellent'],['良好 80–89',bands.good||0,'good'],['及格 60–79',bands.pass||0,'pass'],['未通过 0–59',bands.fail||0,'fail']]
+  return <section className="exam-panel exam-analytics"><div className="exam-analytics-title"><div><small>EXAM INTELLIGENCE</small><h2>考试数据分析中心</h2><p>成绩、答题质量、团队表现与排行榜统一汇总，点击排名可查看该员工全部考试记录。</p></div><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-analytics-facts">{facts.map(([label,value,unit])=><div key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>)}</div><div className="exam-analytics-visuals"><AnalyticsColumnChart title="盘口 / 系列平均分" rows={series}/><AnalyticsColumnChart title="岗位平均分" rows={positions} green/><div className="exam-distribution-card"><header><div><h3>成绩分布</h3><p>已完成评分的考试</p></div><b>{graded}<small>份</small></b></header><div className="exam-score-bands">{bandRows.map(([label,value,tone])=><div key={label}><span>{label}</span><i><em className={tone} style={{width:`${graded?Math.max(3,value/graded*100):0}%`}}/></i><b>{value}</b></div>)}</div></div><TrendChart rows={trend}/></div><div className="exam-analytics-charts"><AnalyticsBars title="团队平均分" rows={teams}/><Leaderboard rows={leaderboard} onEmployee={onEmployee}/></div></section>
+}
+
+function AnalyticsColumnChart({title,rows,green=false}){
+  const visible=(rows||[]).slice(0,16),max=Math.max(100,...visible.map(x=>Number(x.average)||0))
+  return <div className={`exam-column-card ${green?'green':''}`}><header><h3>{title}</h3><span>{rows?.length||0} 类</span></header>{visible.length?<div className="exam-column-plot"><div className="exam-y-axis"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div className="exam-columns">{visible.map(row=><div key={row.name} title={`${row.name}：${score(row.average)} 分，${row.attempts} 次`}><b style={{height:`${Math.max(3,(Number(row.average)||0)/max*100)}%`}}><em>{score(row.average)}</em></b><span>{row.name}</span></div>)}</div></div>:<div className="exam-empty compact">暂无已完成考试数据</div>}</div>
+}
+
+function TrendChart({rows}){
+  const visible=(rows||[]).slice(-12),max=Math.max(100,...visible.map(x=>Number(x.average)||0))
+  return <div className="exam-trend-card"><header><div><h3>近 30 天成绩趋势</h3><p>按完成日期统计平均分</p></div><span>{visible.reduce((n,x)=>n+Number(x.attempts||0),0)} 次</span></header>{visible.length?<div className="exam-trend-bars">{visible.map(x=><div key={x.day} title={`${x.day} · ${score(x.average)}分 · ${x.attempts}次`}><i style={{height:`${Math.max(5,(Number(x.average)||0)/max*100)}%`}}/><span>{String(x.day).slice(5)}</span></div>)}</div>:<div className="exam-empty compact">暂无趋势数据</div>}</div>
+}
+
+function Leaderboard({rows,onEmployee}){
+  const visible=(rows||[]).slice(0,20)
+  return <div className="exam-leaderboard"><header><div><h3>考试排行榜</h3><p>按平均分、最高分和考试次数综合排序</p></div><span>TOP {visible.length}</span></header>{visible.length?<div className="exam-leaderboard-list">{visible.map(row=><button key={row.employee_id} onClick={()=>onEmployee?.(row)}><b className={`rank r${row.rank}`}>{row.rank<=3?['🥇','🥈','🥉'][row.rank-1]:row.rank}</b><span><strong>{row.employee_name}</strong><small>{row.employee_no} · {row.team_name}</small></span><em>{score(row.average_score)}<small>平均分</small></em><em>{score(row.best_score)}<small>最高分</small></em><em>{row.attempts}<small>次数</small></em><i>查看记录 →</i></button>)}</div>:<div className="exam-empty compact">暂无排行榜数据</div>}</div>
 }
 
 function AnalyticsBars({title,rows}){

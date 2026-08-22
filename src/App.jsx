@@ -26,8 +26,21 @@ function Protected({ children, mode }) {
   useEffect(() => {
     let alive = true
     let authSubscription
+    const freshSession = async (force = false) => {
+      const { data, error } = await supabase.auth.getSession()
+      let session = data?.session || null
+      if (!error && session && (force || Number(session.expires_at || 0) * 1000 - Date.now() < 10 * 60 * 1000)) {
+        const refreshed = await supabase.auth.refreshSession(session)
+        if (!refreshed.error && refreshed.data?.session) session = refreshed.data.session
+      }
+      return { session, error }
+    }
     const bootstrap = async () => {
-      const { data:{ session } } = await supabase.auth.getSession()
+      const { session, error: sessionError } = await freshSession()
+      if (sessionError) {
+        if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'登录状态读取失败，请检查网络后重试。' })
+        return
+      }
       if (!session) {
         if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
         return
@@ -70,7 +83,22 @@ function Protected({ children, mode }) {
       } else if (session) setState(current => ({ ...current, session }))
     })
     authSubscription = data.subscription
-    return () => { alive = false; authSubscription?.unsubscribe() }
+    const recover = async () => {
+      if (document.hidden || !navigator.onLine) return
+      const { session } = await freshSession()
+      if (alive && session) setState(current => ({ ...current, session, error:'' }))
+    }
+    const onVisible = () => { if (!document.hidden) recover() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', recover)
+    window.addEventListener('focus', recover)
+    return () => {
+      alive = false
+      authSubscription?.unsubscribe()
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', recover)
+      window.removeEventListener('focus', recover)
+    }
   }, [mode, retryKey])
 
   if (state.loading) return <div className="center-screen">Loading...</div>
