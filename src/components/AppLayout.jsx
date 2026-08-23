@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { clearSessionActivity, supabase } from '../lib/supabase'
 
 const enc = value => encodeURIComponent(value)
 
@@ -73,6 +73,7 @@ export default function AppLayout({ mode, children }) {
   },[location.pathname])
 
   const logout = async()=>{
+    clearSessionActivity()
     await supabase.auth.signOut()
     navigate(mode==='admin'?'/admin/login':'/staff/login')
   }
