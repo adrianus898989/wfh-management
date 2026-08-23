@@ -125,7 +125,7 @@ function Protected({ children, mode }) {
     const onOnline = () => recover()
     const onFocus = () => recover()
     const onActivity = () => touchSessionActivity()
-    const onAuthCheck = () => recover(true)
+    const onAuthCheck = event => event?.detail?.terminal ? localSignOut() : recover(true)
     const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut() }, 60*1000)
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('online', onOnline)
