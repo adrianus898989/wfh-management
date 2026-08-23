@@ -16,12 +16,14 @@ import AdminPayrollPage from './pages/AdminPayrollPage'
 import StaffPayrollPage from './pages/StaffPayrollPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
+import { StaffI18nProvider, useStaffLocale } from './lib/staffI18n'
 
 const FOUNDER_AUTH_USER_ID = '567e1c26-9ff7-4df2-a3bd-9b68e26d10c9'
 const accessCache = new Map()
 
 function Protected({ children, mode }) {
   const location = useLocation()
+  const { t } = useStaffLocale()
   const [state, setState] = useState({ loading:true, session:null, access:null, aal:null, error:'' })
   const [retryKey, setRetryKey] = useState(0)
 
@@ -59,7 +61,7 @@ function Protected({ children, mode }) {
     const bootstrap = async () => {
       const { session, error: sessionError } = await freshSession()
       if (sessionError) {
-        if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'登录状态读取失败，请检查网络后重试。' })
+        if (alive) setState({ loading:false, session:null, access:null, aal:null, error:mode==='staff'?t('auth.readFailed','登录状态读取失败，请检查网络后重试。'):'登录状态读取失败，请检查网络后重试。' })
         return
       }
       if (!session) {
@@ -83,7 +85,7 @@ function Protected({ children, mode }) {
           .eq('auth_user_id', session.user.id)
           .maybeSingle()
         if (result.error) {
-          if (alive) setState({ loading:false, session, access:null, aal:null, error:'权限验证暂时失败，请重试。登录状态仍为你保留。' })
+          if (alive) setState({ loading:false, session, access:null, aal:null, error:mode==='staff'?t('auth.accessFailed','权限验证暂时失败，请重试。登录状态仍为你保留。'):'权限验证暂时失败，请重试。登录状态仍为你保留。' })
           return
         }
         access = result.data
@@ -145,8 +147,8 @@ function Protected({ children, mode }) {
     }
   }, [mode, retryKey])
 
-  if (state.loading) return <div className="center-screen">Loading...</div>
-  if (state.error) return <div className="center-screen auth-retry"><div><strong>连接暂时不稳定</strong><p>{state.error}</p><button onClick={() => { setState(s => ({...s,loading:true,error:''})); setRetryKey(x=>x+1) }}>重新验证</button></div></div>
+  if (state.loading) return <div className="center-screen">{mode==='staff'?t('common.loading','读取中…'):'Loading...'}</div>
+  if (state.error) return <div className="center-screen auth-retry"><div><strong>{mode==='staff'?t('auth.connectionUnstable','连接暂时不稳定'):'连接暂时不稳定'}</strong><p>{state.error}</p><button onClick={() => { setState(s => ({...s,loading:true,error:''})); setRetryKey(x=>x+1) }}>{mode==='staff'?t('common.retry','重新验证'):'重新验证'}</button></div></div>
   const login = mode === 'admin' ? '/admin/login' : '/staff/login'
   if (!state.session || !state.access?.active) return <Navigate to={login} replace />
   if (mode === 'admin' && !state.access.backend_enabled) return <Navigate to="/admin/login" replace />
@@ -155,8 +157,10 @@ function Protected({ children, mode }) {
   return children
 }
 
-export default function App() {
-  if (!configured) return <div className="center-screen">暂时无法连接</div>
+function AppRoutes() {
+  const location = useLocation()
+  const { t } = useStaffLocale()
+  if (!configured) return <div className="center-screen">{location.pathname.startsWith('/staff')?t('auth.unavailable','暂时无法连接'):'暂时无法连接'}</div>
   return <Routes>
     <Route path="/" element={<Navigate to="/staff/login" replace />} />
     <Route path="/admin/login" element={<AdminLoginPage />} />
@@ -172,11 +176,15 @@ export default function App() {
     <Route path="/admin/reports" element={<Protected mode="admin"><AppLayout mode="admin"><AdminReportsPage /></AppLayout></Protected>} />
     <Route path="/admin/users" element={<Protected mode="admin"><AppLayout mode="admin"><AdminUsersPage /></AppLayout></Protected>} />
     <Route path="/staff" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome /></AppLayout></Protected>} />
-    <Route path="/staff/schedule" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title="我的排班" /></AppLayout></Protected>} />
-    <Route path="/staff/attendance" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title="我的出勤" /></AppLayout></Protected>} />
+    <Route path="/staff/schedule" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.schedule','我的排班')} /></AppLayout></Protected>} />
+    <Route path="/staff/attendance" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.attendance','我的出勤')} /></AppLayout></Protected>} />
     <Route path="/staff/payroll" element={<Protected mode="staff"><AppLayout mode="staff"><StaffPayrollPage /></AppLayout></Protected>} />
     <Route path="/staff/exams" element={<Protected mode="staff"><AppLayout mode="staff"><StaffExamPage /></AppLayout></Protected>} />
-    <Route path="/staff/requests" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title="我的申请" /></AppLayout></Protected>} />
+    <Route path="/staff/requests" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.requests','我的申请')} /></AppLayout></Protected>} />
     <Route path="*" element={<Navigate to="/staff/login" replace />} />
   </Routes>
+}
+
+export default function App() {
+  return <StaffI18nProvider><AppRoutes /></StaffI18nProvider>
 }

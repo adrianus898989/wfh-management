@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
 import { StaffPayrollWorkspace } from './StaffPayrollPage'
+import { useStaffLocale } from '../lib/staffI18n'
 
 const inactiveStatuses = ['left', 'resigned', 'inactive', 'terminated', '离职', '停用']
 const text = v => String(v ?? '').trim()
@@ -202,98 +203,203 @@ function CompactStats({ rows }) {
   )
 }
 
-const staffTenure = date => {
+const staffTenure = (date, t) => {
   if (!date) return '—'
-  const start = new Date(`${date}T00:00:00`), days = Math.max(0, Math.floor((Date.now() - start.getTime()) / 86400000))
-  const years = Math.floor(days / 365), months = Math.floor((days % 365) / 30), rest = days - years * 365 - months * 30
-  return `${years ? `${years}年 ` : ''}${months}个月 ${rest}天 · 共 ${days} 天`
+  const start = new Date(`${date}T00:00:00`)
+  const days = Math.max(0, Math.floor((Date.now() - start.getTime()) / 86400000))
+  const years = Math.floor(days / 365)
+  const months = Math.floor((days % 365) / 30)
+  const rest = days - years * 365 - months * 30
+  return `${years ? t('tenure.years', '{years}y ', { years }) : ''}${t('tenure.duration', '{months}m {days}d · {total} days', { months, days: rest, total: days })}`
 }
 
-const staffDate = value => value ? String(value).slice(0,10) : '—'
-const staffDateTime = value => value ? new Date(value).toLocaleString('zh-CN',{hour12:false}) : '—'
-const staffExamBreakdown = row => {
-  if(row?.source_system==='legacy'&&!row?.answer_detail_available)return row?.percentage==null?'逐题明细等待同步':'总成绩已保留 · 逐题明细未同步'
-  const answered=Number(row?.answer_detail_count||0),total=Number(row?.total_question_count||0)
-  const prefix=row?.source_system==='legacy'&&total?`已答 ${answered}/${total} · 未答 ${Number(row?.unanswered_count||Math.max(total-answered,0))} · `:''
-  return `${prefix}正确 ${row?.correct_count||0} · 半对 ${row?.partial_count||0} · 错误 ${row?.wrong_count||0} · 待评 ${row?.pending_count||0}`
+const staffDate = value => value ? String(value).slice(0, 10) : '—'
+const localeCode = locale => ({ zh: 'zh-CN', en: 'en-US', vi: 'vi-VN', id: 'id-ID' }[locale] || 'en-US')
+const staffDateTime = (value, locale) => value ? new Date(value).toLocaleString(localeCode(locale), { hour12: false }) : '—'
+const staffExamBreakdown = (row, t) => {
+  if (row?.source_system === 'legacy' && !row?.answer_detail_available) {
+    return row?.percentage == null ? t('exam.detailWaiting', 'Per-question detail pending sync') : t('exam.totalOnly', 'Final score saved · per-question detail not synced')
+  }
+  const answered = Number(row?.answer_detail_count || 0)
+  const total = Number(row?.total_question_count || 0)
+  const prefix = row?.source_system === 'legacy' && total
+    ? t('exam.breakdownAnswered', 'Answered {answered}/{total} · Unanswered {unanswered} · ', { answered, total, unanswered: Number(row?.unanswered_count || Math.max(total - answered, 0)) })
+    : ''
+  return `${prefix}${t('exam.breakdown', 'Correct {correct} · Partial {partial} · Wrong {wrong} · Pending {pending}', {
+    correct: row?.correct_count || 0,
+    partial: row?.partial_count || 0,
+    wrong: row?.wrong_count || 0,
+    pending: row?.pending_count || 0,
+  })}`
 }
 
 export const StaffHome = () => {
-  const [data,setData] = useState(null), [loading,setLoading] = useState(true), [error,setError] = useState('')
-  const [activity,setActivity] = useState({loading:true,error:'',data:null})
-  const [errorHistory,setErrorHistory] = useState({rows:[],total:0,page:1,pages:1}), [errorPage,setErrorPage] = useState(1), [errorsLoading,setErrorsLoading] = useState(false)
-  const [revealed,setRevealed] = useState({}), [revealLoading,setRevealLoading] = useState('')
-  const [activeSection,setActiveSection] = useState('info')
-  const [examDetail,setExamDetail] = useState(null), [examDetailLoading,setExamDetailLoading] = useState(false), [examDetailError,setExamDetailError] = useState('')
+  const { locale, t, adoptCountry } = useStaffLocale()
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [activity, setActivity] = useState({ loading: true, error: '', data: null })
+  const [errorHistory, setErrorHistory] = useState({ rows: [], total: 0, page: 1, pages: 1 })
+  const [errorPage, setErrorPage] = useState(1)
+  const [errorsLoading, setErrorsLoading] = useState(false)
+  const [revealed, setRevealed] = useState({})
+  const [revealLoading, setRevealLoading] = useState('')
+  const [activeSection, setActiveSection] = useState('info')
+  const [examDetail, setExamDetail] = useState(null)
+  const [examDetailLoading, setExamDetailLoading] = useState(false)
+  const [examDetailError, setExamDetailError] = useState('')
+
   const load = async () => {
-    setLoading(true); setError('')
-    setActivity(current=>({...current,loading:true,error:''}))
-    const [{data:result,error:loadError},{data:activityResult,error:activityError}] = await Promise.all([
+    setLoading(true)
+    setError('')
+    setActivity(current => ({ ...current, loading: true, error: '' }))
+    const [{ data: result, error: loadError }, { data: activityResult, error: activityError }] = await Promise.all([
       supabase.rpc('staff_portal_home'),
       supabase.rpc('staff_activity_home'),
     ])
-    if(loadError)setError(loadError.message || '个人资料读取失败'); else setData(result)
-    setActivity(activityError?{loading:false,error:activityError.message||'出勤与断网记录读取失败',data:null}:{loading:false,error:'',data:activityResult||null})
+    if (loadError) setError(loadError.message || t('portal.profileLoadFailed', 'Failed to load profile'))
+    else setData(result)
+    setActivity(activityError
+      ? { loading: false, error: activityError.message || t('portal.activityLoadFailed', 'Failed to load attendance and connectivity records'), data: null }
+      : { loading: false, error: '', data: activityResult || null })
     setLoading(false)
   }
-  useEffect(()=>{load()},[])
-  useEffect(()=>{if(activeSection!=='errors')return;let alive=true;(async()=>{setErrorsLoading(true);const {data:result,error:e}=await supabase.rpc('staff_portal_errors',{p_page:errorPage,p_page_size:20});if(!alive)return;if(e)setError(e.message||'错误记录读取失败');else setErrorHistory(result||{rows:[],total:0,page:1,pages:1});setErrorsLoading(false)})();return()=>{alive=false}},[errorPage,activeSection])
-  if(loading)return <div className="staff-portal-page"><div className="staff-portal-loading">正在读取个人资料…</div></div>
-  const p=data?.profile||{}, pay=data?.payment||{}, summary=data?.error_summary||{}, exam=data?.exam_summary||{}, errors=errorHistory?.rows||[]
-  const attendance=activity.data?.attendance||{}, connectivity=activity.data?.connectivity||{}
+
+  useEffect(() => { load() }, [])
+  useEffect(() => {
+    const country = data?.profile?.country || data?.profile?.nationality
+    adoptCountry(country)
+  }, [data?.profile?.country, data?.profile?.nationality, adoptCountry])
+  useEffect(() => {
+    if (activeSection !== 'errors') return undefined
+    let alive = true
+    ;(async () => {
+      setErrorsLoading(true)
+      const { data: result, error: loadError } = await supabase.rpc('staff_portal_errors', { p_page: errorPage, p_page_size: 20 })
+      if (!alive) return
+      if (loadError) setError(loadError.message || t('portal.errorHistoryLoadFailed', 'Failed to load error records'))
+      else setErrorHistory(result || { rows: [], total: 0, page: 1, pages: 1 })
+      setErrorsLoading(false)
+    })()
+    return () => { alive = false }
+  }, [errorPage, activeSection, t])
+
+  if (loading) return <div className="staff-portal-page"><div className="staff-portal-loading">{t('portal.loadingProfile', 'Loading profile…')}</div></div>
+
+  const p = data?.profile || {}
+  const pay = data?.payment || {}
+  const summary = data?.error_summary || {}
+  const exam = data?.exam_summary || {}
+  const errors = errorHistory?.rows || []
+  const attendance = activity.data?.attendance || {}
+  const connectivity = activity.data?.connectivity || {}
   const toggleSensitive = async field => {
-    if(revealed[field]) { setRevealed(current=>({...current,[field]:''})); return }
-    setRevealLoading(field); setError('')
-    const {data:value,error:e}=await supabase.rpc('staff_portal_reveal_payment',{p_field:field})
-    if(e)setError(e.message||'敏感资料读取失败'); else setRevealed(current=>({...current,[field]:value||'—'}))
+    if (revealed[field]) {
+      setRevealed(current => ({ ...current, [field]: '' }))
+      return
+    }
+    setRevealLoading(field)
+    setError('')
+    const { data: value, error: revealError } = await supabase.rpc('staff_portal_reveal_payment', { p_field: field })
+    if (revealError) setError(revealError.message || t('portal.sensitiveLoadFailed', 'Failed to load protected information'))
+    else setRevealed(current => ({ ...current, [field]: value || '—' }))
     setRevealLoading('')
   }
-  const fields=[['员工ID',p.employee_no],['员工国家',p.country||p.nationality],['员工类型',p.employment_type],['状态',p.status==='active'?'在职':p.status],['入职日期',staffDate(p.hire_date)],['入职时长',staffTenure(p.hire_date)],['团队',p.team_name],['组别',p.group_name],['岗位',p.position_name],['班次',p.shift_name],['负责人 / 组长',p.person_in_charge||p.leader_name],['培训老师',p.online_trainer||p.trainer_name],['盘口 / 平台',p.platform_scope],['工作内容',p.work_content]]
-  const examRows=data?.exam_history||[]
-  const openExam=async row=>{
-    setExamDetail({session:row,answers:[]});setExamDetailLoading(true);setExamDetailError('')
-    const {data:result,error:e}=await supabase.rpc('staff_exam_result_detail',{p_session_id:row.id})
-    if(e)setExamDetailError(e.message||'考试明细读取失败');else setExamDetail(result)
+  const fields = [
+    [t('profile.employeeId', 'Employee ID'), p.employee_no],
+    [t('profile.country', 'Country'), p.country || p.nationality],
+    [t('profile.employmentType', 'Employee type'), p.employment_type],
+    [t('profile.status', 'Status'), p.status === 'active' ? t('profile.active', 'Active') : p.status],
+    [t('profile.hireDate', 'Hire date'), staffDate(p.hire_date)],
+    [t('profile.tenure', 'Tenure'), staffTenure(p.hire_date, t)],
+    [t('profile.team', 'Team'), p.team_name],
+    [t('profile.group', 'Group'), p.group_name],
+    [t('profile.position', 'Position'), p.position_name],
+    [t('profile.shift', 'Shift'), p.shift_name],
+    [t('profile.leader', 'Manager / team leader'), p.person_in_charge || p.leader_name],
+    [t('profile.trainer', 'Trainer'), p.online_trainer || p.trainer_name],
+    [t('profile.platform', 'Platform'), p.platform_scope],
+    [t('profile.workContent', 'Work scope'), p.work_content],
+  ]
+  const examRows = data?.exam_history || []
+  const openExam = async row => {
+    setExamDetail({ session: row, answers: [] })
+    setExamDetailLoading(true)
+    setExamDetailError('')
+    const { data: result, error: detailError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: row.id })
+    if (detailError) setExamDetailError(detailError.message || t('portal.examDetailLoadFailed', 'Failed to load exam detail'))
+    else setExamDetail(result)
     setExamDetailLoading(false)
   }
+
+  const tabs = [
+    ['info', t('tab.info', 'Personal information')],
+    ['errors', t('tab.errors', 'Error records')],
+    ['exams', t('tab.exams', 'Exam results')],
+    ['attendance', t('tab.attendance', 'Attendance')],
+    ['connectivity', t('tab.connectivity', 'Power / internet records')],
+    ['payroll', t('tab.payroll', 'Payslips')],
+  ]
+
   return <div className="staff-portal-page">
-    <header className="staff-portal-hero"><div className="staff-avatar">{(p.full_name||'W').slice(0,1).toUpperCase()}</div><div><small>MY WORKSPACE</small><h1>{p.full_name||'我的首页'}</h1><p>{p.employee_no||'—'} · {p.team_name||'未设置团队'} · {p.position_name||'未设置岗位'}</p><div className="staff-hero-tags"><span>{p.shift_name||'班次未设置'}</span><span>{staffTenure(p.hire_date)}</span></div></div><button onClick={load}>↻ 刷新资料</button></header>
-    {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
-    <section className="staff-dashboard-metrics"><div><span>本月错误</span><strong>{summary.month_error_count||0}</strong><small>累计 {summary.total_error_count||0} 笔</small></div><div><span>考试记录</span><strong>{exam.total||0}</strong><small>通过 {exam.passed||0} 次</small></div><div><span>平均成绩</span><strong>{exam.average||0}%</strong><small>已批改 {exam.completed||0} 次</small></div><div><span>本月缺席</span><strong>{activity.loading?'—':attendance.summary?.month_absent||0}</strong><small>出勤记录</small></div><div><span>本月休假</span><strong>{activity.loading?'—':attendance.summary?.month_leave||0}</strong><small>休假 / 公休天数</small></div><div><span>停电 / 断网</span><strong>{activity.loading?'—':connectivity.total||0}</strong><small>停电 {connectivity.power||0} · 断网 {connectivity.internet||0}</small></div></section>
-    <nav className="staff-profile-tabs">
-      {[['info','个人信息'],['errors','出错记录'],['exams','考试结果'],['attendance','出勤记录'],['connectivity','停电 / 断网记录'],['payroll','工资记录']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
-    </nav>
-    {activeSection==='info'&&<div className="staff-portal-columns"><div className="staff-profile-stack"><section className="staff-profile-panel"><header><div><small>PERSONAL PROFILE</small><h2>个人信息</h2></div><span>仅本人可见</span></header><div className="staff-profile-fields">{fields.map(([label,value])=><div key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section>
-      <section className="staff-payment-panel"><header><div><small>PAYMENT & CONTACT</small><h2>收款与联系资料</h2></div><span>🔒 已安全隐藏</span></header><div className="staff-payment-grid">
-        <div><span>收款方式</span><strong>{pay.transfer_using||pay.payment_mode||'—'}</strong></div><div><span>收款姓名</span><strong>{pay.account_name||'—'}</strong></div>
-        <div className="staff-sensitive-row"><span>银行卡 / 钱包账号</span><strong>{revealed.bank_account||pay.bank_account_masked||'—'}</strong>{pay.bank_account_masked&&<button onClick={()=>toggleSensitive('bank_account')} disabled={revealLoading==='bank_account'}>{revealLoading==='bank_account'?'读取中':revealed.bank_account?'隐藏':'查看'}</button>}</div>
-        <div className="staff-sensitive-row"><span>USDT 地址</span><strong>{revealed.usdt_address||pay.usdt_address_masked||'—'}</strong>{pay.usdt_address_masked&&<button onClick={()=>toggleSensitive('usdt_address')} disabled={revealLoading==='usdt_address'}>{revealLoading==='usdt_address'?'读取中':revealed.usdt_address?'隐藏':'查看'}</button>}</div>
-        <div><span>联系电话</span><strong>{pay.contact_phone||'—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number||'—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook||'—'}</strong></div><div><span>联系地址</span><strong>{pay.employee_address||'—'}</strong></div>
-      </div></section></div>
-      <section className="staff-quick-panel"><header><small>QUICK ACCESS</small><h2>快捷入口</h2></header><Link to="/staff/exams"><b>参加考试</b><span>选择岗位与盘口 →</span></Link><Link to="/staff/schedule"><b>排班记录</b><span>查看本人排班 →</span></Link><Link to="/staff/attendance"><b>出勤记录</b><span>查看本人出勤 →</span></Link></section></div>}
-    {activeSection==='errors'&&<section className="staff-own-errors"><header><div><small>ERROR RECORDS</small><h2>出错记录</h2></div><span>共 {errorHistory.total||0} 条</span></header>{errorsLoading?<div className="staff-history-empty">正在读取错误记录…</div>:errors.length?<><div className="staff-error-list">{errors.map((row,index)=><article key={row.record_key||`${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type||'未分类错误'}</span></div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><span className="staff-error-score">{row.score?`${row.score} 分`:'—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage<=1} onClick={()=>setErrorPage(x=>Math.max(1,x-1))}>上一页</button><span>第 {errorHistory.page||1} / {errorHistory.pages||1} 页</span><button disabled={errorPage>=(errorHistory.pages||1)} onClick={()=>setErrorPage(x=>x+1)}>下一页</button></div></>:<div className="staff-history-empty">目前没有与你员工ID关联的错误记录。</div>}</section>}
-    {activeSection==='exams'&&<section className="staff-portal-exams"><header><div><small>EXAM RESULTS</small><h2>考试结果</h2></div><span>本系统 {exam.current||0} · 旧考试 {exam.legacy||0}</span></header>{examRows.length?<div className="staff-portal-exam-list">{examRows.map(row=><article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system==='legacy'?'legacy':'current'}`}>{row.source_label||'本系统'}</span><strong>{row.title}</strong><small>第 {row.attempt_no} 次 · {staffDateTime(row.submitted_at||row.started_at)}</small></div><div><b>{row.percentage==null?'待批改':`${Number(row.earned_score||0).toLocaleString()}/${Number(row.total_score||100).toLocaleString()} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row)}</small></div><button onClick={()=>openExam(row)}>查看答卷</button></article>)}</div>:<div className="staff-history-empty">暂无考试记录。</div>}</section>}
-    {activeSection==='attendance'&&<StaffAttendancePanel data={attendance} loading={activity.loading} error={activity.error}/>}
-    {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivity} loading={activity.loading} error={activity.error}/>}
-    {activeSection==='payroll'&&<StaffPayrollWorkspace embedded/>}
-    {examDetail&&<StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={()=>setExamDetail(null)}/>}
+    <header className="staff-portal-hero">
+      <div className="staff-avatar">{(p.full_name || 'W').slice(0, 1).toUpperCase()}</div>
+      <div><small>{t('portal.workspace', 'MY WORKSPACE')}</small><h1>{p.full_name || t('portal.myHome', 'My workspace')}</h1><p>{p.employee_no || '—'} · {p.team_name || t('portal.teamUnset', 'Team not set')} · {p.position_name || t('portal.positionUnset', 'Position not set')}</p><div className="staff-hero-tags"><span>{p.shift_name || t('portal.shiftUnset', 'Shift not set')}</span><span>{staffTenure(p.hire_date, t)}</span></div></div>
+      <button onClick={load}>↻ {t('portal.refresh', 'Refresh')}</button>
+    </header>
+    {error && <div className="exam-error">{error}<button onClick={() => setError('')}>×</button></div>}
+    <section className="staff-dashboard-metrics">
+      <div><span>{t('portal.monthErrors', 'Errors this month')}</span><strong>{summary.month_error_count || 0}</strong><small>{t('portal.totalErrors', 'Total {count}', { count: summary.total_error_count || 0 })}</small></div>
+      <div><span>{t('portal.examRecords', 'Exam records')}</span><strong>{exam.total || 0}</strong><small>{t('portal.passedTimes', 'Passed {count} times', { count: exam.passed || 0 })}</small></div>
+      <div><span>{t('portal.averageScore', 'Average score')}</span><strong>{exam.average || 0}%</strong><small>{t('portal.gradedTimes', 'Graded {count} times', { count: exam.completed || 0 })}</small></div>
+      <div><span>{t('portal.monthAbsent', 'Absent this month')}</span><strong>{activity.loading ? '—' : attendance.summary?.month_absent || 0}</strong><small>{t('portal.attendanceRecords', 'Attendance records')}</small></div>
+      <div><span>{t('portal.monthLeave', 'Leave this month')}</span><strong>{activity.loading ? '—' : attendance.summary?.month_leave || 0}</strong><small>{t('portal.leaveDays', 'Leave / rest days')}</small></div>
+      <div><span>{t('portal.connectivity', 'Power / internet')}</span><strong>{activity.loading ? '—' : connectivity.total || 0}</strong><small>{t('portal.powerInternetCounts', 'Power {power} · Internet {internet}', { power: connectivity.power || 0, internet: connectivity.internet || 0 })}</small></div>
+    </section>
+    <nav className="staff-profile-tabs">{tabs.map(([key, label]) => <button key={key} className={activeSection === key ? 'active' : ''} onClick={() => setActiveSection(key)}>{label}</button>)}</nav>
+    {activeSection === 'info' && <div className="staff-portal-columns"><div className="staff-profile-stack">
+      <section className="staff-profile-panel"><header><div><small>{t('decor.profile', 'PERSONAL PROFILE')}</small><h2>{t('profile.title', 'Personal information')}</h2></div><span>{t('profile.private', 'Only you can view')}</span></header><div className="staff-profile-fields">{fields.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value || '—'}</strong></div>)}</div></section>
+      <section className="staff-payment-panel"><header><div><small>{t('decor.payment', 'PAYMENT & CONTACT')}</small><h2>{t('payment.title', 'Payment & contact')}</h2></div><span>🔒 {t('payment.protected', 'Safely hidden')}</span></header><div className="staff-payment-grid">
+        <div><span>{t('payment.method', 'Payment method')}</span><strong>{pay.transfer_using || pay.payment_mode || '—'}</strong></div><div><span>{t('payment.accountName', 'Account name')}</span><strong>{pay.account_name || '—'}</strong></div>
+        <div className="staff-sensitive-row"><span>{t('payment.bankAccount', 'Bank / wallet account')}</span><strong>{revealed.bank_account || pay.bank_account_masked || '—'}</strong>{pay.bank_account_masked && <button onClick={() => toggleSensitive('bank_account')} disabled={revealLoading === 'bank_account'}>{revealLoading === 'bank_account' ? t('payment.reading', 'Loading') : revealed.bank_account ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>
+        <div className="staff-sensitive-row"><span>{t('payment.usdt', 'USDT address')}</span><strong>{revealed.usdt_address || pay.usdt_address_masked || '—'}</strong>{pay.usdt_address_masked && <button onClick={() => toggleSensitive('usdt_address')} disabled={revealLoading === 'usdt_address'}>{revealLoading === 'usdt_address' ? t('payment.reading', 'Loading') : revealed.usdt_address ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>
+        <div><span>{t('payment.phone', 'Phone')}</span><strong>{pay.contact_phone || '—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number || '—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook || '—'}</strong></div><div><span>{t('payment.address', 'Contact address')}</span><strong>{pay.employee_address || '—'}</strong></div>
+      </div></section>
+    </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to="/staff/exams"><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link><Link to="/staff/schedule"><b>{t('quick.schedule', 'Schedule')}</b><span>{t('quick.viewSchedule', 'View my schedule →')}</span></Link><Link to="/staff/attendance"><b>{t('quick.attendance', 'Attendance')}</b><span>{t('quick.viewAttendance', 'View my attendance →')}</span></Link></section></div>}
+    {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => setErrorPage(value => Math.max(1, value - 1))}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => setErrorPage(value => value + 1)}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
+    {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
+    {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={activity.loading} error={activity.error} t={t} />}
+    {activeSection === 'connectivity' && <EmployeeConnectivityPanel data={connectivity} loading={activity.loading} error={activity.error} t={t} />}
+    {activeSection === 'payroll' && <StaffPayrollWorkspace embedded />}
+    {examDetail && <StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={() => setExamDetail(null)} t={t} locale={locale} />}
   </div>
 }
 
-function StaffAttendancePanel({data,loading,error}){
-  const rows=data?.rows||[], summary=data?.summary||{}
-  const label=value=>({normal:'正常',rest:'公休',absent:'缺席',leave:'休假',late:'迟到'}[String(value||'').toLowerCase()]||value||'—')
-  return <section className="staff-activity-panel"><header><div><small>ATTENDANCE</small><h2>出勤记录</h2></div><span>{data?.total||0} 条</span></header><div className="staff-activity-summary"><div><span>正常</span><strong>{summary.normal||0}</strong></div><div><span>公休</span><strong>{summary.rest||0}</strong></div><div><span>缺席</span><strong>{summary.absent||0}</strong></div><div><span>休假</span><strong>{summary.leave||0}</strong></div></div>{loading?<div className="staff-history-empty">正在读取出勤记录…</div>:error?<div className="staff-history-empty">{error}</div>:rows.length?<div className="staff-attendance-list">{rows.map(row=><article key={row.id}><strong>{row.report_date}</strong><span className={`staff-attendance-status ${row.attendance_status}`}>{label(row.attendance_status)}</span><span>{row.shift_name||'—'}</span><span>{row.status_note||'—'}</span></article>)}</div>:<div className="staff-history-empty">暂无出勤记录。</div>}</section>
+function StaffAttendancePanel({ data, loading, error, t }) {
+  const rows = data?.rows || []
+  const summary = data?.summary || {}
+  const label = value => ({
+    normal: t('attendance.normal', 'Present'),
+    rest: t('attendance.rest', 'Rest day'),
+    absent: t('attendance.absent', 'Absent'),
+    leave: t('attendance.leave', 'Leave'),
+    late: t('attendance.late', 'Late'),
+  }[String(value || '').toLowerCase()] || value || '—')
+  return <section className="staff-activity-panel"><header><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>{t('attendance.title', 'Attendance')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: data?.total || 0 })}</span></header><div className="staff-activity-summary"><div><span>{label('normal')}</span><strong>{summary.normal || 0}</strong></div><div><span>{label('rest')}</span><strong>{summary.rest || 0}</strong></div><div><span>{label('absent')}</span><strong>{summary.absent || 0}</strong></div><div><span>{label('leave')}</span><strong>{summary.leave || 0}</strong></div></div>{loading ? <div className="staff-history-empty">{t('attendance.loading', 'Loading attendance…')}</div> : error ? <div className="staff-history-empty">{error}</div> : rows.length ? <div className="staff-attendance-list">{rows.map(row => <article key={row.id}><strong>{row.report_date}</strong><span className={`staff-attendance-status ${row.attendance_status}`}>{label(row.attendance_status)}</span><span>{row.shift_name || '—'}</span><span>{row.status_note || '—'}</span></article>)}</div> : <div className="staff-history-empty">{t('attendance.none', 'No attendance records yet.')}</div>}</section>
 }
 
-function StaffPortalExamModal({detail,loading,error,onClose}){
-  const session=detail?.session||{},answers=detail?.answers||[]
-  return <div className="exam-modal-backdrop" onMouseDown={onClose}><div className="exam-modal wide staff-result-modal" onMouseDown={event=>event.stopPropagation()}><header><div><small>MY EXAM RESULT</small><h2>{session.title||'考试结果'}</h2><p>{session.source_label||'本系统'} · 第 {session.attempt_no||'—'} 次</p></div><button onClick={onClose}>×</button></header>{loading?<div className="staff-history-empty">正在读取完整答卷…</div>:error?<div className="exam-error">{error}</div>:<><div className="staff-result-summary"><div><span>成绩</span><strong>{session.percentage==null?'待批改':`${Number(session.percentage).toFixed(1)}%`}</strong></div><div><span>得分</span><strong>{session.earned_score==null?'—':`${session.earned_score}/${session.total_score}`}</strong></div><div><span>完成时间</span><strong>{staffDateTime(session.submitted_at)}</strong></div><div><span>答题统计</span><strong>{staffExamBreakdown(session)}</strong></div></div><div className="staff-result-list">{answers.length?answers.map((answer,index)=>{const q=answer.question||{};return <article key={q.id||index}><header><b>{index+1}</b><div><strong>{q.question_zh||q.question_en||q.question_vi||'题目内容未保留'}</strong><small>本题 {q.points||0} 分</small></div><span className={`result-chip ${answer.grade_status==='correct'?'pass':answer.grade_status==='partial'?'partial':answer.grade_status==='wrong'?'fail':'pending'}`}>{answer.awarded_score==null?'待批改':`${answer.awarded_score}/${q.points||0} 分`}</span></header><div className="staff-result-answer"><b>我的答案</b><p>{answer.answer_text||'（未作答）'}</p></div>{answer.grader_feedback&&<div className="staff-result-feedback"><b>老师评语</b><p>{answer.grader_feedback}</p></div>}</article>}):<div className="staff-history-empty">该场考试仅保留总成绩，逐题答卷尚未同步。</div>}</div></>}<footer><button className="primary" onClick={onClose}>关闭</button></footer></div></div>
+function StaffPortalExamModal({ detail, loading, error, onClose, t, locale }) {
+  const session = detail?.session || {}
+  const answers = detail?.answers || []
+  const questionText = question => {
+    if (locale === 'zh') return question.question_zh || question.question_en || question.question_vi
+    if (locale === 'vi') return question.question_vi || question.question_en || question.question_zh
+    return question.question_en || question.question_vi || question.question_zh
+  }
+  return <div className="exam-modal-backdrop" onMouseDown={onClose}><div className="exam-modal wide staff-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>{t('exam.detailTitle', 'MY EXAM RESULT')}</small><h2>{session.title || t('exams.title', 'Exam results')}</h2><p>{session.source_label || t('exams.current', 'New system')} · {t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: session.attempt_no || '—', date: '' }).replace(/\s*·\s*$/, '')}</p></div><button type="button" className="exam-icon-close" aria-label={t('common.close', 'Close')} onClick={onClose}>×</button></header>{loading ? <div className="staff-history-empty">{t('exam.loadingDetail', 'Loading complete answers…')}</div> : error ? <div className="exam-error">{error}</div> : <><div className="staff-result-summary"><div><span>{t('exam.result', 'Result')}</span><strong>{session.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(session.percentage).toFixed(1)}%`}</strong></div><div><span>{t('exam.score', 'Score')}</span><strong>{session.earned_score == null ? '—' : `${session.earned_score}/${session.total_score}`}</strong></div><div><span>{t('exam.completedAt', 'Completed')}</span><strong>{staffDateTime(session.submitted_at, locale)}</strong></div><div><span>{t('exam.answerSummary', 'Answer summary')}</span><strong>{staffExamBreakdown(session, t)}</strong></div></div><div className="staff-result-list">{answers.length ? answers.map((answer, index) => { const question = answer.question || {}; return <article key={question.id || index}><header><b>{index + 1}</b><div><strong>{questionText(question) || t('exam.questionUnavailable', 'Question content unavailable')}</strong><small>{t('exam.questionPoints', 'This question: {count} points', { count: question.points || 0 })}</small></div><span className={`result-chip ${answer.grade_status === 'correct' ? 'pass' : answer.grade_status === 'partial' ? 'partial' : answer.grade_status === 'wrong' ? 'fail' : 'pending'}`}>{answer.awarded_score == null ? t('exams.pending', 'Pending grading') : `${answer.awarded_score}/${question.points || 0} ${t('common.points', '{count} points', { count: '' }).trim().replace(/^\s+/, '')}`}</span></header><div className="staff-result-answer"><b>{t('exam.myAnswer', 'My answer')}</b><p>{answer.answer_text || t('exam.unanswered', '(Unanswered)')}</p></div>{answer.grader_feedback && <div className="staff-result-feedback"><b>{t('exam.feedback', 'Feedback')}</b><p>{answer.grader_feedback}</p></div>}</article> }) : <div className="staff-history-empty">{t('exam.noAnswers', 'Only the final score is available; per-question answers have not been synced.')}</div>}</div></>}<footer><button type="button" className="exam-footer-close" onClick={onClose}>{t('common.close', 'Close')}</button></footer></div></div>
 }
 
-export const ComingSoon = ({ title }) => (
-  <div className="content-page">
-    <div className="page-toolbar"><h1>{title}</h1></div>
-    <div className="data-card"><div className="empty-state">暂无数据</div></div>
-  </div>
-)
+export const ComingSoon = ({ title }) => {
+  const { t } = useStaffLocale()
+  return <div className="content-page"><div className="page-toolbar"><h1>{title}</h1></div><div className="data-card"><div className="empty-state">{t('common.noData', 'No data yet')}</div></div></div>
+}

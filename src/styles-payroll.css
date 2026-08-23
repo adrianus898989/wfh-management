@@ -65,3 +65,24 @@
 .payroll-admin-page .professional-pagination{min-height:50px;margin-top:7px;padding:8px 0 0;background:#fff}
 .payroll-admin-page .professional-pagination .pagination-summary{padding-left:2px}
 @media(max-width:1200px){.payroll-admin-page .payroll-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+/* Payroll employee preview stays inside the batch review workspace. */
+.payroll-dialog-close{display:grid;flex:0 0 auto;place-items:center;width:36px;height:36px;padding:0;border:1px solid #d7e1ee;border-radius:50%;background:#f7f9fc;color:#526983;box-shadow:0 3px 10px rgba(18,45,78,.08);font-size:22px;line-height:1;cursor:pointer;transition:background .16s ease,border-color .16s ease,color .16s ease,transform .16s ease}
+.payroll-dialog-close:hover{border-color:#b9cbe2;background:#edf3fb;color:#173b69;transform:translateY(-1px)}
+.payroll-dialog-close:focus-visible{outline:3px solid rgba(54,111,232,.25);outline-offset:2px}
+.payroll-value-modal header .payroll-dialog-close{width:36px;height:36px;border:1px solid #d7e1ee;border-radius:50%;background:#f7f9fc;color:#526983}
+.payroll-employee-drawer-backdrop{position:fixed;z-index:3700;inset:0;display:flex;justify-content:flex-end;background:rgba(8,25,47,.56);backdrop-filter:blur(3px)}
+.payroll-employee-drawer{display:flex;width:min(540px,100vw);height:100%;flex-direction:column;overflow:hidden;border-left:1px solid #d8e2ef;background:#f7f9fc;box-shadow:-24px 0 70px rgba(8,27,54,.24);animation:payroll-drawer-in .2s ease-out}
+@keyframes payroll-drawer-in{from{opacity:.45;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+.payroll-employee-drawer-head{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:13px;align-items:center;padding:20px;border-bottom:1px solid #dfe7f1;background:#fff}
+.payroll-employee-avatar{display:grid;place-items:center;width:52px;height:52px;border-radius:15px;background:linear-gradient(145deg,#346ee8,#6356df);color:#fff;font-size:23px;font-weight:900;box-shadow:0 8px 18px rgba(49,96,211,.22)}
+.payroll-employee-drawer-head>div:nth-child(2)>span{display:block;color:#2862d8;font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}
+.payroll-employee-drawer-head h2{margin:3px 0 7px;color:#172e4c;font-size:21px;line-height:1.2}
+.payroll-employee-badges{display:flex;flex-wrap:wrap;gap:5px}.payroll-employee-badges b{display:inline-flex;padding:4px 8px;border-radius:999px;background:#eef3fa;color:#526982;font-size:9px;font-weight:850}.payroll-employee-badges b[data-status="active"]{background:#e9f8ef;color:#177849}.payroll-employee-badges b[data-status="resigned"]{background:#f2f4f7;color:#657387}
+.payroll-employee-drawer-body{min-height:0;flex:1;overflow:auto;padding:15px}
+.payroll-employee-loading{display:flex;align-items:center;gap:9px;margin-bottom:11px;padding:10px 12px;border:1px solid #cddcf0;border-radius:10px;background:#eef5ff;color:#285aa9;font-size:12px;font-weight:800}.payroll-employee-loading i{width:14px;height:14px;border:2px solid #9db9e9;border-top-color:#2864df;border-radius:50%;animation:payroll-spin .75s linear infinite}@keyframes payroll-spin{to{transform:rotate(360deg)}}
+.payroll-employee-error{margin-bottom:11px;padding:10px 12px;border:1px solid #f0b9b2;border-radius:10px;background:#fff3f1;color:#b53d32;font-size:12px;font-weight:750}
+.payroll-employee-section{margin-bottom:12px;overflow:hidden;border:1px solid #dce5f0;border-radius:13px;background:#fff;box-shadow:0 5px 14px rgba(26,52,82,.04)}
+.payroll-employee-section h3{margin:0;padding:12px 14px;border-bottom:1px solid #e5ebf3;color:#1b3558;font-size:13px}
+.payroll-employee-section dl{margin:0}.payroll-employee-section dl>div{display:grid;grid-template-columns:128px minmax(0,1fr);gap:14px;padding:10px 14px;border-bottom:1px solid #edf1f6}.payroll-employee-section dl>div:last-child{border-bottom:0}.payroll-employee-section dt{color:#7b8a9f;font-size:10px}.payroll-employee-section dd{margin:0;color:#203958;font-size:12px;font-weight:750;overflow-wrap:anywhere}
+@media(max-width:600px){.payroll-employee-drawer{width:100%;border-left:0}.payroll-employee-drawer-head{grid-template-columns:44px minmax(0,1fr) auto;padding:15px}.payroll-employee-avatar{width:44px;height:44px;border-radius:13px}.payroll-employee-section dl>div{grid-template-columns:105px minmax(0,1fr)}}

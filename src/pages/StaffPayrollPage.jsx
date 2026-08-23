@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useStaffLocale } from '../lib/staffI18n'
 import { supabase } from '../lib/supabase'
 
 const COPY={
@@ -20,23 +21,27 @@ const monthLabel=(value,locale)=>{
 }
 
 export function StaffPayrollWorkspace({embedded=false}){
-  const [locale,setLocale]=useState(()=>window.localStorage.getItem('wfh-payroll-language')||'zh')
+  const {locale,setLocale,adoptCountry,t:translate}=useStaffLocale()
   const [state,setState]=useState({loading:true,error:'',data:null})
   const [selectedId,setSelectedId]=useState(null)
   const [detail,setDetail]=useState(null)
   const [detailLoading,setDetailLoading]=useState(false)
-  const t=COPY[locale]
+  const t=COPY[locale]||COPY.en
 
-  useEffect(()=>{window.localStorage.setItem('wfh-payroll-language',locale)},[locale])
   useEffect(()=>{let alive=true;(async()=>{
-    const {data,error}=await supabase.rpc('staff_payroll_home')
+    const [{data,error},{data:portalData}]=await Promise.all([
+      supabase.rpc('staff_payroll_home'),
+      supabase.rpc('staff_portal_home'),
+    ])
     if(!alive)return
+    const profile=portalData?.profile||{}
+    adoptCountry(profile.country||profile.nationality)
     if(error)setState({loading:false,error:error.message,data:null})
     else{
       setState({loading:false,error:'',data:data||null})
       const first=data?.history?.[0]?.id||null;setSelectedId(first)
     }
-  })();return()=>{alive=false}},[])
+  })();return()=>{alive=false}},[adoptCountry])
 
   useEffect(()=>{if(!selectedId){setDetail(null);return}let alive=true;setDetailLoading(true);(async()=>{
     const {data,error}=await supabase.rpc('staff_payroll_detail',{p_payslip_id:selectedId})
@@ -49,7 +54,7 @@ export function StaffPayrollWorkspace({embedded=false}){
   const history=state.data?.history||[]
 
   return <div className={`${embedded?'':'content-page '}staff-payroll-page ${embedded?'staff-payroll-embedded':''}`}>
-    <header className="staff-payroll-head"><div><small>PAYSLIP</small><h1>{t.title}</h1><p>{t.subtitle}</p></div><label>{t.language}<select value={locale} onChange={event=>setLocale(event.target.value)}><option value="zh">中文</option><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="id">Bahasa Indonesia</option></select></label></header>
+    <header className="staff-payroll-head"><div><small>{translate('decor.payroll','PAYSLIP')}</small><h1>{t.title}</h1><p>{t.subtitle}</p></div><label>{t.language}<select value={locale} onChange={event=>setLocale(event.target.value)}><option value="zh">中文</option><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="id">Bahasa Indonesia</option></select></label></header>
     {!history.length?<div className="payroll-state">{t.empty}</div>:<div className="staff-payroll-layout">
       <aside className="staff-payroll-history"><h2>{t.history}</h2>{history.map(item=><button key={item.id} className={Number(selectedId)===Number(item.id)?'active':''} onClick={()=>setSelectedId(item.id)}><span>{monthLabel(item.period_start,locale)}</span><strong>{money(item.total_pay,item.currency,locale)}</strong><small>{item.title}</small></button>)}</aside>
       <main className="payslip-paper">{detailLoading&&!detail?<div className="payroll-state">{t.loading}</div>:detail&&<Payslip detail={detail} locale={locale} t={t}/>}</main>

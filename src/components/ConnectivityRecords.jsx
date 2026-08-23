@@ -36,7 +36,8 @@ const evidenceMime=file=>{
 }
 const safeFileName=name=>text(name).replace(/[^\p{L}\p{N}._-]+/gu,'-').replace(/^-+|-+$/g,'').slice(-90)||'evidence'
 
-function EvidenceLinks({items=[],legacyUrl=''}){
+function EvidenceLinks({items=[],legacyUrl='',t}){
+  const tr=typeof t==='function'?t:(_key,fallback)=>fallback
   const [busy,setBusy]=useState('')
   const [preview,setPreview]=useState(null)
   const open=async item=>{
@@ -44,11 +45,11 @@ function EvidenceLinks({items=[],legacyUrl=''}){
     setBusy(item.path)
     const {data,error}=await supabase.storage.from(EVIDENCE_BUCKET).createSignedUrl(item.path,300)
     setBusy('')
-    if(error){window.alert(`附件打开失败：${error.message}`);return}
-    setPreview({url:data.signedUrl,mime:item.mime||'',name:item.name||'证明文件'})
+    if(error){window.alert(`${tr('connectivity.openFailed','附件打开失败')}：${error.message}`);return}
+    setPreview({url:data.signedUrl,mime:item.mime||'',name:item.name||tr('connectivity.evidenceFile','证明文件')})
   }
   if(!items.length&&!legacyUrl)return null
-  return <><div className="connectivity-evidence-links">{items.map((item,index)=><button type="button" key={item.path||index} onClick={()=>open(item)} disabled={busy===item.path}>{busy===item.path?'打开中…':`${String(item.mime||'').startsWith('video/')?'视频':'图片'} ${index+1}`}</button>)}{legacyUrl&&<button type="button" onClick={()=>setPreview({url:legacyUrl,mime:'image/*',name:'旧证明'})}>旧证明</button>}</div>{preview&&<div className="connectivity-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onMouseDown={()=>setPreview(null)}><div onMouseDown={event=>event.stopPropagation()}><header><strong>{preview.name}</strong><button type="button" onClick={()=>setPreview(null)}>×</button></header>{String(preview.mime).startsWith('video/')?<video src={preview.url} controls autoPlay/>:<img src={preview.url} alt={preview.name}/>}</div></div>}</>
+  return <><div className="connectivity-evidence-links">{items.map((item,index)=><button type="button" key={item.path||index} onClick={()=>open(item)} disabled={busy===item.path}>{busy===item.path?tr('connectivity.opening','打开中…'):`${tr(String(item.mime||'').startsWith('video/')?'connectivity.video':'connectivity.image',String(item.mime||'').startsWith('video/')?'视频':'图片')} ${index+1}`}</button>)}{legacyUrl&&<button type="button" onClick={()=>setPreview({url:legacyUrl,mime:'image/*',name:tr('connectivity.legacyEvidence','旧证明')})}>{tr('connectivity.legacyEvidence','旧证明')}</button>}</div>{preview&&<div className="connectivity-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onMouseDown={()=>setPreview(null)}><div onMouseDown={event=>event.stopPropagation()}><header><strong>{preview.name}</strong><button type="button" aria-label={tr('common.close','关闭')} onClick={()=>setPreview(null)}>×</button></header>{String(preview.mime).startsWith('video/')?<video src={preview.url} controls autoPlay/>:<img src={preview.url} alt={preview.name}/>}</div></div>}</>
 }
 
 export function ConnectivityRecordsPage(){
@@ -168,9 +169,18 @@ export function ConnectivityRecordsPage(){
   </div>
 }
 
-export function EmployeeConnectivityPanel({data,loading,error,title='停电 / 断网记录'}){
+export function EmployeeConnectivityPanel({data,loading,error,title,t}){
+  const tr=typeof t==='function'?t:(_key,fallback)=>fallback
   const rows=data?.rows||[]
-  return <section className="detail-panel employee-connectivity-panel"><div className="detail-panel-head"><h3>{title}</h3><span className="employee-exam-count">{data?.total||0} 条</span></div>{loading?<div className="connectivity-empty">正在读取记录…</div>:error?<div className="connectivity-empty error">{error}</div>:rows.length?<div className="employee-connectivity-list">{rows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></div><div><small>时间 / 持续</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'} · {durationLabel(row.duration_minutes)}</p></div><div><small>状态</small><p>{statusLabel(row.status)}</p></div><div className="employee-connectivity-details"><small>情况说明</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>证明</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">暂无停电或断网记录</div>}</section>
+  const translatedType=value=>value==='power_outage'?tr('connectivity.power','停电'):value==='internet_outage'?tr('connectivity.internet','断网'):value||'—'
+  const translatedStatus=value=>({reported:tr('connectivity.recorded','已记录'),verified:tr('connectivity.verified','已核实'),resolved:tr('connectivity.resolved','已恢复'),rejected:tr('connectivity.rejected','不成立')}[value]||value||'—')
+  const translatedDuration=value=>{
+    const minutes=Number(value)
+    if(!Number.isFinite(minutes)||minutes<=0)return '—'
+    const hours=Math.floor(minutes/60),rest=minutes%60
+    return `${hours?tr('connectivity.hours','{count}小时',{count:hours}):''}${hours&&rest?' ':''}${rest?tr('connectivity.minutes','{count}分钟',{count:rest}):''}`
+  }
+  return <section className="detail-panel employee-connectivity-panel"><div className="detail-panel-head"><h3>{title||tr('connectivity.title','停电 / 断网记录')}</h3><span className="employee-exam-count">{tr('common.totalItems','共 {count} 条',{count:data?.total||0})}</span></div>{loading?<div className="connectivity-empty">{tr('connectivity.loading','正在读取记录…')}</div>:error?<div className="connectivity-empty error">{error}</div>:rows.length?<div className="employee-connectivity-list">{rows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{translatedType(row.incident_type)}</span></div><div><small>{tr('connectivity.timeDuration','时间 / 持续')}</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'} · {translatedDuration(row.duration_minutes)}</p></div><div><small>{tr('connectivity.status','状态')}</small><p>{translatedStatus(row.status)}</p></div><div className="employee-connectivity-details"><small>{tr('connectivity.details','情况说明')}</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>{tr('connectivity.evidence','证明')}</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url} t={t}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">{tr('connectivity.none','暂无停电或断网记录')}</div>}</section>
 }
 
 export function EmployeePayrollHistoryPanel({data,loading,error}){

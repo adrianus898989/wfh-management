@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
+import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 
 const tests = [
-  ['10位以上', p => p.length >= 10],
-  ['大写字母', p => /[A-Z]/.test(p)],
-  ['小写字母', p => /[a-z]/.test(p)],
-  ['数字', p => /[0-9]/.test(p)],
-  ['特殊符号', p => /[^A-Za-z0-9]/.test(p)],
+  ['register.passwordLength', '10位以上', p => p.length >= 10],
+  ['register.passwordUpper', '大写字母', p => /[A-Z]/.test(p)],
+  ['register.passwordLower', '小写字母', p => /[a-z]/.test(p)],
+  ['register.passwordNumber', '数字', p => /[0-9]/.test(p)],
+  ['register.passwordSymbol', '特殊符号', p => /[^A-Za-z0-9]/.test(p)],
 ]
 
 export default function StaffRegisterPage() {
@@ -15,10 +16,11 @@ export default function StaffRegisterPage() {
   const [error, setError] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const { t } = useStaffLocale()
 
   const checks = useMemo(
-    () => tests.map(([label, fn]) => ({ label, ok: fn(form.password) })),
-    [form.password]
+    () => tests.map(([key, fallback, fn]) => ({ key, label:t(key,fallback), ok:fn(form.password) })),
+    [form.password, t]
   )
 
   const valid =
@@ -31,8 +33,8 @@ export default function StaffRegisterPage() {
     e.preventDefault()
     setError('')
 
-    if (!configured) return setError('暂时无法注册')
-    if (!valid) return setError('请完成密码要求')
+    if (!configured) return setError(t('register.unavailable','暂时无法注册'))
+    if (!valid) return setError(t('register.completeRequirements','请完成密码要求'))
 
     setLoading(true)
 
@@ -49,7 +51,7 @@ export default function StaffRegisterPage() {
     if (error) {
       let detail = ''
       try { detail = (await error.context?.json())?.error || '' } catch {}
-      return setError(detail || data?.error || '注册失败，请检查激活码')
+      return setError(detail || data?.error || t('register.failed','注册失败，请检查激活码'))
     }
     if (data?.error) return setError(data.error)
     setResult(data)
@@ -64,10 +66,11 @@ export default function StaffRegisterPage() {
             <span>WFH</span>
           </div>
           <div className="login-card register-success">
+            <div className="auth-language-row"><StaffLanguageSwitcher /></div>
             <div className="success-check">✓</div>
-            <div className="login-title">注册成功</div>
+            <div className="login-title">{t('register.success','注册成功')}</div>
             <div className="register-result">{result.employee_id} · {result.employee_name}</div>
-            <Link className="login-submit login-link-button" to="/staff/login">去登录</Link>
+            <Link className="login-submit login-link-button" to="/staff/login">{t('register.goLogin','去登录')}</Link>
           </div>
         </div>
       </div>
@@ -83,10 +86,11 @@ export default function StaffRegisterPage() {
         </div>
 
         <form className="login-card" onSubmit={submit}>
-          <div className="login-title">激活账号</div>
+          <div className="auth-language-row"><StaffLanguageSwitcher /></div>
+          <div className="login-title">{t('register.title','激活账号')}</div>
 
           <label className="login-field">
-            邮箱
+            {t('auth.email','邮箱')}
             <div className="login-input">
               <input
                 type="email"
@@ -98,7 +102,7 @@ export default function StaffRegisterPage() {
           </label>
 
           <label className="login-field">
-            密码
+            {t('auth.password','密码')}
             <div className="login-input">
               <input
                 type="password"
@@ -110,7 +114,7 @@ export default function StaffRegisterPage() {
           </label>
 
           <label className="login-field">
-            确认密码
+            {t('register.confirmPassword','确认密码')}
             <div className="login-input">
               <input
                 type="password"
@@ -123,14 +127,14 @@ export default function StaffRegisterPage() {
 
           <div className="password-checks">
             {checks.map(x => (
-              <span className={x.ok ? 'pass' : ''} key={x.label}>
+              <span className={x.ok ? 'pass' : ''} key={x.key}>
                 {x.ok ? '✓' : '○'} {x.label}
               </span>
             ))}
           </div>
 
           <label className="login-field">
-            激活码
+            {t('register.activationCode','激活码')}
             <div className="login-input">
               <input
                 value={form.code}
@@ -144,11 +148,11 @@ export default function StaffRegisterPage() {
           {error && <div className="login-error">{error}</div>}
 
           <button className="login-submit" disabled={!valid || loading}>
-            {loading ? '处理中...' : '创建账号'}
+            {loading ? t('register.processing','处理中...') : t('register.create','创建账号')}
           </button>
 
           <div className="login-foot">
-            <Link to="/staff/login">返回登录</Link>
+            <Link to="/staff/login">{t('register.back','返回登录')}</Link>
           </div>
         </form>
       </div>

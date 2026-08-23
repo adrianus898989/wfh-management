@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
+import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 
 export default function StaffLoginPage() {
   const [username, setUsername] = useState('')
@@ -9,12 +10,13 @@ export default function StaffLoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const { t, resetLocale } = useStaffLocale()
 
   const submit = async (e) => {
     e.preventDefault()
     setError('')
 
-    if (!configured) return setError('暂时无法登录')
+    if (!configured) return setError(t('auth.loginUnavailable','暂时无法登录'))
 
     setLoading(true)
 
@@ -24,7 +26,7 @@ export default function StaffLoginPage() {
 
     if (error || !data?.access_token || !data?.refresh_token) {
       setLoading(false)
-      return setError(data?.error || '用户名或密码错误')
+      return setError(data?.error || t('auth.invalidCredentials','用户名或密码错误'))
     }
 
     const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
@@ -33,7 +35,7 @@ export default function StaffLoginPage() {
     })
     if (sessionError || !sessionData.user) {
       setLoading(false)
-      return setError('登录失败，请重试')
+      return setError(t('auth.loginFailed','登录失败，请重试'))
     }
 
     const { data: access, error: accessError } = await supabase
@@ -45,15 +47,17 @@ export default function StaffLoginPage() {
     setLoading(false)
 
     if (accessError) {
+      resetLocale()
       navigate('/staff', { replace: true })
       return
     }
 
     if (!access?.active || !access?.employee_portal_enabled) {
       await supabase.auth.signOut()
-      return setError('账号不可用')
+      return setError(t('auth.accountUnavailable','账号不可用'))
     }
 
+    resetLocale()
     navigate('/staff', { replace: true })
   }
 
@@ -66,10 +70,11 @@ export default function StaffLoginPage() {
         </div>
 
         <form className="login-card" onSubmit={submit}>
-          <div className="login-title">员工登录</div>
+          <div className="auth-language-row"><StaffLanguageSwitcher /></div>
+          <div className="login-title">{t('auth.staffLogin','员工登录')}</div>
 
           <label className="login-field">
-            邮箱
+            {t('auth.email','邮箱')}
             <div className="login-input">
               <input
                 value={username}
@@ -82,7 +87,7 @@ export default function StaffLoginPage() {
           </label>
 
           <label className="login-field">
-            密码
+            {t('auth.password','密码')}
             <div className="login-input">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -92,7 +97,7 @@ export default function StaffLoginPage() {
                 required
               />
               <button type="button" onClick={() => setShowPassword(v => !v)}>
-                {showPassword ? '隐藏' : '显示'}
+                {showPassword ? t('common.hide','隐藏') : t('auth.show','显示')}
               </button>
             </div>
           </label>
@@ -100,11 +105,11 @@ export default function StaffLoginPage() {
           {error && <div className="login-error">{error}</div>}
 
           <button className="login-submit" disabled={loading}>
-            {loading ? '登录中...' : '登录'}
+            {loading ? t('auth.signingIn','登录中...') : t('auth.signIn','登录')}
           </button>
 
           <div className="login-foot">
-            首次使用？ <Link to="/staff/register">激活账号</Link>
+            {t('auth.firstTime','首次使用？')} <Link to="/staff/register">{t('auth.activate','激活账号')}</Link>
           </div>
         </form>
       </div>

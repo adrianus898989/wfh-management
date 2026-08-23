@@ -1,66 +1,409 @@
-import React,{useEffect,useRef,useState} from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
-const msg=e=>e?.message||String(e||'操作失败')
-const fmt=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—'
-const score=v=>v==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:2})
-const breakdown=x=>{
-  if(x.source_system==='legacy'&&!x.answer_detail_available)return x.percentage==null?'逐题明细等待同步':'总成绩已保留 · 逐题明细未同步'
-  const answered=Number(x.answer_detail_count||0),total=Number(x.total_question_count||0),unanswered=Number(x.unanswered_count||Math.max(total-answered,0))
-  const detail=`正确 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错误 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`
-  return x.source_system==='legacy'&&total?`已答 ${answered}/${total} · 未答 ${unanswered} · ${detail}`:detail
-}
-const driveId=url=>String(url||'').match(/\/d\/([^/?]+)/)?.[1]||String(url||'').match(/[?&]id=([^&]+)/)?.[1]||''
-const imageSources=url=>{const id=driveId(url);return id?[`https://drive.google.com/thumbnail?id=${id}&sz=w1600`,`https://lh3.googleusercontent.com/d/${id}=w1600`,url]:[url]}
+import { useStaffLocale } from '../lib/staffI18n'
 
-export default function StaffExamPage(){
-  const [home,setHome]=useState(null),[session,setSession]=useState(null),[result,setResult]=useState(null),[answers,setAnswers]=useState({}),[loading,setLoading]=useState(true),[error,setError]=useState('')
-  const load=async()=>{setLoading(true);const {data,error:e}=await supabase.rpc('staff_exam_home');if(e)setError(msg(e));else{setHome(data);setError('')}setLoading(false)}
-  useEffect(()=>{load()},[])
-  const start=async exam=>{if(!exam.resume_session_id&&!confirm(`确认开始“${exam.series_name} · ${exam.position_name}”考试？开始后将连续计时 60 分钟。`))return;const {data,error:e}=await supabase.rpc('staff_exam_start_adaptive',{p_series:exam.series_name,p_position:exam.position_name});if(e)return setError(msg(e));setSession(data);setAnswers(data?.saved_answers||{})}
-  const viewResult=async id=>{setLoading(true);const {data,error:e}=await supabase.rpc('staff_exam_result_detail',{p_session_id:id});setLoading(false);if(e)return setError(msg(e));setResult(data)}
-  if(session)return <ExamRunner session={session} answers={answers} setAnswers={setAnswers} onDone={()=>{setSession(null);load()}}/>
-  const pending=home?.assignments||[],history=home?.history||[],passed=history.filter(x=>x.status==='graded'&&x.passed).length
-  return <div className="staff-exam-page">
-    <header className="staff-exam-hero"><div><small>W F H · LEARNING CENTER</small><h1>我的考试</h1><p>{home?.profile?`${home.profile.employee_no} · ${home.profile.employee_name}`:'考试会根据员工档案自动匹配'}</p>{home?.profile&&<div className="staff-profile-tags"><span>{home.profile.team_name}</span><span>{home.profile.position_name}</span></div>}</div><button onClick={load}>↻ 刷新</button></header>
-    {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {loading?<div className="exam-empty">正在读取考试…</div>:<>
-      <div className="staff-exam-metrics"><div><span>待完成</span><strong>{pending.length}</strong><small>项考试</small></div><div><span>历史考试</span><strong>{history.length}</strong><small>次记录</small></div><div><span>已通过</span><strong>{passed}</strong><small>次通过</small></div></div>
-      <section className="staff-pending-section"><div className="staff-section-head"><div><small>MY TEAM EXAM</small><h2>选择岗位与盘口</h2><p>系统只按员工档案的实际团队匹配；岗位和盘口由员工自己选择。</p></div><span>团队已匹配</span></div>{pending.length?<div className="adaptive-exam-list">{pending.map(exam=><article className="adaptive-exam-card" key={`${exam.position_name}-${exam.series_name}`}><div><span className="adaptive-status">{exam.resume_session_id?'考试进行中':'可选盘口'}</span><h3>{exam.series_name}</h3><p>{exam.team_name} · 岗位：{exam.position_name} · 每次随机抽取 14 题</p><div className="adaptive-exam-facts"><b>14<small>题目</small></b><b>100<small>总分</small></b><b>60<small>分钟</small></b><b>{exam.pass_score}%<small>及格</small></b></div>{!exam.pool_ready&&<div className="pool-warning">该盘口题库不足：5分题 {exam.pool_counts?.[5]||0}/10、10分题 {exam.pool_counts?.[10]||0}/3、20分题 {exam.pool_counts?.[20]||0}/1。</div>}</div><button disabled={!exam.pool_ready||(!exam.resume_session_id&&exam.attempts>=exam.max_attempts)} onClick={()=>start(exam)}>{exam.resume_session_id?'继续考试 →':!exam.pool_ready?'题库准备中':exam.attempts>=exam.max_attempts?'考试次数已用完':'选择并开始 →'}</button></article>)}</div>:<div className="staff-empty-state"><span>!</span><h3>暂时没有匹配的考试盘口</h3><p>你的团队是“{home?.profile?.team_name||'未设置'}”。请管理员确认题库 K 列已填写相同团队。</p></div>}</section>
-      <section><div className="staff-section-head"><div><small>MY RESULTS</small><h2>我的考试结果</h2><p>只有本人能够查看自己的答案、得分及老师评语。</p></div><span>{history.length} 次</span></div>{history.length?<div className="exam-table-wrap"><table className="exam-table staff-history-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答时间</th><th>完成作答时间</th><th>评分完成时间</th><th>成绩</th><th>答题结果</th><th>结果</th><th>操作</th></tr></thead><tbody>{history.map(x=><tr key={`${x.source_system||'current'}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{fmt(x.started_at)}</td><td>{fmt(x.submitted_at)}</td><td>{fmt(x.graded_at)}</td><td><b>{x.percentage==null?'待批改':`${score(x.earned_score)}/${score(x.total_score)} · ${score(x.percentage)}%`}</b></td><td><span className="staff-history-breakdown">{breakdown(x)}</span></td><td><span className={`result-chip ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{x.status==='graded'?(x.passed?'通过':'未通过'):'待批改'}</span></td><td><button onClick={()=>viewResult(x.id)}>查看结果</button></td></tr>)}</tbody></table></div>:<div className="staff-history-empty">完成考试后，成绩与历史记录会显示在这里。</div>}</section>
-      {result&&<ExamResult result={result} onClose={()=>setResult(null)}/>} 
+const copy = {
+  eyebrow: ['WFH · 学习中心', 'WFH · LEARNING CENTER', 'WFH · TRUNG TÂM HỌC TẬP', 'WFH · PUSAT BELAJAR'],
+  title: ['我的考试', 'My exams', 'Kỳ thi của tôi', 'Ujian saya'],
+  refresh: ['刷新', 'Refresh', 'Làm mới', 'Muat ulang'],
+  loading: ['正在读取考试…', 'Loading exams…', 'Đang tải kỳ thi…', 'Memuat ujian…'],
+  available: ['可选考试', 'Available exams', 'Bài thi có thể chọn', 'Ujian tersedia'],
+  history: ['历史考试', 'Exam history', 'Lịch sử thi', 'Riwayat ujian'],
+  passed: ['已通过', 'Passed', 'Đã đạt', 'Lulus'],
+  options: ['个组合', 'options', 'lựa chọn', 'pilihan'],
+  records: ['次记录', 'records', 'bản ghi', 'catatan'],
+  passedTimes: ['次通过', 'passes', 'lần đạt', 'kali lulus'],
+  pickerEyebrow: ['自主选考', 'CHOOSE YOUR EXAM', 'TỰ CHỌN BÀI THI', 'PILIH UJIAN'],
+  pickerTitle: ['选择考试', 'Choose an exam', 'Chọn bài thi', 'Pilih ujian'],
+  pickerSubtitle: ['按团队、系列与考试项目选择可用试卷。', 'Choose any available team, series and exam type.', 'Chọn nhóm, bộ đề và loại bài thi có sẵn.', 'Pilih tim, seri, dan jenis ujian yang tersedia.'],
+  team: ['团队', 'Team', 'Nhóm', 'Tim'],
+  series: ['考试系列', 'Exam series', 'Bộ đề', 'Seri ujian'],
+  examType: ['考试项目', 'Exam type', 'Loại bài thi', 'Jenis ujian'],
+  selectTeam: ['请选择团队', 'Select a team', 'Chọn nhóm', 'Pilih tim'],
+  selectSeries: ['请选择考试系列', 'Select an exam series', 'Chọn bộ đề', 'Pilih seri ujian'],
+  selectExam: ['请选择考试项目', 'Select an exam type', 'Chọn loại bài thi', 'Pilih jenis ujian'],
+  selected: ['当前选择', 'Selected exam', 'Bài thi đã chọn', 'Ujian terpilih'],
+  inProgress: ['进行中', 'In progress', 'Đang làm', 'Sedang berlangsung'],
+  questions: ['题目', 'Questions', 'Câu hỏi', 'Soal'],
+  totalScore: ['总分', 'Total score', 'Tổng điểm', 'Total nilai'],
+  minutes: ['分钟', 'Minutes', 'Phút', 'Menit'],
+  passScore: ['及格', 'Pass score', 'Điểm đạt', 'Nilai lulus'],
+  poolWarning: ['题库不足：5分题 {five}/10、10分题 {ten}/3、20分题 {twenty}/1。', 'Question pool incomplete: 5-point {five}/10, 10-point {ten}/3, 20-point {twenty}/1.', 'Ngân hàng câu hỏi chưa đủ: câu 5 điểm {five}/10, 10 điểm {ten}/3, 20 điểm {twenty}/1.', 'Bank soal belum lengkap: soal 5 poin {five}/10, 10 poin {ten}/3, 20 poin {twenty}/1.'],
+  startConfirm: ['确认开始“{team} · {series} · {exam}”吗？开始后将连续计时 60 分钟。', 'Start “{team} · {series} · {exam}”? The 60-minute timer will begin immediately.', 'Bắt đầu “{team} · {series} · {exam}”? Đồng hồ 60 phút sẽ chạy ngay.', 'Mulai “{team} · {series} · {exam}”? Waktu 60 menit akan langsung berjalan.'],
+  resume: ['继续考试', 'Resume exam', 'Tiếp tục', 'Lanjutkan'],
+  start: ['开始考试', 'Start exam', 'Bắt đầu thi', 'Mulai ujian'],
+  preparing: ['题库准备中', 'Question pool unavailable', 'Ngân hàng đề chưa sẵn sàng', 'Bank soal belum siap'],
+  attemptsUsed: ['考试次数已用完', 'No attempts remaining', 'Đã hết lượt thi', 'Kesempatan ujian habis'],
+  noExams: ['暂无可选考试', 'No exams available', 'Chưa có bài thi', 'Belum ada ujian'],
+  noExamsText: ['管理员开放考试后，会在这里显示。', 'Available exams will appear here after an administrator enables them.', 'Bài thi sẽ hiển thị ở đây sau khi quản trị viên mở.', 'Ujian akan muncul di sini setelah diaktifkan admin.'],
+  resultsEyebrow: ['我的成绩', 'MY RESULTS', 'KẾT QUẢ CỦA TÔI', 'HASIL SAYA'],
+  resultsTitle: ['考试结果', 'Exam results', 'Kết quả thi', 'Hasil ujian'],
+  source: ['来源', 'Source', 'Nguồn', 'Sumber'],
+  exam: ['考试', 'Exam', 'Bài thi', 'Ujian'],
+  attempt: ['次数', 'Attempt', 'Lần thi', 'Percobaan'],
+  attemptValue: ['第 {count} 次', 'Attempt {count}', 'Lần {count}', 'Percobaan {count}'],
+  startedAt: ['开始时间', 'Started', 'Bắt đầu', 'Mulai'],
+  submittedAt: ['完成时间', 'Submitted', 'Hoàn thành', 'Dikumpulkan'],
+  gradedAt: ['评分时间', 'Graded', 'Chấm điểm', 'Dinilai'],
+  grade: ['成绩', 'Score', 'Điểm', 'Nilai'],
+  answerResult: ['答题结果', 'Answer summary', 'Kết quả trả lời', 'Ringkasan jawaban'],
+  result: ['结果', 'Result', 'Kết quả', 'Hasil'],
+  action: ['操作', 'Action', 'Thao tác', 'Tindakan'],
+  pending: ['待批改', 'Pending review', 'Chờ chấm', 'Menunggu penilaian'],
+  pass: ['通过', 'Passed', 'Đạt', 'Lulus'],
+  fail: ['未通过', 'Not passed', 'Chưa đạt', 'Belum lulus'],
+  viewResult: ['查看结果', 'View result', 'Xem kết quả', 'Lihat hasil'],
+  noHistory: ['完成考试后，成绩会显示在这里。', 'Completed exams will appear here.', 'Bài thi đã hoàn thành sẽ hiển thị ở đây.', 'Ujian yang selesai akan muncul di sini.'],
+  detailWaiting: ['逐题明细等待同步', 'Per-question details awaiting sync', 'Chi tiết từng câu đang chờ đồng bộ', 'Detail per soal menunggu sinkronisasi'],
+  totalOnly: ['总成绩已保留 · 逐题明细未同步', 'Final score saved · details not synced', 'Đã lưu tổng điểm · chưa đồng bộ chi tiết', 'Nilai akhir tersimpan · detail belum disinkronkan'],
+  breakdown: ['正确 {correct} · 半对 {partial} · 错误 {wrong} · 待评 {pending}', 'Correct {correct} · Partial {partial} · Wrong {wrong} · Pending {pending}', 'Đúng {correct} · Nửa đúng {partial} · Sai {wrong} · Chờ {pending}', 'Benar {correct} · Sebagian {partial} · Salah {wrong} · Menunggu {pending}'],
+  breakdownAnswered: ['已答 {answered}/{total} · 未答 {unanswered} · {detail}', 'Answered {answered}/{total} · Unanswered {unanswered} · {detail}', 'Đã trả lời {answered}/{total} · Chưa trả lời {unanswered} · {detail}', 'Dijawab {answered}/{total} · Belum dijawab {unanswered} · {detail}'],
+  resultTitle: ['我的考试结果', 'MY EXAM RESULT', 'KẾT QUẢ BÀI THI', 'HASIL UJIAN SAYA'],
+  score: ['成绩', 'Score', 'Điểm', 'Nilai'],
+  awarded: ['得分', 'Points', 'Điểm số', 'Poin'],
+  answerStats: ['答题统计', 'Answer summary', 'Thống kê câu trả lời', 'Ringkasan jawaban'],
+  overallFeedback: ['总体评语', 'Overall feedback', 'Nhận xét chung', 'Catatan keseluruhan'],
+  questionPoints: ['本题 {count} 分', '{count} points', '{count} điểm', '{count} poin'],
+  showLanguages: ['查看其他语言', 'Show other languages', 'Xem ngôn ngữ khác', 'Lihat bahasa lain'],
+  myAnswer: ['我的答案', 'My answer', 'Câu trả lời của tôi', 'Jawaban saya'],
+  unanswered: ['（未作答）', '(No answer)', '(Chưa trả lời)', '(Belum dijawab)'],
+  feedback: ['老师评语', 'Reviewer feedback', 'Nhận xét người chấm', 'Catatan penilai'],
+  noFeedback: ['老师未填写评语', 'No feedback provided', 'Chưa có nhận xét', 'Tidak ada catatan'],
+  noAnswerDetails: ['该场考试没有可显示的逐题明细。', 'No per-question details are available for this exam.', 'Không có chi tiết từng câu cho bài thi này.', 'Detail per soal tidak tersedia untuk ujian ini.'],
+  close: ['关闭', 'Close', 'Đóng', 'Tutup'],
+  onlineExam: ['在线考试', 'ONLINE EXAM', 'BÀI THI TRỰC TUYẾN', 'UJIAN ONLINE'],
+  runningExam: ['正在考试', 'Exam in progress', 'Đang thi', 'Ujian berlangsung'],
+  runnerSummary: ['{count} 题 · 100 分 · 答案自动保存', '{count} questions · 100 points · Answers auto-save', '{count} câu · 100 điểm · Tự động lưu', '{count} soal · 100 poin · Jawaban tersimpan otomatis'],
+  timeLeft: ['剩余时间', 'Time remaining', 'Thời gian còn lại', 'Sisa waktu'],
+  progress: ['答题进度', 'Progress', 'Tiến độ', 'Progres'],
+  answered: ['已答 {answered} / {total}', 'Answered {answered} / {total}', 'Đã trả lời {answered} / {total}', 'Dijawab {answered} / {total}'],
+  questionIndex: ['第 {current} 题 / 共 {total} 题', 'Question {current} of {total}', 'Câu {current} / {total}', 'Soal {current} dari {total}'],
+  difficulty: ['{points} 分 · 难度 {difficulty}', '{points} pts · Difficulty {difficulty}', '{points} điểm · Độ khó {difficulty}', '{points} poin · Kesulitan {difficulty}'],
+  answerLabel: ['填写答案', 'Your answer', 'Câu trả lời', 'Jawaban Anda'],
+  answerPlaceholder: ['请输入完整回答…', 'Enter your complete answer…', 'Nhập câu trả lời đầy đủ…', 'Masukkan jawaban lengkap…'],
+  previous: ['上一题', 'Previous', 'Câu trước', 'Sebelumnya'],
+  next: ['下一题', 'Next', 'Câu tiếp', 'Berikutnya'],
+  submit: ['提交考试', 'Submit exam', 'Nộp bài', 'Kirim ujian'],
+  saving: ['正在保存…', 'Saving…', 'Đang lưu…', 'Menyimpan…'],
+  saved: ['答案已自动保存', 'Answer saved automatically', 'Đã tự động lưu', 'Jawaban tersimpan otomatis'],
+  saveFailed: ['答案保存失败：{error}', 'Could not save answer: {error}', 'Không thể lưu câu trả lời: {error}', 'Jawaban gagal disimpan: {error}'],
+  submitConfirm: ['提交后不能再修改，确认提交？', 'You cannot edit after submission. Submit now?', 'Không thể sửa sau khi nộp. Xác nhận nộp?', 'Jawaban tidak dapat diubah setelah dikirim. Kirim sekarang?'],
+  autoSubmitted: ['考试时间到，已自动提交。', 'Time is up. Your exam was submitted automatically.', 'Hết giờ. Bài thi đã được tự động nộp.', 'Waktu habis. Ujian dikirim otomatis.'],
+  submitted: ['考试已提交，等待后台批改。', 'Exam submitted and awaiting review.', 'Đã nộp bài và đang chờ chấm.', 'Ujian dikirim dan menunggu penilaian.'],
+  noQuestions: ['试卷没有可用题目，请联系管理员。', 'This exam has no available questions. Please contact an administrator.', 'Bài thi không có câu hỏi. Vui lòng liên hệ quản trị viên.', 'Ujian ini tidak memiliki soal. Hubungi administrator.'],
+  imageClose: ['关闭图片', 'Close image', 'Đóng ảnh', 'Tutup gambar'],
+  imageAlt: ['考试题目图片', 'Exam question image', 'Ảnh câu hỏi', 'Gambar soal'],
+  imageOpen: ['点击放大', 'Enlarge', 'Phóng to', 'Perbesar'],
+  imageFallback: ['图片暂时无法预览，点击打开原图', 'Preview unavailable. Open original image.', 'Không thể xem trước. Mở ảnh gốc.', 'Pratinjau tidak tersedia. Buka gambar asli.'],
+}
+
+const languageIndex = { zh: 0, en: 1, vi: 2, id: 3 }
+const dateLocale = { zh: 'zh-CN', en: 'en-US', vi: 'vi-VN', id: 'id-ID' }
+const msg = error => error?.message || String(error || 'Request failed')
+const template = (value, vars = {}) => String(value).replace(/\{(\w+)\}/g, (match, key) => vars[key] ?? match)
+const baseText = (locale, key) => copy[key]?.[languageIndex[locale] ?? 1] || copy[key]?.[1] || key
+const fmt = (value, locale) => value ? new Date(value).toLocaleString(dateLocale[locale] || 'en-US', { hour12: false }) : '—'
+const score = (value, locale) => value == null ? '—' : Number(value).toLocaleString(dateLocale[locale] || 'en-US', { maximumFractionDigits: 2 })
+const driveId = url => String(url || '').match(/\/d\/([^/?]+)/)?.[1] || String(url || '').match(/[?&]id=([^&]+)/)?.[1] || ''
+const imageSources = url => { const id = driveId(url); return id ? [`https://drive.google.com/thumbnail?id=${id}&sz=w1600`, `https://lh3.googleusercontent.com/d/${id}=w1600`, url] : [url] }
+const optionKey = exam => JSON.stringify(
+  [exam?.team_name, exam?.series_name, exam?.position_name].map(value => String(value || '').trim()),
+)
+
+function useExamText() {
+  const { locale, setLocale, t } = useStaffLocale()
+  const tr = (key, vars) => t(`staff.exam.${key}`, baseText(locale, key), vars)
+  return { locale, setLocale, tr, languageLabel: t('language.choose', 'Language') }
+}
+
+function answerBreakdown(item, tr) {
+  if (item.source_system === 'legacy' && !item.answer_detail_available) return item.percentage == null ? tr('detailWaiting') : tr('totalOnly')
+  const answered = Number(item.answer_detail_count || 0)
+  const total = Number(item.total_question_count || 0)
+  const unanswered = Number(item.unanswered_count || Math.max(total - answered, 0))
+  const detail = tr('breakdown', { correct: item.correct_count || 0, partial: item.partial_count || 0, wrong: item.wrong_count || 0, pending: item.pending_count || 0 })
+  return item.source_system === 'legacy' && total ? tr('breakdownAnswered', { answered, total, unanswered, detail }) : detail
+}
+
+export default function StaffExamPage() {
+  const { locale, setLocale, tr, languageLabel } = useExamText()
+  const [home, setHome] = useState(null)
+  const [session, setSession] = useState(null)
+  const [result, setResult] = useState(null)
+  const [answers, setAnswers] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [selectedTeam, setSelectedTeam] = useState('')
+  const [selectedSeries, setSelectedSeries] = useState('')
+  const [selectedExamKey, setSelectedExamKey] = useState('')
+
+  const load = async () => {
+    setLoading(true)
+    const { data, error: requestError } = await supabase.rpc('staff_exam_home')
+    if (requestError) setError(msg(requestError))
+    else { setHome(data); setError('') }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const assignments = useMemo(() => {
+    const unique = new Map()
+    for (const exam of home?.assignments || []) {
+      if (!exam.pool_ready && !exam.resume_session_id) continue
+      const key = optionKey(exam)
+      const previous = unique.get(key)
+      if (!previous || (!previous.resume_session_id && exam.resume_session_id)) unique.set(key, exam)
+    }
+    return [...unique.values()]
+  }, [home])
+
+  useEffect(() => {
+    if (!assignments.length) {
+      setSelectedTeam(''); setSelectedSeries(''); setSelectedExamKey('')
+      return
+    }
+    if (assignments.some(exam => optionKey(exam) === selectedExamKey)) return
+    const first = assignments.find(exam => exam.resume_session_id) || assignments[0]
+    setSelectedTeam(first.team_name || '')
+    setSelectedSeries(first.series_name || '')
+    setSelectedExamKey(optionKey(first))
+  }, [assignments, selectedExamKey])
+
+  const teamOptions = useMemo(() => [...new Set(assignments.map(exam => exam.team_name).filter(Boolean))], [assignments])
+  const seriesOptions = useMemo(() => [...new Set(assignments.filter(exam => exam.team_name === selectedTeam).map(exam => exam.series_name).filter(Boolean))], [assignments, selectedTeam])
+  const examOptions = useMemo(() => assignments.filter(exam => exam.team_name === selectedTeam && exam.series_name === selectedSeries), [assignments, selectedTeam, selectedSeries])
+  const selectedExam = assignments.find(exam => optionKey(exam) === selectedExamKey) || null
+  const history = home?.history || []
+  const passedCount = history.filter(item => item.status === 'graded' && item.passed).length
+
+  const chooseTeam = value => {
+    const first = assignments.find(exam => exam.team_name === value)
+    setSelectedTeam(value)
+    setSelectedSeries(first?.series_name || '')
+    setSelectedExamKey(first ? optionKey(first) : '')
+  }
+
+  const chooseSeries = value => {
+    const first = assignments.find(exam => exam.team_name === selectedTeam && exam.series_name === value)
+    setSelectedSeries(value)
+    setSelectedExamKey(first ? optionKey(first) : '')
+  }
+
+  const start = async exam => {
+    if (!exam) return
+    if (!exam.resume_session_id && !window.confirm(tr('startConfirm', { team: exam.team_name || '—', series: exam.series_name || '—', exam: exam.position_name || '—' }))) return
+    const { data, error: requestError } = await supabase.rpc('staff_exam_start_open', {
+      p_team: exam.team_name,
+      p_series: exam.series_name,
+      p_position: exam.position_name,
+    })
+    if (requestError) return setError(msg(requestError))
+    setSession(data)
+    setAnswers(data?.saved_answers || {})
+  }
+
+  const viewResult = async id => {
+    setLoading(true)
+    const { data, error: requestError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: id })
+    setLoading(false)
+    if (requestError) return setError(msg(requestError))
+    setResult(data)
+  }
+
+  if (session) return <ExamRunner session={session} answers={answers} setAnswers={setAnswers} onDone={() => { setSession(null); load() }} />
+
+  const attempts = Number(selectedExam?.attempts || 0)
+  const maxAttempts = Number(selectedExam?.max_attempts || 0)
+  const attemptsExhausted = Boolean(selectedExam && !selectedExam.resume_session_id && maxAttempts > 0 && attempts >= maxAttempts)
+
+  return <div className="staff-exam-page staff-exam-page-compact">
+    <header className="staff-exam-hero">
+      <div>
+        <small>{tr('eyebrow')}</small>
+        <h1>{tr('title')}</h1>
+        <p>{home?.profile ? `${home.profile.employee_no} · ${home.profile.employee_name}` : ''}</p>
+      </div>
+      <div className="staff-exam-hero-actions">
+        <label className="staff-exam-locale">
+          <span>{languageLabel}</span>
+          <select value={locale} onChange={event => setLocale(event.target.value)} aria-label={languageLabel}>
+            <option value="zh">中文</option><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="id">Bahasa Indonesia</option>
+          </select>
+        </label>
+        <button onClick={load}>↻ {tr('refresh')}</button>
+      </div>
+    </header>
+
+    {error && <div className="exam-error">{error}<button className="exam-inline-close" onClick={() => setError('')} aria-label={tr('close')}>×</button></div>}
+    {loading ? <div className="exam-empty staff-exam-loading">{tr('loading')}</div> : <>
+      <div className="staff-exam-metrics">
+        <div><span>{tr('available')}</span><strong>{assignments.length}</strong><small>{tr('options')}</small></div>
+        <div><span>{tr('history')}</span><strong>{history.length}</strong><small>{tr('records')}</small></div>
+        <div><span>{tr('passed')}</span><strong>{passedCount}</strong><small>{tr('passedTimes')}</small></div>
+      </div>
+
+      <section className="staff-pending-section">
+        <div className="staff-section-head"><div><small>{tr('pickerEyebrow')}</small><h2>{tr('pickerTitle')}</h2><p>{tr('pickerSubtitle')}</p></div></div>
+        {assignments.length ? <div className="staff-exam-picker">
+          <div className="staff-exam-picker-controls">
+            <label><span>{tr('team')}</span><select value={selectedTeam} onChange={event => chooseTeam(event.target.value)}><option value="">{tr('selectTeam')}</option>{teamOptions.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>{tr('series')}</span><select value={selectedSeries} onChange={event => chooseSeries(event.target.value)} disabled={!selectedTeam}><option value="">{tr('selectSeries')}</option>{seriesOptions.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>{tr('examType')}</span><select value={selectedExamKey} onChange={event => setSelectedExamKey(event.target.value)} disabled={!selectedSeries}><option value="">{tr('selectExam')}</option>{examOptions.map(exam => <option key={optionKey(exam)} value={optionKey(exam)}>{exam.position_name}</option>)}</select></label>
+          </div>
+
+          {selectedExam && <div className="staff-exam-selection">
+            <div className="staff-exam-selection-main">
+              <small>{tr('selected')}</small>
+              <strong>{selectedExam.team_name} · {selectedExam.series_name}</strong>
+              <span>{selectedExam.position_name}</span>
+              {selectedExam.resume_session_id && <em>{tr('inProgress')}</em>}
+            </div>
+            <div className="staff-exam-selection-facts">
+              <b>14<small>{tr('questions')}</small></b>
+              <b>100<small>{tr('totalScore')}</small></b>
+              <b>60<small>{tr('minutes')}</small></b>
+              <b>{selectedExam.pass_score ?? 60}%<small>{tr('passScore')}</small></b>
+            </div>
+            {!selectedExam.pool_ready && <div className="pool-warning">{tr('poolWarning', { five: selectedExam.pool_counts?.[5] || 0, ten: selectedExam.pool_counts?.[10] || 0, twenty: selectedExam.pool_counts?.[20] || 0 })}</div>}
+            <button className="staff-exam-start" disabled={!selectedExam.pool_ready || attemptsExhausted} onClick={() => start(selectedExam)}>{selectedExam.resume_session_id ? tr('resume') : !selectedExam.pool_ready ? tr('preparing') : attemptsExhausted ? tr('attemptsUsed') : tr('start')} <span>→</span></button>
+          </div>}
+        </div> : <div className="staff-empty-state compact"><span>!</span><h3>{tr('noExams')}</h3><p>{tr('noExamsText')}</p></div>}
+      </section>
+
+      <section className="staff-exam-results-section">
+        <div className="staff-section-head"><div><small>{tr('resultsEyebrow')}</small><h2>{tr('resultsTitle')}</h2></div><span>{history.length}</span></div>
+        {history.length ? <div className="exam-table-wrap"><table className="exam-table staff-history-table"><thead><tr><th>{tr('source')}</th><th>{tr('exam')}</th><th>{tr('attempt')}</th><th>{tr('startedAt')}</th><th>{tr('submittedAt')}</th><th>{tr('gradedAt')}</th><th>{tr('grade')}</th><th>{tr('answerResult')}</th><th>{tr('result')}</th><th>{tr('action')}</th></tr></thead><tbody>{history.map(item => <tr key={`${item.source_system || 'current'}-${item.id}`}>
+          <td><span className={`exam-source-badge ${item.source_system === 'legacy' ? 'legacy' : 'current'}`}>{item.source_label || '—'}</span></td>
+          <td><strong>{item.title}</strong></td><td>{tr('attemptValue', { count: item.attempt_no })}</td>
+          <td>{fmt(item.started_at, locale)}</td><td>{fmt(item.submitted_at, locale)}</td><td>{fmt(item.graded_at, locale)}</td>
+          <td><b>{item.percentage == null ? tr('pending') : `${score(item.earned_score, locale)}/${score(item.total_score, locale)} · ${score(item.percentage, locale)}%`}</b></td>
+          <td><span className="staff-history-breakdown">{answerBreakdown(item, tr)}</span></td>
+          <td><span className={`result-chip ${item.status === 'graded' ? (item.passed ? 'pass' : 'fail') : 'pending'}`}>{item.status === 'graded' ? (item.passed ? tr('pass') : tr('fail')) : tr('pending')}</span></td>
+          <td><button className="exam-table-action" onClick={() => viewResult(item.id)}>{tr('viewResult')}</button></td>
+        </tr>)}</tbody></table></div> : <div className="staff-history-empty">{tr('noHistory')}</div>}
+      </section>
+      {result && <ExamResult result={result} onClose={() => setResult(null)} />}
     </>}
   </div>
 }
 
-function ExamResult({result,onClose}){
-  const s=result?.session||{},items=result?.answers||[]
-  return <div className="exam-modal-backdrop"><div className="exam-modal wide staff-result-modal"><header><div><small>MY EXAM RESULT</small><h2>{s.title}</h2><p>第 {s.attempt_no} 次</p></div><button onClick={onClose}>×</button></header><div className="staff-result-summary"><div><span>成绩</span><strong>{s.percentage==null?'待批改':`${score(s.percentage)}%`}</strong></div><div><span>结果</span><strong>{s.status==='graded'?(s.passed?'通过':'未通过'):'待批改'}</strong></div><div><span>得分</span><strong>{score(s.earned_score)} / {score(s.total_score)}</strong></div><div><span>答题统计</span><strong>{breakdown(s)}</strong></div></div><div className="staff-result-audit"><span><b>开始作答时间</b>{fmt(s.started_at)}</span><span><b>完成作答时间</b>{fmt(s.submitted_at)}</span><span><b>评分完成时间</b>{fmt(s.graded_at)}</span></div>{s.grader_note&&<div className="staff-result-note"><b>总体评语</b><p>{s.grader_note}</p></div>}<div className="staff-result-list">{items.map((x,i)=>{const q=x.question||{},state=x.grade_status==='correct'?'pass':x.grade_status==='partial'?'partial':x.grade_status==='wrong'?'fail':'pending';return <article key={q.id||i}><header><b>{i+1}</b><div><strong>{q.question_zh||q.question_en||q.question_vi}</strong><small>本题 {score(q.points)} 分</small></div><span className={`result-chip ${state}`}>{x.awarded_score==null?'待批改':`${score(x.awarded_score)}/${score(q.points)} 分`}</span></header><details><summary>查看 English / Tiếng Việt</summary>{q.question_en&&<p><b>EN</b>{q.question_en}</p>}{q.question_vi&&<p><b>VI</b>{q.question_vi}</p>}</details><ExamMedia urls={q.image_urls}/><div className="staff-result-answer"><b>我的答案</b><p>{x.answer_text||'（未作答）'}</p></div>{x.awarded_score!=null&&<div className="staff-result-feedback"><b>老师评语</b><p>{x.grader_feedback||'老师未填写评语'}</p><small>评分完成时间 · {fmt(x.graded_at||s.graded_at)}</small></div>}</article>})}</div><footer><button className="primary" onClick={onClose}>关闭</button></footer></div></div>
+function ExamResult({ result, onClose }) {
+  const { locale, tr } = useExamText()
+  const session = result?.session || {}
+  const items = result?.answers || []
+
+  useEffect(() => {
+    const closeOnEscape = event => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+
+  return <div className="exam-modal-backdrop" onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
+    <div className="exam-modal wide staff-result-modal" role="dialog" aria-modal="true" aria-labelledby="staff-exam-result-title">
+      <header><div><small>{tr('resultTitle')}</small><h2 id="staff-exam-result-title">{session.title || tr('resultsTitle')}</h2><p>{tr('attemptValue', { count: session.attempt_no || 1 })}</p></div><button type="button" className="exam-icon-close" onClick={onClose} aria-label={tr('close')}>×</button></header>
+      <div className="staff-result-summary">
+        <div><span>{tr('score')}</span><strong>{session.percentage == null ? tr('pending') : `${score(session.percentage, locale)}%`}</strong></div>
+        <div><span>{tr('result')}</span><strong>{session.status === 'graded' ? (session.passed ? tr('pass') : tr('fail')) : tr('pending')}</strong></div>
+        <div><span>{tr('awarded')}</span><strong>{score(session.earned_score, locale)} / {score(session.total_score, locale)}</strong></div>
+        <div><span>{tr('answerStats')}</span><strong>{answerBreakdown(session, tr)}</strong></div>
+      </div>
+      <div className="staff-result-audit"><span><b>{tr('startedAt')}</b>{fmt(session.started_at, locale)}</span><span><b>{tr('submittedAt')}</b>{fmt(session.submitted_at, locale)}</span><span><b>{tr('gradedAt')}</b>{fmt(session.graded_at, locale)}</span></div>
+      {session.grader_note && <div className="staff-result-note"><b>{tr('overallFeedback')}</b><p>{session.grader_note}</p></div>}
+      {items.length ? <div className="staff-result-list">{items.map((item, index) => {
+        const question = item.question || {}
+        const state = item.grade_status === 'correct' ? 'pass' : item.grade_status === 'partial' ? 'partial' : item.grade_status === 'wrong' ? 'fail' : 'pending'
+        return <article key={question.id || index}><header><b>{index + 1}</b><div><strong>{preferredQuestion(question, locale)}</strong><small>{tr('questionPoints', { count: score(question.points, locale) })}</small></div><span className={`result-chip ${state}`}>{item.awarded_score == null ? tr('pending') : `${score(item.awarded_score, locale)}/${score(question.points, locale)}`}</span></header>
+          <QuestionTranslations question={question} locale={locale} label={tr('showLanguages')} />
+          <ExamMedia urls={question.image_urls} />
+          <div className="staff-result-answer"><b>{tr('myAnswer')}</b><p>{item.answer_text || tr('unanswered')}</p></div>
+          {item.awarded_score != null && <div className="staff-result-feedback"><b>{tr('feedback')}</b><p>{item.grader_feedback || tr('noFeedback')}</p><small>{tr('gradedAt')} · {fmt(item.graded_at || session.graded_at, locale)}</small></div>}
+        </article>
+      })}</div> : <div className="staff-history-empty result-empty">{tr('noAnswerDetails')}</div>}
+      <footer><button type="button" className="exam-footer-close" onClick={onClose}>{tr('close')}</button></footer>
+    </div>
+  </div>
 }
 
-function ExamRunner({session,answers,setAnswers,onDone}){
-  const questions=session.question_snapshot||[]
-  const [index,setIndex]=useState(0),[remaining,setRemaining]=useState(Math.max(0,Math.floor((new Date(session.expires_at)-Date.now())/1000))),[saving,setSaving]=useState(false),[error,setError]=useState('')
-  const submitting=useRef(false)
-  useEffect(()=>{const t=setInterval(()=>setRemaining(x=>Math.max(0,x-1)),1000);return()=>clearInterval(t)},[])
-  useEffect(()=>{if(remaining===0)submit(true)},[remaining])
-  const q=questions[index],answer=answers[q?.id]||''
-  const save=async(question=q,value=answer)=>{if(!question)return true;setSaving(true);const {error:e}=await supabase.rpc('staff_exam_save_answer',{p_session_id:session.id,p_question_id:question.id,p_answer:value,p_attachments:[]});setSaving(false);if(e){setError(`答案保存失败：${msg(e)}`);return false}setError('');return true}
-  const go=async n=>{await save();setIndex(n)}
-  const submit=async(auto=false)=>{if(submitting.current)return;if(!auto&&!confirm('提交后不能再修改，确认提交？'))return;submitting.current=true;const saved=await save();if(!saved&&!auto){submitting.current=false;return}const {error:e}=await supabase.rpc('staff_exam_submit',{p_session_id:session.id});if(e){submitting.current=false;setError(msg(e));return}alert(auto?'考试时间到，已自动提交。':'考试已提交，等待后台批改。');onDone()}
-  const mm=String(Math.floor(remaining/60)).padStart(2,'0'),ss=String(remaining%60).padStart(2,'0')
-  if(!q)return <div className="exam-empty">试卷没有可用题目，请联系管理员。</div>
-  return <div className="exam-runner"><header><div><small>ONLINE EXAM</small><h1>{session.title||'正在考试'}</h1><p>14 题 · 100 分 · 答案自动保存</p></div><div className={remaining<300?'timer danger':'timer'}><small>剩余时间</small><strong>{mm}:{ss}</strong></div></header>{error&&<div className="exam-error runner-error">{error}</div>}<div className="runner-layout"><aside><strong>答题进度</strong><div className="question-nav">{questions.map((x,i)=><button key={x.id} className={`${i===index?'active':''} ${answers[x.id]?.trim()?'done':''}`} onClick={()=>go(i)}>{i+1}</button>)}</div><p>已答 {Object.values(answers).filter(x=>String(x||'').trim()).length} / {questions.length}</p></aside><main><div className="question-head"><span>第 {index+1} 题 / 共 {questions.length} 题</span><b>{q.points} 分 · 难度 {q.difficulty}</b></div><div className="runner-languages">{q.question_zh&&<div><span>中</span><p>{q.question_zh}</p></div>}{q.question_en&&<div><span>EN</span><p>{q.question_en}</p></div>}{q.question_vi&&<div><span>VI</span><p>{q.question_vi}</p></div>}</div><ExamMedia urls={q.image_urls}/><label>填写答案<textarea autoFocus value={answer} onChange={e=>setAnswers({...answers,[q.id]:e.target.value})} onBlur={()=>save(q,answers[q.id]||'')} placeholder="请输入你的完整回答…"/></label><footer><button disabled={index===0} onClick={()=>go(index-1)}>上一题</button><span>{saving?'正在保存…':'答案已自动保存'}</span>{index<questions.length-1?<button className="primary" onClick={()=>go(index+1)}>下一题</button>:<button className="primary" onClick={()=>submit(false)}>提交考试</button>}</footer></main></div></div>
+function preferredQuestion(question, locale) {
+  if (locale === 'zh') return question.question_zh || question.question_en || question.question_vi || '—'
+  if (locale === 'vi') return question.question_vi || question.question_en || question.question_zh || '—'
+  return question.question_en || question.question_zh || question.question_vi || '—'
 }
 
-function ExamMedia({urls=[]}){
-  const [preview,setPreview]=useState('')
-  if(!urls?.length)return null
-  return <><div className="exam-media-grid">{urls.map((url,i)=><ProgressiveImage key={`${url}-${i}`} url={url} onOpen={setPreview}/>)}</div>{preview&&<div className="exam-image-lightbox" onClick={()=>setPreview('')}><button aria-label="关闭图片">×</button><img src={preview} alt="考试题目大图" referrerPolicy="no-referrer" onClick={e=>e.stopPropagation()}/></div>}</>
+function QuestionTranslations({ question, locale, label }) {
+  const rows = [['ZH', question.question_zh, 'zh'], ['EN', question.question_en, 'en'], ['VI', question.question_vi, 'vi']].filter(([, value, code]) => value && code !== locale)
+  if (!rows.length) return null
+  return <details><summary>{label}</summary>{rows.map(([language, value]) => <p key={language}><b>{language}</b><span>{value}</span></p>)}</details>
 }
 
-function ProgressiveImage({url,onOpen}){
-  const sources=imageSources(url)
-  const [index,setIndex]=useState(0),src=sources[index]
-  if(!src)return <a className="exam-media-fallback" href={url} target="_blank" rel="noreferrer">图片暂时无法预览<br/>点击打开原图</a>
-  return <button type="button" className="exam-media-thumb" onClick={()=>onOpen(src)}><img src={src} alt="考试题目图片" referrerPolicy="no-referrer" onError={()=>setIndex(x=>x+1)}/><span>点击放大</span></button>
+function ExamRunner({ session, answers, setAnswers, onDone }) {
+  const { locale, tr } = useExamText()
+  const questions = session.question_snapshot || []
+  const [index, setIndex] = useState(0)
+  const [remaining, setRemaining] = useState(Math.max(0, Math.floor((new Date(session.expires_at) - Date.now()) / 1000)))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const submitting = useRef(false)
+  const question = questions[index]
+  const answer = answers[question?.id] || ''
+
+  useEffect(() => { const timer = window.setInterval(() => setRemaining(value => Math.max(0, value - 1)), 1000); return () => window.clearInterval(timer) }, [])
+  useEffect(() => { if (remaining === 0) submit(true) }, [remaining])
+
+  const save = async (targetQuestion = question, value = answer) => {
+    if (!targetQuestion) return true
+    setSaving(true)
+    const { error: requestError } = await supabase.rpc('staff_exam_save_answer', { p_session_id: session.id, p_question_id: targetQuestion.id, p_answer: value, p_attachments: [] })
+    setSaving(false)
+    if (requestError) { setError(tr('saveFailed', { error: msg(requestError) })); return false }
+    setError('')
+    return true
+  }
+
+  const go = async nextIndex => { await save(); setIndex(nextIndex) }
+  const submit = async (automatic = false) => {
+    if (submitting.current) return
+    if (!automatic && !window.confirm(tr('submitConfirm'))) return
+    submitting.current = true
+    const saved = await save()
+    if (!saved && !automatic) { submitting.current = false; return }
+    const { error: requestError } = await supabase.rpc('staff_exam_submit', { p_session_id: session.id })
+    if (requestError) { submitting.current = false; setError(msg(requestError)); return }
+    window.alert(automatic ? tr('autoSubmitted') : tr('submitted'))
+    onDone()
+  }
+
+  const minutes = String(Math.floor(remaining / 60)).padStart(2, '0')
+  const seconds = String(remaining % 60).padStart(2, '0')
+  if (!question) return <div className="exam-empty">{tr('noQuestions')}</div>
+  const languageRows = locale === 'zh'
+    ? [['中', question.question_zh], ['EN', question.question_en], ['VI', question.question_vi]]
+    : locale === 'vi'
+      ? [['VI', question.question_vi], ['EN', question.question_en], ['中', question.question_zh]]
+      : [['EN', question.question_en], ['中', question.question_zh], ['VI', question.question_vi]]
+
+  return <div className="exam-runner">
+    <header><div><small>{tr('onlineExam')}</small><h1>{session.title || tr('runningExam')}</h1><p>{tr('runnerSummary', { count: questions.length })}</p></div><div className={remaining < 300 ? 'timer danger' : 'timer'}><small>{tr('timeLeft')}</small><strong>{minutes}:{seconds}</strong></div></header>
+    {error && <div className="exam-error runner-error">{error}</div>}
+    <div className="runner-layout"><aside><strong>{tr('progress')}</strong><div className="question-nav">{questions.map((item, questionIndex) => <button key={item.id} className={`${questionIndex === index ? 'active' : ''} ${answers[item.id]?.trim() ? 'done' : ''}`} onClick={() => go(questionIndex)}>{questionIndex + 1}</button>)}</div><p>{tr('answered', { answered: Object.values(answers).filter(value => String(value || '').trim()).length, total: questions.length })}</p></aside>
+      <main><div className="question-head"><span>{tr('questionIndex', { current: index + 1, total: questions.length })}</span><b>{tr('difficulty', { points: question.points, difficulty: question.difficulty })}</b></div><div className="runner-languages">{languageRows.filter(([, value]) => value).map(([language, value]) => <div key={language}><span>{language}</span><p>{value}</p></div>)}</div><ExamMedia urls={question.image_urls} /><label>{tr('answerLabel')}<textarea autoFocus value={answer} onChange={event => setAnswers({ ...answers, [question.id]: event.target.value })} onBlur={() => save(question, answers[question.id] || '')} placeholder={tr('answerPlaceholder')} /></label><footer><button disabled={index === 0} onClick={() => go(index - 1)}>{tr('previous')}</button><span>{saving ? tr('saving') : tr('saved')}</span>{index < questions.length - 1 ? <button className="primary" onClick={() => go(index + 1)}>{tr('next')}</button> : <button className="primary" onClick={() => submit(false)}>{tr('submit')}</button>}</footer></main>
+    </div>
+  </div>
+}
+
+function ExamMedia({ urls = [] }) {
+  const { tr } = useExamText()
+  const [preview, setPreview] = useState('')
+  if (!urls?.length) return null
+  return <><div className="exam-media-grid">{urls.map((url, index) => <ProgressiveImage key={`${url}-${index}`} url={url} onOpen={setPreview} />)}</div>{preview && <div className="exam-image-lightbox" onClick={() => setPreview('')}><button className="exam-lightbox-close" aria-label={tr('imageClose')}>×</button><img src={preview} alt={tr('imageAlt')} referrerPolicy="no-referrer" onClick={event => event.stopPropagation()} /></div>}</>
+}
+
+function ProgressiveImage({ url, onOpen }) {
+  const { tr } = useExamText()
+  const sources = imageSources(url)
+  const [index, setIndex] = useState(0)
+  const src = sources[index]
+  if (!src) return <a className="exam-media-fallback" href={url} target="_blank" rel="noreferrer">{tr('imageFallback')}</a>
+  return <button type="button" className="exam-media-thumb" onClick={() => onOpen(src)}><img src={src} alt={tr('imageAlt')} referrerPolicy="no-referrer" onError={() => setIndex(value => value + 1)} /><span>{tr('imageOpen')}</span></button>
 }

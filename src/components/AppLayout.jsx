@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { clearSessionActivity, supabase } from '../lib/supabase'
+import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 
 const enc = value => encodeURIComponent(value)
 
@@ -51,12 +52,13 @@ const ADMIN_NAV = [
 ]
 
 const STAFF_NAV = [
-  ['/staff','首页'], ['/staff/exams','我的考试'],
+  ['/staff','nav.home','首页'], ['/staff/exams','nav.exams','我的考试'],
 ]
 
 export default function AppLayout({ mode, children }) {
   const navigate = useNavigate()
   const location = useLocation()
+  const { t, resetLocale } = useStaffLocale()
 
   const childPath = to => new URL(to,'https://wfh.local').pathname
   const groupActive = item => location.pathname.startsWith(item.to) || item.children?.some(([,to])=>{
@@ -74,6 +76,7 @@ export default function AppLayout({ mode, children }) {
   const logout = async()=>{
     clearSessionActivity()
     await supabase.auth.signOut()
+    if (mode === 'staff') resetLocale()
     navigate(mode==='admin'?'/admin/login':'/staff/login')
   }
 
@@ -123,11 +126,12 @@ export default function AppLayout({ mode, children }) {
             </div>
           })}
         </nav> : <nav className="sidebar-nav">
-          {STAFF_NAV.map(([to,label])=><NavLink key={to} to={to} end={to==='/staff'} className={({isActive})=>isActive?'active':''}>{label}</NavLink>)}
+          {STAFF_NAV.map(([to,key,label])=><NavLink key={to} to={to} end={to==='/staff'} className={({isActive})=>isActive?'active':''}>{t(key,label)}</NavLink>)}
         </nav>}
 
-        <div className="sidebar-footnote">{mode==='admin'?'ADMIN CONSOLE':'EMPLOYEE PORTAL'}</div>
-        <button className="sidebar-logout" onClick={logout}>退出登录</button>
+        {mode==='staff'&&<StaffLanguageSwitcher className="sidebar-language-switcher" />}
+        <div className="sidebar-footnote">{mode==='admin'?'ADMIN CONSOLE':t('nav.employeePortal','员工门户')}</div>
+        <button className="sidebar-logout" onClick={logout}>{mode==='admin'?'退出登录':t('nav.signOut','退出登录')}</button>
       </aside>
       <main className="main">{children}</main>
     </div>

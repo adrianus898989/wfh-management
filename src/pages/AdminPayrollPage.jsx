@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
 import { supabase } from '../lib/supabase'
 
@@ -142,7 +142,6 @@ function normalizeRows(sheetRows){
 }
 
 export default function AdminPayrollPage(){
-  const navigate=useNavigate()
   const [params,setParams]=useSearchParams()
   const urlTab=params.get('tab')
   const [tab,setTabState]=useState(TABS.includes(urlTab)?urlTab:TABS[0])
@@ -158,7 +157,9 @@ export default function AdminPayrollPage(){
   const [platformFilter,setPlatformFilter]=useState('')
   const [rowPage,setRowPage]=useState(1)
   const [rowPageSize,setRowPageSize]=useState(20)
+  const [employeePanel,setEmployeePanel]=useState(null)
   const fileRef=useRef(null)
+  const employeeRequestRef=useRef(0)
 
   const setTab=value=>{
     setTabState(value);setParams(value===TABS[0]?{}:{tab:value})
@@ -255,10 +256,57 @@ export default function AdminPayrollPage(){
   useEffect(()=>{setRowPage(1)},[batchId,rowFilter,rowSearch,positionFilter,platformFilter])
   useEffect(()=>{setRowPage(current=>Math.min(current,rowPages))},[rowPages])
   const clearRowFilters=()=>{setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');setRowPage(1)}
-  const openEmployee=row=>{
+  const employeePanelOpen=Boolean(employeePanel)
+  const closeEmployee=()=>{
+    employeeRequestRef.current+=1
+    setEmployeePanel(null)
+  }
+  useEffect(()=>{
+    if(!employeePanelOpen)return undefined
+    const previousOverflow=document.body.style.overflow
+    const onKeyDown=event=>{
+      if(event.key!=='Escape')return
+      employeeRequestRef.current+=1
+      setEmployeePanel(null)
+    }
+    document.body.style.overflow='hidden'
+    window.addEventListener('keydown',onKeyDown)
+    return()=>{
+      document.body.style.overflow=previousOverflow
+      window.removeEventListener('keydown',onKeyDown)
+    }
+  },[employeePanelOpen])
+  const openEmployee=async row=>{
     const employeeId=clean(row?.employee_id)
     if(!employeeId)return
-    navigate(`/admin/employees?employee=${encodeURIComponent(employeeId)}`)
+    const requestId=employeeRequestRef.current+1
+    employeeRequestRef.current=requestId
+    const fallback={
+      id:employeeId,
+      employee_no:clean(row.employee_no),
+      full_name:clean(row.full_name),
+      platform_scope:clean(row.platform),
+      position_name:clean(row.position_name),
+      hire_date:clean(row.hire_date),
+      resign_date:clean(row.departure_date),
+      group_name:clean(row.source_group),
+      status:matchState(row),
+    }
+    setEmployeePanel({loading:true,error:'',employee:fallback})
+    try{
+      const {data,error}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:employeeId}})
+      if(employeeRequestRef.current!==requestId)return
+      if(error||data?.error){
+        setEmployeePanel({loading:false,error:data?.error||error?.message||'员工档案读取失败',employee:fallback})
+        return
+      }
+      const detail=data||{}
+      const employee=detail.employee||detail.profile||detail
+      setEmployeePanel({loading:false,error:'',employee:{...fallback,...employee}})
+    }catch(error){
+      if(employeeRequestRef.current!==requestId)return
+      setEmployeePanel({loading:false,error:error?.message||'员工档案读取失败',employee:fallback})
+    }
   }
 
   return <div className="content-page payroll-admin-page">
@@ -309,6 +357,7 @@ export default function AdminPayrollPage(){
         <Pagination page={rowPage} pages={rowPages} total={filteredRows.length} pageSize={rowPageSize} loading={state.loading} onPage={setRowPage} onPageSize={value=>{setRowPageSize(value);setRowPage(1)}}/>
       </section>}
     </>}
+    {employeePanel&&<PayrollEmployeeDrawer panel={employeePanel} onClose={closeEmployee}/>}
   </div>
 }
 
@@ -325,5 +374,66 @@ function PayrollRows({rows,currency,preview=false,onOpenEmployee}){
   const matchClass=row=>({active:'ok',resigned:'resigned',unmatched:'bad'}[stateOf(row)]||'bad')
   return <><div className="payroll-table-wrap"><table className="payroll-table payroll-table-complete"><thead><tr><th>#</th><th>员工ID</th><th>姓名</th><th>盘口</th><th>分组</th><th>岗位</th><th>入职日期</th><th>离职日期</th><th>卡号</th><th>收款姓名</th><th>银行 / GCASH</th><th>基础工资</th><th>出勤工资</th><th>休假扣款</th><th>递增</th><th>满勤</th><th>绩效</th><th>押金</th><th>额外加班</th><th>额外加扣</th><th>下次要扣除</th><th>多转扣除</th><th>其他调整</th><th>实发工资</th><th>员工匹配</th><th>备注</th></tr></thead>
     <tbody>{rows.length?rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td>{!preview&&onOpenEmployee&&row.employee_id&&row.employee_no?<button type="button" className="payroll-employee-link" title="打开员工档案" onClick={()=>onOpenEmployee(row)}>{row.employee_no}</button>:<strong>{row.employee_no||'—'}</strong>}</td><td>{row.full_name||'—'}</td><td className="payroll-platform-cell"><button type="button" className="payroll-platform-value" disabled={!row.platform} title={row.platform?'点击查看完整盘口 / 平台':''} onClick={()=>row.platform&&setExpandedPlatform(row.platform)}>{row.platform||'—'}</button></td><td>{row.source_group||'—'}</td><td>{row.position_name||'—'}</td><td>{row.hire_date||'—'}</td><td>{row.departure_date||'—'}</td><td>{row.card_number||'—'}</td><td>{row.payment_name||'—'}</td><td>{row.payment_method||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td>{money(row.leave_deduction,currency)}</td><td>{money(row.increment_adjustment,currency)}</td><td>{money(row.attendance_bonus,currency)}</td><td>{money(row.performance_adjustment,currency)}</td><td>{money(row.deposit_adjustment,currency)}</td><td>{money(row.overtime_bonus,currency)}</td><td>{money(row.extra_adjustment,currency)}</td><td>{money(row.next_deduction,currency)}</td><td>{money(row.overpayment_deduction,currency)}</td><td>{money(row.other_adjustment,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${matchClass(row)}`}>{matchLabel(row)}</span>}</td><td className="payroll-remark-cell">{row.remark||'—'}</td></tr>):<tr><td className="payroll-table-empty" colSpan="26">暂无符合条件的工资记录</td></tr>}</tbody>
-  </table></div>{expandedPlatform&&<div className="payroll-value-modal-backdrop" role="presentation" onMouseDown={()=>setExpandedPlatform('')}><div className="payroll-value-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-platform-modal-title" onMouseDown={event=>event.stopPropagation()}><header><h3 id="payroll-platform-modal-title">完整盘口 / 平台</h3><button type="button" aria-label="关闭" onClick={()=>setExpandedPlatform('')}>×</button></header><p>{expandedPlatform}</p></div></div>}</>
+  </table></div>{expandedPlatform&&<div className="payroll-value-modal-backdrop" role="presentation" onMouseDown={()=>setExpandedPlatform('')}><div className="payroll-value-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-platform-modal-title" onMouseDown={event=>event.stopPropagation()}><header><h3 id="payroll-platform-modal-title">完整盘口 / 平台</h3><button type="button" className="payroll-dialog-close" aria-label="关闭" onClick={()=>setExpandedPlatform('')}><span aria-hidden="true">×</span></button></header><p>{expandedPlatform}</p></div></div>}</>
+}
+
+const payrollDisplayValue=value=>{
+  if(value==null)return ''
+  if(typeof value==='object')return clean(value.name||value.title||value.label)
+  return clean(value)
+}
+const payrollReadPath=(record,path)=>path.split('.').reduce((value,part)=>value?.[part],record)
+const payrollPick=(record,...paths)=>{
+  for(const path of paths){
+    const value=payrollDisplayValue(payrollReadPath(record,path))
+    if(value)return value
+  }
+  return '—'
+}
+const payrollStatusLabel=value=>({active:'在职',resigned:'离职',unmatched:'未匹配',pending:'待入职'}[clean(value).toLowerCase()]||payrollDisplayValue(value)||'—')
+const payrollTypeLabel=value=>({home_ph:'纯居家菲律宾',home_vn:'纯居家越南',home_id:'纯居家印尼',home_mm:'纯居家缅甸',onsite_to_home:'现场转居家',pure_remote:'纯居家',remote:'居家',onsite:'现场',hybrid:'混合办公'}[clean(value).toLowerCase()]||payrollDisplayValue(value)||'—')
+
+function PayrollEmployeeDrawer({panel,onClose}){
+  const employee=panel.employee||{}
+  const name=payrollPick(employee,'full_name','name')
+  const employeeNo=payrollPick(employee,'employee_no','employeeNo')
+  const status=payrollStatusLabel(payrollPick(employee,'status'))
+  const basicRows=[
+    ['员工ID',employeeNo],
+    ['姓名',name],
+    ['员工国家',payrollPick(employee,'country','nationality')],
+    ['员工类型',payrollTypeLabel(payrollPick(employee,'employment_type','employee_type'))],
+    ['状态',status],
+    ['入职日期',payrollPick(employee,'hire_date')],
+    ['离职日期',payrollPick(employee,'resign_date','departure_date')],
+  ]
+  const organizationRows=[
+    ['团队',payrollPick(employee,'teams.name','team.name','team_name','team')],
+    ['组别',payrollPick(employee,'groups.name','group.name','group_name')],
+    ['岗位',payrollPick(employee,'positions.name','position.name','position_name','schedule_position')],
+    ['班次',payrollPick(employee,'shift_name','shift.name','shift')],
+    ['负责人 / 组长',payrollPick(employee,'person_in_charge','leader_name','manager_name')],
+    ['培训老师',payrollPick(employee,'online_trainer','trainer_name')],
+    ['盘口 / 平台',payrollPick(employee,'platform_scope','platform')],
+    ['工作内容',payrollPick(employee,'work_content')],
+  ]
+  return <div className="payroll-employee-drawer-backdrop" role="presentation" onMouseDown={onClose}>
+    <aside className="payroll-employee-drawer" role="dialog" aria-modal="true" aria-labelledby="payroll-employee-drawer-title" onMouseDown={event=>event.stopPropagation()}>
+      <header className="payroll-employee-drawer-head">
+        <div className="payroll-employee-avatar">{name==='—'?'E':name.slice(0,1).toUpperCase()}</div>
+        <div><span>{employeeNo}</span><h2 id="payroll-employee-drawer-title">{name}</h2><div className="payroll-employee-badges"><b data-status={clean(employee.status).toLowerCase()}>{status}</b>{payrollPick(employee,'teams.name','team_name')!=='—'&&<b>{payrollPick(employee,'teams.name','team_name')}</b>}{payrollPick(employee,'positions.name','position_name')!=='—'&&<b>{payrollPick(employee,'positions.name','position_name')}</b>}</div></div>
+        <button type="button" className="payroll-dialog-close" aria-label="关闭员工档案" onClick={onClose}><span aria-hidden="true">×</span></button>
+      </header>
+      <div className="payroll-employee-drawer-body">
+        {panel.loading&&<div className="payroll-employee-loading"><i/><span>正在读取员工档案…</span></div>}
+        {panel.error&&<div className="payroll-employee-error">{panel.error}</div>}
+        <PayrollEmployeeSection title="基本资料" rows={basicRows}/>
+        <PayrollEmployeeSection title="组织与岗位" rows={organizationRows}/>
+      </div>
+    </aside>
+  </div>
+}
+
+function PayrollEmployeeSection({title,rows}){
+  return <section className="payroll-employee-section"><h3>{title}</h3><dl>{rows.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value||'—'}</dd></div>)}</dl></section>
 }
