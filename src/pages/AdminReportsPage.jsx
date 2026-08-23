@@ -144,7 +144,7 @@ export default function AdminReportsPage(){
   </div>
 }
 
-function Loading(){return <div className="rp-card rp-loading">正在读取居家排班表与效率表…</div>}
+function Loading(){return <div className="rp-card rp-loading">正在读取 Supabase 同步数据…</div>}
 function GlobalFilters({tab,value,onChange,onQuery,onReset,options,meta,extraFields,extraActions,loading=false}){
   const set=(key,next)=>onChange({...value,[key]:next})
   const visible=new Set(FILTER_PROFILES[tab]||FILTER_PROFILES.总汇)
