@@ -37,11 +37,10 @@ const ADMIN_NAV = [
     ['人工批改', `/admin/training?tab=${enc('人工批改')}`],
   ]},
   { to:'/admin/payroll', label:'工资中心', icon:'薪', children:[
-    ['工资计算', `/admin/payroll?tab=${enc('工资计算')}`],
-    ['待复核', `/admin/payroll?tab=${enc('待复核')}`],
+    ['工资导入', `/admin/payroll?tab=${enc('工资导入')}`],
+    ['待发布', `/admin/payroll?tab=${enc('待发布')}`],
     ['已发布', `/admin/payroll?tab=${enc('已发布')}`],
-    ['工资规则', `/admin/payroll?tab=${enc('工资规则')}`],
-    ['导出记录', `/admin/payroll?tab=${enc('导出记录')}`],
+    ['导入记录', `/admin/payroll?tab=${enc('导入记录')}`],
   ]},
   { to:'/admin/users', label:'用户与权限', icon:'权', children:[
     ['后台账号', '/admin/users?tab=backend'],

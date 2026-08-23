@@ -12,6 +12,8 @@ import AdminReportsPage from './pages/AdminReportsPage'
 import AdminDailyWorkPage from './pages/AdminDailyWorkPage'
 import AdminTrainingPage from './pages/AdminTrainingPage'
 import StaffExamPage from './pages/StaffExamPage'
+import AdminPayrollPage from './pages/AdminPayrollPage'
+import StaffPayrollPage from './pages/StaffPayrollPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 
@@ -166,13 +168,13 @@ export default function App() {
     <Route path="/admin/schedule" element={<Protected mode="admin"><AppLayout mode="admin"><ModulePage module="schedule" /></AppLayout></Protected>} />
     <Route path="/admin/daily" element={<Protected mode="admin"><AppLayout mode="admin"><AdminDailyWorkPage /></AppLayout></Protected>} />
     <Route path="/admin/training" element={<Protected mode="admin"><AppLayout mode="admin"><AdminTrainingPage /></AppLayout></Protected>} />
-    <Route path="/admin/payroll" element={<Protected mode="admin"><AppLayout mode="admin"><ModulePage module="payroll" /></AppLayout></Protected>} />
+    <Route path="/admin/payroll" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPayrollPage /></AppLayout></Protected>} />
     <Route path="/admin/reports" element={<Protected mode="admin"><AppLayout mode="admin"><AdminReportsPage /></AppLayout></Protected>} />
     <Route path="/admin/users" element={<Protected mode="admin"><AppLayout mode="admin"><AdminUsersPage /></AppLayout></Protected>} />
     <Route path="/staff" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome /></AppLayout></Protected>} />
     <Route path="/staff/schedule" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title="我的排班" /></AppLayout></Protected>} />
     <Route path="/staff/attendance" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title="我的出勤" /></AppLayout></Protected>} />
-    <Route path="/staff/payroll" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title="我的工资" /></AppLayout></Protected>} />
+    <Route path="/staff/payroll" element={<Protected mode="staff"><AppLayout mode="staff"><StaffPayrollPage /></AppLayout></Protected>} />
     <Route path="/staff/exams" element={<Protected mode="staff"><AppLayout mode="staff"><StaffExamPage /></AppLayout></Protected>} />
     <Route path="/staff/requests" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title="我的申请" /></AppLayout></Protected>} />
     <Route path="*" element={<Navigate to="/staff/login" replace />} />
