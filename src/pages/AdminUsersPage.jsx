@@ -28,9 +28,12 @@ const blankStaffAccount = () => ({
 const actionLabels = {
   view: '查看',
   create: '新增',
+  submit: '提交',
   edit: '编辑',
   delete: '删除',
   approve: '审批',
+  review: '批注 / 复核',
+  grade: '批改',
   export: '导出',
   publish: '发布',
   manage: '管理',
@@ -38,38 +41,48 @@ const actionLabels = {
   reset_password: '重置密码',
   otp_toggle: 'OTP开关',
   mfa_reset: '重置OTP',
+  resign: '办理离职',
+  general: '通用导出',
 }
 
-const moduleLabels = {
-  account: '账号安全',
-  user: '用户与权限',
-  employee: '员工档案',
-  'employee.compensation': '员工薪资资料',
-  team: '团队管理',
-  schedule: '排班表',
-  attendance: '考勤管理',
-  leave: '请假与离岗',
-  daily_work: '每日工作报告',
-  online_training: '线上培训报告',
-  report: '统计报表',
-  exam: '考试管理',
-  adjustment: '调整与奖惩',
-  payroll: '工资中心',
-  'payroll.rule': '工资规则',
-  audit: '操作日志',
-  export: '数据导出',
-  sensitive: '敏感资料',
-}
-
-const permissionActionOrder = ['view', 'create', 'submit', 'edit', 'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable', 'reset_password', 'otp_toggle', 'mfa_reset']
-const permissionColumns = [
-  { key: 'view', label: '查看', actions: ['view'] },
-  { key: 'create', label: '新增 / 提交', actions: ['create', 'submit'] },
-  { key: 'edit', label: '编辑', actions: ['edit'] },
-  { key: 'delete', label: '删除', actions: ['delete'] },
-  { key: 'manage', label: '审批 / 管理', actions: ['approve', 'manage', 'grade', 'publish'] },
-  { key: 'other', label: '其他', actions: ['export', 'disable', 'reset_password', 'otp_toggle', 'mfa_reset'] },
+const permissionSectionDefinitions = [
+  { key: 'employee', label: '员工管理', description: '员工档案、薪资资料、团队与人员状态' },
+  { key: 'attendance', label: '排班与考勤', description: '排班、考勤、请假及离岗审批' },
+  { key: 'work', label: '每日工作', description: '工作日报、线上培训与出错奖惩' },
+  { key: 'exam', label: '考试管理', description: '考试查看、分配、题库与批改' },
+  { key: 'payroll', label: '工资中心', description: '工资资料、规则、审核、发布与导出' },
+  { key: 'report', label: '统计报表', description: '经营统计、报表查看与数据导出' },
+  { key: 'access', label: '用户与权限', description: '账号安全、角色权限与登录控制' },
+  { key: 'system', label: '系统与审计', description: '敏感资料、操作日志及系统功能' },
+  { key: 'other', label: '其他功能', description: '尚未归类的系统权限' },
 ]
+
+const permissionModuleMeta = {
+  account: { section: 'access', label: '后台账号', description: '创建、停用、删除账号及登录安全设置' },
+  user: { section: 'access', label: '用户与权限', description: '查看账号并管理角色权限' },
+  role: { section: 'access', label: '角色管理', description: '创建、编辑及分配系统角色' },
+  employee: { section: 'employee', label: '员工档案', description: '员工资料的查看、新增、编辑与离职操作' },
+  'employee.compensation': { section: 'employee', label: '员工薪资资料', description: '员工固定薪资及补贴等资料' },
+  team: { section: 'employee', label: '团队管理', description: '团队资料、组织关系及成员归属' },
+  schedule: { section: 'attendance', label: '排班管理', description: '排班表与轮班规则' },
+  attendance: { section: 'attendance', label: '考勤管理', description: '员工考勤记录的查看与维护' },
+  leave: { section: 'attendance', label: '请假与离岗', description: '请假、公休、回家及换班审批' },
+  daily_work: { section: 'work', label: '每日工作报告', description: '每日工作记录的提交与管理' },
+  online_training: { section: 'work', label: '线上培训报告', description: '培训日报的提交、批注及管理' },
+  adjustment: { section: 'work', label: '出错 / 扣款 / 奖金', description: '奖惩记录的录入与审核' },
+  exam: { section: 'exam', label: '考试管理', description: '考试、题库、分配及成绩批改' },
+  payroll: { section: 'payroll', label: '工资管理', description: '工资批次的查看、编辑、审核与发布' },
+  'payroll.rule': { section: 'payroll', label: '工资规则', description: '工资计算规则及阈值配置' },
+  'sensitive.payout': { section: 'payroll', label: '敏感收款资料', description: '完整收款资料的查看、修改与审核' },
+  report: { section: 'report', label: '统计报表', description: '统计页面与范围内报表数据' },
+  export: { section: 'report', label: '数据导出', description: '通用数据导出能力' },
+  'sensitive.employee': { section: 'system', label: '员工敏感资料', description: '受保护的员工个人资料' },
+  sensitive: { section: 'system', label: '敏感资料', description: '系统内受保护的敏感数据' },
+  audit: { section: 'system', label: '操作日志', description: '后台操作与安全审计记录' },
+}
+
+const permissionModuleOrder = Object.keys(permissionModuleMeta)
+const permissionActionOrder = ['view', 'create', 'submit', 'edit', 'review', 'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable', 'resign', 'reset_password', 'otp_toggle', 'mfa_reset', 'general']
 
 function getRole(a) {
   return Array.isArray(a?.roles) ? a.roles[0] : a?.roles
@@ -168,19 +181,68 @@ export default function AdminUsersPage() {
     return map
   }, [rolePermissions])
 
-  const groupedPermissions = useMemo(() => {
-    const groups = new Map()
-    for (const p of permissions) {
-      const s = permissionShape(p.code)
-      if (!groups.has(s.module)) groups.set(s.module, [])
-      groups.get(s.module).push({ ...p, actionKey: s.action })
+  const groupedPermissionSections = useMemo(() => {
+    const sections = new Map(permissionSectionDefinitions.map(section => [section.key, {
+      ...section,
+      pages: new Map(),
+    }]))
+
+    for (const permission of permissions) {
+      const shape = permissionShape(permission.code)
+      const moduleMeta = permissionModuleMeta[shape.module] || {
+        section: 'other',
+        label: permission.category || shape.module,
+        description: '系统扩展功能',
+      }
+      const section = sections.get(moduleMeta.section) || sections.get('other')
+      if (!section.pages.has(shape.module)) {
+        section.pages.set(shape.module, {
+          key: shape.module,
+          label: moduleMeta.label,
+          description: moduleMeta.description,
+          items: [],
+        })
+      }
+      section.pages.get(shape.module).items.push({ ...permission, actionKey: shape.action })
     }
-    return [...groups.entries()].map(([module, items]) => ({
-      module,
-      label: moduleLabels[module] || module,
-      items: [...items].sort((a, b) => permissionActionOrder.indexOf(a.actionKey) - permissionActionOrder.indexOf(b.actionKey)),
-    }))
+
+    return [...sections.values()]
+      .map(section => ({
+        ...section,
+        pages: [...section.pages.values()]
+          .sort((a, b) => {
+            const aIndex = permissionModuleOrder.indexOf(a.key)
+            const bIndex = permissionModuleOrder.indexOf(b.key)
+            return (aIndex < 0 ? 999 : aIndex) - (bIndex < 0 ? 999 : bIndex)
+          })
+          .map(page => ({
+            ...page,
+            items: [...page.items].sort((a, b) => {
+              const aIndex = permissionActionOrder.indexOf(a.actionKey)
+              const bIndex = permissionActionOrder.indexOf(b.actionKey)
+              return (aIndex < 0 ? 999 : aIndex) - (bIndex < 0 ? 999 : bIndex)
+            }),
+          })),
+      }))
+      .filter(section => section.pages.length > 0)
   }, [permissions])
+
+  const visiblePermissionSections = useMemo(() => {
+    const query = String(roleModal?.permission_search || '').trim().toLowerCase()
+    if (!query) return groupedPermissionSections
+
+    return groupedPermissionSections.map(section => {
+      const sectionMatches = `${section.label} ${section.description}`.toLowerCase().includes(query)
+      const pages = section.pages.map(page => {
+        const pageMatches = `${page.label} ${page.description} ${page.key}`.toLowerCase().includes(query)
+        const items = sectionMatches || pageMatches
+          ? page.items
+          : page.items.filter(permission => `${permission.name || ''} ${permission.code || ''} ${actionLabels[permission.actionKey] || ''}`.toLowerCase().includes(query))
+        return { ...page, items }
+      }).filter(page => page.items.length > 0)
+      return { ...section, pages }
+    }).filter(section => section.pages.length > 0)
+  }, [groupedPermissionSections, roleModal?.permission_search])
 
   const openCreate = () => setAccountModal({ mode: 'create', form: blankAccount(), error: '', saving: false })
   const openCreateStaff = () => setStaffModal({ form: blankStaffAccount(), error: '', saving: false })
@@ -309,14 +371,23 @@ export default function AdminUsersPage() {
       role,
       name: role.name,
       permission_ids: selected,
+      permission_search: '',
+      collapsed_sections: [],
+      error: '',
+      saving: false,
     })
   }
 
   const saveRole = async () => {
     if (!roleModal) return
+    if (!roleModal.name.trim()) {
+      setRoleModal(x => ({ ...x, error: '角色名称不能为空。' }))
+      return
+    }
+    setRoleModal(x => ({ ...x, error: '', saving: true }))
     try {
-      if (!roleModal.role.system_locked && roleModal.name !== roleModal.role.name) {
-        await call({ action: 'rename_role', role_id: roleModal.role.id, name: roleModal.name })
+      if (!roleModal.role.system_locked && roleModal.name.trim() !== roleModal.role.name) {
+        await call({ action: 'rename_role', role_id: roleModal.role.id, name: roleModal.name.trim() })
       }
       if (roleModal.role.code !== 'founder') {
         await call({
@@ -327,7 +398,9 @@ export default function AdminUsersPage() {
       }
       setRoleModal(null)
       await load()
-    } catch (e) { setError(e.message) }
+    } catch (e) {
+      setRoleModal(x => x ? ({ ...x, error: e.message, saving: false }) : x)
+    }
   }
 
   const deleteRole = async (role) => {
@@ -338,22 +411,23 @@ export default function AdminUsersPage() {
     } catch (e) { setError(e.message) }
   }
 
-  const permissionToggle = (p) => (
-    <label key={p.id} className="permission-choice">
-      <input type="checkbox"
-        disabled={roleModal.role.code === 'founder'}
-        checked={roleModal.role.code === 'founder' || roleModal.permission_ids.includes(p.id)}
-        onChange={e => setRoleModal(x => ({
-          ...x,
-          permission_ids: e.target.checked
-            ? [...x.permission_ids, p.id]
-            : x.permission_ids.filter(id => id !== p.id)
-        }))}
-      />
-      <span>{p.name || actionLabels[p.actionKey] || p.actionKey}</span>
-      {p.sensitive && <em>敏感</em>}
-    </label>
-  )
+  const roleIsLocked = roleModal?.role.code === 'founder'
+  const selectedPermissionIds = new Set(roleModal?.permission_ids || [])
+
+  const updatePermissionSelection = (permissionIds, checked) => {
+    setRoleModal(current => {
+      if (!current || current.role.code === 'founder') return current
+      const next = new Set(current.permission_ids)
+      permissionIds.forEach(id => checked ? next.add(id) : next.delete(id))
+      return { ...current, permission_ids: [...next], error: '' }
+    })
+  }
+
+  const displayPermissionName = permission => {
+    const name = String(permission.name || '').trim()
+    if (name.includes('·')) return name.split('·').slice(1).join('·').trim()
+    return name || actionLabels[permission.actionKey] || permission.actionKey
+  }
 
   return (
     <div className="content-page access-page">
@@ -366,25 +440,30 @@ export default function AdminUsersPage() {
         .access-grid-actions{display:flex;gap:7px;flex-wrap:wrap}
         .access-grid-actions button{border:1px solid #d9e2ed;background:#fff;border-radius:7px;padding:6px 8px;font-size:11px;cursor:pointer}
         .access-grid-actions button.danger{color:#bd4242}
-        .role-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-        .role-card{border:1px solid #e0e7ef;background:#fff;border-radius:13px;padding:16px}
-        .role-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
-        .role-card h3{margin:0;font-size:15px}.role-card small{color:#8995a6}
-        .role-card-actions{display:flex;gap:7px;margin-top:13px}.role-card-actions button{border:1px solid #dbe3ed;background:#fff;border-radius:8px;padding:7px 10px}
-        .create-role-row{display:flex;gap:8px;margin-bottom:14px}.create-role-row input{height:40px;border:1px solid #d8e1eb;border-radius:9px;padding:0 11px}
+        .roles-workspace{overflow:hidden;border:1px solid #dce5f0;border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(29,51,82,.04)}
+        .roles-overview{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 24px;border-bottom:1px solid #e5ebf3;background:linear-gradient(135deg,#f8fbff 0%,#f3f7ff 62%,#f8f6ff 100%)}
+        .roles-overview-copy span{display:block;margin-bottom:5px;color:#315fc8;font-size:10px;font-weight:900;letter-spacing:.12em}.roles-overview-copy h2{margin:0 0 6px;color:#1f3552;font-size:20px}.roles-overview-copy p{max-width:660px;margin:0;color:#718198;font-size:13px;line-height:1.65}
+        .roles-overview-stats{display:flex;gap:10px;flex:0 0 auto}.roles-overview-stats div{min-width:92px;padding:11px 14px;border:1px solid #dce5f1;border-radius:11px;background:rgba(255,255,255,.82)}.roles-overview-stats strong,.roles-overview-stats small{display:block}.roles-overview-stats strong{color:#243d5c;font-size:20px}.roles-overview-stats small{margin-top:3px;color:#8492a5;font-size:10px}
+        .roles-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #e8edf4}.role-search{display:flex;align-items:center;gap:7px;min-width:280px;max-width:520px;flex:1}.role-search input,.create-role-row input{width:100%;height:39px;border:1px solid #d7e0eb;border-radius:9px;background:#fff;padding:0 11px;color:#334b68;outline:none}.role-search input:focus,.create-role-row input:focus{border-color:#4d77dd;box-shadow:0 0 0 3px rgba(77,119,221,.09)}.role-search button,.create-role-row button{height:39px;white-space:nowrap}.create-role-row{display:flex;gap:7px;min-width:330px}.create-role-row input{min-width:180px}
+        .role-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:16px;background:#f7f9fc}
+        .role-card{display:flex;min-height:208px;flex-direction:column;border:1px solid #dfe7f0;background:#fff;border-radius:13px;padding:16px;box-shadow:0 3px 12px rgba(30,54,85,.035);transition:border-color .18s,box-shadow .18s,transform .18s}.role-card:hover{border-color:#cbd9ec;box-shadow:0 9px 24px rgba(31,55,88,.08);transform:translateY(-1px)}
+        .role-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.role-card-title{display:flex;align-items:center;gap:10px;min-width:0}.role-avatar{display:grid;place-items:center;width:38px;height:38px;flex:0 0 auto;border-radius:10px;background:#edf3ff;color:#3465d5;font-size:14px;font-weight:900}.role-card h3{overflow:hidden;margin:0;color:#253b58;font-size:15px;white-space:nowrap;text-overflow:ellipsis}.role-card-title small{display:block;margin-top:4px;color:#8996a8;font-size:10px}.role-lock{display:inline-flex;align-items:center;padding:4px 7px;border-radius:999px;background:#edf8f2;color:#20805a;font-size:9px;font-weight:850}
+        .role-permission-summary{margin-top:16px}.role-permission-summary>div:first-child{display:flex;align-items:center;justify-content:space-between;color:#697b92;font-size:10px}.role-permission-summary strong{color:#315fc8;font-size:11px}.role-progress{height:6px;margin:7px 0 10px;overflow:hidden;border-radius:999px;background:#edf1f6}.role-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#3971df,#765ce1)}.role-module-tags{display:flex;min-height:24px;gap:5px;flex-wrap:wrap}.role-module-tags span{padding:4px 7px;border-radius:6px;background:#f2f5f9;color:#60728a;font-size:9px}.role-module-tags span.more{background:#edf2ff;color:#3f67c5}.role-module-tags small{padding-top:4px;color:#9aa6b5;font-size:9px}
+        .role-card-actions{display:flex;gap:7px;margin-top:auto;padding-top:14px}.role-card-actions button{height:34px;border:1px solid #d5dfeb;background:#fff;border-radius:8px;padding:0 11px;color:#486078;font-size:11px;font-weight:800;cursor:pointer}.role-card-actions button.primary{border-color:#d3dfff;background:#f1f5ff;color:#2d61d3}.role-card-actions button.danger{margin-left:auto;color:#b85050}
         .access-searchbar{display:grid;grid-template-columns:minmax(300px,1fr) auto auto auto;align-items:center;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
         .account-modal{width:min(760px,94vw);max-height:min(760px,88vh);display:flex;flex-direction:column;overflow:hidden}.account-modal .modal-head{flex:0 0 auto}.account-modal .account-modal-body{overflow:auto;padding:2px 3px 8px}.account-modal .modal-actions{flex:0 0 auto;position:sticky;bottom:0;background:#fff;border-top:1px solid #edf1f5;padding-top:12px;margin-top:6px;z-index:2}
         .scope-panel{grid-column:1/-1;border:1px solid #e3e9f1;border-radius:11px;padding:12px;background:#fafbfd}
         .scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.scope-column-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}.scope-column-head span{font-size:10px;color:#5873a1}.scope-search{width:100%;height:36px!important;margin-bottom:7px}.check-list{max-height:180px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px;background:#fff;padding:8px}
         .check-list label{display:flex;gap:8px;align-items:center;padding:7px 5px;font-size:12px;color:#46566d}
-        .permission-matrix{overflow:auto;border:1px solid #e1e8f0;border-radius:11px}.permission-matrix table{width:100%;border-collapse:collapse}
-        .permission-matrix th,.permission-matrix td{padding:10px 11px;border-bottom:1px solid #edf1f5;font-size:12px;text-align:center}.permission-matrix th:first-child,.permission-matrix td:first-child{text-align:left}
-        .permission-matrix th{background:#f8fafc;color:#67778d;position:sticky;top:0}.sensitive-row{background:#fff9f1}
-        .permission-matrix td.permission-cell{min-width:110px;vertical-align:top}.permission-empty{color:#c2cad5}
-        .permission-choice{display:flex;align-items:flex-start;gap:6px;text-align:left;margin:2px 0;color:#3e4f66}.permission-choice input{margin-top:2px}.permission-choice em{font-size:9px;color:#a96019;background:#fff1dc;padding:1px 4px;border-radius:4px;font-style:normal}
-        .role-modal{width:min(920px,96vw)}
+        .permissions-modal-mask{padding:clamp(10px,2vw,24px)}.role-modal{display:flex;width:min(1180px,calc(100vw - 36px));height:min(860px,calc(100dvh - 36px));max-height:none;flex-direction:column;overflow:hidden;padding:0;border-radius:18px;background:#f5f7fa}.role-modal .role-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto;margin:0;padding:17px 20px;border-bottom:1px solid #dfe6ef;background:#fff}.role-modal-heading{display:flex;align-items:center;gap:11px}.role-modal-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:11px;background:#eaf1ff;color:#3265da;font-weight:900}.role-modal-head h2{margin:0 0 4px;color:#203754;font-size:19px}.role-modal-head p{margin:0;color:#7c8ba0;font-size:12px}.role-modal-head>button{width:34px;height:34px;flex:0 0 auto;border:0;border-radius:9px;background:#f0f3f7;color:#748297;font-size:21px;cursor:pointer}.role-modal-head>button:hover{background:#e9edf3;color:#344b67}
+        .role-modal-body{min-height:0;overflow:auto;padding:16px 18px 24px;overscroll-behavior:contain;scrollbar-gutter:stable}.role-modal .page-error{margin-bottom:12px}.role-identity-panel{display:grid;grid-template-columns:minmax(260px,1fr) auto;align-items:end;gap:18px;margin-bottom:12px;padding:14px 15px;border:1px solid #dfe6ef;border-radius:12px;background:#fff}.role-name-field{display:flex;flex-direction:column;gap:6px;color:#5e718a;font-size:11px;font-weight:850}.role-name-field input{width:100%;height:39px;border:1px solid #d3deea;border-radius:9px;padding:0 11px;color:#2e4561;outline:none}.role-name-field input:focus{border-color:#4b76dc;box-shadow:0 0 0 3px rgba(75,118,220,.09)}.role-name-field input:disabled{background:#f3f5f8;color:#728196}.role-selection-summary{display:flex;gap:8px}.role-selection-summary div{min-width:108px;padding:9px 11px;border-radius:9px;background:#f4f7fb}.role-selection-summary strong,.role-selection-summary small{display:block}.role-selection-summary strong{color:#2d5fce;font-size:17px}.role-selection-summary small{margin-top:2px;color:#8391a4;font-size:10px}
+        .permission-guidance{display:flex;align-items:flex-start;gap:8px;margin:-2px 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.permission-guidance strong{flex:0 0 auto;color:#3564c8}.permission-toolbar{position:sticky;top:-16px;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding:11px 12px;border:1px solid #dce5ef;border-radius:11px;background:rgba(255,255,255,.96);box-shadow:0 5px 16px rgba(31,51,79,.05);backdrop-filter:blur(8px)}.permission-search{display:flex;align-items:center;min-width:260px;max-width:520px;flex:1;height:39px;border:1px solid #d3deea;border-radius:9px;background:#fff;padding:0 10px}.permission-search span{margin-right:7px;color:#91a0b3}.permission-search input{min-width:0;flex:1;height:35px;border:0;background:transparent;color:#344b67;outline:none}.permission-toolbar-actions{display:flex;gap:7px}.permission-toolbar-actions button{height:35px;border:1px solid #d3deea;border-radius:8px;background:#fff;padding:0 10px;color:#51677f;font-size:11px;font-weight:800;cursor:pointer}.permission-toolbar-actions button:hover{border-color:#b9cae2;background:#f7f9fc}.permission-toolbar-actions button:disabled{opacity:.5;cursor:not-allowed}.founder-permission-note{display:flex;align-items:flex-start;gap:9px;margin-bottom:12px;padding:11px 13px;border:1px solid #cce7d9;border-radius:10px;background:#f1fbf6;color:#34775b;font-size:11px;line-height:1.55}.founder-permission-note strong{flex:0 0 auto}
+        .permission-sections{display:flex;flex-direction:column;gap:11px}.permission-section{overflow:hidden;border:1px solid #dce4ee;border-radius:13px;background:#fff}.permission-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;border-bottom:1px solid #e7ecf3;background:#f9fbfd}.permission-section-head-main{display:flex;align-items:center;gap:10px;min-width:0}.permission-section-head-main>input,.permission-page-title>input,.permission-option>input{width:17px;height:17px;flex:0 0 auto;margin:0;accent-color:#3568da;cursor:pointer}.permission-section-head-main>input:disabled,.permission-page-title>input:disabled,.permission-option>input:disabled{cursor:not-allowed}.permission-section-head h3{margin:0;color:#263e5b;font-size:14px}.permission-section-head p{margin:3px 0 0;color:#8290a3;font-size:10px}.permission-section-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}.permission-count{padding:4px 7px;border-radius:999px;background:#edf3ff;color:#3d65c3;font-size:10px;font-weight:850}.permission-section-actions button{width:29px;height:29px;border:0;border-radius:7px;background:#eef2f6;color:#667991;cursor:pointer}.permission-section.collapsed .permission-section-head{border-bottom:0}
+        .permission-page-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px}.permission-page{overflow:hidden;border:1px solid #e1e7ef;border-radius:11px;background:#fbfcfe}.permission-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #e8edf3;background:#fff}.permission-page-title{display:flex;align-items:flex-start;gap:9px;min-width:0}.permission-page-title>input{margin-top:2px}.permission-page-title strong,.permission-page-title small{display:block}.permission-page-title strong{color:#334b67;font-size:12px}.permission-page-title small{margin-top:3px;color:#8996a7;font-size:10px;line-height:1.45}.permission-page-head>span{flex:0 0 auto;color:#7c8ca0;font-size:10px}.permission-options{display:grid;grid-template-columns:1fr;gap:6px;padding:9px}.permission-option{display:flex;align-items:flex-start;gap:9px;min-width:0;padding:9px 10px;border:1px solid #e4e9f0;border-radius:8px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.permission-option:hover{border-color:#c8d6e9;background:#f9fbff}.permission-option.selected{border-color:#bfd0f4;background:#f2f6ff}.permission-option.locked{cursor:default}.permission-option>input{margin-top:2px}.permission-option-copy{min-width:0;flex:1}.permission-option-copy strong,.permission-option-copy small{display:block}.permission-option-copy strong{color:#3c5069;font-size:12px;line-height:1.4}.permission-option-copy small{overflow:hidden;margin-top:3px;color:#96a1b0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;white-space:nowrap;text-overflow:ellipsis}.sensitive-badge{flex:0 0 auto;padding:3px 5px;border-radius:5px;background:#fff0db;color:#a76520;font-size:9px;font-style:normal;font-weight:850}.permission-empty-state{padding:35px 18px;border:1px dashed #ccd7e5;border-radius:12px;background:#fff;color:#7d8da2;text-align:center}.permission-empty-state strong,.permission-empty-state span{display:block}.permission-empty-state strong{margin-bottom:5px;color:#465d78;font-size:13px}.permission-empty-state span{font-size:11px}
+        .role-modal>.modal-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;margin:0;padding:12px 18px;border-top:1px solid #dde5ef;background:#fff}.role-modal-actions-note{color:#8291a4;font-size:11px}.role-modal-actions-buttons{display:flex;gap:8px}.role-modal>.modal-actions button{height:39px}.role-modal>.modal-actions button:disabled{opacity:.55;cursor:not-allowed}
         .employee-search-results{grid-column:1/-1;max-height:235px;overflow:auto;border:1px solid #dce5ef;border-radius:10px;background:#fff;padding:5px}.employee-search-option{width:100%;display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;border:0;border-bottom:1px solid #edf1f5;background:#fff;padding:10px;text-align:left;cursor:pointer}.employee-search-option:hover{background:#f3f7ff}.employee-search-option:last-child{border-bottom:0}.employee-search-option strong{color:#24415f}.employee-search-option small{color:#738198}.employee-search-option span{font-size:11px;color:#376ac5}.linked-employee{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #bfe6d0;background:#f0fbf5;border-radius:9px;color:#18784a;font-size:12px}.linked-employee button{border:0;background:transparent;color:#b34b4b;cursor:pointer}
-        @media(max-width:900px){.role-list{grid-template-columns:1fr}.scope-columns{grid-template-columns:1fr}.access-searchbar{grid-template-columns:1fr 1fr}.access-searchbar input{grid-column:1/-1}.employee-search-option{grid-template-columns:95px 1fr}}
+        @media(max-width:1100px){.role-list{grid-template-columns:repeat(2,minmax(0,1fr))}.roles-toolbar{align-items:stretch;flex-direction:column}.role-search{max-width:none}.create-role-row{min-width:0}.permission-page-grid{grid-template-columns:1fr}}
+        @media(max-width:700px){.roles-overview{align-items:flex-start;flex-direction:column}.roles-overview-stats{width:100%}.roles-overview-stats div{min-width:0;flex:1}.role-list{grid-template-columns:1fr}.role-search,.create-role-row{min-width:0;width:100%}.create-role-row{flex-direction:column}.permissions-modal-mask{padding:6px}.role-modal{width:calc(100vw - 12px);height:calc(100dvh - 12px);border-radius:13px}.role-identity-panel{grid-template-columns:1fr}.role-selection-summary div{flex:1}.permission-toolbar{align-items:stretch;flex-direction:column}.permission-search{min-width:0;width:100%}.permission-toolbar-actions{display:grid;grid-template-columns:1fr 1fr}.role-modal>.modal-actions{align-items:stretch;flex-direction:column}.role-modal-actions-buttons{display:grid;grid-template-columns:1fr 1fr}.scope-columns{grid-template-columns:1fr}.access-searchbar{grid-template-columns:1fr 1fr}.access-searchbar input{grid-column:1/-1}.employee-search-option{grid-template-columns:95px 1fr}}
       `}</style>
 
       <div className="page-toolbar">
@@ -470,26 +549,71 @@ export default function AdminUsersPage() {
           )}
 
           {tab === 'roles' && (
-            <>
-              {callerFounder && <div className="create-role-row">
-                <input placeholder="新角色名称" value={newRoleName} onChange={e => setNewRoleName(e.target.value)} />
-                <button className="primary-action" onClick={createRole}>新增角色</button>
-              </div>}
+            <div className="roles-workspace">
+              <div className="roles-overview">
+                <div className="roles-overview-copy">
+                  <span>ACCESS CONTROL</span>
+                  <h2>按模块、页面和具体操作配置权限</h2>
+                </div>
+                <div className="roles-overview-stats">
+                  <div><strong>{visibleRoles.length}</strong><small>当前角色</small></div>
+                  <div><strong>{permissions.length}</strong><small>权限项目</small></div>
+                  <div><strong>{permissions.filter(permission => permission.sensitive).length}</strong><small>敏感权限</small></div>
+                </div>
+              </div>
+
+              <div className="roles-toolbar">
+                <div className="role-search">
+                  <input value={searchDraft} onChange={e => setSearchDraft(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && setSearchQuery(searchDraft)}
+                    placeholder="搜索角色名称或角色代码" />
+                  <button className="primary-action" onClick={() => setSearchQuery(searchDraft)}>查询</button>
+                  {(searchDraft || searchQuery) && <button className="secondary-action" onClick={() => { setSearchDraft(''); setSearchQuery('') }}>清除</button>}
+                </div>
+                {callerFounder && <div className="create-role-row">
+                  <input placeholder="输入新角色名称" value={newRoleName} onChange={e => setNewRoleName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && createRole()} />
+                  <button className="primary-action" onClick={createRole}>＋ 新增角色</button>
+                </div>}
+              </div>
+
               <div className="role-list">
-                {visibleRoles.map(role => (
-                  <div className="role-card" key={role.id}>
+                {visibleRoles.map(role => {
+                  const grantedIds = role.code === 'founder'
+                    ? new Set(permissions.map(permission => permission.id))
+                    : rolePermissionMap.get(role.id) || new Set()
+                  const grantedCount = grantedIds.size
+                  const sectionLabels = groupedPermissionSections
+                    .filter(section => section.pages.some(page => page.items.some(permission => grantedIds.has(permission.id))))
+                    .map(section => section.label)
+                  const progress = permissions.length ? Math.round((grantedCount / permissions.length) * 100) : 0
+
+                  return <div className="role-card" key={role.id}>
                     <div className="role-card-head">
-                      <div><h3>{role.name}</h3><small>{role.code === 'founder' ? '系统角色' : '可编辑'}</small></div>
-                      {role.code === 'founder' && <span className="status-chip">锁定</span>}
+                      <div className="role-card-title">
+                        <span className="role-avatar">{String(role.name || '角').trim().slice(0, 1).toUpperCase()}</span>
+                        <div><h3>{role.name}</h3><small>{role.code} · {role.system_locked ? '系统角色' : '自定义角色'}</small></div>
+                      </div>
+                      {role.system_locked && <span className="role-lock">锁定</span>}
+                    </div>
+                    <div className="role-permission-summary">
+                      <div><span>已授权项目</span><strong>{grantedCount} / {permissions.length}</strong></div>
+                      <div className="role-progress"><i style={{width:`${progress}%`}} /></div>
+                      <div className="role-module-tags">
+                        {sectionLabels.slice(0, 3).map(label => <span key={label}>{label}</span>)}
+                        {sectionLabels.length > 3 && <span className="more">+{sectionLabels.length - 3} 个模块</span>}
+                        {sectionLabels.length === 0 && <small>尚未配置任何页面权限</small>}
+                      </div>
                     </div>
                     <div className="role-card-actions">
-                      <button onClick={() => openRole(role)}>权限</button>
-                      {!role.system_locked && <button onClick={() => deleteRole(role)}>删除</button>}
+                      <button className="primary" onClick={() => openRole(role)}>{role.code === 'founder' ? '查看固定权限' : '配置权限'}</button>
+                      {!role.system_locked && <button className="danger" onClick={() => deleteRole(role)}>删除角色</button>}
                     </div>
                   </div>
-                ))}
+                })}
+                {visibleRoles.length === 0 && <div className="permission-empty-state" style={{gridColumn:'1 / -1'}}><strong>没有匹配的角色</strong><span>请调整搜索内容后再试。</span></div>}
               </div>
-            </>
+            </div>
           )}
         </>
       )}
@@ -611,38 +735,122 @@ export default function AdminUsersPage() {
       )}
 
       {roleModal && (
-        <div className="modal-mask" onMouseDown={() => setRoleModal(null)}>
-          <div className="modal-card role-modal" onMouseDown={e => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2>角色权限</h2>
-              <button onClick={() => setRoleModal(null)}>×</button>
+        <div className="modal-mask permissions-modal-mask" onMouseDown={() => !roleModal.saving && setRoleModal(null)}>
+          <div className="modal-card role-modal" role="dialog" aria-modal="true" aria-labelledby="role-permission-title" onMouseDown={e => e.stopPropagation()}>
+            <div className="role-modal-head">
+              <div className="role-modal-heading">
+                <span className="role-modal-icon">权</span>
+                <div>
+                  <h2 id="role-permission-title">配置「{roleModal.role.name}」的权限</h2>
+                  <p>按业务模块与对应页面逐项授权；带“敏感”标记的权限请谨慎开放。</p>
+                </div>
+              </div>
+              <button aria-label="关闭" disabled={roleModal.saving} onClick={() => setRoleModal(null)}>×</button>
             </div>
 
-            <label>角色名称
-              <input disabled={roleModal.role.system_locked} value={roleModal.name}
-                onChange={e => setRoleModal(x => ({...x, name:e.target.value}))}/>
-            </label>
+            <div className="role-modal-body">
+              {roleModal.error && <div className="page-error">{roleModal.error}</div>}
 
-            <div className="permission-matrix" style={{marginTop:14}}>
-              <table>
-                <thead><tr><th>对应页面 / 功能</th>{permissionColumns.map(col => <th key={col.key}>{col.label}</th>)}</tr></thead>
-                <tbody>
-                  {groupedPermissions.map(group => (
-                    <tr key={group.module} className={group.items.some(x=>x.sensitive) ? 'sensitive-row' : ''}>
-                      <td><strong>{group.label}</strong><small style={{display:'block',marginTop:3,color:'#98a4b3'}}>{group.module}</small></td>
-                      {permissionColumns.map(col => {
-                        const items = group.items.filter(p => col.actions.includes(p.actionKey))
-                        return <td key={col.key} className="permission-cell">{items.length ? items.map(permissionToggle) : <span className="permission-empty">—</span>}</td>
+              <div className="role-identity-panel">
+                <label className="role-name-field"><span>角色名称</span>
+                  <input disabled={roleModal.role.system_locked} value={roleModal.name}
+                    onChange={e => setRoleModal(x => ({...x, name:e.target.value, error:''}))}/>
+                </label>
+                <div className="role-selection-summary">
+                  <div><strong>{roleIsLocked ? permissions.length : permissions.filter(permission => selectedPermissionIds.has(permission.id)).length}</strong><small>已选权限</small></div>
+                  <div><strong>{groupedPermissionSections.filter(section => section.pages.some(page => page.items.some(permission => roleIsLocked || selectedPermissionIds.has(permission.id)))).length}</strong><small>已开模块</small></div>
+                </div>
+              </div>
+
+              <div className="permission-toolbar">
+                <label className="permission-search"><span>⌕</span>
+                  <input value={roleModal.permission_search} placeholder="搜索模块、页面、功能或权限代码"
+                    onChange={e => setRoleModal(x => ({...x, permission_search:e.target.value}))} />
+                </label>
+                <div className="permission-toolbar-actions">
+                  {roleModal.permission_search && <button onClick={() => setRoleModal(x => ({...x, permission_search:''}))}>清除搜索</button>}
+                  <button disabled={roleIsLocked} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), true)}>全部勾选</button>
+                  <button disabled={roleIsLocked} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), false)}>全部取消</button>
+                  <button disabled={roleModal.collapsed_sections.length === 0} onClick={() => setRoleModal(x => ({...x, collapsed_sections:[]}))}>全部展开</button>
+                </div>
+              </div>
+
+              {roleIsLocked && <div className="founder-permission-note"><strong>Founder 固定权限</strong><span>创办人角色始终拥有全部页面及操作权限，系统已锁定，不能取消勾选。</span></div>}
+
+              {visiblePermissionSections.length > 0 ? <div className="permission-sections">
+                {visiblePermissionSections.map(section => {
+                  const sourceSection = groupedPermissionSections.find(item => item.key === section.key) || section
+                  const sectionPermissionIds = sourceSection.pages.flatMap(page => page.items.map(permission => permission.id))
+                  const sectionSelectedCount = roleIsLocked
+                    ? sectionPermissionIds.length
+                    : sectionPermissionIds.filter(id => selectedPermissionIds.has(id)).length
+                  const sectionCollapsed = !roleModal.permission_search && roleModal.collapsed_sections.includes(section.key)
+
+                  return <section className={`permission-section ${sectionCollapsed ? 'collapsed' : ''}`} key={section.key}>
+                    <div className="permission-section-head">
+                      <label className="permission-section-head-main">
+                        <input type="checkbox" disabled={roleIsLocked}
+                          ref={node => { if (node) node.indeterminate = sectionSelectedCount > 0 && sectionSelectedCount < sectionPermissionIds.length }}
+                          checked={sectionSelectedCount === sectionPermissionIds.length && sectionPermissionIds.length > 0}
+                          onChange={e => updatePermissionSelection(sectionPermissionIds, e.target.checked)} />
+                        <div><h3>{section.label}</h3><p>{section.description}</p></div>
+                      </label>
+                      <div className="permission-section-actions">
+                        <span className="permission-count">{sectionSelectedCount} / {sectionPermissionIds.length}</span>
+                        {!roleModal.permission_search && <button aria-label={sectionCollapsed ? `展开${section.label}` : `收起${section.label}`} aria-expanded={!sectionCollapsed}
+                          onClick={() => setRoleModal(current => ({
+                            ...current,
+                            collapsed_sections: sectionCollapsed
+                              ? current.collapsed_sections.filter(key => key !== section.key)
+                              : [...current.collapsed_sections, section.key],
+                          }))}>{sectionCollapsed ? '⌄' : '⌃'}</button>}
+                      </div>
+                    </div>
+
+                    {!sectionCollapsed && <div className="permission-page-grid">
+                      {section.pages.map(page => {
+                        const sourcePage = sourceSection.pages.find(item => item.key === page.key) || page
+                        const pagePermissionIds = sourcePage.items.map(permission => permission.id)
+                        const pageSelectedCount = roleIsLocked
+                          ? pagePermissionIds.length
+                          : pagePermissionIds.filter(id => selectedPermissionIds.has(id)).length
+
+                        return <article className="permission-page" key={page.key}>
+                          <div className="permission-page-head">
+                            <label className="permission-page-title">
+                              <input type="checkbox" disabled={roleIsLocked}
+                                ref={node => { if (node) node.indeterminate = pageSelectedCount > 0 && pageSelectedCount < pagePermissionIds.length }}
+                                checked={pageSelectedCount === pagePermissionIds.length && pagePermissionIds.length > 0}
+                                onChange={e => updatePermissionSelection(pagePermissionIds, e.target.checked)} />
+                              <span><strong>{page.label}</strong><small>{page.description}</small></span>
+                            </label>
+                            <span>{pageSelectedCount}/{pagePermissionIds.length}</span>
+                          </div>
+                          <div className="permission-options">
+                            {page.items.map(permission => {
+                              const checked = roleIsLocked || selectedPermissionIds.has(permission.id)
+                              return <label className={`permission-option ${checked ? 'selected' : ''} ${roleIsLocked ? 'locked' : ''}`} key={permission.id}>
+                                <input type="checkbox" disabled={roleIsLocked} checked={checked}
+                                  onChange={e => updatePermissionSelection([permission.id], e.target.checked)} />
+                                <span className="permission-option-copy"><strong>{displayPermissionName(permission)}</strong><small>{permission.code}</small></span>
+                                {permission.sensitive && <em className="sensitive-badge">敏感</em>}
+                              </label>
+                            })}
+                          </div>
+                        </article>
                       })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                    </div>}
+                  </section>
+                })}
+              </div> : <div className="permission-empty-state"><strong>没有匹配的权限</strong><span>请更换关键词，或清除搜索查看全部模块。</span></div>}
             </div>
 
             <div className="modal-actions">
-              <button className="secondary-action" onClick={() => setRoleModal(null)}>取消</button>
-              <button className="primary-action" onClick={saveRole}>保存权限</button>
+              <span className="role-modal-actions-note">权限保存后立即应用于使用该角色的后台账号。</span>
+              <div className="role-modal-actions-buttons">
+                {!roleIsLocked && <button className="secondary-action" disabled={roleModal.saving} onClick={() => setRoleModal(null)}>取消</button>}
+                <button className="primary-action" disabled={roleModal.saving} onClick={roleIsLocked ? () => setRoleModal(null) : saveRole}>{roleIsLocked ? '完成' : roleModal.saving ? '保存中…' : '保存权限'}</button>
+              </div>
             </div>
           </div>
         </div>

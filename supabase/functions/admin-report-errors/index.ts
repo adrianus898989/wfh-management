@@ -134,7 +134,7 @@ Deno.serve(async req => {
 
     const rows = (pageRows || []).map((row: any) => ({
       ...row,
-      key: `error-${row.source_row}`,
+      key: `error-${row.record_key || row.source_row}`,
       group: row.group_name,
     }))
 

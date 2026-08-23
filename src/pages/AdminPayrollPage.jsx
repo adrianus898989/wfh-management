@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Pagination } from '../components/DataPageControls'
 import { supabase } from '../lib/supabase'
 
 const TABS = ['工资导入','待发布','已发布','导入记录']
@@ -155,10 +156,13 @@ export default function AdminPayrollPage(){
   const [rowSearch,setRowSearch]=useState('')
   const [positionFilter,setPositionFilter]=useState('')
   const [platformFilter,setPlatformFilter]=useState('')
+  const [rowPage,setRowPage]=useState(1)
+  const [rowPageSize,setRowPageSize]=useState(20)
   const fileRef=useRef(null)
 
   const setTab=value=>{
     setTabState(value);setParams(value===TABS[0]?{}:{tab:value})
+    setRowPage(1)
     if(value==='工资导入')return
     const wantedStatus=value==='待发布'?'draft':value==='已发布'?'published':null
     const next=(state.data?.batches||[]).find(batch=>!wantedStatus||batch.status===wantedStatus)
@@ -245,12 +249,16 @@ export default function AdminPayrollPage(){
       return true
     })
   },[rows,rowFilter,rowSearch,positionFilter,platformFilter])
-  const clearRowFilters=()=>{setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('')}
-  const openEmployee=employeeNo=>{
-    const normalized=clean(employeeNo).toUpperCase()
-    if(!normalized)return
-    window.sessionStorage.setItem('wfh-open-employee-no',normalized)
-    navigate('/admin/employees')
+  const unmatchedCount=Number(visibleSelected?.unmatched_count??rows.filter(row=>matchState(row)==='unmatched').length)||0
+  const rowPages=Math.max(1,Math.ceil(filteredRows.length/rowPageSize))
+  const pagedRows=useMemo(()=>filteredRows.slice((rowPage-1)*rowPageSize,rowPage*rowPageSize),[filteredRows,rowPage,rowPageSize])
+  useEffect(()=>{setRowPage(1)},[batchId,rowFilter,rowSearch,positionFilter,platformFilter])
+  useEffect(()=>{setRowPage(current=>Math.min(current,rowPages))},[rowPages])
+  const clearRowFilters=()=>{setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');setRowPage(1)}
+  const openEmployee=row=>{
+    const employeeId=clean(row?.employee_id)
+    if(!employeeId)return
+    navigate(`/admin/employees?employee=${encodeURIComponent(employeeId)}`)
   }
 
   return <div className="content-page payroll-admin-page">
@@ -287,17 +295,18 @@ export default function AdminPayrollPage(){
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
         <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
-        <div className="payroll-summary-grid"><button className={rowFilter==='all'?'active':''} onClick={()=>setRowFilter('all')}><span>工资单</span><strong>{visibleSelected.row_count}</strong><small>全部记录</small></button><button className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职员工</span><strong>{visibleSelected.active_count??rows.filter(row=>matchState(row)==='active').length}</strong><small>当前在职</small></button><button className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>matchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button className={`${rowFilter==='unmatched'?'active':''} ${visibleSelected.unmatched_count?'has-warning':''}`} onClick={()=>setRowFilter('unmatched')}><span>未匹配</span><strong className={visibleSelected.unmatched_count?'warn':''}>{visibleSelected.unmatched_count}</strong><small>需要核对</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
+        <div className="payroll-summary-grid"><button type="button" className={rowFilter==='all'?'active':''} onClick={()=>setRowFilter('all')}><span>工资单</span><strong>{visibleSelected.row_count}</strong><small>全部记录</small></button><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职员工</span><strong>{visibleSelected.active_count??rows.filter(row=>matchState(row)==='active').length}</strong><small>当前在职</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>matchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
         <div className="payroll-record-filters">
           <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
-          <label><span>员工状态</span><select value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">全部状态</option><option value="active">在职员工</option><option value="resigned">离职员工</option><option value="unmatched">未匹配</option></select></label>
+          <label><span>员工状态</span><select value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">全部状态</option><option value="active">在职员工</option><option value="resigned">离职员工</option><option value="unmatched" disabled={unmatchedCount===0}>未匹配{unmatchedCount===0?'（没有数据）':''}</option></select></label>
           <label><span>岗位</span><select value={positionFilter} onChange={event=>setPositionFilter(event.target.value)}><option value="">全部岗位</option>{positionOptions.map(value=><option key={value}>{value}</option>)}</select></label>
           <label><span>盘口</span><select value={platformFilter} onChange={event=>setPlatformFilter(event.target.value)}><option value="">全部盘口</option>{platformOptions.map(value=><option key={value}>{value}</option>)}</select></label>
           <div className="payroll-filter-actions"><button type="button" onClick={clearRowFilters}>重置</button></div>
         </div>
         {rowFilter==='unmatched'&&<div className="payroll-unmatched-note">仅显示无法按员工ID或唯一姓名关联员工档案的记录；已离职员工会保留并归类到“离职员工”。</div>}
-        <div className="payroll-filter-result">当前显示 {filteredRows.length} / {rows.length} 条</div>
-        <PayrollRows rows={filteredRows} currency={visibleSelected.currency} onOpenEmployee={openEmployee}/>
+        <div className="payroll-filter-result">筛选结果 {filteredRows.length} / {rows.length} 条 · 第 {rowPage} / {rowPages} 页</div>
+        <PayrollRows rows={pagedRows} currency={visibleSelected.currency} onOpenEmployee={openEmployee}/>
+        <Pagination page={rowPage} pages={rowPages} total={filteredRows.length} pageSize={rowPageSize} loading={state.loading} onPage={setRowPage} onPageSize={value=>{setRowPageSize(value);setRowPage(1)}}/>
       </section>}
     </>}
   </div>
@@ -305,10 +314,16 @@ export default function AdminPayrollPage(){
 
 function PayrollRows({rows,currency,preview=false,onOpenEmployee}){
   const [expandedPlatform,setExpandedPlatform]=useState('')
+  useEffect(()=>{
+    if(!expandedPlatform)return undefined
+    const close=event=>{if(event.key==='Escape')setExpandedPlatform('')}
+    window.addEventListener('keydown',close)
+    return()=>window.removeEventListener('keydown',close)
+  },[expandedPlatform])
   const stateOf=row=>row.match_state||(row.matched?'active':'unmatched')
   const matchLabel=row=>({active:'在职员工',resigned:'离职员工',unmatched:'未匹配'}[stateOf(row)]||'未匹配')
   const matchClass=row=>({active:'ok',resigned:'resigned',unmatched:'bad'}[stateOf(row)]||'bad')
   return <><div className="payroll-table-wrap"><table className="payroll-table payroll-table-complete"><thead><tr><th>#</th><th>员工ID</th><th>姓名</th><th>盘口</th><th>分组</th><th>岗位</th><th>入职日期</th><th>离职日期</th><th>卡号</th><th>收款姓名</th><th>银行 / GCASH</th><th>基础工资</th><th>出勤工资</th><th>休假扣款</th><th>递增</th><th>满勤</th><th>绩效</th><th>押金</th><th>额外加班</th><th>额外加扣</th><th>下次要扣除</th><th>多转扣除</th><th>其他调整</th><th>实发工资</th><th>员工匹配</th><th>备注</th></tr></thead>
-    <tbody>{rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td>{!preview&&onOpenEmployee&&row.employee_no?<button type="button" className="payroll-employee-link" onClick={()=>onOpenEmployee(row.employee_no)}>{row.employee_no}</button>:<strong>{row.employee_no||'—'}</strong>}</td><td>{row.full_name||'—'}</td><td><button type="button" className="payroll-platform-value" disabled={!row.platform} title={row.platform||''} onClick={()=>row.platform&&setExpandedPlatform(row.platform)}>{row.platform||'—'}</button></td><td>{row.source_group||'—'}</td><td>{row.position_name||'—'}</td><td>{row.hire_date||'—'}</td><td>{row.departure_date||'—'}</td><td>{row.card_number||'—'}</td><td>{row.payment_name||'—'}</td><td>{row.payment_method||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td>{money(row.leave_deduction,currency)}</td><td>{money(row.increment_adjustment,currency)}</td><td>{money(row.attendance_bonus,currency)}</td><td>{money(row.performance_adjustment,currency)}</td><td>{money(row.deposit_adjustment,currency)}</td><td>{money(row.overtime_bonus,currency)}</td><td>{money(row.extra_adjustment,currency)}</td><td>{money(row.next_deduction,currency)}</td><td>{money(row.overpayment_deduction,currency)}</td><td>{money(row.other_adjustment,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${matchClass(row)}`}>{matchLabel(row)}</span>}</td><td className="payroll-remark-cell">{row.remark||'—'}</td></tr>)}</tbody>
-  </table></div>{expandedPlatform&&<div className="payroll-value-modal-backdrop" role="presentation" onMouseDown={()=>setExpandedPlatform('')}><div className="payroll-value-modal" role="dialog" aria-modal="true" aria-label="完整盘口" onMouseDown={event=>event.stopPropagation()}><header><h3>完整盘口 / 平台</h3><button type="button" onClick={()=>setExpandedPlatform('')}>×</button></header><p>{expandedPlatform}</p></div></div>}</>
+    <tbody>{rows.length?rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td>{!preview&&onOpenEmployee&&row.employee_id&&row.employee_no?<button type="button" className="payroll-employee-link" title="打开员工档案" onClick={()=>onOpenEmployee(row)}>{row.employee_no}</button>:<strong>{row.employee_no||'—'}</strong>}</td><td>{row.full_name||'—'}</td><td className="payroll-platform-cell"><button type="button" className="payroll-platform-value" disabled={!row.platform} title={row.platform?'点击查看完整盘口 / 平台':''} onClick={()=>row.platform&&setExpandedPlatform(row.platform)}>{row.platform||'—'}</button></td><td>{row.source_group||'—'}</td><td>{row.position_name||'—'}</td><td>{row.hire_date||'—'}</td><td>{row.departure_date||'—'}</td><td>{row.card_number||'—'}</td><td>{row.payment_name||'—'}</td><td>{row.payment_method||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td>{money(row.leave_deduction,currency)}</td><td>{money(row.increment_adjustment,currency)}</td><td>{money(row.attendance_bonus,currency)}</td><td>{money(row.performance_adjustment,currency)}</td><td>{money(row.deposit_adjustment,currency)}</td><td>{money(row.overtime_bonus,currency)}</td><td>{money(row.extra_adjustment,currency)}</td><td>{money(row.next_deduction,currency)}</td><td>{money(row.overpayment_deduction,currency)}</td><td>{money(row.other_adjustment,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${matchClass(row)}`}>{matchLabel(row)}</span>}</td><td className="payroll-remark-cell">{row.remark||'—'}</td></tr>):<tr><td className="payroll-table-empty" colSpan="26">暂无符合条件的工资记录</td></tr>}</tbody>
+  </table></div>{expandedPlatform&&<div className="payroll-value-modal-backdrop" role="presentation" onMouseDown={()=>setExpandedPlatform('')}><div className="payroll-value-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-platform-modal-title" onMouseDown={event=>event.stopPropagation()}><header><h3 id="payroll-platform-modal-title">完整盘口 / 平台</h3><button type="button" aria-label="关闭" onClick={()=>setExpandedPlatform('')}>×</button></header><p>{expandedPlatform}</p></div></div>}</>
 }

@@ -31,3 +31,37 @@
 .payroll-admin-page .payroll-summary-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:10px}.payroll-admin-page .payroll-summary-grid>div,.payroll-admin-page .payroll-summary-grid>button{min-height:75px;padding:9px 10px;border-radius:10px}.payroll-admin-page .payroll-summary-grid span{font-size:10px}.payroll-admin-page .payroll-summary-grid strong{margin-top:3px;font-size:18px}.payroll-admin-page .payroll-summary-grid small{margin-top:3px;font-size:9px}.payroll-match.resigned{background:#eef1f5;color:#5d6d82}
 .payroll-record-filters{display:grid;grid-template-columns:minmax(330px,1.55fr) minmax(140px,.65fr) minmax(150px,.7fr) minmax(150px,.7fr) auto;gap:8px;align-items:end;margin:0 0 8px;padding:9px;border:1px solid #dbe5f1;border-radius:10px;background:#f8fafd}.payroll-record-filters label{display:flex;min-width:0;flex-direction:column;gap:4px}.payroll-record-filters label>span{color:#677991;font-size:9px;font-weight:850}.payroll-record-filters input,.payroll-record-filters select{width:100%;height:36px;box-sizing:border-box;border:1px solid #cad8ea;border-radius:8px;background:#fff;color:#1b385a;padding:0 10px}.payroll-filter-actions button{height:36px;padding:0 13px;border:1px solid #c8d6e8;border-radius:8px;background:#fff;color:#526985;font-weight:800}.payroll-filter-result{margin:-1px 1px 7px;color:#77879b;font-size:10px;text-align:right}.payroll-admin-page .payroll-unmatched-note{margin:0 0 8px;padding:8px 10px;font-size:11px}.payroll-admin-page .payroll-table-complete{min-width:2400px}.payroll-admin-page .payroll-table-complete .payroll-remark-cell{min-width:250px;max-width:390px}
 @media(max-width:1200px){.payroll-record-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.payroll-filter-actions{grid-column:span 2}.payroll-admin-page .payroll-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+/* V27.25 — paginated payroll review and compact batch workspace. */
+.payroll-admin-page .payroll-tabs{margin-bottom:10px}
+.payroll-admin-page .payroll-batch-strip{gap:6px;padding:6px;margin-bottom:9px;border-radius:11px}
+.payroll-admin-page .payroll-batch-strip button{min-width:180px;max-width:220px;padding:6px 8px;border-radius:8px}
+.payroll-admin-page .payroll-batch-strip span{font-size:8px;line-height:1.2}
+.payroll-admin-page .payroll-batch-strip strong{margin:2px 0;font-size:11px;line-height:1.25}
+.payroll-admin-page .payroll-batch-strip small{font-size:8px;line-height:1.3}
+.payroll-admin-page .payroll-preview-card{padding:10px 12px;margin-bottom:10px;border-radius:12px}
+.payroll-admin-page .payroll-section-head{gap:12px;margin-bottom:7px}
+.payroll-admin-page .payroll-section-head h2{font-size:16px;line-height:1.25}
+.payroll-admin-page .payroll-section-head p{margin-top:2px;font-size:10px;line-height:1.35}
+.payroll-admin-page .payroll-section-head button{padding:7px 11px;border-radius:8px;font-size:11px}
+.payroll-admin-page .payroll-summary-grid{gap:6px;margin-bottom:7px}
+.payroll-admin-page .payroll-summary-grid>div,.payroll-admin-page .payroll-summary-grid>button{min-height:56px;padding:6px 8px;border-radius:8px}
+.payroll-admin-page .payroll-summary-grid span{font-size:9px;line-height:1.2}
+.payroll-admin-page .payroll-summary-grid strong{margin-top:2px;font-size:16px;line-height:1.15}
+.payroll-admin-page .payroll-summary-grid small{margin-top:2px;font-size:8px;line-height:1.2}
+.payroll-admin-page .payroll-summary-grid>button:disabled{border-color:#e1e7f0;background:#f7f9fc;color:inherit;box-shadow:none;cursor:default;opacity:1}
+.payroll-admin-page .payroll-summary-grid>button:disabled strong{color:#8a98aa}
+.payroll-admin-page .payroll-record-filters{gap:6px;margin-bottom:6px;padding:6px;border-radius:8px}
+.payroll-admin-page .payroll-record-filters label{gap:3px}
+.payroll-admin-page .payroll-record-filters input,.payroll-admin-page .payroll-record-filters select,.payroll-admin-page .payroll-filter-actions button{height:32px;border-radius:7px;font-size:10px}
+.payroll-admin-page .payroll-filter-result{margin:0 1px 5px;font-size:9px}
+.payroll-admin-page .payroll-table-wrap{border-radius:9px}
+.payroll-admin-page .payroll-table th{padding:8px 7px}
+.payroll-admin-page .payroll-table td{padding:7px}
+.payroll-admin-page .payroll-platform-cell{width:180px;max-width:180px}
+.payroll-admin-page .payroll-platform-value{width:166px;max-width:166px;line-height:1.4}
+.payroll-admin-page .payroll-employee-link:focus-visible,.payroll-admin-page .payroll-platform-value:focus-visible{outline:2px solid #76a3f4;outline-offset:2px;border-radius:3px}
+.payroll-admin-page .payroll-table-empty{height:110px;color:#7b899c;text-align:center;vertical-align:middle}
+.payroll-admin-page .professional-pagination{min-height:50px;margin-top:7px;padding:8px 0 0;background:#fff}
+.payroll-admin-page .professional-pagination .pagination-summary{padding-left:2px}
+@media(max-width:1200px){.payroll-admin-page .payroll-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}

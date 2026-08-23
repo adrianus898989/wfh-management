@@ -2,7 +2,16 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const ROSTER_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA/填表'
 const ACCOUNT_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA/账号'
-const MISTAKE_URL = 'https://opensheet.elk.sh/1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM/员工错误'
+const ERROR_SOURCES = [
+  {
+    name: '效率表/员工错误',
+    url: 'https://opensheet.elk.sh/1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM/员工错误',
+  },
+  {
+    name: '财务质检错误记录/财务质检错误记录',
+    url: 'https://opensheet.elk.sh/125rN-PXjjWMe4SnYjruGlQ_NdZUb5hI7dXUUBjqe7bY/财务质检错误记录',
+  },
+] as const
 const EFF_ID = '1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM'
 const ORDER_SHEETS = ['工作表4', '填表']
 const ORDER_CHUNK_SIZE = 5_000
@@ -26,7 +35,14 @@ function pick(row: Record<string, unknown>, keys: string[]) {
   return ''
 }
 
-async function fetchJson(url: string) {
+function normalizeEmployeeId(value: unknown) {
+  return text(value)
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[-–—]+$/, '')
+}
+
+async function fetchJson(url: string): Promise<Record<string, unknown>[]> {
   const response = await fetch(url, {
     cache: 'no-store',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -35,7 +51,10 @@ async function fetchJson(url: string) {
   if (!response.ok) throw new Error(`fetch ${response.status} ${new URL(url).host}`)
   const parsed = JSON.parse(body)
   if (!Array.isArray(parsed)) throw new Error('source is not array')
-  return parsed
+  if (!parsed.every((row) => row && typeof row === 'object' && !Array.isArray(row))) {
+    throw new Error('source contains invalid rows')
+  }
+  return parsed as Record<string, unknown>[]
 }
 
 function csvParse(input: string) {
@@ -222,9 +241,9 @@ function noteSummaryHash(note: unknown) {
   return text(note).match(/(?:^|;)summary-hash:([a-z0-9]+)(?:;|$)/i)?.[1] || ''
 }
 
-function normalizeErrors(rawErrors: Record<string, unknown>[]) {
+function normalizeErrors(rawErrors: Record<string, unknown>[], sourceName: string) {
   return rawErrors.map((row, index) => {
-    const employeeId = pick(row, ['ID']).toUpperCase()
+    const employeeId = normalizeEmployeeId(pick(row, ['员工ID', '員工ID', 'ID']))
     const memberOrder = pick(row, ['会员/id /订单号', '會員/id /訂單號'])
     const errorNote = pick(row, ['错误备注', '錯誤備註'])
     const errorType = pick(row, ['错误类型', '錯誤類型'])
@@ -233,6 +252,7 @@ function normalizeErrors(rawErrors: Record<string, unknown>[]) {
     const recordKey = `${employeeId}|${qcDate}|${hash32([memberOrder, errorType, qcPerson, errorNote].join('|'))}`
 
     return {
+      source_name: sourceName,
       record_key: recordKey,
       source_row: index + 2,
       employee_id: employeeId,
@@ -412,10 +432,11 @@ async function writeSnapshot(
   return { source, changed: true, rows: rowCount }
 }
 
-async function syncErrorRows(service: any, payload: any[]) {
+async function syncErrorRows(service: any, sourceName: string, payload: any[]) {
   const { data: currentRows, error: stateError } = await service
     .from('report_error_sync_chunks')
     .select('chunk_index,content_hash')
+    .eq('source_name', sourceName)
   if (stateError) throw new Error(`错误明细同步状态读取失败: ${stateError.message}`)
 
   const current = new Map((currentRows || []).map((row: any) => [
@@ -434,6 +455,7 @@ async function syncErrorRows(service: any, payload: any[]) {
   for (let index = 0; index < changes.length; index += 4) {
     await Promise.all(changes.slice(index, index + 4).map(async change => {
       const { error } = await service.rpc('sync_report_employee_error_chunk', {
+        p_source_name: sourceName,
         p_chunk_index: change.chunkIndex,
         p_chunk_size: ERROR_CHUNK_SIZE,
         p_content_hash: change.hash,
@@ -444,10 +466,14 @@ async function syncErrorRows(service: any, payload: any[]) {
   }
 
   const { data: finalized, error: finalizeError } = await service
-    .rpc('finalize_report_employee_error_sync', { p_chunk_count: chunks.length })
+    .rpc('finalize_report_employee_error_sync', {
+      p_source_name: sourceName,
+      p_chunk_count: chunks.length,
+    })
   if (finalizeError) throw new Error(`错误明细同步收尾失败: ${finalizeError.message}`)
 
   return {
+    source: sourceName,
     rows: payload.length,
     chunks: chunks.length,
     changed_chunks: changes.length,
@@ -467,6 +493,28 @@ async function loadAllSummaries(service: any) {
     if (error) throw new Error(`read error summary: ${error.message}`)
     const page = data || []
     rows.push(...page)
+    if (page.length < pageSize) break
+  }
+  return rows
+}
+
+async function loadAllSyncedErrors(service: any) {
+  const rows: any[] = []
+  const pageSize = 1_000
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await service
+      .from('report_employee_errors_v')
+      .select('record_key,source_row,employee_no,member_order,amount,error_note,correct_action,error_type,score,qc_person,qc_date,leader_review,qc_result,review_date')
+      .order('record_key')
+      .range(from, from + pageSize - 1)
+    if (error) throw new Error(`read synced errors: ${error.message}`)
+    const page = data || []
+    rows.push(...page.map((row: any) => ({
+      ...row,
+      employee_id: normalizeEmployeeId(row.employee_no),
+      qc_date: text(row.qc_date),
+      review_date: text(row.review_date),
+    })))
     if (page.length < pageSize) break
   }
   return rows
@@ -604,11 +652,14 @@ Deno.serve(async (request) => {
       { auth: { persistSession: false } },
     )
 
-    const [rawRoster, rawAccounts, rawErrors] = await Promise.all([
+    const [rawRoster, rawAccounts] = await Promise.all([
       fetchJson(ROSTER_URL),
       fetchJson(ACCOUNT_URL),
-      fetchJson(MISTAKE_URL),
     ])
+
+    const rawErrorResults = await Promise.allSettled(
+      ERROR_SOURCES.map((source) => fetchJson(source.url)),
+    )
 
     const roster = rawRoster.map((row: Record<string, unknown>, index: number) => ({
       source_row: index + 2,
@@ -634,18 +685,43 @@ Deno.serve(async (request) => {
       hire_date: normalizeDate(pick(row, ['入职时间', '入職時間', 'Join Date'])),
     })).filter((row: any) => row.employee_id && row.employee_id !== 'ID')
 
-    const errors = normalizeErrors(rawErrors)
+    const errorSources = ERROR_SOURCES.flatMap((source, index) => {
+      const result = rawErrorResults[index]
+      if (result.status !== 'fulfilled') return []
+      return [{
+        name: source.name,
+        rawRows: result.value,
+        rows: normalizeErrors(result.value, source.name),
+      }]
+    })
+    const errorSourceFailures = ERROR_SOURCES.flatMap((source, index) => {
+      const result = rawErrorResults[index]
+      if (result.status !== 'rejected') return []
+      return [{
+        source: source.name,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      }]
+    })
+
+    const errorSyncResults = await Promise.all(errorSources.map(async (source) => {
+      const [snapshot, rows] = await Promise.all([
+        writeChunkedSnapshot(service, source.name, source.rows),
+        syncErrorRows(service, source.name, source.rows),
+      ])
+      return { source: source.name, snapshot, rows }
+    }))
+    const errorChangedChunks = errorSyncResults.reduce(
+      (total, result) => total + result.snapshot.changed_chunks + result.rows.changed_chunks,
+      0,
+    )
+    const rawErrorCount = errorSources.reduce((total, source) => total + source.rawRows.length, 0)
+    const errors = await loadAllSyncedErrors(service)
     const summaries = buildRiskSummaries(errors)
     const latestErrors = errors
       .map((row) => row.qc_date || row.review_date || '')
       .filter(Boolean)
       .sort()
       .at(-1) || ''
-
-    const [errorChunkResult, errorRowSyncResult] = await Promise.all([
-      writeChunkedSnapshot(service, '效率表/员工错误', errors),
-      syncErrorRows(service, errors),
-    ])
     const orderSyncResult = await syncOrderSheets(service)
     const states = await loadSnapshotStates(service)
     const summaryHash = payloadHash(summaries)
@@ -684,16 +760,27 @@ Deno.serve(async (request) => {
     }
 
     let summaryChanges = 0
-    if (errorChunkResult.changed_chunks > 0 || previousSummaryHash !== summaryHash) {
+    if (errorChangedChunks > 0 || previousSummaryHash !== summaryHash) {
       summaryChanges = await syncChangedSummaries(service, summaries)
     }
     snapshotResults.push(await writeSnapshot(
       service,
       states,
       '效率表/员工错误状态',
-      [{ latest_date: latestErrors, summary_employees: summaries.length }],
-      `同步错误分块快照与风险汇总；summary-hash:${summaryHash}`,
-      rawErrors.length,
+      [{
+        latest_date: latestErrors,
+        raw_rows: rawErrorCount,
+        unique_rows: errors.length,
+        summary_employees: summaries.length,
+        sources: errorSources.map((source) => ({
+          source: source.name,
+          raw_rows: source.rawRows.length,
+          normalized_rows: source.rows.length,
+        })),
+        unavailable_sources: errorSourceFailures,
+      }],
+      `多来源错误明细独立同步；按记录指纹去重；summary-hash:${summaryHash}`,
+      errors.length,
     ))
 
     return json({
@@ -701,11 +788,17 @@ Deno.serve(async (request) => {
       roster_raw: rawRoster.length,
       roster_rows: roster.length,
       account_rows: accounts.length,
-      error_rows: rawErrors.length,
+      error_rows_raw: rawErrorCount,
+      error_rows_unique: errors.length,
+      error_sources: errorSources.map((source) => ({
+        source: source.name,
+        raw_rows: source.rawRows.length,
+        normalized_rows: source.rows.length,
+      })),
+      error_source_failures: errorSourceFailures,
       error_summary: summaries.length,
       summary_changes: summaryChanges,
-      error_chunks: errorChunkResult,
-      error_rows_sync: errorRowSyncResult,
+      error_sync: errorSyncResults,
       snapshot_changes: snapshotResults.filter((result) => result.changed).map((result) => result.source),
       latest_orders: orderSyncResult.latest_date,
       order_sync: orderSyncResult,
