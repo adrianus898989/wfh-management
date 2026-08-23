@@ -151,6 +151,9 @@ export default function AdminPayrollPage(){
   const [message,setMessage]=useState('')
   const [saving,setSaving]=useState(false)
   const [rowFilter,setRowFilter]=useState('all')
+  const [rowSearch,setRowSearch]=useState('')
+  const [positionFilter,setPositionFilter]=useState('')
+  const [platformFilter,setPlatformFilter]=useState('')
   const fileRef=useRef(null)
 
   const setTab=value=>{
@@ -217,7 +220,7 @@ export default function AdminPayrollPage(){
     setSaving(false)
     if(error){setMessage(`删除失败：${error.message}`);return}
     setMessage(`已删除“${batch.title}”及 ${data.rows||batch.row_count} 份工资记录。`)
-    setBatchId(null);setRowFilter('all');await load(null)
+    setBatchId(null);setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');await load(null)
   }
 
   const batches=state.data?.batches||[]
@@ -225,7 +228,23 @@ export default function AdminPayrollPage(){
   const selected=state.data?.selected_batch
   const visibleSelected=selected&&visibleBatches.some(batch=>Number(batch.id)===Number(selected.id))?selected:null
   const rows=state.data?.rows||[]
-  const filteredRows=useMemo(()=>rowFilter==='unmatched'?rows.filter(row=>!row.matched):rows,[rows,rowFilter])
+  const matchState=row=>row.match_state||(row.matched?'active':'unmatched')
+  const positionOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.position_name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
+  const platformOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.platform)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
+  const filteredRows=useMemo(()=>{
+    const needle=key(rowSearch)
+    return rows.filter(row=>{
+      if(rowFilter!=='all'&&matchState(row)!==rowFilter)return false
+      if(positionFilter&&clean(row.position_name)!==positionFilter)return false
+      if(platformFilter&&clean(row.platform)!==platformFilter)return false
+      if(needle){
+        const haystack=key([row.employee_no,row.full_name,row.platform,row.source_group,row.position_name,row.payment_name,row.payment_method,row.card_number,row.remark].join(' '))
+        if(!haystack.includes(needle))return false
+      }
+      return true
+    })
+  },[rows,rowFilter,rowSearch,positionFilter,platformFilter])
+  const clearRowFilters=()=>{setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('')}
 
   return <div className="content-page payroll-admin-page">
     <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>工资中心</h1></div><button className="payroll-refresh" onClick={()=>load()}>刷新资料</button></div>
@@ -255,14 +274,22 @@ export default function AdminPayrollPage(){
       </section>}
     </>:<>
       <section className="payroll-batch-strip">
-        {visibleBatches.length?visibleBatches.map(batch=><button key={batch.id} className={Number(batchId)===Number(batch.id)?'active':''} onClick={()=>{setBatchId(batch.id);load(batch.id)}}>
-          <span>{String(batch.period_start).slice(0,7)}</span><strong>{batch.title}</strong><small>{batch.row_count} 人 · 已匹配 {batch.matched_count} · 未匹配 {batch.unmatched_count}</small>
+        {visibleBatches.length?visibleBatches.map(batch=><button key={batch.id} className={Number(batchId)===Number(batch.id)?'active':''} onClick={()=>{clearRowFilters();setBatchId(batch.id);load(batch.id)}}>
+          <span>{String(batch.period_start).slice(0,7)}</span><strong>{batch.title}</strong><small>{batch.row_count} 人 · 在职 {batch.active_count??batch.matched_count??0} · 离职 {batch.resigned_count??0} · 未匹配 {batch.unresolved_count??batch.unmatched_count??0}</small>
         </button>):<div className="payroll-empty-small">暂无对应工资批次</div>}
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
         <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
-        <div className="payroll-summary-grid"><button className={rowFilter==='all'?'active':''} onClick={()=>setRowFilter('all')}><span>工资单</span><strong>{visibleSelected.row_count}</strong><small>查看全部</small></button><div><span>已匹配</span><strong>{visibleSelected.matched_count}</strong><small>已关联员工档案</small></div><button className={`${rowFilter==='unmatched'?'active':''} ${visibleSelected.unmatched_count?'has-warning':''}`} onClick={()=>setRowFilter('unmatched')}><span>未匹配</span><strong className={visibleSelected.unmatched_count?'warn':''}>{visibleSelected.unmatched_count}</strong><small>点击查看具体人员</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
-        {rowFilter==='unmatched'&&<div className="payroll-unmatched-note">下面列出全部未匹配人员。系统已按标准化员工ID和唯一姓名匹配；这些员工ID目前不存在于员工主档，请先核对或补录员工档案。</div>}
+        <div className="payroll-summary-grid"><button className={rowFilter==='all'?'active':''} onClick={()=>setRowFilter('all')}><span>工资单</span><strong>{visibleSelected.row_count}</strong><small>全部记录</small></button><button className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职员工</span><strong>{visibleSelected.active_count??rows.filter(row=>matchState(row)==='active').length}</strong><small>当前在职</small></button><button className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>matchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button className={`${rowFilter==='unmatched'?'active':''} ${visibleSelected.unmatched_count?'has-warning':''}`} onClick={()=>setRowFilter('unmatched')}><span>未匹配</span><strong className={visibleSelected.unmatched_count?'warn':''}>{visibleSelected.unmatched_count}</strong><small>需要核对</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
+        <div className="payroll-record-filters">
+          <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
+          <label><span>员工状态</span><select value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">全部状态</option><option value="active">在职员工</option><option value="resigned">离职员工</option><option value="unmatched">未匹配</option></select></label>
+          <label><span>岗位</span><select value={positionFilter} onChange={event=>setPositionFilter(event.target.value)}><option value="">全部岗位</option>{positionOptions.map(value=><option key={value}>{value}</option>)}</select></label>
+          <label><span>盘口</span><select value={platformFilter} onChange={event=>setPlatformFilter(event.target.value)}><option value="">全部盘口</option>{platformOptions.map(value=><option key={value}>{value}</option>)}</select></label>
+          <div className="payroll-filter-actions"><button type="button" onClick={clearRowFilters}>重置</button></div>
+        </div>
+        {rowFilter==='unmatched'&&<div className="payroll-unmatched-note">仅显示无法按员工ID或唯一姓名关联员工档案的记录；已离职员工会保留并归类到“离职员工”。</div>}
+        <div className="payroll-filter-result">当前显示 {filteredRows.length} / {rows.length} 条</div>
         <PayrollRows rows={filteredRows} currency={visibleSelected.currency}/>
       </section>}
     </>}
@@ -270,7 +297,10 @@ export default function AdminPayrollPage(){
 }
 
 function PayrollRows({rows,currency,preview=false}){
+  const stateOf=row=>row.match_state||(row.matched?'active':'unmatched')
+  const matchLabel=row=>({active:'在职员工',resigned:'离职员工',unmatched:'未匹配'}[stateOf(row)]||'未匹配')
+  const matchClass=row=>({active:'ok',resigned:'resigned',unmatched:'bad'}[stateOf(row)]||'bad')
   return <div className="payroll-table-wrap"><table className="payroll-table payroll-table-complete"><thead><tr><th>#</th><th>员工ID</th><th>姓名</th><th>盘口</th><th>分组</th><th>岗位</th><th>入职日期</th><th>离职日期</th><th>卡号</th><th>收款姓名</th><th>银行 / GCASH</th><th>基础工资</th><th>出勤工资</th><th>休假扣款</th><th>递增</th><th>满勤</th><th>绩效</th><th>押金</th><th>额外加班</th><th>额外加扣</th><th>下次要扣除</th><th>多转扣除</th><th>其他调整</th><th>实发工资</th><th>员工匹配</th><th>备注</th></tr></thead>
-    <tbody>{rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td><strong>{row.employee_no||'—'}</strong></td><td>{row.full_name||'—'}</td><td>{row.platform||'—'}</td><td>{row.source_group||'—'}</td><td>{row.position_name||'—'}</td><td>{row.hire_date||'—'}</td><td>{row.departure_date||'—'}</td><td>{row.card_number||'—'}</td><td>{row.payment_name||'—'}</td><td>{row.payment_method||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td>{money(row.leave_deduction,currency)}</td><td>{money(row.increment_adjustment,currency)}</td><td>{money(row.attendance_bonus,currency)}</td><td>{money(row.performance_adjustment,currency)}</td><td>{money(row.deposit_adjustment,currency)}</td><td>{money(row.overtime_bonus,currency)}</td><td>{money(row.extra_adjustment,currency)}</td><td>{money(row.next_deduction,currency)}</td><td>{money(row.overpayment_deduction,currency)}</td><td>{money(row.other_adjustment,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${row.matched?'ok':'bad'}`}>{row.matched?'已匹配':'未匹配'}</span>}</td><td className="payroll-remark-cell">{row.remark||'—'}</td></tr>)}</tbody>
+    <tbody>{rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td><strong>{row.employee_no||'—'}</strong></td><td>{row.full_name||'—'}</td><td>{row.platform||'—'}</td><td>{row.source_group||'—'}</td><td>{row.position_name||'—'}</td><td>{row.hire_date||'—'}</td><td>{row.departure_date||'—'}</td><td>{row.card_number||'—'}</td><td>{row.payment_name||'—'}</td><td>{row.payment_method||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td>{money(row.leave_deduction,currency)}</td><td>{money(row.increment_adjustment,currency)}</td><td>{money(row.attendance_bonus,currency)}</td><td>{money(row.performance_adjustment,currency)}</td><td>{money(row.deposit_adjustment,currency)}</td><td>{money(row.overtime_bonus,currency)}</td><td>{money(row.extra_adjustment,currency)}</td><td>{money(row.next_deduction,currency)}</td><td>{money(row.overpayment_deduction,currency)}</td><td>{money(row.other_adjustment,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${matchClass(row)}`}>{matchLabel(row)}</span>}</td><td className="payroll-remark-cell">{row.remark||'—'}</td></tr>)}</tbody>
   </table></div>
 }
