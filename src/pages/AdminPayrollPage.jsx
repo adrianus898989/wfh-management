@@ -33,13 +33,20 @@ const ALIASES = {
   payment_name:['银行姓名','收款姓名','bankname','accountname','tênngânhàng','tennganhang','namarekening'],
   payment_method:['银行gcash','银行/gcash','收款方式','paymentmethod','bankgcash','metodepembayaran'],
   base_salary:['基础工资','底薪','basicsalary','basesalary','gajipokok','lươngcơbản','luongcoban'],
-  attendance_salary:['出勤工资','全勤工资','满勤','满勤奖','attendancesalary','attendancebonus','gajikehadiran','lươngchuyêncần','luongchuyencan'],
+  attendance_salary:['出勤工资','全勤工资','attendancesalary','gajikehadiran','lươngchuyêncần','luongchuyencan'],
   leave_deduction:['休假扣款','休假扣除','leavededuction','cuti','potongancuti'],
   late_deduction:['迟到','迟到扣款','latededuction','terlambat','đimuộn','dimuon'],
   absence_deduction:['缺勤','旷工','absencededuction','absen','vắngmặt','vangmat'],
+  increment_adjustment:['递增','递增工资','increment','incrementadjustment'],
+  attendance_bonus:['满勤','满勤奖','attendancebonus','fullattendancebonus'],
   performance_adjustment:['绩效','绩效调整','performance','performanceadjustment','kinerja','hiệusuất','hieusuat'],
   deposit_adjustment:['押金','押金调整','deposit','depositadjustment'],
   overtime_bonus:['额外加班','加班','overtime','overtimebonus','lembur','tăngca','tangca'],
+  extra_adjustment:['额外加扣','额外调整','extraadjustment','extradeduction'],
+  next_deduction:['下次要扣除','下次扣除','nextdeduction'],
+  overpayment_deduction:['多转扣除','多付扣除','overpaymentdeduction'],
+  source_group:['分组','组别','group','groupname'],
+  departure_date:['离职日期','departuredate','resignationdate'],
   other_adjustment:['其他调整','其他','otheradjustment','adjustment','penyesuaianlain'],
   remark:['备注','说明','remark','remarks','note','notes','catatan','ghichú','ghichu'],
   total_pay:['工资','总工资','实发工资','totalpay','takehomepay','netsalary','gajibersih','lươngthựclĩnh','luongthuclinh'],
@@ -95,7 +102,7 @@ function normalizeRows(sheetRows){
       if(field)mapped[field]=cell
     })
     if(!clean(mapped.employee_no)&&!clean(mapped.full_name))return
-    const numericFields=['base_salary','attendance_salary','leave_deduction','late_deduction','absence_deduction','performance_adjustment','deposit_adjustment','overtime_bonus','other_adjustment','total_pay']
+    const numericFields=['base_salary','attendance_salary','leave_deduction','late_deduction','absence_deduction','increment_adjustment','attendance_bonus','performance_adjustment','deposit_adjustment','overtime_bonus','extra_adjustment','next_deduction','overpayment_deduction','other_adjustment','total_pay']
     numericFields.forEach(field=>{mapped[field]=number(mapped[field])})
     mapped.employee_no=clean(mapped.employee_no)
     mapped.full_name=clean(mapped.full_name)
@@ -105,13 +112,27 @@ function normalizeRows(sheetRows){
     mapped.card_number=clean(mapped.card_number)
     mapped.payment_name=clean(mapped.payment_name)
     mapped.payment_method=clean(mapped.payment_method)
+    mapped.source_group=clean(mapped.source_group)
+    mapped.departure_date=isoDate(mapped.departure_date)
     mapped.remark=clean(mapped.remark)
     mapped.raw_payload=raw
+    mapped.raw_payload.__payroll_fields={
+      increment_adjustment:mapped.increment_adjustment,
+      attendance_bonus:mapped.attendance_bonus,
+      extra_adjustment:mapped.extra_adjustment,
+      next_deduction:mapped.next_deduction,
+      overpayment_deduction:mapped.overpayment_deduction,
+      source_group:mapped.source_group,
+      departure_date:mapped.departure_date,
+    }
     mapped.line_items=[
-      ['base_salary','基本工资','earn'],['attendance_salary','出勤工资','earn'],['leave_deduction','休假扣款','deduct'],
+      ['attendance_salary','出勤工资','earn'],['leave_deduction','休假扣款','deduct'],
       ['late_deduction','迟到扣款','deduct'],['absence_deduction','缺勤扣款','deduct'],
+      ['increment_adjustment','递增','earn'],['attendance_bonus','满勤','earn'],
       ['performance_adjustment','绩效调整','adjust'],['deposit_adjustment','押金调整','adjust'],
-      ['overtime_bonus','额外加班','earn'],['other_adjustment','其他调整','adjust'],
+      ['overtime_bonus','额外加班','earn'],['extra_adjustment','额外加扣','adjust'],
+      ['next_deduction','下次要扣除','deduct'],['overpayment_deduction','多转扣除','deduct'],
+      ['other_adjustment','其他调整','adjust'],
     ].filter(([field])=>mapped[field]!==0).map(([code,label,type])=>({code,label,type,amount:mapped[code]}))
     rows.push(mapped)
   })
@@ -126,9 +147,10 @@ export default function AdminPayrollPage(){
   const [state,setState]=useState({loading:true,error:'',data:null})
   const [batchId,setBatchId]=useState(null)
   const [fileState,setFileState]=useState({file:null,rows:[],error:'',loading:false})
-  const [form,setForm]=useState({period:new Date().toISOString().slice(0,7),title:'',currency:'USD',notes:''})
+  const [form,setForm]=useState({period:new Date().toISOString().slice(0,7),title:'',currency:'PHP',notes:''})
   const [message,setMessage]=useState('')
   const [saving,setSaving]=useState(false)
+  const [rowFilter,setRowFilter]=useState('all')
   const fileRef=useRef(null)
 
   const setTab=value=>{
@@ -187,11 +209,23 @@ export default function AdminPayrollPage(){
     await load(id);setTabState('已发布');setParams({tab:'已发布'})
   }
 
+  const deleteBatch=async batch=>{
+    const warning=batch.status==='published'?'这份工资已发布给员工，删除后员工也无法再查看。':'这份工资尚未发布。'
+    if(!window.confirm(`确认删除“${batch.title}”？\n${warning}\n此操作会删除该批次的全部 ${batch.row_count} 份工资记录。`))return
+    setSaving(true);setMessage('')
+    const {data,error}=await supabase.rpc('admin_payroll_delete',{p_batch_id:batch.id})
+    setSaving(false)
+    if(error){setMessage(`删除失败：${error.message}`);return}
+    setMessage(`已删除“${batch.title}”及 ${data.rows||batch.row_count} 份工资记录。`)
+    setBatchId(null);setRowFilter('all');await load(null)
+  }
+
   const batches=state.data?.batches||[]
   const visibleBatches=useMemo(()=>batches.filter(batch=>tab==='待发布'?batch.status==='draft':tab==='已发布'?batch.status==='published':true),[batches,tab])
   const selected=state.data?.selected_batch
   const visibleSelected=selected&&visibleBatches.some(batch=>Number(batch.id)===Number(selected.id))?selected:null
   const rows=state.data?.rows||[]
+  const filteredRows=useMemo(()=>rowFilter==='unmatched'?rows.filter(row=>!row.matched):rows,[rows,rowFilter])
 
   return <div className="content-page payroll-admin-page">
     <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>工资中心</h1></div><button className="payroll-refresh" onClick={()=>load()}>刷新资料</button></div>
@@ -205,7 +239,7 @@ export default function AdminPayrollPage(){
         <div className="payroll-import-form">
           <label>工资月份<input type="month" value={form.period} onChange={event=>setForm({...form,period:event.target.value})}/></label>
           <label>批次名称<input value={form.title} onChange={event=>setForm({...form,title:event.target.value})} placeholder={`${form.period} 工资`}/></label>
-          <label>币种<select value={form.currency} onChange={event=>setForm({...form,currency:event.target.value})}><option>USD</option><option>PHP</option><option>CNY</option><option>VND</option><option>IDR</option></select></label>
+          <label>币种<select value={form.currency} onChange={event=>setForm({...form,currency:event.target.value})}><option value="PHP">PHP · 菲律宾披索</option><option value="USD">USD · 美金</option></select></label>
           <label className="wide">备注<input value={form.notes} onChange={event=>setForm({...form,notes:event.target.value})} placeholder="例如：2026年7月正式工资"/></label>
         </div>
         <div className="payroll-drop-zone" onClick={()=>fileRef.current?.click()}>
@@ -226,16 +260,17 @@ export default function AdminPayrollPage(){
         </button>):<div className="payroll-empty-small">暂无对应工资批次</div>}
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
-        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'}</p></div>{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}</div>
-        <div className="payroll-summary-grid"><div><span>工资单</span><strong>{visibleSelected.row_count}</strong></div><div><span>已匹配</span><strong>{visibleSelected.matched_count}</strong></div><div><span>未匹配</span><strong className={visibleSelected.unmatched_count?'warn':''}>{visibleSelected.unmatched_count}</strong></div><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong></div></div>
-        <PayrollRows rows={rows} currency={visibleSelected.currency}/>
+        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
+        <div className="payroll-summary-grid"><button className={rowFilter==='all'?'active':''} onClick={()=>setRowFilter('all')}><span>工资单</span><strong>{visibleSelected.row_count}</strong><small>查看全部</small></button><div><span>已匹配</span><strong>{visibleSelected.matched_count}</strong><small>已关联员工档案</small></div><button className={`${rowFilter==='unmatched'?'active':''} ${visibleSelected.unmatched_count?'has-warning':''}`} onClick={()=>setRowFilter('unmatched')}><span>未匹配</span><strong className={visibleSelected.unmatched_count?'warn':''}>{visibleSelected.unmatched_count}</strong><small>点击查看具体人员</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
+        {rowFilter==='unmatched'&&<div className="payroll-unmatched-note">下面列出全部未匹配人员。系统已按标准化员工ID和唯一姓名匹配；这些员工ID目前不存在于员工主档，请先核对或补录员工档案。</div>}
+        <PayrollRows rows={filteredRows} currency={visibleSelected.currency}/>
       </section>}
     </>}
   </div>
 }
 
 function PayrollRows({rows,currency,preview=false}){
-  return <div className="payroll-table-wrap"><table className="payroll-table"><thead><tr><th>#</th><th>员工ID</th><th>姓名</th><th>盘口</th><th>岗位</th><th>基础工资</th><th>出勤工资</th><th>实发工资</th><th>员工匹配</th><th>备注</th></tr></thead>
-    <tbody>{rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td><strong>{row.employee_no||'—'}</strong></td><td>{row.full_name||'—'}</td><td>{row.platform||'—'}</td><td>{row.position_name||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${row.matched?'ok':'bad'}`}>{row.matched?'已匹配':'未匹配'}</span>}</td><td>{row.remark||'—'}</td></tr>)}</tbody>
+  return <div className="payroll-table-wrap"><table className="payroll-table payroll-table-complete"><thead><tr><th>#</th><th>员工ID</th><th>姓名</th><th>盘口</th><th>分组</th><th>岗位</th><th>入职日期</th><th>离职日期</th><th>卡号</th><th>收款姓名</th><th>银行 / GCASH</th><th>基础工资</th><th>出勤工资</th><th>休假扣款</th><th>递增</th><th>满勤</th><th>绩效</th><th>押金</th><th>额外加班</th><th>额外加扣</th><th>下次要扣除</th><th>多转扣除</th><th>其他调整</th><th>实发工资</th><th>员工匹配</th><th>备注</th></tr></thead>
+    <tbody>{rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td><strong>{row.employee_no||'—'}</strong></td><td>{row.full_name||'—'}</td><td>{row.platform||'—'}</td><td>{row.source_group||'—'}</td><td>{row.position_name||'—'}</td><td>{row.hire_date||'—'}</td><td>{row.departure_date||'—'}</td><td>{row.card_number||'—'}</td><td>{row.payment_name||'—'}</td><td>{row.payment_method||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td>{money(row.leave_deduction,currency)}</td><td>{money(row.increment_adjustment,currency)}</td><td>{money(row.attendance_bonus,currency)}</td><td>{money(row.performance_adjustment,currency)}</td><td>{money(row.deposit_adjustment,currency)}</td><td>{money(row.overtime_bonus,currency)}</td><td>{money(row.extra_adjustment,currency)}</td><td>{money(row.next_deduction,currency)}</td><td>{money(row.overpayment_deduction,currency)}</td><td>{money(row.other_adjustment,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${row.matched?'ok':'bad'}`}>{row.matched?'已匹配':'未匹配'}</span>}</td><td className="payroll-remark-cell">{row.remark||'—'}</td></tr>)}</tbody>
   </table></div>
 }

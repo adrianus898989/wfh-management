@@ -9,6 +9,7 @@ const ADMIN_NAV = [
   { to:'/admin/employees', label:'员工管理', icon:'人', children:[
     ['员工档案', `/admin/employees?tab=${enc('员工档案')}`],
     ['人员分析', `/admin/employees?tab=${enc('人员分析')}`],
+    ['停电 / 断网记录', `/admin/employees?tab=${enc('停电 / 断网记录')}`],
     ['离职记录', `/admin/employees?tab=${enc('离职记录')}`],
     ['操作日志', `/admin/employees?tab=${enc('操作日志')}`],
   ]},

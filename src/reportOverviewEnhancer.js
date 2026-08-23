@@ -61,8 +61,8 @@ function addWorkloadState(card){
   if(!title)return
   let pill=title.querySelector('.rp-workload-live-pill')
   if(!pill){pill=document.createElement('span');pill.className='rp-workload-live-pill';title.appendChild(pill)}
-  if(workload.loading){pill.className='rp-workload-live-pill loading';pill.textContent='效率工作量读取中…';return}
-  if(workload.error){pill.className='rp-workload-live-pill error';pill.textContent='效率工作量读取失败';pill.title=workload.error;return}
+  if(workload.loading){pill.className='rp-workload-live-pill loading';pill.textContent='Supabase 工作量读取中…';return}
+  if(workload.error){pill.className='rp-workload-live-pill error';pill.textContent='Supabase 工作量读取失败';pill.title=workload.error;return}
   if(workload.dates.length){pill.className='rp-workload-live-pill ok';pill.textContent=`日均工作量 ${workload.dates[0].slice(5)} ~ ${workload.dates.at(-1).slice(5)}`}
   else{pill.className='rp-workload-live-pill';pill.textContent='暂无工作量日期'}
 }
@@ -87,7 +87,7 @@ function patchTeamWorkload(){
       const stat=workloadStats(team,position)
       avg.disabled=!workload.dates.length
       avg.textContent=`日均 ${stat.avg}`
-      avg.title=`效率表最近 ${workload.dates.length} 个数据日 · ${stat.count} 人 · ${stat.days} 个有效人日 · 共 ${stat.total} 笔`
+      avg.title=`Supabase 已同步效率表最近 ${workload.dates.length} 个数据日 · ${stat.count} 人 · ${stat.days} 个有效人日 · 共 ${stat.total} 笔`
     })
   }
 }

@@ -240,6 +240,7 @@ async function ensureEmployeeRiskColumn(){
 async function injectDrawerRisk(){
   for(const drawer of document.querySelectorAll('.employee-detail-drawer')){
     const id=upper(drawer.querySelector('.employee-id-line')?.textContent);if(!id||id.includes('读取'))continue
+    if(drawer.querySelector('.wfh-v2722-risk-summary[data-profile-metrics="1"]'))continue
     drawer.querySelector('.profile-status-line.is-complete')?.remove()
     const map=await getSummary(),s=map.get(id)||{},isReport=drawer.closest('.wfh-v2721-employee-mask')
     const label=reportGradeLabel(reportGradeKey(s.total_error_count||0))

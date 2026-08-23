@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
+import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 
 const text = v => String(v ?? '').trim()
 const localDateIso = () => {
@@ -331,7 +332,7 @@ export default function AdminEmployeesPage(){
   const [sp,setSp]=useSearchParams()
   const requestedEmployeeId=sp.get('employee')||''
   const requestedEmployeeRef=useRef('')
-  const tabs=['员工档案','人员分析','离职记录','操作日志']
+  const tabs=['员工档案','人员分析','停电 / 断网记录','离职记录','操作日志']
   const requestedTab=sp.get('tab')
   const initialTab=requestedTab==='入离职记录'?'离职记录':['团队管理','岗位管理'].includes(requestedTab)?'人员分析':requestedTab
   const [tab,setTabState]=useState(tabs.includes(initialTab)?initialTab:'员工档案')
@@ -1097,6 +1098,8 @@ export default function AdminEmployeesPage(){
       {generated&&<ActivationCodeModal data={generated} copyStatus={activationCopyStatus} onCopy={copyActivationCode} onClose={closeActivationCode}/>}
     </>}
 
+    {tab==='停电 / 断网记录'&&<ConnectivityRecordsPage/>}
+
     {tab==='人员分析'&&<>
       <div className="analysis-head-row people-analysis-title">
         <h2>人员分析</h2>
@@ -1534,6 +1537,8 @@ function ActivationCodeModal({data,copyStatus,onCopy,onClose}){
 
 export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn,readOnly=false}){
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
+  const [profileSummary,setProfileSummary]=useState(null)
+  const [profileSummaryLoading,setProfileSummaryLoading]=useState(false)
   const [examData,setExamData]=useState(null)
   const [examLoading,setExamLoading]=useState(false)
   const [examError,setExamError]=useState('')
@@ -1541,11 +1546,27 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const [employeeErrors,setEmployeeErrors]=useState({rows:[],total:0,page:1,pages:1})
   const [employeeErrorsLoading,setEmployeeErrorsLoading]=useState(false)
   const [employeeErrorsError,setEmployeeErrorsError]=useState('')
+  const [connectivityData,setConnectivityData]=useState(null)
+  const [connectivityLoading,setConnectivityLoading]=useState(false)
+  const [connectivityError,setConnectivityError]=useState('')
+  const [payrollData,setPayrollData]=useState(null)
+  const [payrollLoading,setPayrollLoading]=useState(false)
+  const [payrollError,setPayrollError]=useState('')
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
   const paymentTitle=paymentMode==='usdt'?'USDT 收款资料':'银行卡 / 钱包收款资料'
   useEffect(()=>setActiveSection('info'),[e.id])
+  useEffect(()=>{
+    if(!e.id)return
+    let alive=true
+    setProfileSummaryLoading(true)
+    supabase.rpc('admin_employee_profile_summary',{p_employee_id:e.id}).then(({data,error})=>{
+      if(!alive)return
+      if(!error)setProfileSummary(data||null)
+    }).finally(()=>alive&&setProfileSummaryLoading(false))
+    return()=>{alive=false}
+  },[e.id])
   useEffect(()=>{
     if(!e.id||activeSection!=='exams'){return}
     let alive=true
@@ -1554,6 +1575,26 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
       if(!alive)return
       if(error)setExamError(error.message);else setExamData(data)
     }).finally(()=>alive&&setExamLoading(false))
+    return()=>{alive=false}
+  },[e.id,activeSection])
+  useEffect(()=>{
+    if(!e.id||activeSection!=='connectivity')return
+    let alive=true
+    setConnectivityLoading(true);setConnectivityError('')
+    supabase.rpc('admin_employee_connectivity_history',{p_employee_id:e.id}).then(({data,error})=>{
+      if(!alive)return
+      if(error)setConnectivityError(error.message);else setConnectivityData(data||null)
+    }).finally(()=>alive&&setConnectivityLoading(false))
+    return()=>{alive=false}
+  },[e.id,activeSection])
+  useEffect(()=>{
+    if(!e.id||activeSection!=='payroll')return
+    let alive=true
+    setPayrollLoading(true);setPayrollError('')
+    supabase.rpc('admin_employee_payroll_history',{p_employee_id:e.id}).then(({data,error})=>{
+      if(!alive)return
+      if(error)setPayrollError(error.message);else setPayrollData(data||null)
+    }).finally(()=>alive&&setPayrollLoading(false))
     return()=>{alive=false}
   },[e.id,activeSection])
   useEffect(()=>{
@@ -1580,14 +1621,17 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
         <button className="drawer-close" onClick={onClose}>×</button>
       </div>
     </div>
+    {e.id&&<EmployeeProfileMetrics data={profileSummary} loading={profileSummaryLoading}/>}
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <nav className="employee-drawer-tabs">
-        {[['info','员工信息'],['errors','员工出错记录'],['exams','员工考试记录'],['attendance','员工出勤记录'],['penalties','迟到 / 奖金惩罚']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
+        {[['info','员工信息'],['errors','员工出错记录'],['exams','员工考试记录'],['connectivity','停电 / 断网记录'],['payroll','工资记录'],['attendance','员工出勤记录'],['penalties','迟到 / 奖金惩罚']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
       </nav>
       <div className="detail-sections detail-sections-v11">
         {activeSection==='exams'&&<EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>}
         {activeSection==='errors'&&<EmployeeErrorPanel data={employeeErrors} loading={employeeErrorsLoading} error={employeeErrorsError}/>}
+        {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivityData} loading={connectivityLoading} error={connectivityError}/>}
+        {activeSection==='payroll'&&<EmployeePayrollHistoryPanel data={payrollData} loading={payrollLoading} error={payrollError}/>}
         {activeSection==='info'&&<>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
