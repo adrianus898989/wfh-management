@@ -1159,3 +1159,14 @@
 @media(max-width:1450px){.people-filter-grid,.people-filter-grid.view-团队分析,.people-filter-grid.view-岗位分析,.people-filter-grid.view-国家分析,.people-filter-grid.view-班次分析{grid-template-columns:repeat(3,minmax(170px,1fr))}.people-filter-grid .people-date-range-field{grid-column:span 2}.people-filter-grid .people-filter-actions{grid-column:auto}}
 @media(max-width:900px){.people-filter-grid,.people-filter-grid.view-团队分析,.people-filter-grid.view-岗位分析,.people-filter-grid.view-国家分析,.people-filter-grid.view-班次分析{grid-template-columns:1fr 1fr}.people-filter-grid .people-filter-actions{grid-column:1/-1;justify-content:flex-start}}
 @media(max-width:620px){.people-filter-grid,.people-filter-grid.view-团队分析,.people-filter-grid.view-岗位分析,.people-filter-grid.view-国家分析,.people-filter-grid.view-班次分析{grid-template-columns:1fr}.people-filter-grid .people-date-range-field{grid-column:auto}}
+
+/* V27: headings stay concise; the title is the explanation. */
+.people-analysis-title p,
+.analysis-head-row>div>p,
+.resignation-section-head p,
+.resignation-analysis-heading p,
+.analysis-overview-card .analysis-card-head p,
+.country-tenure-heading p,
+.employee-structure-stats .analysis-card-head p{
+  display:none!important;
+}

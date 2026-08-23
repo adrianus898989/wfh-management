@@ -7,6 +7,20 @@ const text=v=>String(v??'').trim()
 const OPS=['总汇','人员','排班表','盘口人数','统计','错误统计']
 const SPECIAL_POSITIONS=['出款','彩金','客服','查单']
 const blankFilters=()=>({q:'',shift:'',team:'',group:'',position:'',country:'',supervisor:'',platform:''})
+const FILTER_PROFILES={
+  总汇:['q','team','group','position','country','supervisor','platform'],
+  人员:['q','team','group','position','country','supervisor'],
+  排班表:['q','shift','team','group','position'],
+  盘口人数:['q','platform','shift','team','position','country'],
+  统计:['q','team','group','position','country','supervisor','platform'],
+}
+const SEARCH_PLACEHOLDERS={
+  总汇:'姓名 / ID / 团队 / 岗位 / 负责人',
+  人员:'姓名 / ID / 工作内容',
+  排班表:'姓名 / ID / 班次 / 工作内容',
+  盘口人数:'姓名 / ID / 盘口',
+  统计:'姓名 / ID / 岗位 / 盘口',
+}
 const uniq=arr=>[...new Set((arr||[]).map(text).filter(Boolean))]
 const ERROR_GRADE_CHOICES=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
 const errorGradeKey=value=>{const count=Number(value||0);return count>=31?'high':count>=16?'watch':count>=9?'attention':count>=1?'normal':'excellent'}
@@ -108,8 +122,8 @@ export default function AdminReportsPage(){
   const setTab=next=>{setTabState(next);setSp(next==='总汇'?{}:{tab:next},{replace:true})}
 
   const roster=useMemo(()=>filterRoster(overview?.roster||[],filters),[overview,filters])
-  const syncRoster=overview?.sync_state?.['居家排班表/填表']
-  const syncOrders=overview?.sync_state?.['效率表/订单处理']||overview?.sync_state?.['效率表/网站数据状态']
+  const applyFilters=()=>setFilters({...draftFilters})
+  const resetFilters=()=>{const next=blankFilters();setDraftFilters(next);setFilters(next)}
 
   return <div className="content-page reports-page rp-page">
     <div className="rp-head">
@@ -118,33 +132,34 @@ export default function AdminReportsPage(){
     </div>
     {error&&<div className="rp-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <div className="rp-tabs">{OPS.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}</div>
-    {tab!=='错误统计'&&<GlobalFilters value={draftFilters} onChange={setDraftFilters} onQuery={()=>setFilters({...draftFilters})} onReset={()=>{const next=blankFilters();setDraftFilters(next);setFilters(next)}} options={overview?.options||{}} meta={`${overview?.roster?.length||0} 行 · 当前筛选 ${roster.length} 行 · ${uniqueCount(roster)} 人`}/>} 
-    {tab!=='错误统计'&&<div className="rp-source-strip"><span><i/>人员：居家排班表 / 填表 {syncRoster?.row_count?`· ${syncRoster.row_count} 行`:''}</span><span><i/>账号映射：居家排班表 / 账号</span><span><i/>订单明细：Supabase ← 工作表4 + 填表 {syncOrders?.row_count?`· ${syncOrders.row_count} 行`:''}</span><span><i/>错误：效率表 / 员工错误</span></div>}
+    {!['错误统计','统计'].includes(tab)&&<GlobalFilters tab={tab} value={draftFilters} onChange={setDraftFilters} onQuery={applyFilters} onReset={resetFilters} options={overview?.options||{}} meta={`筛选后 ${uniqueCount(roster)} 人`}/>} 
     {loading&&!overview?<Loading/>:<>
       {tab==='总汇'&&<Overview data={overview} rows={roster}/>} 
       {tab==='人员'&&<People rows={roster}/>} 
       {tab==='排班表'&&<Schedule rows={roster}/>} 
       {tab==='盘口人数'&&<Platforms rows={roster}/>} 
-      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} onError={setError}/>} 
+      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} onError={setError} filterValue={draftFilters} onFilterChange={setDraftFilters} onFilterQuery={applyFilters} onFilterReset={resetFilters} filterOptions={overview?.options||{}} filterMeta={`筛选后 ${uniqueCount(roster)} 人`}/>} 
       {tab==='错误统计'&&<Errors onError={setError}/>}
     </>}
   </div>
 }
 
 function Loading(){return <div className="rp-card rp-loading">正在读取居家排班表与效率表…</div>}
-function GlobalFilters({value,onChange,onQuery,onReset,options,meta}){
+function GlobalFilters({tab,value,onChange,onQuery,onReset,options,meta,extraFields,extraActions,loading=false}){
   const set=(key,next)=>onChange({...value,[key]:next})
-  return <div className="rp-filterbar">
-    <label className="rp-filter-field rp-filter-search"><span>综合搜索</span><input className="rp-search" value={value.q} onChange={event=>set('q',event.target.value)} onKeyDown={event=>{if(event.key==='Enter')onQuery()}} placeholder="姓名 / ID / 团队 / 岗位 / 负责人 / 工作内容"/></label>
-    <label className="rp-filter-field"><span>班次</span><Select value={value.shift} onChange={next=>set('shift',next)} options={options.shifts} all="全部班次"/></label>
-    <label className="rp-filter-field"><span>团队</span><Select value={value.team} onChange={next=>set('team',next)} options={options.teams} all="全部团队"/></label>
-    <label className="rp-filter-field"><span>组别</span><Select value={value.group} onChange={next=>set('group',next)} options={options.groups} all="全部组别"/></label>
-    <label className="rp-filter-field"><span>岗位</span><Select value={value.position} onChange={next=>set('position',next)} options={options.positions} all="全部岗位"/></label>
-    <label className="rp-filter-field"><span>国家</span><Select value={value.country} onChange={next=>set('country',next)} options={options.countries} all="全部国家"/></label>
-    <label className="rp-filter-field"><span>负责人</span><input list="rp-supervisors" value={value.supervisor} onChange={event=>set('supervisor',event.target.value)} onKeyDown={event=>{if(event.key==='Enter')onQuery()}} placeholder="负责人 / 培训 / 组长"/></label>
+  const visible=new Set(FILTER_PROFILES[tab]||FILTER_PROFILES.总汇)
+  return <div className={`rp-filterbar rp-filterbar-${tab}`}>
+    {visible.has('q')&&<label className="rp-filter-field rp-filter-search"><span>综合搜索</span><input className="rp-search" value={value.q} onChange={event=>set('q',event.target.value)} onKeyDown={event=>{if(event.key==='Enter')onQuery()}} placeholder={SEARCH_PLACEHOLDERS[tab]||SEARCH_PLACEHOLDERS.总汇}/></label>}
+    {visible.has('shift')&&<label className="rp-filter-field"><span>班次</span><Select value={value.shift} onChange={next=>set('shift',next)} options={options.shifts} all="全部班次"/></label>}
+    {visible.has('team')&&<label className="rp-filter-field"><span>团队</span><Select value={value.team} onChange={next=>set('team',next)} options={options.teams} all="全部团队"/></label>}
+    {visible.has('group')&&<label className="rp-filter-field"><span>组别</span><Select value={value.group} onChange={next=>set('group',next)} options={options.groups} all="全部组别"/></label>}
+    {visible.has('position')&&<label className="rp-filter-field"><span>岗位</span><Select value={value.position} onChange={next=>set('position',next)} options={options.positions} all="全部岗位"/></label>}
+    {visible.has('country')&&<label className="rp-filter-field"><span>国家</span><Select value={value.country} onChange={next=>set('country',next)} options={options.countries} all="全部国家"/></label>}
+    {visible.has('supervisor')&&<label className="rp-filter-field"><span>负责人</span><input list="rp-supervisors" value={value.supervisor} onChange={event=>set('supervisor',event.target.value)} onKeyDown={event=>{if(event.key==='Enter')onQuery()}} placeholder="负责人 / 培训 / 组长"/></label>}
     <datalist id="rp-supervisors">{(options.supervisors||[]).map(x=><option key={x} value={x}/>)}</datalist>
-    <label className="rp-filter-field"><span>盘口</span><Select value={value.platform} onChange={next=>set('platform',next)} options={options.platforms} all="全部盘口"/></label>
-    <div className="rp-filter-actions"><button className="rp-query" onClick={onQuery}>查询</button><button className="rp-reset" onClick={onReset}>重置</button></div>
+    {visible.has('platform')&&<label className="rp-filter-field"><span>盘口</span><Select value={value.platform} onChange={next=>set('platform',next)} options={options.platforms} all="全部盘口"/></label>}
+    {extraFields}
+    <div className="rp-filter-actions"><button className="rp-query" disabled={loading} onClick={onQuery}>{loading?'查询中…':'查询'}</button><button className="rp-reset" disabled={loading} onClick={onReset}>重置</button>{extraActions}</div>
     <div className="rp-filter-meta">{meta}</div>
   </div>
 }
@@ -177,11 +192,9 @@ function Platforms({rows}){
 
 function Orders({invoke,roster,onError}){const [range,setRange]=useState({from:'',to:''}),[position,setPosition]=useState(''),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'total',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[mistakes,setMistakes]=useState(null);const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'orders',date_from:next.from,date_to:next.to});setData(d);onError('')}catch(e){onError(e.message||'统计读取失败')}finally{setLoading(false)}};useEffect(()=>{load()},[]);useEffect(()=>{const t=setInterval(()=>{if(!document.hidden)load(range)},300000);return()=>clearInterval(t)},[range.from,range.to]);const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster]);const rows=useMemo(()=>{let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id)&&(!position||r.position===position));x=[...x].sort((a,b)=>{const av=Number(a[sort.key]||0),bv=Number(b[sort.key]||0);return sort.asc?av-bv:bv-av});return x},[data,allowed,position,sort]);useEffect(()=>setPage(1),[position,sort,size,roster]);const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size),dates=data?.dates||[];const changeSort=key=>setSort(s=>({key,asc:s.key===key?!s.asc:false}));const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)};const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:range.from,date_to:range.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){onError(e.message||'错误记录读取失败')}};return <section className="rp-card"><div className="rp-card-title"><div><h2>员工订单处理统计</h2><p>与原版同源：效率表「网站数据」（由 工作表4 + 填表 生成）+ 居家排班表「账号」做后台账号 → ID 映射。</p></div><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'读取中'}</span></div><div className="rp-order-toolbar"><label>日期起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>日期止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><Select value={position} onChange={setPosition} options={data?.options?.positions||[]} all="全部岗位"/><button className="primary" onClick={()=>load()}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>{loading&&!data?<div className="rp-loading-inline">读取订单统计…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>入职日期</th><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td>{r.hire_date||'—'}</td><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section>}
 
-function OrdersManualQuery({invoke,roster,onError}){
+function OrdersManualQuery({invoke,roster,onError,filterValue,onFilterChange,onFilterQuery,onFilterReset,filterOptions,filterMeta}){
   const [range,setRange]=useState({from:'',to:''})
   const [appliedRange,setAppliedRange]=useState({from:'',to:''})
-  const [position,setPosition]=useState('')
-  const [appliedPosition,setAppliedPosition]=useState('')
   const [data,setData]=useState(null)
   const [loading,setLoading]=useState(true)
   const [sort,setSort]=useState({key:'total',asc:false})
@@ -189,7 +202,7 @@ function OrdersManualQuery({invoke,roster,onError}){
   const [size,setSize]=useState(30)
   const [mistakes,setMistakes]=useState(null)
   const requestRef=useRef(0)
-  const load=async(nextRange=appliedRange,nextPosition=appliedPosition)=>{
+  const load=async(nextRange=appliedRange)=>{
     const requestId=++requestRef.current
     setLoading(true)
     try{
@@ -198,19 +211,18 @@ function OrdersManualQuery({invoke,roster,onError}){
       // from overwriting a newer result when several admin windows refresh.
       const d=await invoke({action:'orders',date_from:nextRange.from,date_to:nextRange.to})
       if(requestId!==requestRef.current)return
-      setData(d);setAppliedRange(nextRange);setAppliedPosition(nextPosition);setPage(1);onError('')
+      setData(d);setAppliedRange(nextRange);setPage(1);onError('')
     }catch(e){if(requestId===requestRef.current)onError(e.message||'统计读取失败')}
     finally{if(requestId===requestRef.current)setLoading(false)}
   }
-  useEffect(()=>{load({from:'',to:''},'')},[])
-  useEffect(()=>{const t=setInterval(()=>{if(!document.hidden)load(appliedRange,appliedPosition)},300000);return()=>clearInterval(t)},[appliedRange.from,appliedRange.to,appliedPosition])
+  useEffect(()=>{load({from:'',to:''})},[])
+  useEffect(()=>{const t=setInterval(()=>{if(!document.hidden)load(appliedRange)},300000);return()=>clearInterval(t)},[appliedRange.from,appliedRange.to])
   const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])
   const rows=useMemo(()=>{
-    let next=(data?.rows||[]).filter(r=>allowed.has(r.employee_id)&&(!appliedPosition||r.position===appliedPosition))
+    let next=(data?.rows||[]).filter(r=>allowed.has(r.employee_id))
     return [...next].sort((a,b)=>{const av=Number(a[sort.key]||0),bv=Number(b[sort.key]||0);return sort.asc?av-bv:bv-av})
-  },[data,allowed,appliedPosition,sort])
-  useEffect(()=>setPage(1),[appliedPosition,sort,size,roster])
-  useEffect(()=>{if(data)load(appliedRange,appliedPosition)},[roster])
+  },[data,allowed,sort])
+  useEffect(()=>setPage(1),[sort,size,roster])
   const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size),dates=data?.dates||[]
   const changeSort=key=>setSort(current=>({key,asc:current.key===key?!current.asc:false}))
   const quick=kind=>{
@@ -218,11 +230,14 @@ function OrdersManualQuery({invoke,roster,onError}){
     let next={from:'',to:''}
     if(kind==='7d')next={from:isoAdd(end,-6),to:end}
     if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end}
-    setRange(next);load(next,position)
+    setRange(next);onFilterQuery();load(next)
   }
-  const reset=()=>{const next={from:'',to:''};setRange(next);setPosition('');load(next,'')}
+  const query=()=>{onFilterQuery();load({...range})}
+  const reset=()=>{const next={from:'',to:''};setRange(next);onFilterReset();load(next)}
   const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:appliedRange.from,date_to:appliedRange.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){onError(e.message||'错误记录读取失败')}}
-  return <section className="rp-card"><div className="rp-card-title"><div><h2>员工订单处理统计</h2><p>与原版同源：效率表「网站数据」（由 工作表4 + 填表 生成）+ 居家排班表「账号」做后台账号 → ID 映射。</p></div><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'读取中'}</span></div><div className="rp-order-toolbar"><label>日期起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>日期止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><Select value={position} onChange={setPosition} options={data?.options?.positions||[]} all="全部岗位"/><button className="primary" disabled={loading} onClick={()=>load({...range},position)}>{loading?'查询中…':'查询'}</button><button onClick={reset}>重置</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>{loading&&!data?<div className="rp-loading-inline">读取订单统计…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>入职日期</th><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td>{r.hire_date||'—'}</td><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section>
+  const dateFields=<><label className="rp-filter-field rp-filter-date"><span>日期起</span><input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label className="rp-filter-field rp-filter-date"><span>日期止</span><input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label></>
+  const quickActions=<div className="rp-quick-actions"><button type="button" onClick={()=>quick('7d')}>近7天</button><button type="button" onClick={()=>quick('month')}>本月</button><button type="button" onClick={()=>quick('all')}>全部</button></div>
+  return <><GlobalFilters tab="统计" value={filterValue} onChange={onFilterChange} onQuery={query} onReset={reset} options={filterOptions} meta={filterMeta} extraFields={dateFields} extraActions={quickActions} loading={loading}/><section className="rp-card"><div className="rp-card-title"><h2>员工订单处理统计</h2><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'读取中'}</span></div>{loading&&!data?<div className="rp-loading-inline">读取订单统计…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>入职日期</th><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td>{r.hire_date||'—'}</td><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section></>
 }
 
 const blankErrorFilters=()=>({employee_id:'',employee_name:'',risk_level:'',error_type:'',qc_person:'',shift:'',team:'',group:'',position:'',country:'',manager:'',platform:''})

@@ -1099,7 +1099,7 @@ export default function AdminEmployeesPage(){
 
     {tab==='人员分析'&&<>
       <div className="analysis-head-row people-analysis-title">
-        <div><h2>人员分析</h2><p>人员规模、组织结构、国家、班次和离职分开查看；不再把所有分析堆在一个长页面。</p></div>
+        <h2>人员分析</h2>
         <div className="analysis-badge">实时数据</div>
       </div>
 
@@ -1999,10 +1999,7 @@ function ResignationAnalyticsPanel({analytics,filters,setFilters,options,onQuery
 
   return <section className="resignation-analytics-section">
     <div className="analysis-head-row resignation-analysis-heading">
-      <div>
-        <h2>离职分析</h2>
-        <p>按日、周、月和累计统计离职；环比上升用红色、下降用绿色。所有数字都可下钻到具体员工与离职原因。</p>
-      </div>
+      <h2>离职分析</h2>
       <div className="resignation-heading-actions">{Number(unmatchedTeam?.count||0)>0&&<button type="button" className="resignation-unmatched-bell" title={`当前有 ${unmatchedTeam?.count||0} 名人员未匹配团队`}>🔔 <strong>{unmatchedTeam?.count||0}</strong></button>}<div className="analysis-badge">截至 {asOf||'—'}</div></div>
     </div>
 
@@ -2054,10 +2051,7 @@ function ResignationAnalyticsPanel({analytics,filters,setFilters,options,onQuery
 
     <div className="analysis-overview-card team-resignation-card">
       <div className="analysis-card-head">
-        <div>
-          <h3>各团队离职明细</h3>
-          <p>今天 / 昨天、近7天 / 前7天、本月 / 上月同期、累计离职与离职率；点击人数或“查看人员”进入明细。</p>
-        </div>
+        <h3>各团队离职明细</h3>
         <span>{teams.length} 个团队</span>
       </div>
       <div className="team-resignation-table-wrap">

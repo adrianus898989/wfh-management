@@ -213,7 +213,7 @@ begin
       'legacy_partial_count',coalesce(sum(partial_count)filter(where source_system='legacy'),0),
       'legacy_wrong_count',coalesce(sum(wrong_count)filter(where source_system='legacy'),0),
       'legacy_scored_count',coalesce(sum(scored_answer_count)filter(where source_system='legacy'),0),
-      'legacy_zero_score_count',coalesce(sum(zero_score_count)filter(where source_system='legacy'),0),
+      'legacy_zero_score_count',coalesce(sum(zero_score_answer_count)filter(where source_system='legacy'),0),
       'legacy_answer_pending_count',coalesce(sum(pending_count)filter(where source_system='legacy'),0))from a),
     'series',(select coalesce(jsonb_agg(to_jsonb(x)order by average desc,name),'[]'::jsonb)from(select coalesce(nullif(series_name,''),'未分类')name,round(avg(percentage),1)average,count(*)attempts from a where status='graded'group by 1)x),
     'positions',(select coalesce(jsonb_agg(to_jsonb(x)order by average desc,name),'[]'::jsonb)from(select coalesce(nullif(position_name,''),'未分类')name,round(avg(percentage),1)average,count(*)attempts from a where status='graded'group by 1)x),

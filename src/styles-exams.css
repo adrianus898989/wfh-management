@@ -91,3 +91,12 @@
 .exam-page .exam-column-plot{padding-top:25px}
 .exam-page .exam-columns{padding-top:18px;overflow-y:visible}
 .exam-page .exam-columns em{top:-15px;padding:1px 3px;border-radius:4px;background:rgba(255,255,255,.94);font-weight:800;line-height:1.15}
+
+/* V9: compact section headings without redundant explanatory copy. */
+.exam-page .exam-section-title p,
+.exam-page .exam-analytics-title>div>p,
+.exam-page .exam-distribution-card header p,
+.exam-page .exam-trend-card header p,
+.exam-page .exam-leaderboard header p{
+  display:none!important;
+}
