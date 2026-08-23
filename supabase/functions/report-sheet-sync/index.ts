@@ -6,6 +6,7 @@ const MISTAKE_URL = 'https://opensheet.elk.sh/1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawI
 const EFF_ID = '1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM'
 const ORDER_SHEETS = ['工作表4', '填表']
 const ORDER_CHUNK_SIZE = 5_000
+const ERROR_CHUNK_SIZE = 500
 const FETCH_TIMEOUT_MS = 25_000
 
 const text = (value: unknown) => String(value ?? '').trim()
@@ -392,6 +393,11 @@ async function writeSnapshot(
   const now = new Date().toISOString()
 
   if (existing && existingHash === hash) {
+    const { error } = await service
+      .from('report_sheet_snapshots')
+      .update({ synced_at: now })
+      .eq('source', source)
+    if (error) throw new Error(`${source} heartbeat: ${error.message}`)
     return { source, changed: false, rows: rowCount }
   }
 
@@ -404,6 +410,49 @@ async function writeSnapshot(
   }, { onConflict: 'source' })
   if (error) throw new Error(`${source}: ${error.message}`)
   return { source, changed: true, rows: rowCount }
+}
+
+async function syncErrorRows(service: any, payload: any[]) {
+  const { data: currentRows, error: stateError } = await service
+    .from('report_error_sync_chunks')
+    .select('chunk_index,content_hash')
+  if (stateError) throw new Error(`错误明细同步状态读取失败: ${stateError.message}`)
+
+  const current = new Map((currentRows || []).map((row: any) => [
+    Number(row.chunk_index),
+    text(row.content_hash),
+  ]))
+  const chunks: any[][] = []
+  for (let index = 0; index < payload.length; index += ERROR_CHUNK_SIZE) {
+    chunks.push(payload.slice(index, index + ERROR_CHUNK_SIZE))
+  }
+
+  const changes = chunks
+    .map((rows, chunkIndex) => ({ rows, chunkIndex, hash: payloadHash(rows) }))
+    .filter(change => current.get(change.chunkIndex) !== change.hash)
+
+  for (let index = 0; index < changes.length; index += 4) {
+    await Promise.all(changes.slice(index, index + 4).map(async change => {
+      const { error } = await service.rpc('sync_report_employee_error_chunk', {
+        p_chunk_index: change.chunkIndex,
+        p_chunk_size: ERROR_CHUNK_SIZE,
+        p_content_hash: change.hash,
+        p_rows: change.rows,
+      })
+      if (error) throw new Error(`错误明细同步 #${change.chunkIndex}: ${error.message}`)
+    }))
+  }
+
+  const { data: finalized, error: finalizeError } = await service
+    .rpc('finalize_report_employee_error_sync', { p_chunk_count: chunks.length })
+  if (finalizeError) throw new Error(`错误明细同步收尾失败: ${finalizeError.message}`)
+
+  return {
+    rows: payload.length,
+    chunks: chunks.length,
+    changed_chunks: changes.length,
+    deleted_rows: Number(finalized?.deleted_rows || 0),
+  }
 }
 
 async function loadAllSummaries(service: any) {
@@ -593,7 +642,10 @@ Deno.serve(async (request) => {
       .sort()
       .at(-1) || ''
 
-    const errorChunkResult = await writeChunkedSnapshot(service, '效率表/员工错误', errors)
+    const [errorChunkResult, errorRowSyncResult] = await Promise.all([
+      writeChunkedSnapshot(service, '效率表/员工错误', errors),
+      syncErrorRows(service, errors),
+    ])
     const orderSyncResult = await syncOrderSheets(service)
     const states = await loadSnapshotStates(service)
     const summaryHash = payloadHash(summaries)
@@ -623,7 +675,12 @@ Deno.serve(async (request) => {
     ]
     const snapshotResults = []
     for (const [source, payload, note, rowCount] of snapshotPlans) {
-      snapshotResults.push(await writeSnapshot(service, states, source, payload, note, rowCount))
+      const result = await writeSnapshot(service, states, source, payload, note, rowCount)
+      snapshotResults.push(result)
+      if (source === '居家排班表/填表' && result.changed) {
+        const { error } = await service.rpc('sync_report_employee_directory', { p_rows: payload })
+        if (error) throw new Error(`员工查询目录同步失败: ${error.message}`)
+      }
     }
 
     let summaryChanges = 0
@@ -648,6 +705,7 @@ Deno.serve(async (request) => {
       error_summary: summaries.length,
       summary_changes: summaryChanges,
       error_chunks: errorChunkResult,
+      error_rows_sync: errorRowSyncResult,
       snapshot_changes: snapshotResults.filter((result) => result.changed).map((result) => result.source),
       latest_orders: orderSyncResult.latest_date,
       order_sync: orderSyncResult,
