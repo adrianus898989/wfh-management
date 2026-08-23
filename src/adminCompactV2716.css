@@ -98,6 +98,32 @@
   padding:0 11px!important;
   border-radius:8px!important;
 }
+.employee-page .resignation-card-pro .resignation-search-panel{
+  grid-template-columns:112px 145px minmax(155px,.9fr) minmax(155px,.9fr) minmax(155px,.85fr) minmax(185px,1fr) minmax(275px,1.4fr) auto!important;
+}
+.employee-page .v25-resignation-filter-panel .resign-filter-field>span{
+  display:block!important;
+  margin:0 0 5px!important;
+  color:#60748e!important;
+  font-size:10px!important;
+  font-weight:800!important;
+  line-height:1!important;
+  white-space:nowrap!important;
+}
+.employee-page .v25-resignation-filter-panel input,
+.employee-page .v25-resignation-filter-panel select,
+.employee-page .v25-resignation-filter-panel .pro-input-shell,
+.employee-page .v25-resignation-filter-panel .pro-date-range{
+  height:36px!important;
+  min-height:36px!important;
+  border-radius:8px!important;
+}
+.employee-page .v25-resignation-filter-panel .v25-resign-actions,
+.employee-page .v25-resignation-filter-panel .v25-resign-actions button{
+  height:36px!important;
+  min-height:36px!important;
+  white-space:nowrap!important;
+}
 
 /* Operation log uses the same compact principle, also one desktop row. */
 .employee-page .data-card:not(.resignation-card-pro)>.v25-resignation-filter-panel{
@@ -125,6 +151,13 @@
   height:34px!important;
   min-width:64px!important;
   padding:0 11px!important;
+}
+.employee-page .data-card:not(.resignation-card-pro)>.audit-search-panel{
+  grid-template-columns:125px 150px 180px 220px minmax(300px,1fr) auto!important;
+}
+.employee-page .audit-search-panel .v25-resign-date,
+.employee-page .audit-search-panel .v25-resign-actions{
+  grid-column:auto!important;
 }
 
 /* People analysis: one dense row on wide screens rather than a tall filter block. */
