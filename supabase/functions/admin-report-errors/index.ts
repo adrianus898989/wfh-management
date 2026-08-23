@@ -40,6 +40,7 @@ function applyFilters(query: any, filters: Record<string, string>, from: string,
   if (to) next = next.lte(basisColumn, to)
   if (filters.employee_id) next = next.ilike('employee_id', `%${filters.employee_id}%`)
   if (filters.employee_name) next = next.ilike('name', `%${filters.employee_name}%`)
+  if (filters.employee_status) next = next.eq('employee_status', filters.employee_status)
   if (filters.risk_level) next = next.eq('risk_level', filters.risk_level)
   if (filters.error_type) next = next.eq('error_type', filters.error_type)
   if (filters.qc_person) next = next.eq('qc_person', filters.qc_person)
@@ -51,19 +52,6 @@ function applyFilters(query: any, filters: Record<string, string>, from: string,
   if (filters.manager) next = next.ilike('manager_search', `%${filters.manager}%`)
   if (filters.platform) next = next.eq('platform', filters.platform)
   return next
-}
-
-function missingFields(row: any) {
-  const labels: Array<[string, string]> = [
-    ['error_type', '错误类型'],
-    ['score', '扣分'],
-    ['qc_person', '质检人'],
-    ['qc_date', '质检时间'],
-    ['leader_review', '小组长复审'],
-    ['qc_result', '质检结果'],
-    ['review_date', '复检时间'],
-  ]
-  return labels.filter(([field]) => !text(row[field])).map(([, label]) => label)
 }
 
 Deno.serve(async req => {
@@ -84,6 +72,7 @@ Deno.serve(async req => {
     const filters = {
       employee_id: text(body.employee_id).toUpperCase(),
       employee_name: text(body.employee_name),
+      employee_status: text(body.employee_status),
       risk_level: text(body.risk_level),
       error_type: text(body.error_type),
       qc_person: text(body.qc_person),
@@ -118,6 +107,7 @@ Deno.serve(async req => {
     const sortMap: Record<string, string> = {
       employee_id: 'employee_id',
       name: 'name',
+      employee_status: 'employee_status',
       team: 'team',
       position: 'position',
       platform: 'platform',
@@ -146,7 +136,6 @@ Deno.serve(async req => {
       ...row,
       key: `error-${row.source_row}`,
       group: row.group_name,
-      source_missing_fields: missingFields(row),
     }))
 
     return json({
