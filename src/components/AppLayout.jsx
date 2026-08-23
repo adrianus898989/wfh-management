@@ -51,8 +51,7 @@ const ADMIN_NAV = [
 ]
 
 const STAFF_NAV = [
-  ['/staff','首页'], ['/staff/schedule','我的排班'], ['/staff/attendance','我的出勤'],
-  ['/staff/payroll','我的工资'], ['/staff/exams','我的考试'], ['/staff/requests','我的申请'],
+  ['/staff','首页'], ['/staff/exams','我的考试'],
 ]
 
 export default function AppLayout({ mode, children }) {

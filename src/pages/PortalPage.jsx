@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
+import { StaffPayrollWorkspace } from './StaffPayrollPage'
 
 const inactiveStatuses = ['left', 'resigned', 'inactive', 'terminated', '离职', '停用']
 const text = v => String(v ?? '').trim()
@@ -218,20 +220,27 @@ const staffExamBreakdown = row => {
 
 export const StaffHome = () => {
   const [data,setData] = useState(null), [loading,setLoading] = useState(true), [error,setError] = useState('')
+  const [activity,setActivity] = useState({loading:true,error:'',data:null})
   const [errorHistory,setErrorHistory] = useState({rows:[],total:0,page:1,pages:1}), [errorPage,setErrorPage] = useState(1), [errorsLoading,setErrorsLoading] = useState(false)
   const [revealed,setRevealed] = useState({}), [revealLoading,setRevealLoading] = useState('')
   const [activeSection,setActiveSection] = useState('info')
   const [examDetail,setExamDetail] = useState(null), [examDetailLoading,setExamDetailLoading] = useState(false), [examDetailError,setExamDetailError] = useState('')
   const load = async () => {
     setLoading(true); setError('')
-    const { data:result,error:loadError } = await supabase.rpc('staff_portal_home')
+    setActivity(current=>({...current,loading:true,error:''}))
+    const [{data:result,error:loadError},{data:activityResult,error:activityError}] = await Promise.all([
+      supabase.rpc('staff_portal_home'),
+      supabase.rpc('staff_activity_home'),
+    ])
     if(loadError)setError(loadError.message || '个人资料读取失败'); else setData(result)
+    setActivity(activityError?{loading:false,error:activityError.message||'出勤与断网记录读取失败',data:null}:{loading:false,error:'',data:activityResult||null})
     setLoading(false)
   }
   useEffect(()=>{load()},[])
   useEffect(()=>{if(activeSection!=='errors')return;let alive=true;(async()=>{setErrorsLoading(true);const {data:result,error:e}=await supabase.rpc('staff_portal_errors',{p_page:errorPage,p_page_size:20});if(!alive)return;if(e)setError(e.message||'错误记录读取失败');else setErrorHistory(result||{rows:[],total:0,page:1,pages:1});setErrorsLoading(false)})();return()=>{alive=false}},[errorPage,activeSection])
-  if(loading)return <div className="staff-portal-page"><div className="staff-portal-loading">正在读取我的资料…</div></div>
+  if(loading)return <div className="staff-portal-page"><div className="staff-portal-loading">正在读取个人资料…</div></div>
   const p=data?.profile||{}, pay=data?.payment||{}, summary=data?.error_summary||{}, exam=data?.exam_summary||{}, errors=errorHistory?.rows||[]
+  const attendance=activity.data?.attendance||{}, connectivity=activity.data?.connectivity||{}
   const toggleSensitive = async field => {
     if(revealed[field]) { setRevealed(current=>({...current,[field]:''})); return }
     setRevealLoading(field); setError('')
@@ -250,24 +259,31 @@ export const StaffHome = () => {
   return <div className="staff-portal-page">
     <header className="staff-portal-hero"><div className="staff-avatar">{(p.full_name||'W').slice(0,1).toUpperCase()}</div><div><small>MY WORKSPACE</small><h1>{p.full_name||'我的首页'}</h1><p>{p.employee_no||'—'} · {p.team_name||'未设置团队'} · {p.position_name||'未设置岗位'}</p><div className="staff-hero-tags"><span>{p.shift_name||'班次未设置'}</span><span>{staffTenure(p.hire_date)}</span></div></div><button onClick={load}>↻ 刷新资料</button></header>
     {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
-    <section className="staff-dashboard-metrics"><div><span>累计错误</span><strong>{summary.total_error_count||0}</strong><small>仅本人可见</small></div><div><span>本月错误</span><strong>{summary.month_error_count||0}</strong><small>近30天 {summary.last_30d_error_count||0} 笔</small></div><div><span>考试记录</span><strong>{exam.total||0}</strong><small>通过 {exam.passed||0} 次</small></div><div><span>平均成绩</span><strong>{exam.average||0}%</strong><small>已批改 {exam.completed||0} 次</small></div></section>
+    <section className="staff-dashboard-metrics"><div><span>本月错误</span><strong>{summary.month_error_count||0}</strong><small>累计 {summary.total_error_count||0} 笔</small></div><div><span>考试记录</span><strong>{exam.total||0}</strong><small>通过 {exam.passed||0} 次</small></div><div><span>平均成绩</span><strong>{exam.average||0}%</strong><small>已批改 {exam.completed||0} 次</small></div><div><span>本月缺席</span><strong>{activity.loading?'—':attendance.summary?.month_absent||0}</strong><small>出勤记录</small></div><div><span>本月休假</span><strong>{activity.loading?'—':attendance.summary?.month_leave||0}</strong><small>休假 / 公休天数</small></div><div><span>停电 / 断网</span><strong>{activity.loading?'—':connectivity.total||0}</strong><small>停电 {connectivity.power||0} · 断网 {connectivity.internet||0}</small></div></section>
     <nav className="staff-profile-tabs">
-      {[['info','我的信息'],['errors','我的出错记录'],['exams','我的考试结果'],['attendance','我的出勤记录'],['penalties','迟到 / 奖金惩罚']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
+      {[['info','个人信息'],['errors','出错记录'],['exams','考试结果'],['attendance','出勤记录'],['connectivity','停电 / 断网记录'],['payroll','工资记录']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
     </nav>
-    {activeSection==='info'&&<div className="staff-portal-columns"><div className="staff-profile-stack"><section className="staff-profile-panel"><header><div><small>PERSONAL PROFILE</small><h2>我的员工档案</h2></div><span>仅本人可见</span></header><div className="staff-profile-fields">{fields.map(([label,value])=><div key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section>
-      <section className="staff-payment-panel"><header><div><small>PAYMENT & CONTACT</small><h2>我的收款与联系资料</h2></div><span>🔒 已安全隐藏</span></header><div className="staff-payment-grid">
+    {activeSection==='info'&&<div className="staff-portal-columns"><div className="staff-profile-stack"><section className="staff-profile-panel"><header><div><small>PERSONAL PROFILE</small><h2>个人信息</h2></div><span>仅本人可见</span></header><div className="staff-profile-fields">{fields.map(([label,value])=><div key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section>
+      <section className="staff-payment-panel"><header><div><small>PAYMENT & CONTACT</small><h2>收款与联系资料</h2></div><span>🔒 已安全隐藏</span></header><div className="staff-payment-grid">
         <div><span>收款方式</span><strong>{pay.transfer_using||pay.payment_mode||'—'}</strong></div><div><span>收款姓名</span><strong>{pay.account_name||'—'}</strong></div>
         <div className="staff-sensitive-row"><span>银行卡 / 钱包账号</span><strong>{revealed.bank_account||pay.bank_account_masked||'—'}</strong>{pay.bank_account_masked&&<button onClick={()=>toggleSensitive('bank_account')} disabled={revealLoading==='bank_account'}>{revealLoading==='bank_account'?'读取中':revealed.bank_account?'隐藏':'查看'}</button>}</div>
         <div className="staff-sensitive-row"><span>USDT 地址</span><strong>{revealed.usdt_address||pay.usdt_address_masked||'—'}</strong>{pay.usdt_address_masked&&<button onClick={()=>toggleSensitive('usdt_address')} disabled={revealLoading==='usdt_address'}>{revealLoading==='usdt_address'?'读取中':revealed.usdt_address?'隐藏':'查看'}</button>}</div>
         <div><span>联系电话</span><strong>{pay.contact_phone||'—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number||'—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook||'—'}</strong></div><div><span>联系地址</span><strong>{pay.employee_address||'—'}</strong></div>
       </div></section></div>
-      <section className="staff-quick-panel"><header><small>QUICK ACCESS</small><h2>快捷入口</h2></header><Link to="/staff/exams"><b>参加考试</b><span>选择岗位与盘口 →</span></Link><Link to="/staff/schedule"><b>我的排班</b><span>查看本人排班 →</span></Link><Link to="/staff/attendance"><b>我的出勤</b><span>查看本人出勤 →</span></Link></section></div>}
-    {activeSection==='errors'&&<section className="staff-own-errors"><header><div><small>MY ERROR RECORDS</small><h2>我的完整错误记录</h2></div><span>共 {errorHistory.total||0} 条</span></header>{errorsLoading?<div className="staff-history-empty">正在读取错误记录…</div>:errors.length?<><div className="staff-error-list">{errors.map((row,index)=><article key={row.record_key||`${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type||'未分类错误'}</span></div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><span className="staff-error-score">{row.score?`${row.score} 分`:'—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage<=1} onClick={()=>setErrorPage(x=>Math.max(1,x-1))}>上一页</button><span>第 {errorHistory.page||1} / {errorHistory.pages||1} 页</span><button disabled={errorPage>=(errorHistory.pages||1)} onClick={()=>setErrorPage(x=>x+1)}>下一页</button></div></>:<div className="staff-history-empty">目前没有与你员工ID关联的错误记录。</div>}</section>}
-    {activeSection==='exams'&&<section className="staff-portal-exams"><header><div><small>MY EXAM RESULTS</small><h2>我的考试结果</h2></div><span>本系统 {exam.current||0} · 旧考试 {exam.legacy||0}</span></header>{examRows.length?<div className="staff-portal-exam-list">{examRows.map(row=><article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system==='legacy'?'legacy':'current'}`}>{row.source_label||'本系统'}</span><strong>{row.title}</strong><small>第 {row.attempt_no} 次 · {staffDateTime(row.submitted_at||row.started_at)}</small></div><div><b>{row.percentage==null?'待批改':`${Number(row.earned_score||0).toLocaleString()}/${Number(row.total_score||100).toLocaleString()} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row)}</small></div><button onClick={()=>openExam(row)}>查看答卷</button></article>)}</div>:<div className="staff-history-empty">暂无考试记录。</div>}</section>}
-    {activeSection==='attendance'&&<section className="staff-section-placeholder"><h2>我的出勤记录</h2><p>出勤数据接入后会在这里按日期展示。</p></section>}
-    {activeSection==='penalties'&&<section className="staff-section-placeholder"><h2>迟到 / 奖金惩罚记录</h2><p>迟到、奖金和惩罚资料接入后会在这里统一展示。</p></section>}
+      <section className="staff-quick-panel"><header><small>QUICK ACCESS</small><h2>快捷入口</h2></header><Link to="/staff/exams"><b>参加考试</b><span>选择岗位与盘口 →</span></Link><Link to="/staff/schedule"><b>排班记录</b><span>查看本人排班 →</span></Link><Link to="/staff/attendance"><b>出勤记录</b><span>查看本人出勤 →</span></Link></section></div>}
+    {activeSection==='errors'&&<section className="staff-own-errors"><header><div><small>ERROR RECORDS</small><h2>出错记录</h2></div><span>共 {errorHistory.total||0} 条</span></header>{errorsLoading?<div className="staff-history-empty">正在读取错误记录…</div>:errors.length?<><div className="staff-error-list">{errors.map((row,index)=><article key={row.record_key||`${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type||'未分类错误'}</span></div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><span className="staff-error-score">{row.score?`${row.score} 分`:'—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage<=1} onClick={()=>setErrorPage(x=>Math.max(1,x-1))}>上一页</button><span>第 {errorHistory.page||1} / {errorHistory.pages||1} 页</span><button disabled={errorPage>=(errorHistory.pages||1)} onClick={()=>setErrorPage(x=>x+1)}>下一页</button></div></>:<div className="staff-history-empty">目前没有与你员工ID关联的错误记录。</div>}</section>}
+    {activeSection==='exams'&&<section className="staff-portal-exams"><header><div><small>EXAM RESULTS</small><h2>考试结果</h2></div><span>本系统 {exam.current||0} · 旧考试 {exam.legacy||0}</span></header>{examRows.length?<div className="staff-portal-exam-list">{examRows.map(row=><article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system==='legacy'?'legacy':'current'}`}>{row.source_label||'本系统'}</span><strong>{row.title}</strong><small>第 {row.attempt_no} 次 · {staffDateTime(row.submitted_at||row.started_at)}</small></div><div><b>{row.percentage==null?'待批改':`${Number(row.earned_score||0).toLocaleString()}/${Number(row.total_score||100).toLocaleString()} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row)}</small></div><button onClick={()=>openExam(row)}>查看答卷</button></article>)}</div>:<div className="staff-history-empty">暂无考试记录。</div>}</section>}
+    {activeSection==='attendance'&&<StaffAttendancePanel data={attendance} loading={activity.loading} error={activity.error}/>}
+    {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivity} loading={activity.loading} error={activity.error}/>}
+    {activeSection==='payroll'&&<StaffPayrollWorkspace embedded/>}
     {examDetail&&<StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={()=>setExamDetail(null)}/>}
   </div>
+}
+
+function StaffAttendancePanel({data,loading,error}){
+  const rows=data?.rows||[], summary=data?.summary||{}
+  const label=value=>({normal:'正常',rest:'公休',absent:'缺席',leave:'休假',late:'迟到'}[String(value||'').toLowerCase()]||value||'—')
+  return <section className="staff-activity-panel"><header><div><small>ATTENDANCE</small><h2>出勤记录</h2></div><span>{data?.total||0} 条</span></header><div className="staff-activity-summary"><div><span>正常</span><strong>{summary.normal||0}</strong></div><div><span>公休</span><strong>{summary.rest||0}</strong></div><div><span>缺席</span><strong>{summary.absent||0}</strong></div><div><span>休假</span><strong>{summary.leave||0}</strong></div></div>{loading?<div className="staff-history-empty">正在读取出勤记录…</div>:error?<div className="staff-history-empty">{error}</div>:rows.length?<div className="staff-attendance-list">{rows.map(row=><article key={row.id}><strong>{row.report_date}</strong><span className={`staff-attendance-status ${row.attendance_status}`}>{label(row.attendance_status)}</span><span>{row.shift_name||'—'}</span><span>{row.status_note||'—'}</span></article>)}</div>:<div className="staff-history-empty">暂无出勤记录。</div>}</section>
 }
 
 function StaffPortalExamModal({detail,loading,error,onClose}){

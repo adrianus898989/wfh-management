@@ -31,3 +31,13 @@
 .connectivity-panel-proof .connectivity-evidence-links{margin-top:5px}
 @media(max-width:1280px){.connectivity-filter-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.connectivity-filter-actions{grid-column:auto;justify-content:flex-end}}
 @media(max-width:760px){.connectivity-toast{top:14px;right:14px}.connectivity-filter-grid{grid-template-columns:1fr}.connectivity-filter-actions{justify-content:stretch}.connectivity-filter-actions button{flex:1}.connectivity-lightbox{padding:10px}}
+/* V27.24 — precise employee filters and compact profile records. */
+.connectivity-filter-grid{grid-template-columns:repeat(5,minmax(130px,1fr));gap:7px}.connectivity-filter-actions{grid-column:auto;align-self:end;justify-content:flex-end}.connectivity-filter-grid input,.connectivity-filter-grid select{height:37px}
+.employee-connectivity-list article{display:grid;grid-template-columns:105px minmax(155px,.75fr) 88px minmax(210px,1.4fr) auto;gap:10px;align-items:start;padding:9px 10px}
+.employee-connectivity-list .employee-connectivity-identity{display:flex;min-width:0;flex-direction:column;gap:4px}.employee-connectivity-list .employee-connectivity-identity strong{font-size:12px}.employee-connectivity-list .employee-connectivity-identity span{font-size:10px}
+.employee-connectivity-details{min-width:0}.employee-connectivity-details small{display:block;color:#7c8ca1;font-size:9px}.employee-connectivity-details p{max-height:3.1em;margin:3px 0 0;overflow:auto;color:#304866;font-size:10px;line-height:1.45;white-space:pre-wrap}
+.employee-connectivity-list .connectivity-panel-proof{min-width:88px;padding-top:0;border-top:0}.employee-connectivity-panel>header{margin-bottom:7px}.employee-connectivity-panel>header h3{font-size:14px}
+.staff-portal-page .employee-connectivity-panel{grid-column:auto;margin:0}.staff-portal-page .employee-connectivity-list{gap:6px}
+@media(max-width:1280px){.connectivity-filter-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.employee-connectivity-list article{grid-template-columns:95px minmax(145px,.75fr) 78px minmax(190px,1.3fr) auto}}
+@media(max-width:850px){.connectivity-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.employee-connectivity-list article{grid-template-columns:1fr 1fr}.employee-connectivity-details,.employee-connectivity-list .connectivity-panel-proof{grid-column:1/-1}}
+@media(max-width:560px){.connectivity-filter-grid,.employee-connectivity-list article{grid-template-columns:1fr}.connectivity-filter-actions,.employee-connectivity-details,.employee-connectivity-list .connectivity-panel-proof{grid-column:auto}}

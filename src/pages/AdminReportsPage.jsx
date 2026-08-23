@@ -139,7 +139,7 @@ export default function AdminReportsPage(){
       {tab==='人员'&&<People rows={roster}/>} 
       {tab==='排班表'&&<Schedule rows={roster}/>} 
       {tab==='盘口人数'&&<Platforms rows={roster}/>} 
-      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} allRoster={overview?.roster||[]} onError={setError} filterValue={draftFilters} onFilterChange={setDraftFilters} onFilterQuery={applyFilters} onFilterReset={resetFilters} filterOptions={overview?.options||{}} filterMeta={`筛选后 ${uniqueCount(roster)} 人`}/>} 
+      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} allRoster={overview?.roster||[]} onError={setError} filterValue={draftFilters} onFilterChange={setDraftFilters} onFilterQuery={applyFilters} onFilterReset={resetFilters} filterOptions={overview?.options||{}} filterMeta={`筛选后 ${uniqueCount(roster)} 人`}/>}
       {tab==='错误统计'&&<Errors onError={setError}/>}
     </>}
   </div>
