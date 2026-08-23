@@ -162,7 +162,7 @@ export default function AdminPayrollPage(){
 
   const setTab=value=>{
     setTabState(value);setParams(value===TABS[0]?{}:{tab:value})
-    setRowPage(1)
+    setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');setRowPage(1)
     if(value==='工资导入')return
     const wantedStatus=value==='待发布'?'draft':value==='已发布'?'published':null
     const next=(state.data?.batches||[]).find(batch=>!wantedStatus||batch.status===wantedStatus)

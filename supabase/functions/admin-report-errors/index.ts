@@ -127,6 +127,7 @@ Deno.serve(async req => {
     pageQuery = applyFilters(pageQuery, filters, from, to, basisColumn)
       .order(sortColumn, { ascending, nullsFirst: false })
       .order('source_row', { ascending: false })
+      .order('record_key', { ascending: false })
       .range(start, start + pageSize - 1)
 
     const { data: pageRows, error: pageError } = await pageQuery

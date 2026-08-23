@@ -237,10 +237,6 @@ function noteHash(note: unknown) {
   return text(note).match(/(?:^|;)hash:([a-z0-9]+)(?:;|$)/i)?.[1] || ''
 }
 
-function noteSummaryHash(note: unknown) {
-  return text(note).match(/(?:^|;)summary-hash:([a-z0-9]+)(?:;|$)/i)?.[1] || ''
-}
-
 function normalizeErrors(rawErrors: Record<string, unknown>[], sourceName: string) {
   return rawErrors.map((row, index) => {
     const employeeId = normalizeEmployeeId(pick(row, ['员工ID', '員工ID', 'ID']))
@@ -541,10 +537,14 @@ function summaryChanged(next: any, current: any) {
 async function syncChangedSummaries(service: any, summaries: any[]) {
   const currentRows = await loadAllSummaries(service)
   const currentByEmployee = new Map(currentRows.map((row) => [text(row.employee_no).toUpperCase(), row]))
+  const nextEmployees = new Set(summaries.map((summary) => text(summary.employee_no).toUpperCase()))
   const updatedAt = new Date().toISOString()
   const changedRows = summaries
     .filter((summary) => summaryChanged(summary, currentByEmployee.get(summary.employee_no)))
     .map((summary) => ({ ...summary, updated_at: updatedAt }))
+  const removedEmployees = currentRows
+    .map((row) => text(row.employee_no).toUpperCase())
+    .filter((employeeNo) => employeeNo && !nextEmployees.has(employeeNo))
 
   for (let index = 0; index < changedRows.length; index += 250) {
     const { error } = await service
@@ -552,7 +552,14 @@ async function syncChangedSummaries(service: any, summaries: any[]) {
       .upsert(changedRows.slice(index, index + 250), { onConflict: 'employee_no' })
     if (error) throw new Error(`error summary: ${error.message}`)
   }
-  return changedRows.length
+  for (let index = 0; index < removedEmployees.length; index += 250) {
+    const { error } = await service
+      .from('employee_error_summary')
+      .delete()
+      .in('employee_no', removedEmployees.slice(index, index + 250))
+    if (error) throw new Error(`remove stale error summary: ${error.message}`)
+  }
+  return changedRows.length + removedEmployees.length
 }
 
 function orderRowsFromCsv(raw: string) {
@@ -685,21 +692,31 @@ Deno.serve(async (request) => {
       hire_date: normalizeDate(pick(row, ['入职时间', '入職時間', 'Join Date'])),
     })).filter((row: any) => row.employee_id && row.employee_id !== 'ID')
 
+    // Treat a successful-but-empty response as unavailable. A private sheet,
+    // upstream proxy issue, or malformed publication can otherwise look like
+    // an intentional clear and erase the last known-good Supabase mirror.
     const errorSources = ERROR_SOURCES.flatMap((source, index) => {
       const result = rawErrorResults[index]
-      if (result.status !== 'fulfilled') return []
+      if (result.status !== 'fulfilled' || result.value.length === 0) return []
+      const rows = normalizeErrors(result.value, source.name)
+      if (rows.length === 0) return []
       return [{
         name: source.name,
         rawRows: result.value,
-        rows: normalizeErrors(result.value, source.name),
+        rows,
       }]
     })
+    const availableErrorSourceNames = new Set(errorSources.map((source) => source.name))
     const errorSourceFailures = ERROR_SOURCES.flatMap((source, index) => {
       const result = rawErrorResults[index]
-      if (result.status !== 'rejected') return []
+      if (availableErrorSourceNames.has(source.name)) return []
       return [{
         source: source.name,
-        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        error: result.status === 'rejected'
+          ? (result.reason instanceof Error ? result.reason.message : String(result.reason))
+          : result.value.length === 0
+            ? 'empty source response; retained last known-good Supabase rows'
+            : 'source rows could not be normalized; retained last known-good Supabase rows',
       }]
     })
 
@@ -710,10 +727,6 @@ Deno.serve(async (request) => {
       ])
       return { source: source.name, snapshot, rows }
     }))
-    const errorChangedChunks = errorSyncResults.reduce(
-      (total, result) => total + result.snapshot.changed_chunks + result.rows.changed_chunks,
-      0,
-    )
     const rawErrorCount = errorSources.reduce((total, source) => total + source.rawRows.length, 0)
     const errors = await loadAllSyncedErrors(service)
     const summaries = buildRiskSummaries(errors)
@@ -725,7 +738,6 @@ Deno.serve(async (request) => {
     const orderSyncResult = await syncOrderSheets(service)
     const states = await loadSnapshotStates(service)
     const summaryHash = payloadHash(summaries)
-    const previousSummaryHash = noteSummaryHash(states.get('效率表/员工错误状态')?.note)
     const snapshotPlans: Array<[string, unknown[], string, number?]> = [
       [
         '居家排班表/填表',
@@ -759,10 +771,9 @@ Deno.serve(async (request) => {
       }
     }
 
-    let summaryChanges = 0
-    if (errorChangedChunks > 0 || previousSummaryHash !== summaryHash) {
-      summaryChanges = await syncChangedSummaries(service, summaries)
-    }
+    // The summary table is a derived cache. Reconcile it on every run so a
+    // deleted source record cannot leave an employee with stale totals.
+    const summaryChanges = await syncChangedSummaries(service, summaries)
     snapshotResults.push(await writeSnapshot(
       service,
       states,
