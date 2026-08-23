@@ -1218,11 +1218,11 @@ export default function AdminEmployeesPage(){
 
     {tab==='离职记录'&&<div className="data-card resignation-card-pro">
       <div className="section-head resignation-section-head">
-        <div><h2>离职记录</h2><p>完整保留离职员工档案；可按员工、团队、岗位、国家、原因和日期精确查询。</p></div>
+        <div><h2>离职记录</h2></div>
         <span>{historyTotal} 人</span>
       </div>
 
-      <div className="resignation-filter-panel v25-resignation-filter-panel" style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:'14px 16px',alignItems:'end'}}>
+      <div className="resignation-filter-panel v25-resignation-filter-panel resignation-search-panel">
         <label className="resign-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.employee_no} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
         <label className="resign-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.full_name} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
         <label className="resign-filter-field"><span>团队</span><FilterCombo value={historyDraftFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/></label>
@@ -1230,7 +1230,7 @@ export default function AdminEmployeesPage(){
         <label className="resign-filter-field"><span>员工国家</span><FilterCombo value={historyDraftFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="history-country"/></label>
         <label className="resign-filter-field v25-resign-reason"><span>离职原因</span><input value={historyDraftFilters.reason} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,reason:e.target.value})} placeholder="输入离职原因关键字"/></label>
         <label className="resign-filter-field v25-resign-date"><span>离职日期区间</span><div className="pro-date-range"><input aria-label="离职日期起" type="date" value={historyDraftFilters.date_from} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_from:e.target.value})}/><b>—</b><input aria-label="离职日期止" type="date" value={historyDraftFilters.date_to} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_to:e.target.value})}/></div></label>
-        <div className="resign-filter-actions v25-resign-actions" style={{gridColumn:'4',display:'flex',justifyContent:'flex-end',alignItems:'end',gap:8,minHeight:42}}><button className="primary-action resignation-query-action" onClick={applyHistoryFilters} disabled={historyLoading}>{historyLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={resetHistoryFilters} disabled={historyLoading}>重置</button></div>
+        <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={applyHistoryFilters} disabled={historyLoading}>{historyLoading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetHistoryFilters} disabled={historyLoading}>重置</button></div>
       </div>
 
       {!history.length&&historyLoading?<div className="empty-state">读取离职记录...</div>:<div className={`table-scroll resignation-history-table-wrap ${historyLoading?'is-loading':''}`}><table className="data-table lifecycle-table resignation-table-pro">
@@ -1262,16 +1262,16 @@ export default function AdminEmployeesPage(){
 
     {tab==='操作日志'&&<div className="data-card">
       <div className="section-head">
-        <div><h2>操作日志</h2><p>只显示新操作。后台历史重扫不再显示；Google 编辑优先显示真实邮箱，邮箱被隐藏时使用已登记操作人，不再统一冒充 Google Sheet。</p></div>
+        <div><h2>操作日志</h2></div>
         <span>{auditTotal} 条</span>
       </div>
-      <div className="resignation-filter-panel v25-resignation-filter-panel" style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:'14px 16px',alignItems:'end'}}>
+      <div className="resignation-filter-panel v25-resignation-filter-panel audit-search-panel">
         <label className="resign-filter-field"><span>员工ID</span><input value={auditDraftFilters.employee_no} onChange={e=>setAuditDraftFilters({...auditDraftFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></label>
         <label className="resign-filter-field"><span>姓名</span><input value={auditDraftFilters.full_name} onChange={e=>setAuditDraftFilters({...auditDraftFilters,full_name:e.target.value})} placeholder="输入姓名"/></label>
         <label className="resign-filter-field"><span>操作类型</span><FilterCombo value={auditDraftFilters.action?auditActionLabel(auditDraftFilters.action):''} options={auditActionOptions.map(x=>x.label)} onChange={label=>setAuditDraftFilters({...auditDraftFilters,action:auditActionValueByLabel(label)})} placeholder="全部操作 / 输入搜索" listId="audit-action-filter"/></label>
         <label className="resign-filter-field"><span>操作账号</span><input value={auditDraftFilters.actor} onChange={e=>setAuditDraftFilters({...auditDraftFilters,actor:e.target.value})} placeholder="后台账号 / Google 邮箱"/></label>
-        <label className="resign-filter-field v25-resign-date" style={{gridColumn:'1 / span 2',minWidth:0}}><span>操作日期区间</span><div className="pro-date-range" style={{width:'100%'}}><input type="date" value={auditDraftFilters.date_from} onChange={e=>setAuditDraftFilters({...auditDraftFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditDraftFilters.date_to} onChange={e=>setAuditDraftFilters({...auditDraftFilters,date_to:e.target.value})}/></div></label>
-        <div className="resign-filter-actions v25-resign-actions" style={{gridColumn:'3 / span 2',display:'flex',alignSelf:'end',justifyContent:'flex-end',alignItems:'end',gap:8,minHeight:42}}><button className="primary-action resignation-query-action" onClick={()=>{const next={...auditDraftFilters};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>{auditLoading?'查询中...':'查询'}</button><button className="secondary-action" onClick={()=>{const next=blankAuditFilters();setAuditDraftFilters(next);setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
+        <label className="resign-filter-field v25-resign-date"><span>操作日期区间</span><div className="pro-date-range"><input type="date" value={auditDraftFilters.date_from} onChange={e=>setAuditDraftFilters({...auditDraftFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditDraftFilters.date_to} onChange={e=>setAuditDraftFilters({...auditDraftFilters,date_to:e.target.value})}/></div></label>
+        <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={()=>{const next={...auditDraftFilters};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>{auditLoading?'查询中…':'查询'}</button><button className="secondary-action" onClick={()=>{const next=blankAuditFilters();setAuditDraftFilters(next);setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
       </div>
       {auditLoading&&!auditRows.length?<div className="empty-state">读取操作日志...</div>:!auditRows.length?<div className="empty-state">暂无操作日志</div>:<div className="table-scroll"><table className="data-table">
         <thead><tr><th>时间</th><th>操作账号</th><th>员工ID</th><th>姓名</th><th>操作</th><th>详细变更</th><th>来源</th></tr></thead>
