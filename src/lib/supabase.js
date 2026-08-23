@@ -27,7 +27,12 @@ export const isSessionIdleExpired=()=>{
 
 const authenticatedFetch=async(input,init)=>{
   const response=await fetch(input,init)
-  if(response.status===401&&typeof window!=='undefined')window.dispatchEvent(new CustomEvent('wfh:auth-check-needed'))
+  if(response.status===401&&typeof window!=='undefined'){
+    let body=''
+    try{body=await response.clone().text()}catch(_){body=''}
+    const terminal=/invalid\s*(jwt|token)|jwt\s*(expired|malformed)|refresh\s*token|session\s*(missing|expired)|not\s*authenticated|no\s*authorization/i.test(body)
+    window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail:{terminal}}))
+  }
   return response
 }
 
