@@ -208,11 +208,20 @@ const staffTenure = date => {
 }
 
 const staffDate = value => value ? String(value).slice(0,10) : '—'
+const staffDateTime = value => value ? new Date(value).toLocaleString('zh-CN',{hour12:false}) : '—'
+const staffExamBreakdown = row => {
+  if(row?.source_system==='legacy'&&!row?.answer_detail_available)return row?.percentage==null?'逐题明细等待同步':'总成绩已保留 · 逐题明细未同步'
+  const answered=Number(row?.answer_detail_count||0),total=Number(row?.total_question_count||0)
+  const prefix=row?.source_system==='legacy'&&total?`已答 ${answered}/${total} · 未答 ${Number(row?.unanswered_count||Math.max(total-answered,0))} · `:''
+  return `${prefix}正确 ${row?.correct_count||0} · 半对 ${row?.partial_count||0} · 错误 ${row?.wrong_count||0} · 待评 ${row?.pending_count||0}`
+}
 
 export const StaffHome = () => {
   const [data,setData] = useState(null), [loading,setLoading] = useState(true), [error,setError] = useState('')
   const [errorHistory,setErrorHistory] = useState({rows:[],total:0,page:1,pages:1}), [errorPage,setErrorPage] = useState(1), [errorsLoading,setErrorsLoading] = useState(false)
   const [revealed,setRevealed] = useState({}), [revealLoading,setRevealLoading] = useState('')
+  const [activeSection,setActiveSection] = useState('info')
+  const [examDetail,setExamDetail] = useState(null), [examDetailLoading,setExamDetailLoading] = useState(false), [examDetailError,setExamDetailError] = useState('')
   const load = async () => {
     setLoading(true); setError('')
     const { data:result,error:loadError } = await supabase.rpc('staff_portal_home')
@@ -220,7 +229,7 @@ export const StaffHome = () => {
     setLoading(false)
   }
   useEffect(()=>{load()},[])
-  useEffect(()=>{let alive=true;(async()=>{setErrorsLoading(true);const {data:result,error:e}=await supabase.rpc('staff_portal_errors',{p_page:errorPage,p_page_size:20});if(!alive)return;if(e)setError(e.message||'错误记录读取失败');else setErrorHistory(result||{rows:[],total:0,page:1,pages:1});setErrorsLoading(false)})();return()=>{alive=false}},[errorPage])
+  useEffect(()=>{if(activeSection!=='errors')return;let alive=true;(async()=>{setErrorsLoading(true);const {data:result,error:e}=await supabase.rpc('staff_portal_errors',{p_page:errorPage,p_page_size:20});if(!alive)return;if(e)setError(e.message||'错误记录读取失败');else setErrorHistory(result||{rows:[],total:0,page:1,pages:1});setErrorsLoading(false)})();return()=>{alive=false}},[errorPage,activeSection])
   if(loading)return <div className="staff-portal-page"><div className="staff-portal-loading">正在读取我的资料…</div></div>
   const p=data?.profile||{}, pay=data?.payment||{}, summary=data?.error_summary||{}, exam=data?.exam_summary||{}, errors=errorHistory?.rows||[]
   const toggleSensitive = async field => {
@@ -231,20 +240,39 @@ export const StaffHome = () => {
     setRevealLoading('')
   }
   const fields=[['员工ID',p.employee_no],['员工国家',p.country||p.nationality],['员工类型',p.employment_type],['状态',p.status==='active'?'在职':p.status],['入职日期',staffDate(p.hire_date)],['入职时长',staffTenure(p.hire_date)],['团队',p.team_name],['组别',p.group_name],['岗位',p.position_name],['班次',p.shift_name],['负责人 / 组长',p.person_in_charge||p.leader_name],['培训老师',p.online_trainer||p.trainer_name],['盘口 / 平台',p.platform_scope],['工作内容',p.work_content]]
+  const examRows=data?.exam_history||[]
+  const openExam=async row=>{
+    setExamDetail({session:row,answers:[]});setExamDetailLoading(true);setExamDetailError('')
+    const {data:result,error:e}=await supabase.rpc('staff_exam_result_detail',{p_session_id:row.id})
+    if(e)setExamDetailError(e.message||'考试明细读取失败');else setExamDetail(result)
+    setExamDetailLoading(false)
+  }
   return <div className="staff-portal-page">
     <header className="staff-portal-hero"><div className="staff-avatar">{(p.full_name||'W').slice(0,1).toUpperCase()}</div><div><small>MY WORKSPACE</small><h1>{p.full_name||'我的首页'}</h1><p>{p.employee_no||'—'} · {p.team_name||'未设置团队'} · {p.position_name||'未设置岗位'}</p><div className="staff-hero-tags"><span>{p.shift_name||'班次未设置'}</span><span>{staffTenure(p.hire_date)}</span></div></div><button onClick={load}>↻ 刷新资料</button></header>
     {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <section className="staff-dashboard-metrics"><div><span>累计错误</span><strong>{summary.total_error_count||0}</strong><small>仅本人可见</small></div><div><span>本月错误</span><strong>{summary.month_error_count||0}</strong><small>近30天 {summary.last_30d_error_count||0} 笔</small></div><div><span>考试记录</span><strong>{exam.total||0}</strong><small>通过 {exam.passed||0} 次</small></div><div><span>平均成绩</span><strong>{exam.average||0}%</strong><small>已批改 {exam.completed||0} 次</small></div></section>
-    <div className="staff-portal-columns"><div className="staff-profile-stack"><section className="staff-profile-panel"><header><div><small>PERSONAL PROFILE</small><h2>我的员工档案</h2></div><span>仅本人可见</span></header><div className="staff-profile-fields">{fields.map(([label,value])=><div key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section>
-    <section className="staff-payment-panel"><header><div><small>PAYMENT & CONTACT</small><h2>我的收款与联系资料</h2></div><span>🔒 已安全隐藏</span></header><p className="staff-privacy-note">敏感账号默认脱敏；点击查看仅临时展示给当前登录的本人。</p><div className="staff-payment-grid">
-      <div><span>收款方式</span><strong>{pay.transfer_using||pay.payment_mode||'—'}</strong></div><div><span>收款姓名</span><strong>{pay.account_name||'—'}</strong></div>
-      <div className="staff-sensitive-row"><span>银行卡 / 钱包账号</span><strong>{revealed.bank_account||pay.bank_account_masked||'—'}</strong>{pay.bank_account_masked&&<button onClick={()=>toggleSensitive('bank_account')} disabled={revealLoading==='bank_account'}>{revealLoading==='bank_account'?'读取中':revealed.bank_account?'隐藏':'查看'}</button>}</div>
-      <div className="staff-sensitive-row"><span>USDT 地址</span><strong>{revealed.usdt_address||pay.usdt_address_masked||'—'}</strong>{pay.usdt_address_masked&&<button onClick={()=>toggleSensitive('usdt_address')} disabled={revealLoading==='usdt_address'}>{revealLoading==='usdt_address'?'读取中':revealed.usdt_address?'隐藏':'查看'}</button>}</div>
-      <div><span>联系电话</span><strong>{pay.contact_phone||'—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number||'—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook||'—'}</strong></div><div><span>联系地址</span><strong>{pay.employee_address||'—'}</strong></div>
-    </div></section></div>
-    <section className="staff-quick-panel"><header><small>QUICK ACCESS</small><h2>快捷入口</h2></header><Link to="/staff/exams"><b>我的考试</b><span>参加岗位考试、查看历史成绩 →</span></Link><Link to="/staff/schedule"><b>我的排班</b><span>查看本人排班 →</span></Link><Link to="/staff/attendance"><b>我的出勤</b><span>查看本人出勤 →</span></Link></section></div>
-    <section className="staff-own-errors"><header><div><small>MY ERROR RECORDS</small><h2>我的完整错误记录</h2><p>只显示与你本人员工ID关联的记录，按日期从新到旧排列。</p></div><span>共 {errorHistory.total||0} 条</span></header>{errorsLoading?<div className="staff-history-empty">正在读取错误记录…</div>:errors.length?<><div className="staff-error-list">{errors.map((row,index)=><article key={`${row.qc_date}-${row.first_seen_at||index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type||'未分类错误'}</span></div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><span className="staff-error-score">{row.score==null?'—':`${row.score} 分`}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage<=1} onClick={()=>setErrorPage(x=>Math.max(1,x-1))}>上一页</button><span>第 {errorHistory.page||1} / {errorHistory.pages||1} 页</span><button disabled={errorPage>=(errorHistory.pages||1)} onClick={()=>setErrorPage(x=>x+1)}>下一页</button></div></>:<div className="staff-history-empty">目前没有与你员工ID关联的错误记录。</div>}</section>
+    <nav className="staff-profile-tabs">
+      {[['info','我的信息'],['errors','我的出错记录'],['exams','我的考试结果'],['attendance','我的出勤记录'],['penalties','迟到 / 奖金惩罚']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
+    </nav>
+    {activeSection==='info'&&<div className="staff-portal-columns"><div className="staff-profile-stack"><section className="staff-profile-panel"><header><div><small>PERSONAL PROFILE</small><h2>我的员工档案</h2></div><span>仅本人可见</span></header><div className="staff-profile-fields">{fields.map(([label,value])=><div key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section>
+      <section className="staff-payment-panel"><header><div><small>PAYMENT & CONTACT</small><h2>我的收款与联系资料</h2></div><span>🔒 已安全隐藏</span></header><div className="staff-payment-grid">
+        <div><span>收款方式</span><strong>{pay.transfer_using||pay.payment_mode||'—'}</strong></div><div><span>收款姓名</span><strong>{pay.account_name||'—'}</strong></div>
+        <div className="staff-sensitive-row"><span>银行卡 / 钱包账号</span><strong>{revealed.bank_account||pay.bank_account_masked||'—'}</strong>{pay.bank_account_masked&&<button onClick={()=>toggleSensitive('bank_account')} disabled={revealLoading==='bank_account'}>{revealLoading==='bank_account'?'读取中':revealed.bank_account?'隐藏':'查看'}</button>}</div>
+        <div className="staff-sensitive-row"><span>USDT 地址</span><strong>{revealed.usdt_address||pay.usdt_address_masked||'—'}</strong>{pay.usdt_address_masked&&<button onClick={()=>toggleSensitive('usdt_address')} disabled={revealLoading==='usdt_address'}>{revealLoading==='usdt_address'?'读取中':revealed.usdt_address?'隐藏':'查看'}</button>}</div>
+        <div><span>联系电话</span><strong>{pay.contact_phone||'—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number||'—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook||'—'}</strong></div><div><span>联系地址</span><strong>{pay.employee_address||'—'}</strong></div>
+      </div></section></div>
+      <section className="staff-quick-panel"><header><small>QUICK ACCESS</small><h2>快捷入口</h2></header><Link to="/staff/exams"><b>参加考试</b><span>选择岗位与盘口 →</span></Link><Link to="/staff/schedule"><b>我的排班</b><span>查看本人排班 →</span></Link><Link to="/staff/attendance"><b>我的出勤</b><span>查看本人出勤 →</span></Link></section></div>}
+    {activeSection==='errors'&&<section className="staff-own-errors"><header><div><small>MY ERROR RECORDS</small><h2>我的完整错误记录</h2></div><span>共 {errorHistory.total||0} 条</span></header>{errorsLoading?<div className="staff-history-empty">正在读取错误记录…</div>:errors.length?<><div className="staff-error-list">{errors.map((row,index)=><article key={row.record_key||`${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type||'未分类错误'}</span></div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><span className="staff-error-score">{row.score?`${row.score} 分`:'—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage<=1} onClick={()=>setErrorPage(x=>Math.max(1,x-1))}>上一页</button><span>第 {errorHistory.page||1} / {errorHistory.pages||1} 页</span><button disabled={errorPage>=(errorHistory.pages||1)} onClick={()=>setErrorPage(x=>x+1)}>下一页</button></div></>:<div className="staff-history-empty">目前没有与你员工ID关联的错误记录。</div>}</section>}
+    {activeSection==='exams'&&<section className="staff-portal-exams"><header><div><small>MY EXAM RESULTS</small><h2>我的考试结果</h2></div><span>本系统 {exam.current||0} · 旧考试 {exam.legacy||0}</span></header>{examRows.length?<div className="staff-portal-exam-list">{examRows.map(row=><article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system==='legacy'?'legacy':'current'}`}>{row.source_label||'本系统'}</span><strong>{row.title}</strong><small>第 {row.attempt_no} 次 · {staffDateTime(row.submitted_at||row.started_at)}</small></div><div><b>{row.percentage==null?'待批改':`${Number(row.earned_score||0).toLocaleString()}/${Number(row.total_score||100).toLocaleString()} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row)}</small></div><button onClick={()=>openExam(row)}>查看答卷</button></article>)}</div>:<div className="staff-history-empty">暂无考试记录。</div>}</section>}
+    {activeSection==='attendance'&&<section className="staff-section-placeholder"><h2>我的出勤记录</h2><p>出勤数据接入后会在这里按日期展示。</p></section>}
+    {activeSection==='penalties'&&<section className="staff-section-placeholder"><h2>迟到 / 奖金惩罚记录</h2><p>迟到、奖金和惩罚资料接入后会在这里统一展示。</p></section>}
+    {examDetail&&<StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={()=>setExamDetail(null)}/>}
   </div>
+}
+
+function StaffPortalExamModal({detail,loading,error,onClose}){
+  const session=detail?.session||{},answers=detail?.answers||[]
+  return <div className="exam-modal-backdrop" onMouseDown={onClose}><div className="exam-modal wide staff-result-modal" onMouseDown={event=>event.stopPropagation()}><header><div><small>MY EXAM RESULT</small><h2>{session.title||'考试结果'}</h2><p>{session.source_label||'本系统'} · 第 {session.attempt_no||'—'} 次</p></div><button onClick={onClose}>×</button></header>{loading?<div className="staff-history-empty">正在读取完整答卷…</div>:error?<div className="exam-error">{error}</div>:<><div className="staff-result-summary"><div><span>成绩</span><strong>{session.percentage==null?'待批改':`${Number(session.percentage).toFixed(1)}%`}</strong></div><div><span>得分</span><strong>{session.earned_score==null?'—':`${session.earned_score}/${session.total_score}`}</strong></div><div><span>完成时间</span><strong>{staffDateTime(session.submitted_at)}</strong></div><div><span>答题统计</span><strong>{staffExamBreakdown(session)}</strong></div></div><div className="staff-result-list">{answers.length?answers.map((answer,index)=>{const q=answer.question||{};return <article key={q.id||index}><header><b>{index+1}</b><div><strong>{q.question_zh||q.question_en||q.question_vi||'题目内容未保留'}</strong><small>本题 {q.points||0} 分</small></div><span className={`result-chip ${answer.grade_status==='correct'?'pass':answer.grade_status==='partial'?'partial':answer.grade_status==='wrong'?'fail':'pending'}`}>{answer.awarded_score==null?'待批改':`${answer.awarded_score}/${q.points||0} 分`}</span></header><div className="staff-result-answer"><b>我的答案</b><p>{answer.answer_text||'（未作答）'}</p></div>{answer.grader_feedback&&<div className="staff-result-feedback"><b>老师评语</b><p>{answer.grader_feedback}</p></div>}</article>}):<div className="staff-history-empty">该场考试仅保留总成绩，逐题答卷尚未同步。</div>}</div></>}<footer><button className="primary" onClick={onClose}>关闭</button></footer></div></div>
 }
 
 export const ComingSoon = ({ title }) => (

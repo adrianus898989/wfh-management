@@ -1537,12 +1537,17 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const [examData,setExamData]=useState(null)
   const [examLoading,setExamLoading]=useState(false)
   const [examError,setExamError]=useState('')
+  const [activeSection,setActiveSection]=useState('info')
+  const [employeeErrors,setEmployeeErrors]=useState({rows:[],total:0,page:1,pages:1})
+  const [employeeErrorsLoading,setEmployeeErrorsLoading]=useState(false)
+  const [employeeErrorsError,setEmployeeErrorsError]=useState('')
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
   const paymentTitle=paymentMode==='usdt'?'USDT 收款资料':'银行卡 / 钱包收款资料'
+  useEffect(()=>setActiveSection('info'),[e.id])
   useEffect(()=>{
-    if(!e.id){setExamData(null);return}
+    if(!e.id||activeSection!=='exams'){return}
     let alive=true
     setExamLoading(true);setExamError('')
     supabase.rpc('admin_employee_exam_history',{p_employee_id:e.id}).then(({data,error})=>{
@@ -1550,7 +1555,17 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
       if(error)setExamError(error.message);else setExamData(data)
     }).finally(()=>alive&&setExamLoading(false))
     return()=>{alive=false}
-  },[e.id])
+  },[e.id,activeSection])
+  useEffect(()=>{
+    if(!e.id||activeSection!=='errors')return
+    let alive=true
+    setEmployeeErrorsLoading(true);setEmployeeErrorsError('')
+    supabase.rpc('admin_employee_error_history',{p_employee_id:e.id,p_page:1,p_page_size:100}).then(({data,error})=>{
+      if(!alive)return
+      if(error)setEmployeeErrorsError(error.message);else setEmployeeErrors(data||{rows:[],total:0,page:1,pages:1})
+    }).finally(()=>alive&&setEmployeeErrorsLoading(false))
+    return()=>{alive=false}
+  },[e.id,activeSection])
 
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
@@ -1567,8 +1582,13 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     </div>
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
+      <nav className="employee-drawer-tabs">
+        {[['info','员工信息'],['errors','员工出错记录'],['exams','员工考试记录'],['attendance','员工出勤记录'],['penalties','迟到 / 奖金惩罚']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
+      </nav>
       <div className="detail-sections detail-sections-v11">
-        <EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>
+        {activeSection==='exams'&&<EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>}
+        {activeSection==='errors'&&<EmployeeErrorPanel data={employeeErrors} loading={employeeErrorsLoading} error={employeeErrorsError}/>}
+        {activeSection==='info'&&<>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
@@ -1587,9 +1607,17 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
           {paymentMode==='usdt'?<div className="payment-primary"><span>USDT 地址</span><strong>{text(p.usdt_address)||'—'}</strong><small>收款方式：{p.transfer_using||'USDT'}</small></div>:paymentMode==='bank_wallet'?<div className="info-rows"><InfoRow label="收款方式" value={p.transfer_using}/><InfoRow label="银行卡 / 钱包账号" value={p.bank_wallet_account} mono/><InfoRow label="收款姓名" value={p.account_name}/></div>:null}
           <div className="payment-secondary"><InfoRow label="联系电话" value={p.contact_phone}/><InfoRow label="WhatsApp" value={p.whatsapp_number}/><InfoRow label="员工地址" value={p.employee_address}/></div>
         </section>
+        </>}
+        {activeSection==='attendance'&&<section className="detail-panel employee-section-placeholder"><h3>员工出勤记录</h3><p>出勤资料接入后，将在这里按日期展示员工出勤明细。</p></section>}
+        {activeSection==='penalties'&&<section className="detail-panel employee-section-placeholder"><h3>迟到 / 奖金惩罚记录</h3><p>迟到、奖金及惩罚资料接入后，将在这里统一展示。</p></section>}
       </div>
     </>}
   </div></div>
+}
+
+function EmployeeErrorPanel({data,loading,error}){
+  const rows=data?.rows||[]
+  return <section className="detail-panel employee-error-panel"><div className="detail-panel-head"><div><h3>员工出错记录</h3></div><span className="employee-exam-count">{data?.total||0} 条</span></div>{loading?<div className="employee-exam-empty">正在读取出错记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:rows.length?<div className="employee-error-list">{rows.map((row,index)=><article key={row.record_key||`${row.qc_date}-${index}`}><div className="employee-error-meta"><b>{text(row.qc_date).slice(0,10)||'—'}</b><span>{row.error_type||'未分类错误'}</span>{row.score&&<em>{row.score} 分</em>}</div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><footer><span>质检人：{row.qc_person||'—'}</span><span>复检：{row.leader_review||'—'} · {row.qc_result||'—'}</span></footer></article>)}</div>:<div className="employee-exam-empty">暂无出错记录</div>}</section>
 }
 
 function EmployeeExamPanel({data,loading,error}){
@@ -1609,7 +1637,7 @@ function EmployeeExamPanel({data,loading,error}){
   return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{summary.attempts||0} 次</span></div>
     {loading?<div className="employee-exam-empty">正在读取考试记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:<>
       <div className="employee-exam-summary"><span><small>考试次数</small><b>{summary.attempts||0}</b></span><span><small>本系统 / 旧考试</small><b>{summary.current_attempts||0} / {summary.legacy_attempts||0}</b></span><span><small>已评分 / 待完成</small><b>{summary.graded||0} / {summary.pending||0}</b></span><span><small>通过次数</small><b>{summary.passed||0}</b></span><span><small>平均分</small><b>{summary.average==null?'—':`${summary.average}%`}</b></span></div>
-      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{x.source_system==='legacy'?(x.answer_detail_available?`有得分 ${x.scored_answer_count||0} · 零分 ${x.zero_score_answer_count||0} · 待评 ${x.pending_count||0}`:'逐题答案尚未同步'):`对 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
+      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=>{const total=Number(x.total_question_count||0),answered=Number(x.answer_detail_count||0),legacyResult=!x.answer_detail_available?(x.percentage==null?'逐题明细等待同步':'总成绩已保留 · 逐题明细未同步'):`已答 ${answered}${total?`/${total}`:''} · 未答 ${Number(x.unanswered_count||Math.max(total-answered,0))} · 对 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`;return <tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{x.source_system==='legacy'?legacyResult:`对 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>})}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
     </>}
     {examDetail&&<EmployeeExamDetailModal detail={examDetail} loading={detailLoading} error={detailError} onClose={()=>setExamDetail(null)}/>}
   </section>

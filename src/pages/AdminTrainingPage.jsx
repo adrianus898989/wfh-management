@@ -10,12 +10,20 @@ const message=e=>e?.message||String(e||'操作失败')
 const fmt=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—'
 const score=v=>v==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:2})
 const breakdown=x=>{
-  const result=`正确 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错误 ${x.wrong_count||0}`
+  const result=`正确 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错误 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`
   if(x.source_system!=='legacy')return result
-  if(!x.answer_detail_available)return '尚无逐题作答'
+  if(!x.answer_detail_available)return x.percentage==null?'逐题明细等待同步':'总成绩已保留 · 逐题明细未同步'
   const total=Number(x.total_question_count||0),answered=Number(x.answer_detail_count||0)
   const unanswered=Number(x.unanswered_count??Math.max(total-answered,0))
   return `已答 ${answered}${total?`/${total}`:''} · 未答 ${unanswered} · ${result}`
+}
+const recentDays=(rows,count=7)=>{
+  const byDay=new Map((rows||[]).map(x=>[String(x.activity_day||'').slice(0,10),x]))
+  return Array.from({length:count},(_,index)=>{
+    const day=new Date();day.setHours(12,0,0,0);day.setDate(day.getDate()-index)
+    const key=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`
+    return byDay.get(key)||{activity_day:key,submitted:0,current_submitted:0,legacy_submitted:0,graded:0,pending:0}
+  })
 }
 
 export default function AdminTrainingPage(){
@@ -84,7 +92,7 @@ export default function AdminTrainingPage(){
   const counts=data?.counts||{}
 
   return <div className="exam-page">
-    <header className="exam-head"><div><small>EXAM MANAGEMENT</small><h1>考试管理</h1></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {data?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${data?.legacy?.sync_state?.status||''}`} title={data?.legacy?.sync_state?.last_error||''}>旧考试 · {data?.legacy?.sync_state?.status==='success'?'自动同步正常':data?.legacy?.sync_state?.status==='error'?'同步异常':'等待同步'}</span><button onClick={load}>刷新</button></div></header>
+    <header className="exam-head"><div><small>EXAM MANAGEMENT</small><h1>考试管理</h1></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {data?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${data?.legacy?.sync_state?.status||''}`} title={data?.legacy?.sync_state?.last_error||''}>旧考试 · {data?.legacy?.sync_state?.status==='success'?'自动同步正常':data?.legacy?.sync_state?.status==='error'&&String(data?.legacy?.sync_state?.last_error||'').includes('402')?'来源暂停':data?.legacy?.sync_state?.status==='error'?'同步异常':'等待同步'}</span><button onClick={load}>刷新</button></div></header>
     {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <nav className="exam-tabs">{TABS.map(x=><button key={x} className={x===tab?'active':''} onClick={()=>setTab(x)}>{x}</button>)}</nav>
 
@@ -107,12 +115,13 @@ export default function AdminTrainingPage(){
 function Overview({counts,data,onTab,onEmployee}){
   const analytics=data?.analytics||{},summary=analytics.summary||{}
   const old=data?.legacy?.counts||{},sync=data?.legacy?.sync_state||{}
-  const daily=(analytics.daily_activity||[]).slice(-3).reverse()
+  const sourcePaused=sync.status==='error'&&String(sync.last_error||'').includes('402')
+  const daily=recentDays(analytics.daily_activity,7)
   const cards=[
     ['题库',counts.questions||0,'题库','题目'],['记录',counts.total_sessions||0,'考试记录','全部'],['待批改',counts.pending_grading||0,'人工批改','份'],['已完成',counts.completed||0,'考试记录','份'],
-    ['本系统',summary.current_attempts||0,null,'份'],['旧考试',old.total_sessions||0,null,`已评 ${old.completed||0} · 待评 ${old.pending_grading||0}`],['已匹配',old.matched||0,null,`未匹配 ${old.unmatched||0}`],['同步',sync.status==='success'?'正常':sync.status==='error'?'异常':'等待',null,sync.last_success_at?fmt(sync.last_success_at):'等待首次同步']
+    ['本系统',summary.current_attempts||0,null,'份'],['旧考试',old.total_sessions||0,null,`已评 ${old.completed||0} · 待评 ${old.pending_grading||0}`],['已匹配',old.matched||0,null,`未匹配 ${old.unmatched||0}`],['同步',sync.status==='success'?'正常':sourcePaused?'来源暂停':sync.status==='error'?'异常':'等待',null,sourcePaused?'朋友项目返回 402 · 本地记录已保留':sync.last_success_at?fmt(sync.last_success_at):'等待首次同步']
   ]
-  return <><section className="exam-overview-strip">{cards.map(([label,value,target,note],index)=>{const content=<><span>{label}</span><strong>{value}</strong><small>{note}{target?' · 查看 →':''}</small></>;return target?<button key={label} onClick={()=>onTab(target)}>{content}</button>:<div key={label} className={index===5?'legacy':''}>{content}</div>})}</section><div className="exam-two exam-overview-lower"><section className="exam-panel exam-recent-panel"><div className="exam-section-title"><div><h2>最近考试</h2><p>近 3 天每日提交与最新记录</p></div><button onClick={()=>onTab('考试记录')}>查看全部</button></div><div className="exam-daily-strip">{daily.map(x=><div key={x.activity_day}><span>{String(x.activity_day).slice(5)}</span><strong>{x.submitted} 份</strong><small>本系统 {x.current_submitted} · 旧考试 {x.legacy_submitted}</small><small>已评 {x.graded} · 待评 {x.pending}</small></div>)}{!daily.length&&<small>近 3 天暂无提交</small>}</div><div className="exam-recent-scroll"><Sessions rows={(data?.sessions||[]).slice(0,12)} compact onEmployee={onEmployee}/></div></section><section className="exam-panel adaptive-rule-panel"><h2>考试规则</h2><div><b>仅匹配团队</b><span>员工自行选择岗位与盘口</span></div><div><b>14 题 · 100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>连续计时 · 自动保存</span></div></section></div><ExamAnalytics analytics={analytics} onEmployee={onEmployee}/></>
+  return <><section className="exam-overview-strip">{cards.map(([label,value,target,note],index)=>{const content=<><span>{label}</span><strong>{value}</strong><small>{note}{target?' · 查看 →':''}</small></>;return target?<button key={label} onClick={()=>onTab(target)}>{content}</button>:<div key={label} className={index===5?'legacy':''}>{content}</div>})}</section><div className="exam-two exam-overview-lower"><section className="exam-panel exam-recent-panel"><div className="exam-section-title"><div><h2>最近考试</h2><p>近 7 天每日提交与最新记录</p></div><button onClick={()=>onTab('考试记录')}>查看全部</button></div><div className="exam-daily-strip">{daily.map((x,index)=><div key={x.activity_day} className={index===0?'today':''}><span>{index===0?'今日':String(x.activity_day).slice(5)}</span><strong>{x.submitted} 份</strong><small>本系统 {x.current_submitted} · 旧考试 {x.legacy_submitted}</small><small>已评 {x.graded} · 待评 {x.pending}</small></div>)}</div><div className="exam-recent-scroll"><Sessions rows={(data?.sessions||[]).slice(0,12)} compact onEmployee={onEmployee}/></div></section><section className="exam-panel adaptive-rule-panel"><h2>考试规则</h2><div><b>仅匹配团队</b><span>员工自行选择岗位与盘口</span></div><div><b>14 题 · 100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>连续计时 · 自动保存</span></div></section></div><ExamAnalytics analytics={analytics} onEmployee={onEmployee}/></>
 }
 
 function ExamAnalytics({analytics,onEmployee}){

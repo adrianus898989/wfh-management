@@ -132,13 +132,13 @@ export default function AdminReportsPage(){
     </div>
     {error&&<div className="rp-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <div className="rp-tabs">{OPS.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}</div>
-    {!['错误统计','统计'].includes(tab)&&<GlobalFilters tab={tab} value={draftFilters} onChange={setDraftFilters} onQuery={applyFilters} onReset={resetFilters} options={overview?.options||{}} meta={`筛选后 ${uniqueCount(roster)} 人`}/>} 
+    {!['错误统计','统计'].includes(tab)&&<GlobalFilters tab={tab} value={draftFilters} onChange={setDraftFilters} onQuery={applyFilters} onReset={resetFilters} options={overview?.options||{}} meta={`筛选后 ${uniqueCount(roster)} 人`}/>}
     {loading&&!overview?<Loading/>:<>
       {tab==='总汇'&&<Overview data={overview} rows={roster}/>} 
       {tab==='人员'&&<People rows={roster}/>} 
       {tab==='排班表'&&<Schedule rows={roster}/>} 
       {tab==='盘口人数'&&<Platforms rows={roster}/>} 
-      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} onError={setError} filterValue={draftFilters} onFilterChange={setDraftFilters} onFilterQuery={applyFilters} onFilterReset={resetFilters} filterOptions={overview?.options||{}} filterMeta={`筛选后 ${uniqueCount(roster)} 人`}/>} 
+      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} onError={setError} filterValue={draftFilters} onFilterChange={setDraftFilters} onFilterQuery={applyFilters} onFilterReset={resetFilters} filterOptions={overview?.options||{}} filterMeta={`筛选后 ${uniqueCount(roster)} 人`}/>}
       {tab==='错误统计'&&<Errors onError={setError}/>}
     </>}
   </div>
