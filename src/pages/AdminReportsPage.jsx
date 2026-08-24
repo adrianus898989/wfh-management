@@ -66,6 +66,36 @@ const fmtPct=(n,d)=>d?`${((Number(n)||0)/(Number(d)||1)*100).toFixed(2)}%`:'0.00
 const isoToday=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 const isoAdd=(base,days)=>{const d=new Date(`${base}T12:00:00`);d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 const currentMonthRange=()=>{const today=isoToday();return{from:`${today.slice(0,7)}-01`,to:today}}
+async function functionErrorDetail(error,fallback='请求失败'){
+  const context=error?.context
+  let payload=null
+  if(context){
+    try{payload=await context.clone().json()}
+    catch(_){try{payload=await context.json()}catch(__){payload=null}}
+  }
+  const status=Number(context?.status||error?.status||0)
+  const code=text(payload?.code||context?.headers?.get?.('sb-error-code'))
+  const requestId=text(payload?.request_id||context?.headers?.get?.('x-request-id'))
+  const base=text(payload?.error||payload?.message)||(status===401?'登录已失效，请重新登录':status===403?'当前账号没有后台访问权限':status>=500?'服务暂时不可用，请稍后重试':text(error?.message)||fallback)
+  const diagnostic=[status?`HTTP ${status}`:'',code,requestId?`请求 ${requestId}`:''].filter(Boolean).join(' · ')
+  return{message:diagnostic?`${base}（${diagnostic}）`:base,status,code,requestId}
+}
+async function invokeErrorReport(body,allowSessionRefresh=true){
+  const {data,error}=await supabase.functions.invoke('admin-report-errors',{body})
+  if(error){
+    const detail=await functionErrorDetail(error,'错误统计读取失败')
+    if(detail.status===401&&allowSessionRefresh){
+      const refreshed=await supabase.auth.refreshSession()
+      if(!refreshed.error&&refreshed.data?.session)return invokeErrorReport(body,false)
+    }
+    throw new Error(detail.message)
+  }
+  if(data?.error){
+    const diagnostic=[data.code,data.request_id?`请求 ${data.request_id}`:''].filter(Boolean).join(' · ')
+    throw new Error(`${data.error}${diagnostic?`（${diagnostic}）`:''}`)
+  }
+  return data
+}
 const peoplePriority=r=>{const pos=text(r.position),grp=text(r.group),work=text(r.work_content);if(pos==='组长'||grp.includes('组长')||work.includes('组长'))return 0;if(pos==='培训'||grp.includes('培训'))return 1;return 2}
 const sortPeopleRows=rows=>[...(rows||[])].sort((a,b)=>peoplePriority(a)-peoplePriority(b)||text(a.group).localeCompare(text(b.group),'zh-CN')||text(a.team).localeCompare(text(b.team),'zh-CN')||text(a.name).localeCompare(text(b.name),'zh-CN'))
 
@@ -248,8 +278,7 @@ function Errors({onError}){
   const load=async({nextRange=appliedRange,nextFilters=appliedFilters,nextSort=sort,nextPage=page,nextSize=size,silent=false}={})=>{
     if(!silent)setLoading(true)
     try{
-      const {data:result,error}=await supabase.functions.invoke('admin-report-errors',{body:{date_from:nextRange.from,date_to:nextRange.to,...nextFilters,page:nextPage,page_size:nextSize,sort_key:nextSort.key,sort_dir:nextSort.asc?'asc':'desc'}})
-      if(error||result?.error)throw new Error(result?.error||error?.message||'错误统计读取失败')
+      const result=await invokeErrorReport({date_from:nextRange.from,date_to:nextRange.to,...nextFilters,page:nextPage,page_size:nextSize,sort_key:nextSort.key,sort_dir:nextSort.asc?'asc':'desc'})
       setData(result);setPage(Number(result?.page||nextPage));onError('')
     }catch(e){onError(e.message||'错误统计读取失败')}
     finally{if(!silent)setLoading(false)}

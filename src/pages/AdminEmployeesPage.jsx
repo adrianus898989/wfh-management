@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
+import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
 
 const text = v => String(v ?? '').trim()
 const localDateIso = () => {
@@ -1552,6 +1553,12 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const [payrollData,setPayrollData]=useState(null)
   const [payrollLoading,setPayrollLoading]=useState(false)
   const [payrollError,setPayrollError]=useState('')
+  const [attendanceData,setAttendanceData]=useState(null)
+  const [attendanceLoading,setAttendanceLoading]=useState(false)
+  const [attendanceError,setAttendanceError]=useState('')
+  const [adjustmentData,setAdjustmentData]=useState(null)
+  const [adjustmentLoading,setAdjustmentLoading]=useState(false)
+  const [adjustmentError,setAdjustmentError]=useState('')
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
@@ -1598,6 +1605,26 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     return()=>{alive=false}
   },[e.id,activeSection])
   useEffect(()=>{
+    if(!e.id||activeSection!=='attendance')return
+    let alive=true
+    setAttendanceLoading(true);setAttendanceError('')
+    supabase.rpc('admin_employee_attendance_history',{p_employee_id:e.id,p_page:1,p_page_size:100}).then(({data,error})=>{
+      if(!alive)return
+      if(error)setAttendanceError(error.message);else setAttendanceData(data||{rows:[],total:0,page:1,pages:1})
+    }).finally(()=>alive&&setAttendanceLoading(false))
+    return()=>{alive=false}
+  },[e.id,activeSection])
+  useEffect(()=>{
+    if(!e.id||activeSection!=='penalties')return
+    let alive=true
+    setAdjustmentLoading(true);setAdjustmentError('')
+    supabase.rpc('admin_employee_adjustment_history',{p_employee_id:e.id,p_page:1,p_page_size:100}).then(({data,error})=>{
+      if(!alive)return
+      if(error)setAdjustmentError(error.message);else setAdjustmentData(data||{rows:[],total:0,page:1,pages:1})
+    }).finally(()=>alive&&setAdjustmentLoading(false))
+    return()=>{alive=false}
+  },[e.id,activeSection])
+  useEffect(()=>{
     if(!e.id||activeSection!=='errors')return
     let alive=true
     setEmployeeErrorsLoading(true);setEmployeeErrorsError('')
@@ -1625,13 +1652,15 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <nav className="employee-drawer-tabs">
-        {[['info','员工信息'],['errors','员工出错记录'],['exams','员工考试记录'],['connectivity','停电 / 断网记录'],['payroll','工资记录'],['attendance','员工出勤记录'],['penalties','迟到 / 奖金惩罚']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
+        {[['info','员工信息'],['errors','员工出错记录'],['exams','员工考试记录'],['connectivity','停电 / 断网记录'],['payroll','工资记录'],['attendance','员工出勤记录'],['penalties','奖金 / 扣款']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
       </nav>
       <div className="detail-sections detail-sections-v11">
         {activeSection==='exams'&&<EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>}
         {activeSection==='errors'&&<EmployeeErrorPanel data={employeeErrors} loading={employeeErrorsLoading} error={employeeErrorsError}/>}
         {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivityData} loading={connectivityLoading} error={connectivityError}/>}
         {activeSection==='payroll'&&<EmployeePayrollHistoryPanel data={payrollData} loading={payrollLoading} error={payrollError}/>}
+        {activeSection==='attendance'&&<EmployeeAttendancePanel data={attendanceData} loading={attendanceLoading} error={attendanceError}/>}
+        {activeSection==='penalties'&&<EmployeeAdjustmentPanel data={adjustmentData} loading={adjustmentLoading} error={adjustmentError}/>}
         {activeSection==='info'&&<>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
@@ -1652,8 +1681,6 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
           <div className="payment-secondary"><InfoRow label="联系电话" value={p.contact_phone}/><InfoRow label="WhatsApp" value={p.whatsapp_number}/><InfoRow label="员工地址" value={p.employee_address}/></div>
         </section>
         </>}
-        {activeSection==='attendance'&&<section className="detail-panel employee-section-placeholder"><h3>员工出勤记录</h3><p>出勤资料接入后，将在这里按日期展示员工出勤明细。</p></section>}
-        {activeSection==='penalties'&&<section className="detail-panel employee-section-placeholder"><h3>迟到 / 奖金惩罚记录</h3><p>迟到、奖金及惩罚资料接入后，将在这里统一展示。</p></section>}
       </div>
     </>}
   </div></div>

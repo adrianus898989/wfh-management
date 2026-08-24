@@ -7,7 +7,7 @@ import StaffRegisterPage from './pages/StaffRegisterPage'
 import MfaPage from './pages/MfaPage'
 import AdminEmployeesPage from './pages/AdminEmployeesPage'
 import AdminUsersPage from './pages/AdminUsersPage'
-import ModulePage from './pages/ModulePage'
+import AdminAttendancePage from './pages/AdminAttendancePage'
 import AdminReportsPage from './pages/AdminReportsPage'
 import AdminDailyWorkPage from './pages/AdminDailyWorkPage'
 import AdminTrainingPage from './pages/AdminTrainingPage'
@@ -169,7 +169,7 @@ function AppRoutes() {
     <Route path="/admin/mfa" element={<Protected mode="admin"><MfaPage /></Protected>} />
     <Route path="/admin" element={<Protected mode="admin"><AppLayout mode="admin"><AdminHome /></AppLayout></Protected>} />
     <Route path="/admin/employees" element={<Protected mode="admin"><AppLayout mode="admin"><AdminEmployeesPage /></AppLayout></Protected>} />
-    <Route path="/admin/schedule" element={<Protected mode="admin"><AppLayout mode="admin"><ModulePage module="schedule" /></AppLayout></Protected>} />
+    <Route path="/admin/schedule" element={<Protected mode="admin"><AppLayout mode="admin"><AdminAttendancePage /></AppLayout></Protected>} />
     <Route path="/admin/daily" element={<Protected mode="admin"><AppLayout mode="admin"><AdminDailyWorkPage /></AppLayout></Protected>} />
     <Route path="/admin/training" element={<Protected mode="admin"><AppLayout mode="admin"><AdminTrainingPage /></AppLayout></Protected>} />
     <Route path="/admin/payroll" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPayrollPage /></AppLayout></Protected>} />

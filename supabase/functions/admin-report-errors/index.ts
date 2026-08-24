@@ -4,13 +4,28 @@ const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Expose-Headers': 'x-request-id, sb-error-code',
 }
 
 const text = (value: unknown) => String(value ?? '').trim()
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), {
   status,
-  headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' },
+  headers: { ...cors, ...headers, 'Content-Type': 'application/json; charset=utf-8' },
 })
+
+class ReportRequestError extends Error {
+  status: number
+  code: string
+  stage: string
+
+  constructor(status: number, code: string, stage: string, message: string) {
+    super(message)
+    this.name = 'ReportRequestError'
+    this.status = status
+    this.code = code
+    this.stage = stage
+  }
+}
 
 function normalizeDate(value: unknown) {
   const source = text(value).slice(0, 10)
@@ -19,19 +34,33 @@ function normalizeDate(value: unknown) {
 
 async function authorize(req: Request) {
   const auth = req.headers.get('Authorization') || ''
-  if (!auth.startsWith('Bearer ')) throw new Error('UNAUTHORIZED')
+  if (!auth.startsWith('Bearer ')) {
+    throw new ReportRequestError(401, 'AUTH_HEADER_MISSING', 'authorize', '登录凭证缺失，请重新登录')
+  }
   const client = createClient(
     Deno.env.get('SUPABASE_URL') || '',
     Deno.env.get('SUPABASE_ANON_KEY') || '',
     { global: { headers: { Authorization: auth } } },
   )
-  const { data: { user }, error } = await client.auth.getUser()
-  if (error || !user) throw new Error('UNAUTHORIZED')
-  const { data: access } = await client.from('user_access')
+  const { data: { user }, error: userError } = await client.auth.getUser()
+  if (userError) {
+    const status = Number((userError as any)?.status || 0)
+    if (status === 401 || status === 403) {
+      throw new ReportRequestError(401, 'AUTH_TOKEN_INVALID', 'authorize', '登录已失效，请重新登录')
+    }
+    throw new ReportRequestError(503, 'AUTH_SERVICE_UNAVAILABLE', 'authorize', '认证服务暂时不可用，请稍后重试')
+  }
+  if (!user) throw new ReportRequestError(401, 'AUTH_TOKEN_INVALID', 'authorize', '登录已失效，请重新登录')
+  const { data: access, error: accessError } = await client.from('user_access')
     .select('backend_enabled,active')
     .eq('auth_user_id', user.id)
     .maybeSingle()
-  if (!access?.active || !access?.backend_enabled) throw new Error('FORBIDDEN')
+  if (accessError) {
+    throw new ReportRequestError(503, 'ACCESS_LOOKUP_UNAVAILABLE', 'access', '后台权限服务暂时不可用，请稍后重试')
+  }
+  if (!access?.active || !access?.backend_enabled) {
+    throw new ReportRequestError(403, 'BACKEND_ACCESS_DENIED', 'access', '当前账号没有后台访问权限')
+  }
 }
 
 function applyFilters(query: any, filters: Record<string, string>, from: string, to: string, basisColumn: string) {
@@ -56,6 +85,8 @@ function applyFilters(query: any, filters: Record<string, string>, from: string,
 
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
+
+  const requestId = crypto.randomUUID()
 
   try {
     await authorize(req)
@@ -95,7 +126,9 @@ Deno.serve(async req => {
         ...filters,
       },
     })
-    if (statsError) throw new Error(`错误统计汇总失败：${statsError.message}`)
+    if (statsError) {
+      throw new ReportRequestError(500, 'ERROR_STATS_QUERY_FAILED', 'stats', `错误统计汇总失败：${statsError.message}`)
+    }
 
     const pageSizeOptions = [20, 30, 50, 100, 500]
     const requestedSize = Number(body.page_size || 30)
@@ -131,7 +164,9 @@ Deno.serve(async req => {
       .range(start, start + pageSize - 1)
 
     const { data: pageRows, error: pageError } = await pageQuery
-    if (pageError) throw new Error(`错误统计明细失败：${pageError.message}`)
+    if (pageError) {
+      throw new ReportRequestError(500, 'ERROR_ROWS_QUERY_FAILED', 'rows', `错误统计明细失败：${pageError.message}`)
+    }
 
     const rows = (pageRows || []).map((row: any) => ({
       ...row,
@@ -156,12 +191,19 @@ Deno.serve(async req => {
       available_from: stats?.available_from || '',
       available_to: stats?.available_to || '',
       options: stats?.options || {},
+      request_id: requestId,
     })
   } catch (error) {
+    const known = error instanceof ReportRequestError
+    const status = known ? error.status : 500
+    const code = known ? error.code : 'ERROR_REPORT_UNEXPECTED'
+    const stage = known ? error.stage : 'unexpected'
     const message = error instanceof Error ? error.message : String(error)
-    if (message === 'UNAUTHORIZED') return json({ error: '登录已失效，请重新登录' }, 401)
-    if (message === 'FORBIDDEN') return json({ error: '当前账号没有后台访问权限' }, 403)
-    console.error(error)
-    return json({ error: message || '错误统计读取失败' }, 500)
+    console.error(JSON.stringify({ request_id: requestId, status, code, stage, message }))
+    return json(
+      { error: message || '错误统计读取失败', code, stage, request_id: requestId },
+      status,
+      { 'x-request-id': requestId, 'sb-error-code': code },
+    )
   }
 })

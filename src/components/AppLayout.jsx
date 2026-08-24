@@ -28,6 +28,7 @@ const ADMIN_NAV = [
     ['考勤记录', `/admin/schedule?tab=${enc('考勤记录')}`],
     ['请假审批', `/admin/schedule?tab=${enc('请假审批')}`],
     ['换班记录', `/admin/schedule?tab=${enc('换班记录')}`],
+    ['奖金 / 扣款', `/admin/schedule?tab=${enc('奖金 / 扣款')}`],
   ]},
   { to:'/admin/daily', label:'每日工作', icon:'日', children:[
     ['线上培训报告', '/admin/daily'],
