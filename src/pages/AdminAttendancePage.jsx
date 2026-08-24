@@ -7,14 +7,20 @@ import { EmployeeDrawer } from './AdminEmployeesPage'
 
 const TABS=['排班表','出勤表','今日考勤','考勤记录','请假审批','奖金 / 扣款']
 const text=value=>String(value??'').trim()
+const BUSINESS_TIME_ZONE='Asia/Manila'
 const todayIso=()=>{
-  const date=new Date()
-  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`
+  try{
+    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:BUSINESS_TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date())
+    const value=Object.fromEntries(parts.map(part=>[part.type,part.value]))
+    return `${value.year}-${value.month}-${value.day}`
+  }catch{
+    return new Date().toISOString().slice(0,10)
+  }
 }
-const emptyFilters=()=>({search:'',date_from:'',date_to:'',source_month:'',source_group:'',event_kind:'',employee_status:'',team:'',position:'',country:'',platform:'',manager:'',match_status:''})
+const emptyFilters=()=>({search:'',employee_no:'',employee_name:'',date_from:'',date_to:'',source_month:'',source_group:'',work_mode:'',event_kind:'',employee_status:'',team:'',position:'',country:'',platform:'',manager:'',match_status:''})
 const tabFilters=tab=>{
   const next=emptyFilters()
-  if(tab==='今日考勤')next.date_from=next.date_to=todayIso()
+  if(['今日考勤','考勤记录','请假审批','奖金 / 扣款'].includes(tab))next.date_from=next.date_to=todayIso()
   if(tab==='请假审批')next.event_kind='leave'
   return next
 }
@@ -27,6 +33,11 @@ const employeeTypeLabel=row=>{
   return text(row?.source_group).toLowerCase()==='onsite_to_home'?'现场转居家':'纯居家'
 }
 const employeeStatusLabel=value=>({active:'在职',probation:'试用',suspended:'停用',inactive:'停用',resigned:'离职',unmatched:'未匹配'}[text(value).toLowerCase()]||text(value)||'—')
+const employeeWorkMode=row=>{
+  const value=text(row?.work_mode||row?.source_group||row?.employment_type||row?.employee_type).toLowerCase()
+  return value==='onsite_to_home'||value.includes('现场转居家')?'onsite_to_home':'home'
+}
+const employeeWorkModeLabel=row=>employeeWorkMode(row)==='onsite_to_home'?'现场转居家':'纯居家'
 const formatNumber=value=>{
   const number=Number(value)
   return Number.isFinite(number)?number.toLocaleString('zh-CN',{maximumFractionDigits:2}):text(value)||'0'
@@ -45,6 +56,20 @@ const normalizeAttendanceRows=rows=>(rows||[]).map(row=>{
   const normalized={...row,employment_type:row.employment_type||row.employee_type||''}
   return {...normalized,currency:attendanceCurrency(normalized)}
 })
+
+const syncMeta=payload=>{
+  const nested=[payload?.sync,payload?.sync_status,payload?.source_sync,payload?.sync_state,payload?.latest_sync].find(value=>value&&typeof value==='object'&&!Array.isArray(value))||{}
+  const sources=[payload?.sources,payload?.source_statuses,nested?.sources].find(Array.isArray)||[]
+  const sourceTimes=sources.map(source=>text(source.last_synced_at||source.synced_at||source.refreshed_at||source.last_success_at)).filter(Boolean).sort()
+  const sourceFailed=sources.some(source=>['failed','error'].includes(text(source.status||source.sync_status).toLowerCase()))
+  const status=text(nested.status||payload?.sync_status||payload?.status).toLowerCase()
+  const last=text(nested.last_synced_at||nested.synced_at||nested.refreshed_at||nested.last_success_at||payload?.last_synced_at||payload?.last_sync_at||payload?.latest_sync_at||payload?.synced_at||payload?.refreshed_at||sourceTimes.at(-1))
+  const failed=sourceFailed||['failed','error'].includes(status)
+  const label=failed?'同步异常':status==='syncing'?'同步中':last||status==='success'?'已同步':'等待同步状态'
+  return {status:failed?'error':status==='syncing'?'syncing':last||status==='success'?'success':'idle',label,last}
+}
+
+const SyncIndicator=({sync})=><div className={`attendance-sync-indicator ${sync?.status||'idle'}`} title={sync?.last?`Supabase 最近同步：${sync.last}`:'等待后端返回同步时间'}><i aria-hidden="true"/><span>{sync?.label||'等待同步状态'}</span>{sync?.last&&<time>{sync.last.replace('T',' ').slice(0,19)}</time>}</div>
 
 export default function AdminAttendancePage(){
   const [params,setParams]=useSearchParams()
@@ -73,7 +98,7 @@ export default function AdminAttendancePage(){
     let alive=true
     const load=async()=>{
       setState(current=>({...current,loading:true,error:''}))
-      const filters={...applied,scope:tabScope(tab),page,page_size:pageSize}
+      const filters={...applied,full_name:applied.employee_name,status:applied.employee_status,scope:tabScope(tab),page,page_size:pageSize}
       if(tab==='今日考勤')filters.date_from=filters.date_to=todayIso()
       if(tab==='请假审批'&&!filters.event_kind)filters.event_kind='leave'
       const {data,error}=await supabase.rpc('admin_attendance_home',{p_filters:filters})
@@ -126,7 +151,7 @@ export default function AdminAttendancePage(){
     {requestTab(tab)&&<>
       {tab==='请假审批'&&<div className="attendance-readonly-notice"><b>当前为记录视图</b><span>页面默认筛选“请假”，也可以切换公休、回家 / 居家假、半天等真实类别。</span></div>}
       {tab==='今日考勤'&&<div className="attendance-context-note"><b>{todayIso()}</b><span>仅显示今天已经登记的记录；没有记录不等同于正常出勤。</span></div>}
-      <AttendanceFilters tab={tab} draft={draft} setDraft={setDraft} options={options} advanced={advanced} setAdvanced={setAdvanced} loading={state.loading} onQuery={query} onReset={reset}/>
+      <AttendanceFilters tab={tab} draft={draft} setDraft={setDraft} options={options} advanced={advanced} setAdvanced={setAdvanced} loading={state.loading} sync={syncMeta(data)} onQuery={query} onReset={reset}/>
       {state.error&&<div className="attendance-error" role="alert"><span>考勤数据读取失败：{state.error}</span><button type="button" onClick={()=>setRefreshKey(value=>value+1)}>重试</button></div>}
       <AttendanceSummary scope={tabScope(tab)} summary={data.summary||{}} total={Number(data.total||0)}/>
       <AttendanceTable rows={rows} scope={tabScope(tab)} loading={state.loading} hasData={Boolean(state.data)} onEmployee={openEmployee} onDetail={setRecordDetail}/>
@@ -138,14 +163,16 @@ export default function AdminAttendancePage(){
   </div>
 }
 
-function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,loading,onQuery,onReset}){
+function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,loading,sync,onQuery,onReset}){
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
   const kindOptions=optionEntries(options.event_kinds,attendanceKindLabel)
   if(draft.event_kind&&!kindOptions.some(item=>item.value===draft.event_kind))kindOptions.unshift({value:draft.event_kind,label:attendanceKindLabel(draft.event_kind),key:`selected-${draft.event_kind}`})
   const select=(label,key,values,allLabel,labeler)=><label><span>{label}</span><select value={draft[key]} onChange={event=>update(key,event.target.value)}><option value="">{allLabel}</option>{optionEntries(values,labeler).map(item=><option value={item.value} key={item.key}>{item.label}</option>)}</select></label>
   return <section className="attendance-filter-card">
     <div className="attendance-filter-main">
-      <label className="attendance-search"><span>员工 / 内容搜索</span><div><i>⌕</i><input value={draft.search} onChange={event=>update('search',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder="员工ID / 姓名 / 原因 / 备注"/></div></label>
+      <label className="attendance-search attendance-search-id"><span>员工 ID</span><div><i>⌕</i><input value={draft.employee_no} onChange={event=>update('employee_no',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder="输入员工 ID"/></div></label>
+      <label className="attendance-search attendance-search-name"><span>员工姓名</span><div><i>⌕</i><input value={draft.employee_name} onChange={event=>update('employee_name',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder="输入姓名"/></div></label>
+      <label className="attendance-search attendance-search-content"><span>原因 / 备注</span><div><i>⌕</i><input value={draft.search} onChange={event=>update('search',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder="搜索原因或备注内容"/></div></label>
       <button type="button" className="primary-action" onClick={onQuery} disabled={loading}>{loading?'查询中…':'查询'}</button>
       <button type="button" className="secondary-action" onClick={onReset} disabled={loading}>重置</button>
       <button type="button" className="attendance-filter-toggle" onClick={()=>setAdvanced(value=>!value)}>{advanced?'收起筛选':'更多筛选'}</button>
@@ -153,7 +180,7 @@ function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,load
     {advanced&&<div className="attendance-filter-grid">
       <label><span>日期起</span><input type="date" value={draft.date_from} disabled={tab==='今日考勤'} onChange={event=>update('date_from',event.target.value)}/></label>
       <label><span>日期止</span><input type="date" value={draft.date_to} disabled={tab==='今日考勤'} onChange={event=>update('date_to',event.target.value)}/></label>
-      {select('员工类型','source_group',options.source_groups,'全部员工类型',attendanceSourceGroupLabel)}
+      <label><span>员工类型</span><select value={draft.source_group} onChange={event=>update('source_group',event.target.value)}><option value="">全部员工类型</option><option value="home">纯居家</option><option value="onsite_to_home">现场转居家</option>{optionEntries(options.source_groups,attendanceSourceGroupLabel).filter(item=>!['home','onsite_to_home'].includes(item.value)).map(item=><option value={item.value} key={item.key}>{item.label}</option>)}</select></label>
       <label><span>记录类别</span><select value={draft.event_kind} onChange={event=>update('event_kind',event.target.value)}><option value="">全部类别</option>{kindOptions.map(item=><option key={item.key} value={item.value}>{item.label}</option>)}</select></label>
       <label><span>员工状态</span><select value={draft.employee_status} onChange={event=>update('employee_status',event.target.value)}><option value="">全部员工状态</option><option value="active">在职</option><option value="probation">试用</option><option value="resigned">离职</option><option value="inactive">停用</option><option value="unmatched">未匹配</option></select></label>
       {select('团队','team',options.teams,'全部团队')}
@@ -162,6 +189,7 @@ function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,load
       {select('盘口 / 平台','platform',options.platforms,'全部盘口')}
       {select('负责人','manager',options.managers,'全部负责人')}
     </div>}
+    {sync?.last&&<div className="attendance-filter-foot"><SyncIndicator sync={sync}/><span>页面数据来自 Supabase；这里显示最近一次 Google 表格同步结果。</span></div>}
   </section>
 }
 
@@ -210,22 +238,24 @@ function AttendanceRecordModal({row,adjustment,onClose}){
 }
 
 function SchedulePane(){
-  const blank=()=>({search:'',team:'',group:'',position:'',shift:''})
+  const blank=()=>({employee_no:'',employee_name:'',work_mode:'',employee_status:'',team:'',group:'',position:'',shift:'',country:'',platform:'',manager:''})
   const [draft,setDraft]=useState(blank)
   const [applied,setApplied]=useState(blank)
   const [refreshKey,setRefreshKey]=useState(0)
   const [selected,setSelected]=useState(null)
-  const [state,setState]=useState({loading:true,error:'',rows:[],options:{}})
+  const [state,setState]=useState({loading:true,error:'',rows:[],options:{},sync:syncMeta({})})
   useEffect(()=>{
     let alive=true
     const load=async()=>{
       setState(current=>({...current,loading:true,error:''}))
-      const {data,error}=await supabase.rpc('admin_attendance_schedule',{p_filters:applied})
+      const serverFilters={...applied,work_mode:applied.work_mode,employment_type:''}
+      const {data,error}=await supabase.rpc('admin_attendance_schedule',{p_filters:serverFilters})
       if(!alive)return
       if(error)setState(current=>({...current,loading:false,error:message(error)}))
       else{
         const payload=data||{}
         const rawRows=payload.rows||payload.employees||payload.schedule||[]
+        const refreshedAt=rawRows.map(row=>text(row?.refreshed_at)).filter(Boolean).sort().at(-1)||''
         const rows=rawRows.map((row,index)=>({
           ...row,
           id:row.id||row.employee_id||`${row.employee_no||row.full_name}-${index}`,
@@ -239,8 +269,9 @@ function SchedulePane(){
           country:row.country_name||row.country||row.nationality||'',
           platform:row.platform_name||row.platform||row.platform_scope||'',
           manager:row.responsible||row.manager||'',
+          work_mode:row.work_mode||row.source_group||employeeWorkMode(row),
         }))
-        setState({loading:false,error:'',rows,options:payload.options||payload.filters||{}})
+        setState({loading:false,error:'',rows,options:payload.options||payload.filters||{},sync:syncMeta({...payload,refreshed_at:payload.refreshed_at||refreshedAt})})
       }
     }
     load()
@@ -255,24 +286,58 @@ function SchedulePane(){
   const groups=useMemo(()=>optionValues('group',row=>row.group_name),[state.options,state.rows])
   const positions=useMemo(()=>optionValues('position',row=>row.position_name),[state.options,state.rows])
   const shifts=useMemo(()=>optionValues('shift',row=>row.shift_name).sort(shiftSort),[state.options,state.rows])
-  const counts=useMemo(()=>state.rows.reduce((result,employee)=>{const key=employee.shift_bucket||shiftTone(employee.shift_name);result[key]=(result[key]||0)+1;return result},{day:0,mid:0,night:0,other:0}),[state.rows])
+  const countries=useMemo(()=>optionValues('country',row=>row.country),[state.options,state.rows])
+  const platforms=useMemo(()=>optionValues('platform',row=>row.platform),[state.options,state.rows])
+  const visibleRows=useMemo(()=>state.rows.filter(employee=>{
+    const includes=(value,needle)=>!needle||text(value).toLowerCase().includes(text(needle).toLowerCase())
+    return includes(employee.employee_no,applied.employee_no)
+      &&includes(employee.full_name,applied.employee_name)
+      &&(!applied.work_mode||employeeWorkMode(employee)===applied.work_mode)
+      &&(!applied.employee_status||text(employee.employee_status).toLowerCase()===text(applied.employee_status).toLowerCase())
+      &&(!applied.team||text(employee.team_name)===applied.team)
+      &&(!applied.group||text(employee.group_name)===applied.group)
+      &&(!applied.position||text(employee.position_name)===applied.position)
+      &&(!applied.shift||text(employee.shift_name)===applied.shift)
+      &&(!applied.country||text(employee.country)===applied.country)
+      &&(!applied.platform||text(employee.platform)===applied.platform)
+      &&includes(employee.manager,applied.manager)
+  }),[state.rows,applied])
+  const counts=useMemo(()=>visibleRows.reduce((result,employee)=>{const key=employee.shift_bucket||shiftTone(employee.shift_name);result[key]=(result[key]||0)+1;return result},{day:0,mid:0,night:0,other:0}),[visibleRows])
   const matrix=useMemo(()=>{
     const teamsMap=new Map()
-    state.rows.forEach(employee=>{
+    visibleRows.forEach(employee=>{
       const teamName=employee.team_name||'未分配团队'
       if(!teamsMap.has(teamName))teamsMap.set(teamName,{team:teamName,day:[],mid:[],night:[],other:[]})
       teamsMap.get(teamName)[employee.shift_bucket||shiftTone(employee.shift_name)].push(employee)
     })
     return Array.from(teamsMap.values()).sort((a,b)=>a.team.localeCompare(b.team,'zh-CN'))
-  },[state.rows])
+  },[visibleRows])
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
   const apply=()=>setApplied({...draft})
   const reset=()=>{const next=blank();setDraft(next);setApplied(next)}
   return <>
     <section className="schedule-overview"><div><span>早班 / 白班</span><strong>{counts.day}</strong></div><div><span>中班</span><strong>{counts.mid}</strong></div><div><span>晚班 / 夜班</span><strong>{counts.night}</strong></div><div><span>其他 / 未设置</span><strong>{counts.other}</strong></div></section>
-    <section className="attendance-filter-card schedule-search-card"><div className="attendance-filter-main"><label className="attendance-search"><span>员工搜索</span><div><i>⌕</i><input value={draft.search} onChange={event=>update('search',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="员工ID / 姓名 / 盘口 / 国家"/></div></label><label className="schedule-inline-filter"><span>团队</span><select value={draft.team} onChange={event=>update('team',event.target.value)}><option value="">全部团队</option>{teams.map(value=><option key={value}>{value}</option>)}</select></label><label className="schedule-inline-filter"><span>组别</span><select value={draft.group} onChange={event=>update('group',event.target.value)}><option value="">全部组别</option>{groups.map(value=><option key={value}>{value}</option>)}</select></label><label className="schedule-inline-filter"><span>岗位</span><select value={draft.position} onChange={event=>update('position',event.target.value)}><option value="">全部岗位</option>{positions.map(value=><option key={value}>{value}</option>)}</select></label><label className="schedule-inline-filter"><span>班次</span><select value={draft.shift} onChange={event=>update('shift',event.target.value)}><option value="">全部班次</option>{shifts.map(value=><option key={value}>{value}</option>)}</select></label><button type="button" className="primary-action" onClick={apply}>查询</button><button type="button" className="secondary-action" onClick={reset}>重置</button><button type="button" className="attendance-filter-toggle" onClick={()=>setRefreshKey(value=>value+1)} disabled={state.loading}>{state.loading?'读取中…':'刷新排班'}</button></div></section>
+    <section className="attendance-filter-card schedule-search-card">
+      <div className="attendance-filter-main">
+        <label className="attendance-search attendance-search-id"><span>员工 ID</span><div><i>⌕</i><input value={draft.employee_no} onChange={event=>update('employee_no',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="输入员工 ID"/></div></label>
+        <label className="attendance-search attendance-search-name"><span>员工姓名</span><div><i>⌕</i><input value={draft.employee_name} onChange={event=>update('employee_name',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="输入姓名"/></div></label>
+        <button type="button" className="primary-action" onClick={apply} disabled={state.loading}>查询</button><button type="button" className="secondary-action" onClick={reset} disabled={state.loading}>重置</button><button type="button" className="attendance-filter-toggle" onClick={()=>setRefreshKey(value=>value+1)} disabled={state.loading}>{state.loading?'读取中…':'刷新排班'}</button>
+      </div>
+      <div className="attendance-filter-grid schedule-filter-grid">
+        <label><span>员工类型</span><select value={draft.work_mode} onChange={event=>update('work_mode',event.target.value)}><option value="">全部员工类型</option><option value="home">纯居家</option><option value="onsite_to_home">现场转居家</option></select></label>
+        <label><span>员工状态</span><select value={draft.employee_status} onChange={event=>update('employee_status',event.target.value)}><option value="">全部员工状态</option><option value="active">在职</option><option value="probation">试用</option><option value="suspended">停用</option><option value="resigned">离职</option><option value="unmatched">未匹配</option></select></label>
+        <label><span>团队</span><select value={draft.team} onChange={event=>update('team',event.target.value)}><option value="">全部团队</option>{teams.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>组别</span><select value={draft.group} onChange={event=>update('group',event.target.value)}><option value="">全部组别</option>{groups.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>岗位</span><select value={draft.position} onChange={event=>update('position',event.target.value)}><option value="">全部岗位</option>{positions.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>班次</span><select value={draft.shift} onChange={event=>update('shift',event.target.value)}><option value="">全部班次</option>{shifts.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>员工国家</span><select value={draft.country} onChange={event=>update('country',event.target.value)}><option value="">全部国家</option>{countries.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>盘口 / 平台</span><select value={draft.platform} onChange={event=>update('platform',event.target.value)}><option value="">全部盘口</option>{platforms.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>负责人</span><input value={draft.manager} onChange={event=>update('manager',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="负责人 / 培训 / 组长"/></label>
+      </div>
+      <div className="attendance-filter-foot"><SyncIndicator sync={state.sync}/><span>页面查询 Supabase；Google 排班变更由同步任务写入后在此刷新。</span></div>
+    </section>
     {state.error&&<div className="attendance-error"><span>排班读取失败：{state.error}</span><button type="button" onClick={()=>setRefreshKey(value=>value+1)}>重试</button></div>}
-    <section className="attendance-table-card schedule-matrix-card"><header><div><h2>团队 × 班次</h2><p>每格显示总人数与前 6 名，点击格子查看该团队该班次的完整名单。</p></div><span>{state.loading?'读取中…':`${state.rows.length} 人 · ${matrix.length} 个团队`}</span></header>{state.loading&&!state.rows.length?<div className="attendance-table-state">正在读取排班…</div>:!matrix.length?<div className="attendance-table-state">暂无符合条件的排班员工</div>:<div className="schedule-team-matrix-scroll"><div className="schedule-team-matrix"><div className="schedule-team-row head"><div>团队</div><div>早班 / 白班</div><div>中班</div><div>晚班 / 夜班</div><div>其他 / 未设置</div></div>{matrix.map(teamRow=><div className="schedule-team-row" key={teamRow.team}><div className="schedule-team-name"><strong>{teamRow.team}</strong><span>{teamRow.day.length+teamRow.mid.length+teamRow.night.length+teamRow.other.length} 人</span></div>{['day','mid','night','other'].map(tone=><button type="button" className={`schedule-team-cell ${tone}`} key={tone} onClick={()=>setSelected({team:teamRow.team,tone,people:teamRow[tone]})} disabled={!teamRow[tone].length}><strong>{teamRow[tone].length}<small>人</small></strong><span>{teamRow[tone].slice(0,6).map(person=>person.full_name||person.employee_no).join('、')||'无人排班'}</span>{teamRow[tone].length>6&&<em>另有 {teamRow[tone].length-6} 人</em>}</button>)}</div>)}</div></div>}
+    <section className="attendance-table-card schedule-matrix-card"><header><div><h2>团队 × 班次</h2><p>每格显示总人数与前 6 名，点击格子查看该团队该班次的完整名单。</p></div><span>{state.loading?'读取中…':`${visibleRows.length} 人 · ${matrix.length} 个团队`}</span></header>{state.loading&&!state.rows.length?<div className="attendance-table-state">正在读取排班…</div>:!matrix.length?<div className="attendance-table-state">暂无符合条件的排班员工</div>:<div className="schedule-team-matrix-scroll"><div className="schedule-team-matrix"><div className="schedule-team-row head"><div>团队</div><div>早班 / 白班</div><div>中班</div><div>晚班 / 夜班</div><div>其他 / 未设置</div></div>{matrix.map(teamRow=><div className="schedule-team-row" key={teamRow.team}><div className="schedule-team-name"><strong title={teamRow.team}>{teamRow.team}</strong><span>{teamRow.day.length+teamRow.mid.length+teamRow.night.length+teamRow.other.length} 人</span></div>{['day','mid','night','other'].map(tone=><button type="button" className={`schedule-team-cell ${tone}`} key={tone} onClick={()=>setSelected({team:teamRow.team,tone,people:teamRow[tone]})} disabled={!teamRow[tone].length}><strong>{teamRow[tone].length}<small>人</small></strong><span title={teamRow[tone].map(person=>person.full_name||person.employee_no).join('、')}>{teamRow[tone].slice(0,6).map(person=>person.full_name||person.employee_no).join('、')||'无人排班'}</span>{teamRow[tone].length>6&&<em>另有 {teamRow[tone].length-6} 人</em>}</button>)}</div>)}</div></div>}
       {state.loading&&state.rows.length>0&&<div className="attendance-loading-overlay">正在更新排班…</div>}
     </section>
     {selected&&<ScheduleRosterModal data={selected} onClose={()=>setSelected(null)}/>}
@@ -281,7 +346,7 @@ function SchedulePane(){
 
 function ScheduleRosterModal({data,onClose}){
   const label={day:'早班 / 白班',mid:'中班',night:'晚班 / 夜班',other:'其他 / 未设置'}[data.tone]||'班次'
-  return <div className="modal-mask attendance-main-modal-mask" onMouseDown={onClose}><div className="attendance-main-modal schedule-roster-modal" role="dialog" aria-modal="true" onMouseDown={event=>event.stopPropagation()}><header><div><small>SCHEDULE ROSTER</small><h2>{data.team} · {label}</h2><p>共 {data.people.length} 人</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header><div className="schedule-roster-list">{data.people.map(person=><article key={person.id}><div><strong>{person.full_name||'—'}</strong><span>{person.employee_no||'—'} · {person.group_name||'未分组'}</span></div><div><strong>{person.position_name||'—'}</strong><span>{person.country||'—'} · {person.platform||'—'}</span></div><div><strong>{text(person.hire_date).slice(0,10)||'—'}</strong><span>入职日期 · {employeeStatusLabel(person.employee_status||person.status)}</span></div><div><strong>{person.manager||'—'}</strong><span>负责人</span></div><span className={`schedule-shift ${data.tone}`}>{canonicalShift(person.shift_name)||label}</span></article>)}</div><footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer></div></div>
+  return <div className="modal-mask attendance-main-modal-mask" onMouseDown={onClose}><div className="attendance-main-modal schedule-roster-modal" role="dialog" aria-modal="true" onMouseDown={event=>event.stopPropagation()}><header><div><small>SCHEDULE ROSTER</small><h2>{data.team} · {label}</h2><p>共 {data.people.length} 人</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header><div className="schedule-roster-list">{data.people.map(person=><article key={person.id}><div><strong title={person.full_name||'—'}>{person.full_name||'—'}</strong><span title={`${person.employee_no||'—'} · ${person.group_name||'未分组'}`}>{person.employee_no||'—'} · {person.group_name||'未分组'}</span></div><div><strong title={person.position_name||'—'}>{person.position_name||'—'}</strong><span title={`${person.country||'—'} · ${person.platform||'—'}`}>{person.country||'—'} · {person.platform||'—'}</span></div><div><strong>{text(person.hire_date).slice(0,10)||'—'}</strong><span>入职日期 · {employeeStatusLabel(person.employee_status||person.status)}</span></div><div><strong title={person.manager||'—'}>{person.manager||'—'}</strong><span>负责人 · {employeeWorkModeLabel(person)}</span></div><span className={`schedule-shift ${data.tone}`}>{canonicalShift(person.shift_name)||label}</span></article>)}</div><footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer></div></div>
 }
 
 const canonicalShift=value=>{
@@ -317,27 +382,113 @@ const matrixKindMeta=value=>({
   public_holiday:['休','public_holiday'],home_leave:['回','home_leave'],leave:['假','leave'],half_day:['半','half_day'],absence:['缺','absence'],absent:['缺','absence'],resignation:['离','resignation'],late:['迟','late'],normal:['勤','normal'],present:['勤','normal'],
 }[text(value).toLowerCase()]||['记','other'])
 
-async function fetchAttendanceMonth(month){
-  const {data,error}=await supabase.rpc('admin_attendance_monthly',{p_filters:{month}})
+const matrixKinds=['public_holiday','home_leave','leave','half_day','absence','resignation']
+const matrixKindKey=value=>{
+  const kind=text(value).toLowerCase()
+  if(kind==='absent')return 'absence'
+  return matrixKinds.includes(kind)?kind:''
+}
+const dateOnly=value=>{
+  const match=text(value).match(/^\d{4}-\d{2}-\d{2}/)
+  return match?.[0]||''
+}
+const matrixRawRecords=(employee,day,month)=>{
+  const date=`${month}-${String(day).padStart(2,'0')}`
+  const raw=employee.days?.[day]??employee.days?.[String(day)]??employee.days?.[date]??[]
+  return Array.isArray(raw)?raw:(raw?[raw]:[])
+}
+const matrixResignationWindow=(employee,month)=>{
+  const directStart=dateOnly(employee.resign_date||employee.resignation_date||employee.resigned_at||employee.termination_date||employee.exit_date||employee.last_working_date)
+  const directEnd=dateOnly(employee.rehire_date||employee.rehired_at||employee.reactivation_date||employee.return_date)
+  const periods=employee.resignation_periods||employee.lifecycle_periods||employee.resigned_ranges||[]
+  const normalizedPeriods=(Array.isArray(periods)?periods:[]).map(period=>({start:dateOnly(period.start||period.from||period.resign_date||period.resigned_at),end:dateOnly(period.end||period.to||period.rehire_date||period.rehired_at)})).filter(period=>period.start)
+  if(directStart)normalizedPeriods.push({start:directStart,end:directEnd})
+  if(!normalizedPeriods.length){
+    const eventDates=[]
+    Object.entries(employee.days||{}).forEach(([key,value])=>{
+      const day=Number(key)||Number(dateOnly(key).slice(-2))
+      const records=Array.isArray(value)?value:(value?[value]:[])
+      if(day&&records.some(record=>matrixKindKey(record.event_kind||record.kind||record.status)==='resignation'))eventDates.push(`${month}-${String(day).padStart(2,'0')}`)
+    })
+    if(eventDates.length)normalizedPeriods.push({start:eventDates.sort()[0],end:directEnd})
+  }
+  return normalizedPeriods
+}
+const matrixDayRecords=(employee,day,month)=>{
+  const date=`${month}-${String(day).padStart(2,'0')}`
+  const records=matrixRawRecords(employee,day,month)
+  const resigned=matrixResignationWindow(employee,month).some(period=>date>=period.start&&(!period.end||date<period.end))
+  if(!resigned)return records
+  const remaining=records.filter(record=>matrixKindKey(record.event_kind||record.kind||record.status)!=='resignation')
+  const resignation=records.find(record=>matrixKindKey(record.event_kind||record.kind||record.status)==='resignation')||{event_kind:'resignation',reason:'员工已离职',note:'离职日期起由系统连续标记'}
+  return [resignation,...remaining]
+}
+const numberValue=value=>value!==''&&value!==null&&value!==undefined&&Number.isFinite(Number(value))?Number(value):null
+const matrixSummaryFor=(employee,bounds,month)=>{
+  const fallback={public_holiday:0,home_leave:0,leave:0,half_day:0,absence:0,resignation:0}
+  bounds.days.forEach(day=>{
+    const kinds=new Set(matrixDayRecords(employee,day,month).map(record=>matrixKindKey(record.event_kind||record.kind||record.status)).filter(Boolean))
+    kinds.forEach(kind=>{fallback[kind]+=kind==='half_day'?0.5:1})
+  })
+  const sources=[employee.monthly_summary,employee.attendance_summary,employee.summary,employee.stats,employee.totals,employee].filter(source=>source&&typeof source==='object')
+  const aliases={
+    public_holiday:['public_holiday','public_holiday_days','rest_day','rest_days'],
+    home_leave:['home_leave','home_leave_days','home_vacation','home_vacation_days'],
+    leave:['leave','leave_days','vacation_leave','vacation_days'],
+    half_day:['half_day','half_days'],
+    absence:['absence','absence_days','absent','absent_days'],
+    resignation:['resignation','resignation_days','resigned','resigned_days'],
+  }
+  const result={}
+  Object.entries(aliases).forEach(([kind,keys])=>{
+    let value=null
+    for(const source of sources){for(const key of keys){value=numberValue(source[key]);if(value!==null)break}if(value!==null)break}
+    result[kind]=value??fallback[kind]
+  })
+  const totalKeys=['total','total_days','attendance_total','attendance_days','stat_total','statistics_total']
+  let total=null
+  for(const source of sources){for(const key of totalKeys){total=numberValue(source[key]);if(total!==null)break}if(total!==null)break}
+  if(total!==null){
+    const nonHalf=matrixKinds.filter(kind=>kind!=='half_day').reduce((sum,kind)=>sum+Number(result[kind]||0),0)
+    const weightedHalf=total-nonHalf
+    if(weightedHalf>=0&&weightedHalf<=Number(result.half_day||0))result.half_day=weightedHalf
+  }
+  result.total=total??matrixKinds.reduce((sum,kind)=>sum+Number(result[kind]||0),0)
+  return result
+}
+const matrixSummaryLabels={public_holiday:'休',home_leave:'回',leave:'请',half_day:'半',absence:'缺',resignation:'离'}
+const formatDayCount=value=>Number(value||0).toLocaleString('zh-CN',{maximumFractionDigits:1})
+
+async function fetchAttendanceMonth(month,filters={}){
+  const {data,error}=await supabase.rpc('admin_attendance_monthly',{p_filters:{month,...filters}})
   if(error)throw error
   return data||{rows:[],options:{}}
 }
 
 function AttendanceMatrixPane(){
   const [month,setMonth]=useState(monthValue)
-  const [draftSearch,setDraftSearch]=useState('')
-  const [search,setSearch]=useState('')
-  const [team,setTeam]=useState('')
+  const blank=()=>({employee_no:'',employee_name:'',work_mode:'',employee_status:'',team:'',position:'',country:'',platform:'',manager:''})
+  const [draft,setDraft]=useState(blank)
+  const [applied,setApplied]=useState(blank)
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(30)
   const [dayDetail,setDayDetail]=useState(null)
-  const [state,setState]=useState({loading:true,error:'',people:[],options:{}})
+  const [state,setState]=useState({loading:true,error:'',people:[],options:{},sync:syncMeta({}),total:0,pages:1,serverPaged:false})
   const request=useRef(0)
   const load=async(force=false)=>{
     const sequence=++request.current
     setState(current=>({...current,loading:true,error:''}))
     try{
-      const payload=await fetchAttendanceMonth(month,force)
+      const payload=await fetchAttendanceMonth(month,{
+        ...applied,
+        full_name:applied.employee_name,
+        source_group:applied.work_mode,
+        employment_type:'',
+        status:applied.employee_status,
+        page,
+        page_size:pageSize,
+        force_refresh:force,
+      })
       if(sequence!==request.current)return
       const rawPeople=payload.rows||payload.employees||[]
       const people=rawPeople.map((person,index)=>({
@@ -348,36 +499,96 @@ function AttendanceMatrixPane(){
         team_name:person.team_name||person.team||'',
         position_name:person.position_name||person.position||'',
         platform:person.platform||person.platform_scope||'',
+        manager:person.manager||person.responsible||'',
+        employee_status:person.employee_status||person.status||'',
+        employment_type:person.employment_type||person.employee_type||'',
         days:person.days||person.day_map||person.attendance_days||{},
       }))
-      setState({loading:false,error:'',people,options:payload.options||{}})
+      const serverPaged=payload.page!==undefined||payload.page_size!==undefined||payload.pages!==undefined
+      setState({loading:false,error:'',people,options:payload.options||{},sync:syncMeta(payload),total:Number(payload.total??people.length),pages:Math.max(1,Number(payload.pages||1)),serverPaged})
     }catch(error){if(sequence===request.current)setState(current=>({...current,loading:false,error:message(error)}))}
   }
-  useEffect(()=>{load()},[month])
+  useEffect(()=>{load()},[month,applied,page,pageSize])
   const bounds=useMemo(()=>monthMeta(month),[month])
   const people=useMemo(()=>{
-    const needle=text(search).toLowerCase()
-    return state.people.filter(employee=>(!needle||[employee.employee_no,employee.full_name,employee.country,employee.nationality,employee.platform,employee.position_name,employee.team_name].some(value=>text(value).toLowerCase().includes(needle)))&&(!team||text(employee.team_name)===team)).sort((a,b)=>text(a.team_name).localeCompare(text(b.team_name),'zh-CN')||text(a.full_name).localeCompare(text(b.full_name),'zh-CN'))
-  },[state.people,search,team])
-  const teams=useMemo(()=>{
-    const supplied=state.options?.teams||[]
-    const values=supplied.length?supplied.map(item=>text(item?.value??item?.name??item)):state.people.map(employee=>text(employee.team_name))
-    return Array.from(new Set(values.filter(Boolean))).sort((a,b)=>a.localeCompare(b,'zh-CN'))
-  },[state.people,state.options])
-  const pages=Math.max(1,Math.ceil(people.length/pageSize))
-  const pagePeople=people.slice((page-1)*pageSize,page*pageSize)
-  useEffect(()=>{setPage(1)},[month,search,team,pageSize])
+    const includes=(value,needle)=>!needle||text(value).toLowerCase().includes(text(needle).toLowerCase())
+    return state.people.filter(employee=>includes(employee.employee_no,applied.employee_no)
+      &&includes(employee.full_name,applied.employee_name)
+      &&(!applied.work_mode||employeeWorkMode(employee)===applied.work_mode)
+      &&(!applied.employee_status||text(employee.employee_status).toLowerCase()===text(applied.employee_status).toLowerCase())
+      &&(!applied.team||text(employee.team_name)===applied.team)
+      &&(!applied.position||text(employee.position_name)===applied.position)
+      &&(!applied.country||text(employee.country||employee.nationality)===applied.country)
+      &&(!applied.platform||text(employee.platform)===applied.platform)
+      &&includes(employee.manager,applied.manager)
+    ).sort((a,b)=>text(a.team_name).localeCompare(text(b.team_name),'zh-CN')||text(a.full_name).localeCompare(text(b.full_name),'zh-CN'))
+  },[state.people,applied])
+  const optionValues=(key,selector)=>{
+    const supplied=state.options?.[key]||state.options?.[`${key}s`]||[]
+    const values=supplied.length?supplied.map(item=>text(item?.value??item?.name??item?.label??item)):state.people.map(selector)
+    return Array.from(new Set(values.map(text).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'zh-CN'))
+  }
+  const teams=useMemo(()=>optionValues('team',employee=>employee.team_name),[state.people,state.options])
+  const positions=useMemo(()=>optionValues('position',employee=>employee.position_name),[state.people,state.options])
+  const countries=useMemo(()=>optionValues('country',employee=>employee.country||employee.nationality),[state.people,state.options])
+  const platforms=useMemo(()=>optionValues('platform',employee=>employee.platform),[state.people,state.options])
+  const pages=state.serverPaged?state.pages:Math.max(1,Math.ceil(people.length/pageSize))
+  const pagePeople=state.serverPaged?people:people.slice((page-1)*pageSize,page*pageSize)
+  const total=state.serverPaged?state.total:people.length
+  useEffect(()=>{setPage(1)},[month,applied,pageSize])
   useEffect(()=>{if(page>pages)setPage(pages)},[page,pages])
+  const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
+  const apply=()=>{setApplied({...draft});setPage(1)}
+  const reset=()=>{const next=blank();setDraft(next);setApplied(next);setPage(1)}
   return <>
-    <section className="attendance-filter-card matrix-toolbar"><div className="attendance-filter-main"><label className="schedule-inline-filter month"><span>查看月份</span><input type="month" value={month} onChange={event=>setMonth(event.target.value||monthValue())}/></label><label className="attendance-search"><span>搜索员工</span><div><i>⌕</i><input value={draftSearch} onChange={event=>setDraftSearch(event.target.value)} onKeyDown={event=>event.key==='Enter'&&setSearch(draftSearch)} placeholder="员工ID / 姓名 / 盘口 / 国家 / 岗位"/></div></label><label className="schedule-inline-filter"><span>团队</span><select value={team} onChange={event=>setTeam(event.target.value)}><option value="">全部团队</option>{teams.map(value=><option key={value}>{value}</option>)}</select></label><button type="button" className="primary-action" onClick={()=>setSearch(draftSearch)}>查询</button><button type="button" className="secondary-action" onClick={()=>{setDraftSearch('');setSearch('');setTeam('')}}>重置</button><button type="button" className="attendance-filter-toggle" onClick={()=>load(true)} disabled={state.loading}>{state.loading?'读取中…':'刷新出勤'}</button></div></section>
+    <section className="attendance-filter-card matrix-toolbar">
+      <div className="attendance-filter-main">
+        <label className="schedule-inline-filter month"><span>查看月份</span><input type="month" value={month} onChange={event=>setMonth(event.target.value||monthValue())}/></label>
+        <label className="attendance-search attendance-search-id"><span>员工 ID</span><div><i>⌕</i><input value={draft.employee_no} onChange={event=>update('employee_no',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="输入员工 ID"/></div></label>
+        <label className="attendance-search attendance-search-name"><span>员工姓名</span><div><i>⌕</i><input value={draft.employee_name} onChange={event=>update('employee_name',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="输入姓名"/></div></label>
+        <button type="button" className="primary-action" onClick={apply} disabled={state.loading}>查询</button><button type="button" className="secondary-action" onClick={reset} disabled={state.loading}>重置</button><button type="button" className="attendance-filter-toggle" onClick={()=>load(true)} disabled={state.loading}>{state.loading?'读取中…':'刷新结果'}</button>
+      </div>
+      <div className="attendance-filter-grid matrix-filter-grid">
+        <label><span>员工类型</span><select value={draft.work_mode} onChange={event=>update('work_mode',event.target.value)}><option value="">全部员工类型</option><option value="home">纯居家</option><option value="onsite_to_home">现场转居家</option></select></label>
+        <label><span>员工状态</span><select value={draft.employee_status} onChange={event=>update('employee_status',event.target.value)}><option value="">全部员工状态</option><option value="active">在职</option><option value="probation">试用</option><option value="suspended">停用</option><option value="resigned">离职</option><option value="unmatched">未匹配</option></select></label>
+        <label><span>团队</span><select value={draft.team} onChange={event=>update('team',event.target.value)}><option value="">全部团队</option>{teams.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>岗位</span><select value={draft.position} onChange={event=>update('position',event.target.value)}><option value="">全部岗位</option>{positions.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>员工国家</span><select value={draft.country} onChange={event=>update('country',event.target.value)}><option value="">全部国家</option>{countries.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>盘口 / 平台</span><select value={draft.platform} onChange={event=>update('platform',event.target.value)}><option value="">全部盘口</option>{platforms.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label><span>负责人</span><input value={draft.manager} onChange={event=>update('manager',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="负责人 / 培训 / 组长"/></label>
+      </div>
+      <div className="attendance-filter-foot"><SyncIndicator sync={state.sync}/><span>出勤页面只查询 Supabase；Google 表格同步成功后，刷新结果即可看到最新数据。</span></div>
+    </section>
     {state.error&&<div className="attendance-error"><span>月度出勤读取失败：{state.error}</span><button type="button" onClick={()=>load(true)}>重试</button></div>}
     <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；空白表示当天没有登记异常，不代表已完成打卡。</p></div><div className="matrix-legend"><span className="public_holiday">休 公休</span><span className="home_leave">回 居家假</span><span className="leave">假 请假</span><span className="half_day">半 半天</span><span className="absence">缺 缺勤</span><span className="resignation">离 离职</span></div></header>
-      {state.loading&&!state.people.length?<div className="attendance-table-state">正在生成月度出勤表…</div>:!people.length?<div className="attendance-table-state">当前条件下暂无员工</div>:<div className="attendance-matrix-scroll"><table><thead><tr><th className="matrix-sticky matrix-scope">盘口 / 国家</th><th className="matrix-sticky matrix-position">岗位 / 团队</th><th className="matrix-sticky matrix-employee">员工</th><th className="matrix-sticky matrix-hire">入职日期</th>{bounds.days.map(day=><th className="matrix-day-head" key={day}>{day}</th>)}</tr></thead><tbody>{pagePeople.map(employee=><tr key={matrixPersonKey(employee)}><td className="matrix-sticky matrix-scope"><strong>{employee.platform||'—'}</strong><span>{employee.country||employee.nationality||'—'}</span></td><td className="matrix-sticky matrix-position"><strong>{employee.position_name||'—'}</strong><span>{employee.team_name||'—'}</span></td><td className="matrix-sticky matrix-employee"><strong>{employee.full_name||'—'}</strong><span>{employee.employee_no||'—'}</span></td><td className="matrix-sticky matrix-hire"><strong>{text(employee.hire_date).slice(0,10)||'—'}</strong></td>{bounds.days.map(day=>{const date=`${month}-${String(day).padStart(2,'0')}`,raw=employee.days?.[day]??employee.days?.[String(day)]??employee.days?.[date]??[],records=Array.isArray(raw)?raw:(raw?[raw]:[]),metas=Array.from(new Map(records.map(record=>[text(record.event_kind||record.kind||record.status),matrixKindMeta(record.event_kind||record.kind||record.status)])).values()),primary=metas[0];return <td className="matrix-day-cell" key={day}>{primary?<button type="button" className={primary[1]} aria-label={`${employee.full_name||employee.employee_no} ${date} 查看出勤详情`} title="点击查看完整原因与备注" onClick={()=>setDayDetail({employee,date,records})}>{metas.length>1?`${primary[0]}+${metas.length-1}`:primary[0]}</button>:<i title="无记录">—</i>}</td>})}</tr>)}</tbody></table></div>}
+      {state.loading&&!state.people.length?<div className="attendance-table-state">正在生成月度出勤表…</div>:!people.length?<div className="attendance-table-state">当前条件下暂无员工</div>:<div className="attendance-matrix-scroll"><table><thead><tr><th className="matrix-sticky matrix-scope">盘口 / 国家</th><th className="matrix-sticky matrix-position">岗位 / 团队</th><th className="matrix-sticky matrix-employee">员工</th><th className="matrix-sticky matrix-hire">入职</th><th className="matrix-sticky matrix-summary">本月统计</th>{bounds.days.map(day=><th className="matrix-day-head" key={day}>{day}</th>)}<th className="matrix-total-head">总计</th></tr></thead><tbody>{pagePeople.map(employee=><AttendanceMatrixRow key={matrixPersonKey(employee)} employee={employee} bounds={bounds} month={month} onDay={setDayDetail}/>)}</tbody></table></div>}
       {state.loading&&state.people.length>0&&<div className="attendance-loading-overlay">正在更新月度出勤…</div>}
     </section>
-    {people.length>0&&<div className="matrix-pagination"><Pagination page={page} pages={pages} total={people.length} pageSize={pageSize} loading={state.loading} onPage={setPage} onPageSize={setPageSize}/></div>}
+    {total>0&&<div className="matrix-pagination"><Pagination page={page} pages={pages} total={total} pageSize={pageSize} loading={state.loading} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/></div>}
     {dayDetail&&<AttendanceDayModal data={dayDetail} onClose={()=>setDayDetail(null)}/>}
   </>
+}
+
+function AttendanceMatrixRow({employee,bounds,month,onDay}){
+  const summary=matrixSummaryFor(employee,bounds,month)
+  const country=employee.country||employee.nationality||'—'
+  const status=employeeStatusLabel(employee.employee_status||employee.status)
+  const chips=matrixKinds.map(kind=><span className={kind} key={kind} title={`${attendanceKindLabel(kind)} ${formatDayCount(summary[kind])} 天`}><i>{matrixSummaryLabels[kind]}</i>{formatDayCount(summary[kind])}</span>)
+  return <tr>
+    <td className="matrix-sticky matrix-scope"><strong title={employee.platform||'—'}>{employee.platform||'—'}</strong><span title={`${country} · ${employeeWorkModeLabel(employee)}`}>{country} · {employeeWorkModeLabel(employee)}</span></td>
+    <td className="matrix-sticky matrix-position"><strong title={employee.position_name||'—'}>{employee.position_name||'—'}</strong><span title={employee.team_name||'—'}>{employee.team_name||'—'}</span></td>
+    <td className="matrix-sticky matrix-employee"><strong title={employee.full_name||'—'}>{employee.full_name||'—'}</strong><span title={`${employee.employee_no||'—'} · ${status}`}>{employee.employee_no||'—'} · {status}</span></td>
+    <td className="matrix-sticky matrix-hire"><strong title={text(employee.hire_date).slice(0,10)||'—'}>{text(employee.hire_date).slice(0,10)||'—'}</strong></td>
+    <td className="matrix-sticky matrix-summary"><div className="matrix-summary-chips" title={`本月合计 ${formatDayCount(summary.total)} 天`}>{chips}</div></td>
+    {bounds.days.map(day=>{
+      const date=`${month}-${String(day).padStart(2,'0')}`
+      const records=matrixDayRecords(employee,day,month)
+      const metas=Array.from(new Map(records.map(record=>{const kind=text(record.event_kind||record.kind||record.status);return [matrixKindKey(kind)||kind,matrixKindMeta(kind)]})).values())
+      const primary=metas[0]
+      return <td className="matrix-day-cell" key={day}>{primary?<button type="button" className={primary[1]} aria-label={`${employee.full_name||employee.employee_no} ${date} 查看出勤详情`} title={`${attendanceKindLabel(records[0]?.event_kind||records[0]?.kind||records[0]?.status)} · 点击查看完整原因与备注`} onClick={()=>onDay({employee,date,records})}>{metas.length>1?`${primary[0]}+${metas.length-1}`:primary[0]}</button>:<i title="无异常记录">—</i>}</td>
+    })}
+    <td className="matrix-total-cell" title={`本月统计合计 ${formatDayCount(summary.total)} 天`}><strong>{formatDayCount(summary.total)}</strong><span>天</span></td>
+  </tr>
 }
 
 function AttendanceDayModal({data,onClose}){

@@ -248,7 +248,15 @@ async function injectDrawerRisk(){
     if(!box){box=document.createElement('div');box.className='wfh-v2722-risk-summary';const hero=drawer.querySelector('.employee-hero');hero?.insertAdjacentElement('afterend',box)}
     if(!box)continue
     box.dataset.grade=label
-    box.innerHTML=`<div class="risk-grade"><span>等级</span><strong>${label}</strong></div><div><span>本月错误</span><strong>${Number(s.month_error_count||0)} 笔</strong></div><div><span>近30天错误</span><strong>${Number(s.last_30d_error_count||0)} 笔</strong></div><div><span>总错误</span><strong>${Number(s.total_error_count||0)} 笔</strong></div><div><span>主要错误 / 最近错误</span><strong title="${text(s.main_error_type)}">${text(s.main_error_type)||'—'}${text(s.last_error_date)?` · ${text(s.last_error_date).slice(0,10)}`:''}</strong></div>`
+    const metric=(title,value,className='')=>{const item=document.createElement('div');if(className)item.className=className;const caption=document.createElement('span');caption.textContent=title;const strong=document.createElement('strong');strong.textContent=value;item.append(caption,strong);return{item,strong}}
+    const grade=metric('等级',label,'risk-grade')
+    const month=metric('本月错误',`${Number(s.month_error_count||0)} 笔`)
+    const recent=metric('近30天错误',`${Number(s.last_30d_error_count||0)} 笔`)
+    const total=metric('总错误',`${Number(s.total_error_count||0)} 笔`)
+    const mainType=text(s.main_error_type),lastDate=text(s.last_error_date).slice(0,10)
+    const main=metric('主要错误 / 最近错误',`${mainType||'—'}${lastDate?` · ${lastDate}`:''}`)
+    main.strong.title=mainType
+    box.replaceChildren(grade.item,month.item,recent.item,total.item,main.item)
   }
 }
 
@@ -273,6 +281,5 @@ export function startAdminFinalV2722(){
   window.__WFH_ADMIN_FINAL_V2722__=true
   addStyles();patchInvoke()
   const obs=new MutationObserver(schedule);obs.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']})
-  const timer=setInterval(()=>{if(!document.hidden){summaryCache.at=0;schedule()}},20000)
-  schedule();window.addEventListener('beforeunload',()=>{stopped=true;clearInterval(timer);obs.disconnect()},{once:true})
+  schedule();window.addEventListener('beforeunload',()=>{stopped=true;obs.disconnect()},{once:true})
 }

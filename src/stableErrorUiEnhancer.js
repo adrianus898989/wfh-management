@@ -145,10 +145,45 @@ export async function openEmployeeErrorHistory(id,name,summary={}){
   document.querySelector('.wfh-error-history-mask')?.remove()
   const mask=document.createElement('div');mask.className='wfh-error-history-mask'
   const initial={month:Number(summary?.month_error_count||0),last_3d:null,last_7d:null,last_30d:Number(summary?.last_30d_error_count||0),total:Number(summary?.total_error_count||0)}
-  const modal=document.createElement('div');modal.className='wfh-error-history';modal.innerHTML=`<header><div class="wfh-error-history-head-main"><h3>${name||id} · ${id} · 错误记录</h3><div class="wfh-error-history-stats"><span class="wfh-error-history-stat" data-stat="month">本月 <b>${initial.month}</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_3d">近3天 <b>…</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_7d">近7天 <b>…</b> 笔</span><span class="wfh-error-history-stat" data-stat="last_30d">近30天 <b>${initial.last_30d}</b> 笔</span><span class="wfh-error-history-stat" data-stat="total">累计 <b>${initial.total}</b> 笔</span></div></div><button type="button">×</button></header><div class="wfh-error-history-body">读取中...</div>`;mask.appendChild(modal);document.body.appendChild(mask)
+  const modal=document.createElement('div');modal.className='wfh-error-history'
+  const header=document.createElement('header')
+  const headMain=document.createElement('div');headMain.className='wfh-error-history-head-main'
+  const title=document.createElement('h3');title.textContent=`${text(name)||text(id)} · ${text(id)} · 错误记录`
+  const stats=document.createElement('div');stats.className='wfh-error-history-stats'
+  const statLabels={month:'本月',last_3d:'近3天',last_7d:'近7天',last_30d:'近30天',total:'累计'}
+  for(const key of ['month','last_3d','last_7d','last_30d','total']){
+    const stat=document.createElement('span');stat.className='wfh-error-history-stat';stat.dataset.stat=key
+    stat.append(`${statLabels[key]} `)
+    const count=document.createElement('b');count.textContent=initial[key]===null?'…':String(initial[key]);stat.append(count,' 笔')
+    stats.appendChild(stat)
+  }
+  headMain.append(title,stats)
+  const close=document.createElement('button');close.type='button';close.textContent='×'
+  header.append(headMain,close)
+  const body=document.createElement('div');body.className='wfh-error-history-body';body.textContent='读取中...'
+  modal.append(header,body);mask.appendChild(modal);document.body.appendChild(mask)
   mask.addEventListener('mousedown',e=>{if(e.target===mask)mask.remove()});modal.querySelector('header button')?.addEventListener('click',()=>mask.remove())
-  const body=modal.querySelector('.wfh-error-history-body')
-  try{const {data,error}=await supabase.functions.invoke('admin-report-errors',{body:{employee_id:id,date_basis:'qc',page_size:500}});if(error||data?.error)throw new Error(data?.error||error?.message||'读取失败');const counts=data?.period_counts||{};for(const key of ['month','last_3d','last_7d','last_30d','total']){const value=Number(counts[key]);const target=modal.querySelector(`[data-stat="${key}"] b`);if(target&&Number.isFinite(value))target.textContent=String(value)}const rows=data?.rows||[];if(!rows.length){body.textContent='暂无错误记录';return}body.innerHTML=`<table><thead><tr><th>质检时间</th><th>错误类型</th><th>扣分</th><th>质检人</th><th>会员/订单号</th><th>金额</th><th>错误备注</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${text(r.qc_date)||'—'}</td><td>${text(r.error_type)||'—'}</td><td>${text(r.score)||'—'}</td><td>${text(r.qc_person)||'—'}</td><td>${text(r.member_order)||'—'}</td><td>${text(r.amount)||'—'}</td><td class="wrap">${text(r.error_note)||'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){body.textContent=e?.message||'读取失败'}
+  try{
+    const {data,error}=await supabase.functions.invoke('admin-report-errors',{body:{employee_id:id,date_basis:'qc',page_size:500}})
+    if(error||data?.error)throw new Error(data?.error||error?.message||'读取失败')
+    const counts=data?.period_counts||{}
+    for(const key of ['month','last_3d','last_7d','last_30d','total']){
+      const value=Number(counts[key]);const target=modal.querySelector(`[data-stat="${key}"] b`)
+      if(target&&Number.isFinite(value))target.textContent=String(value)
+    }
+    const rows=data?.rows||[]
+    if(!rows.length){body.textContent='暂无错误记录';return}
+    const columns=[['质检时间','qc_date'],['错误类型','error_type'],['扣分','score'],['质检人','qc_person'],['会员/订单号','member_order'],['金额','amount'],['错误备注','error_note']]
+    const table=document.createElement('table'),thead=document.createElement('thead'),headRow=document.createElement('tr'),tbody=document.createElement('tbody')
+    columns.forEach(([label])=>{const th=document.createElement('th');th.textContent=label;headRow.appendChild(th)})
+    thead.appendChild(headRow)
+    rows.forEach(row=>{
+      const tr=document.createElement('tr')
+      columns.forEach(([,field],index)=>{const td=document.createElement('td');if(index===columns.length-1)td.className='wrap';td.textContent=text(row?.[field])||'—';tr.appendChild(td)})
+      tbody.appendChild(tr)
+    })
+    table.append(thead,tbody);body.replaceChildren(table)
+  }catch(e){body.textContent=e?.message||'读取失败'}
 }
 
 function originalErrorParts(){
@@ -156,7 +191,15 @@ function originalErrorParts(){
   return {card,order:card?.querySelector('.rp-order-toolbar'),local:card?.querySelector('.rp-error-filters'),global:document.querySelector('.rp-filterbar')}
 }
 function makeSelect(role){const x=document.createElement('select');x.dataset.role=role;return x}
-function copyOptions(target,source){if(!target||!source)return;const html=source.innerHTML;if(target.innerHTML!==html)target.innerHTML=html;if(document.activeElement!==target&&target.value!==source.value)target.value=source.value}
+function copyOptions(target,source){
+  if(!target||!source)return
+  const signature=[...source.options].map(option=>`${option.value}\u0000${option.textContent}\u0000${option.disabled?'1':'0'}`).join('\u0001')
+  if(target.dataset.optionsSignature!==signature){
+    target.replaceChildren(...[...source.children].map(child=>child.cloneNode(true)))
+    target.dataset.optionsSignature=signature
+  }
+  if(document.activeElement!==target&&target.value!==source.value)target.value=source.value
+}
 function buildErrorFilter(){
   const active=text(document.querySelector('.rp-tabs button.active')?.textContent)==='错误统计'
   const {card,order,local,global}=originalErrorParts()
@@ -207,7 +250,7 @@ function ensureEmployeeRiskFilter(){
   const grid=document.querySelector('.employee-core-search-grid');if(!grid)return
   if(grid.querySelector('[data-native-risk-filter="1"]')){grid.querySelectorAll('.wfh-employee-risk-filter').forEach(box=>box.remove());return}
   let box=grid.querySelector('.wfh-employee-risk-filter')
-  if(!box){box=document.createElement('label');box.className='pro-filter-field wfh-employee-risk-filter';const title=document.createElement('span');title.textContent='等级';const sel=document.createElement('select');sel.innerHTML='<option value="">全部等级</option><option value="excellent">优秀（0错误）</option><option value="normal">正常（1–8）</option><option value="attention">注意（9–15）</option><option value="watch">重点（16–30）</option><option value="high">高频（31+）</option>';sel.value=riskFilter;sel.addEventListener('change',()=>{riskFilter=sel.value;employeeListCache={key:'',at:0,rows:[]};triggerEmployeeReload()});box.append(title,sel);grid.insertBefore(box,grid.firstChild)}
+  if(!box){box=document.createElement('label');box.className='pro-filter-field wfh-employee-risk-filter';const title=document.createElement('span');title.textContent='等级';const sel=document.createElement('select');[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']].forEach(([value,label])=>{const option=document.createElement('option');option.value=value;option.textContent=label;sel.appendChild(option)});sel.value=riskFilter;sel.addEventListener('change',()=>{riskFilter=sel.value;employeeListCache={key:'',at:0,rows:[]};triggerEmployeeReload()});box.append(title,sel);grid.insertBefore(box,grid.firstChild)}
 }
 async function riskFilteredList(body){
   const requestedPage=Math.max(1,Number(body.page||1)),requestedSize=Number(body.page_size||20),filters={...(body.filters||{})}
@@ -227,13 +270,22 @@ function patchInvoke(){
   supabase.functions.__wfhStableRiskPatched=true
 }
 
-async function run(){if(stopped)return;scheduled=false;if(document.querySelector('.rp-errors-table[data-native-errors-v2723]'))return;buildErrorFilter();await ensureRiskColumns();compactErrorTable()}
+async function run(){
+  if(stopped)return
+  scheduled=false
+  if(document.querySelector('.rp-errors-table[data-native-errors-v2723]'))return
+  const employeeTable=document.querySelector('.employee-master-table')
+  const legacyErrorTable=document.querySelector('.rp-errors-table')
+  if(!employeeTable&&!legacyErrorTable)return
+  if(legacyErrorTable)buildErrorFilter()
+  await ensureRiskColumns()
+  if(legacyErrorTable)compactErrorTable()
+}
 function schedule(){if(stopped||scheduled)return;scheduled=true;setTimeout(run,120)}
 export function startStableErrorUiEnhancer(){
   if(window.__WFH_STABLE_ERROR_UI__)return
   window.__WFH_STABLE_ERROR_UI__=true;addStyles();patchInvoke()
   const observer=new MutationObserver(schedule);observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']})
-  const timer=setInterval(()=>{if(!document.hidden){summaries.at=0;schedule()}},300000)
   schedule()
-  window.addEventListener('beforeunload',()=>{stopped=true;clearInterval(timer);observer.disconnect()},{once:true})
+  window.addEventListener('beforeunload',()=>{stopped=true;observer.disconnect()},{once:true})
 }

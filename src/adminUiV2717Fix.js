@@ -361,7 +361,6 @@ export function startAdminUiV2717Fix(){
   addStyles();patchInvoke()
   const observer=new MutationObserver(schedule)
   observer.observe(document.body,{subtree:true,childList:true})
-  const timer=setInterval(schedule,600)
   schedule()
-  window.addEventListener('beforeunload',()=>{stopped=true;clearInterval(timer);observer.disconnect()},{once:true})
+  window.addEventListener('beforeunload',()=>{stopped=true;observer.disconnect()},{once:true})
 }

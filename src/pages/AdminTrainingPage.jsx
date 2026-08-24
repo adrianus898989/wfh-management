@@ -94,9 +94,12 @@ export default function AdminTrainingPage(){
     setEmployeeDetailLoading(false)
   }
   const counts=data?.counts||{}
+  const legacySync=data?.legacy?.sync_state||{}
+  const legacySourcePaused=legacySync.status==='source_paused'||Boolean(legacySync.last_error)
+  const legacySyncLabel=legacySourcePaused?'旧考试 · 历史已保留（源暂停）':'旧考试 · 已存本库'
 
   return <div className="exam-page">
-    <header className="exam-head"><div><small>EXAM MANAGEMENT</small><h1>考试管理</h1></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {data?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className="exam-sync-pill legacy success">旧考试 · 已存本库</span><button onClick={load}>刷新</button></div></header>
+    <header className="exam-head"><div><small>EXAM MANAGEMENT</small><h1>考试管理</h1></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {data?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${legacySourcePaused?'':'success'}`} title={legacySync.last_success_at?`最后同步：${fmt(legacySync.last_success_at)}`:''}>{legacySyncLabel}</span><button onClick={load}>刷新</button></div></header>
     {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <nav className="exam-tabs">{TABS.map(x=><button key={x} className={x===tab?'active':''} onClick={()=>setTab(x)}>{x}</button>)}</nav>
 

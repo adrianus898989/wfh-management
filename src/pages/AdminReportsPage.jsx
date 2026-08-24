@@ -22,6 +22,7 @@ const SEARCH_PLACEHOLDERS={
   统计:'姓名 / ID / 岗位 / 盘口',
 }
 const uniq=arr=>[...new Set((arr||[]).map(text).filter(Boolean))]
+const STALE_REFRESH_MS=300000
 const ERROR_GRADE_CHOICES=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
 const errorGradeKey=value=>{const count=Number(value||0);return count>=31?'high':count>=16?'watch':count>=9?'attention':count>=1?'normal':'excellent'}
 const errorGradeLabel=value=>({excellent:'优秀',normal:'正常',attention:'注意',watch:'重点',high:'高频'}[text(value)]||'优秀')
@@ -63,8 +64,9 @@ function tenureDurationLabel(hireDate,resignDate,status){
 const personKey=r=>text(r.name)
 const uniqueCount=rows=>new Set((rows||[]).map(personKey).filter(Boolean)).size
 const fmtPct=(n,d)=>d?`${((Number(n)||0)/(Number(d)||1)*100).toFixed(2)}%`:'0.00%'
-const isoToday=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
-const isoAdd=(base,days)=>{const d=new Date(`${base}T12:00:00`);d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+const MANILA_DATE_FORMATTER=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'})
+const isoToday=()=>{const parts={};MANILA_DATE_FORMATTER.formatToParts(new Date()).forEach(part=>{if(part.type!=='literal')parts[part.type]=part.value});return `${parts.year}-${parts.month}-${parts.day}`}
+const isoAdd=(base,days)=>{const d=new Date(`${base}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10)}
 const currentMonthRange=()=>{const today=isoToday();return{from:`${today.slice(0,7)}-01`,to:today}}
 async function functionErrorDetail(error,fallback='请求失败'){
   const context=error?.context
@@ -126,6 +128,9 @@ export default function AdminReportsPage(){
   const [error,setError]=useState('')
   const [filters,setFilters]=useState(blankFilters())
   const [draftFilters,setDraftFilters]=useState(blankFilters())
+  const overviewLoadedAtRef=useRef(0)
+  const overviewRequestRef=useRef(0)
+  const overviewPendingRef=useRef(false)
 
   const invoke=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-reports',{body})
@@ -142,12 +147,27 @@ export default function AdminReportsPage(){
     return data
   }
   const load=async(silent=false)=>{
+    const requestId=++overviewRequestRef.current
+    overviewPendingRef.current=true
     if(!silent)setLoading(true)
-    try{setOverview(await invoke({action:'overview'}));setError('')}
-    catch(e){setError(e.message||'统计数据读取失败')}
-    finally{if(!silent)setLoading(false)}
+    try{
+      const result=await invoke({action:'overview'})
+      if(requestId!==overviewRequestRef.current)return
+      setOverview(result);overviewLoadedAtRef.current=Date.now();setError('')
+    }
+    catch(e){if(requestId===overviewRequestRef.current)setError(e.message||'统计数据读取失败')}
+    finally{if(requestId===overviewRequestRef.current){overviewPendingRef.current=false;setLoading(false)}}
   }
-  useEffect(()=>{load();const t=setInterval(()=>{if(!document.hidden)load(true)},300000);return()=>clearInterval(t)},[])
+  useEffect(()=>{
+    load()
+    const refreshIfStale=()=>{
+      if(document.hidden||overviewPendingRef.current||Date.now()-overviewLoadedAtRef.current<STALE_REFRESH_MS)return
+      load(true)
+    }
+    window.addEventListener('focus',refreshIfStale)
+    document.addEventListener('visibilitychange',refreshIfStale)
+    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale);overviewRequestRef.current+=1;overviewPendingRef.current=false}
+  },[])
   useEffect(()=>{const next=OPS.includes(requestedTab)?requestedTab:'总汇';setTabState(current=>current===next?current:next)},[requestedTab])
 
   const setTab=next=>{setTabState(next);setSp(next==='总汇'?{}:{tab:next},{replace:true})}
@@ -159,7 +179,7 @@ export default function AdminReportsPage(){
   return <div className="content-page reports-page rp-page">
     <div className="rp-head">
       <div><div className="module-kicker">REPORTS & OPERATIONS</div><h1>统计报表</h1></div>
-      <div className="rp-live"><i/><div><small>{overview?.updated_at?`最近读取 ${new Date(overview.updated_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · 5分钟自动刷新`:'正在读取…'}</small></div><button onClick={()=>load()}>刷新</button></div>
+      <div className="rp-live"><i/><div><small>{overview?.updated_at?`最近读取 ${new Date(overview.updated_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · 切回页面按需刷新`:'正在读取…'}</small></div><button onClick={()=>load()}>刷新</button></div>
     </div>
     {error&&<div className="rp-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <div className="rp-tabs">{OPS.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}</div>
@@ -221,7 +241,7 @@ function Platforms({rows}){
   return <><section className="rp-card rp-platforms"><div className="rp-card-title"><div><h2>盘口人数统计</h2><p>按员工姓名去重；点击任一盘口卡片可查看完整员工名单。</p></div><span>{list.length} 个盘口</span></div><div className="rp-platform-kpis"><div><span>筛选后总人数</span><strong>{total}</strong><small>当前筛选范围</small></div><div><span>盘口类别</span><strong>{list.length}</strong><small>包含未填写</small></div><div><span>最大盘口</span><strong>{largest?.total||0}</strong><small>{largest?.platform||'—'}</small></div><div className={missing?'warn':''}><span>未填写盘口</span><strong>{missing}</strong><small>{missing?'建议补充资料':'资料完整'}</small></div></div><div className="rp-platform-grid">{list.map((item,index)=><button className={`rp-platform-card ${index<3?'is-top':''}`} key={item.platform} onClick={()=>setModal({title:`盘口：${item.platform}`,rows:item.rows})}><header><span className="rp-platform-rank">#{index+1}</span><strong title={item.platform}>{item.platform}</strong><em>{fmtPct(item.total,total)}</em></header><div className="rp-platform-total"><strong>{item.total}</strong><span>人</span></div><div className="rp-platform-progress"><i style={{width:`${Math.min(100,item.total/Math.max(1,largest?.total||1)*100)}%`}}/></div><div className="rp-platform-shifts"><span>白班 <b>{item.day}</b></span><span>夜班 <b>{item.night}</b></span><span>中班 <b>{item.mid}</b></span></div><div className="rp-platform-positions">{item.positions.slice(0,4).map(position=><span key={position.name}>{position.name} <b>{position.count}</b></span>)}{item.positions.length>4&&<span>+{item.positions.length-4} 岗位</span>}</div><footer>查看员工名单 →</footer></button>)}</div>{!list.length&&<div className="rp-empty">当前筛选条件下没有盘口人员</div>}</section>{modal&&<RosterModal title={modal.title} rows={modal.rows} onClose={()=>setModal(null)}/>}</>
 }
 
-function Orders({invoke,roster,onError}){const [range,setRange]=useState({from:'',to:''}),[position,setPosition]=useState(''),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'total',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[mistakes,setMistakes]=useState(null);const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'orders',date_from:next.from,date_to:next.to});setData(d);onError('')}catch(e){onError(e.message||'统计读取失败')}finally{setLoading(false)}};useEffect(()=>{load()},[]);useEffect(()=>{const t=setInterval(()=>{if(!document.hidden)load(range)},300000);return()=>clearInterval(t)},[range.from,range.to]);const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster]);const rows=useMemo(()=>{let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id)&&(!position||r.position===position));x=[...x].sort((a,b)=>{const av=Number(a[sort.key]||0),bv=Number(b[sort.key]||0);return sort.asc?av-bv:bv-av});return x},[data,allowed,position,sort]);useEffect(()=>setPage(1),[position,sort,size,roster]);const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size),dates=data?.dates||[];const changeSort=key=>setSort(s=>({key,asc:s.key===key?!s.asc:false}));const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)};const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:range.from,date_to:range.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){onError(e.message||'错误记录读取失败')}};return <section className="rp-card"><div className="rp-card-title"><div><h2>员工订单处理统计</h2><p>与原版同源：效率表「网站数据」（由 工作表4 + 填表 生成）+ 居家排班表「账号」做后台账号 → ID 映射。</p></div><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'正在读取…'}</span></div><div className="rp-order-toolbar"><label>日期起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>日期止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><Select value={position} onChange={setPosition} options={data?.options?.positions||[]} all="全部岗位"/><button className="primary" onClick={()=>load()}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>{loading&&!data?<div className="rp-loading-inline">正在读取…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>入职日期</th><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td>{r.hire_date||'—'}</td><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section>}
+function Orders({invoke,roster,onError}){const [range,setRange]=useState({from:'',to:''}),[position,setPosition]=useState(''),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'total',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[mistakes,setMistakes]=useState(null);const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'orders',date_from:next.from,date_to:next.to});setData(d);onError('')}catch(e){onError(e.message||'统计读取失败')}finally{setLoading(false)}};useEffect(()=>{load()},[]);const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster]);const rows=useMemo(()=>{let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id)&&(!position||r.position===position));x=[...x].sort((a,b)=>{const av=Number(a[sort.key]||0),bv=Number(b[sort.key]||0);return sort.asc?av-bv:bv-av});return x},[data,allowed,position,sort]);useEffect(()=>setPage(1),[position,sort,size,roster]);const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size),dates=data?.dates||[];const changeSort=key=>setSort(s=>({key,asc:s.key===key?!s.asc:false}));const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)};const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:range.from,date_to:range.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){onError(e.message||'错误记录读取失败')}};return <section className="rp-card"><div className="rp-card-title"><div><h2>员工订单处理统计</h2><p>与原版同源：效率表「网站数据」（由 工作表4 + 填表 生成）+ 居家排班表「账号」做后台账号 → ID 映射。</p></div><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'正在读取…'}</span></div><div className="rp-order-toolbar"><label>日期起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>日期止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><Select value={position} onChange={setPosition} options={data?.options?.positions||[]} all="全部岗位"/><button className="primary" onClick={()=>load()}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>{loading&&!data?<div className="rp-loading-inline">正在读取…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>入职日期</th><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td>{r.hire_date||'—'}</td><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section>}
 
 function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilterChange,onFilterQuery,onFilterReset,filterOptions,filterMeta}){
   const [range,setRange]=useState(currentMonthRange)
@@ -233,6 +253,7 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilter
   const [size,setSize]=useState(30)
   const [mistakes,setMistakes]=useState(null)
   const requestRef=useRef(0)
+  const loadedAtRef=useRef(0)
   const load=async(nextRange=appliedRange,{allHistory=false,scope=null}={})=>{
     const requestId=++requestRef.current
     setLoading(true)
@@ -241,12 +262,21 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilter
       const employeeIds=uniq(scopedRows.map(row=>row.employee_id)).filter(Boolean)
       const d=await invoke({action:'orders',date_from:nextRange.from,date_to:nextRange.to,employee_ids:employeeIds,all_history:allHistory})
       if(requestId!==requestRef.current)return
-      setData(d);setAppliedRange(nextRange);setPage(1);onError('')
+      setData(d);loadedAtRef.current=Date.now();setAppliedRange(nextRange);setPage(1);onError('')
     }catch(e){if(requestId===requestRef.current)onError(e.message||'统计读取失败')}
     finally{if(requestId===requestRef.current)setLoading(false)}
   }
   useEffect(()=>{load(currentMonthRange())},[])
-  useEffect(()=>{const t=setInterval(()=>{if(!document.hidden)load(appliedRange)},60000);return()=>clearInterval(t)},[appliedRange.from,appliedRange.to,roster])
+  useEffect(()=>{
+    const refreshIfStale=()=>{
+      if(document.hidden||Date.now()-loadedAtRef.current<STALE_REFRESH_MS)return
+      loadedAtRef.current=Date.now()
+      load(appliedRange)
+    }
+    window.addEventListener('focus',refreshIfStale)
+    document.addEventListener('visibilitychange',refreshIfStale)
+    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
+  },[appliedRange.from,appliedRange.to,roster])
   const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])
   const rows=useMemo(()=>{
     let next=(data?.rows||[]).filter(r=>allowed.has(r.employee_id))
@@ -275,16 +305,30 @@ const blankErrorFilters=()=>({employee_id:'',employee_name:'',employee_status:''
 
 function Errors({onError}){
   const [range,setRange]=useState({from:'',to:''}),[appliedRange,setAppliedRange]=useState({from:'',to:''}),[filters,setFilters]=useState(blankErrorFilters()),[appliedFilters,setAppliedFilters]=useState(blankErrorFilters()),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null),[employeeNo,setEmployeeNo]=useState('')
+  const loadedAtRef=useRef(0)
+  const requestRef=useRef(0)
+  const requestPendingRef=useRef(false)
   const load=async({nextRange=appliedRange,nextFilters=appliedFilters,nextSort=sort,nextPage=page,nextSize=size,silent=false}={})=>{
+    const requestId=++requestRef.current
+    requestPendingRef.current=true
     if(!silent)setLoading(true)
     try{
       const result=await invokeErrorReport({date_from:nextRange.from,date_to:nextRange.to,...nextFilters,page:nextPage,page_size:nextSize,sort_key:nextSort.key,sort_dir:nextSort.asc?'asc':'desc'})
-      setData(result);setPage(Number(result?.page||nextPage));onError('')
-    }catch(e){onError(e.message||'错误统计读取失败')}
-    finally{if(!silent)setLoading(false)}
+      if(requestId!==requestRef.current)return
+      setData(result);loadedAtRef.current=Date.now();setPage(Number(result?.page||nextPage));onError('')
+    }catch(e){if(requestId===requestRef.current)onError(e.message||'错误统计读取失败')}
+    finally{if(requestId===requestRef.current){requestPendingRef.current=false;setLoading(false)}}
   }
-  useEffect(()=>{load({nextRange:{from:'',to:''},nextFilters:blankErrorFilters(),nextPage:1})},[])
-  useEffect(()=>{const timer=setInterval(()=>{if(!document.hidden)load({silent:true})},300000);return()=>clearInterval(timer)},[appliedRange,appliedFilters,sort,page,size])
+  useEffect(()=>{load({nextRange:{from:'',to:''},nextFilters:blankErrorFilters(),nextPage:1});return()=>{requestRef.current+=1;requestPendingRef.current=false}},[])
+  useEffect(()=>{
+    const refreshIfStale=()=>{
+      if(document.hidden||requestPendingRef.current||Date.now()-loadedAtRef.current<STALE_REFRESH_MS)return
+      load({silent:true})
+    }
+    window.addEventListener('focus',refreshIfStale)
+    document.addEventListener('visibilitychange',refreshIfStale)
+    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
+  },[appliedRange,appliedFilters,sort,page,size])
   const updateFilter=(key,value)=>setFilters(current=>({...current,[key]:value}))
   const query=()=>{const nextRange={...range},nextFilters={...filters};setAppliedRange(nextRange);setAppliedFilters(nextFilters);setPage(1);load({nextRange,nextFilters,nextPage:1})}
   const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);setAppliedRange(next);setAppliedFilters({...filters});setPage(1);load({nextRange:next,nextFilters:{...filters},nextPage:1})}

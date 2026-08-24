@@ -171,9 +171,8 @@ export function startAdminCompactV2716(){
   },true)
   const observer=new MutationObserver(schedule)
   observer.observe(document.body,{subtree:true,childList:true})
-  const timer=setInterval(()=>{summaryCache.at=0;schedule()},12000)
   schedule()
   window.addEventListener('beforeunload',()=>{
-    stopped=true;clearInterval(timer);observer.disconnect();document.removeEventListener('click',closePickers,true);document.removeEventListener('click',captureReset,true)
+    stopped=true;observer.disconnect();document.removeEventListener('click',closePickers,true);document.removeEventListener('click',captureReset,true)
   },{once:true})
 }

@@ -4,8 +4,16 @@ import { Pagination } from '../components/DataPageControls'
 import { supabase } from '../lib/supabase'
 
 const TABS = ['工资导入','待发布','已发布','导入记录']
+const PAYROLL_SUMMARY_ONLY_BATCH_ID=0
 const clean = value => String(value ?? '').trim()
 const key = value => clean(value).toLowerCase().replace(/[\s_\-\/()（）.：:]+/g,'')
+const payrollMonth=()=>{
+  try{
+    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit'}).formatToParts(new Date())
+    const values=Object.fromEntries(parts.map(part=>[part.type,part.value]))
+    return `${values.year}-${values.month}`
+  }catch{return new Date().toISOString().slice(0,7)}
+}
 const isoDate = value => {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0,10)
   const s=clean(value)
@@ -21,6 +29,23 @@ const number = value => {
 const money = (value,currency='USD') => {
   const amount=Number(value||0)
   try{return new Intl.NumberFormat('zh-CN',{style:'currency',currency,maximumFractionDigits:2}).format(amount)}catch{return `${amount.toLocaleString()} ${currency}`}
+}
+const dateTime = value => {
+  if(!value)return '—'
+  const parsed=new Date(value)
+  if(Number.isNaN(parsed.getTime()))return clean(value)
+  return new Intl.DateTimeFormat('zh-CN',{
+    year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false,
+  }).format(parsed).replaceAll('/','-')
+}
+const payrollBatchStatus=value=>({draft:'待发布',published:'已发布',archived:'已归档'}[clean(value).toLowerCase()]||clean(value)||'未知')
+const payrollMatchState=row=>{
+  const match=clean(row?.match_state).toLowerCase()
+  const status=clean(row?.employee_status||row?.status).toLowerCase()
+  if(match==='suspended'||match==='inactive'||status==='suspended'||status==='inactive')return 'suspended'
+  if(match==='resigned'||status==='resigned'||(!row?.employee_id&&row?.departure_date))return 'resigned'
+  if(match==='active'||match==='probation'||status==='active'||status==='probation'||row?.employee_id||row?.matched)return 'active'
+  return 'unmatched'
 }
 
 const ALIASES = {
@@ -148,7 +173,7 @@ export default function AdminPayrollPage(){
   const [state,setState]=useState({loading:true,error:'',data:null})
   const [batchId,setBatchId]=useState(null)
   const [fileState,setFileState]=useState({file:null,rows:[],error:'',loading:false})
-  const [form,setForm]=useState({period:new Date().toISOString().slice(0,7),title:'',currency:'PHP',notes:''})
+  const [form,setForm]=useState({period:payrollMonth(),title:'',currency:'PHP',notes:''})
   const [message,setMessage]=useState('')
   const [saving,setSaving]=useState(false)
   const [rowFilter,setRowFilter]=useState('all')
@@ -160,27 +185,47 @@ export default function AdminPayrollPage(){
   const [employeePanel,setEmployeePanel]=useState(null)
   const fileRef=useRef(null)
   const employeeRequestRef=useRef(0)
+  const loadRequestRef=useRef(0)
 
   const setTab=value=>{
     setTabState(value);setParams(value===TABS[0]?{}:{tab:value})
     setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');setRowPage(1)
-    if(value==='工资导入')return
-    const wantedStatus=value==='待发布'?'draft':value==='已发布'?'published':null
-    const next=(state.data?.batches||[]).find(batch=>!wantedStatus||batch.status===wantedStatus)
-    if(next){setBatchId(next.id);load(next.id)}
   }
-  useEffect(()=>{if(TABS.includes(urlTab))setTabState(urlTab)},[urlTab])
 
-  const load=async(selected=batchId)=>{
+  const load=async(selected=batchId,targetTab=tab)=>{
+    const requestId=++loadRequestRef.current
     setState(current=>({...current,loading:true,error:''}))
-    const {data,error}=await supabase.rpc('admin_payroll_home',{p_batch_id:selected||null})
-    if(error)setState({loading:false,error:error.message,data:null})
-    else{
-      setState({loading:false,error:'',data:data||null})
-      if(data?.selected_batch?.id)setBatchId(data.selected_batch.id)
+    try{
+      let response=await supabase.rpc('admin_payroll_home',{p_batch_id:selected===null||selected===undefined?null:selected})
+      if(requestId!==loadRequestRef.current)return
+      if(response.error)throw response.error
+      let data=response.data||null
+      const wantedStatus=targetTab==='待发布'?'draft':targetTab==='已发布'?'published':null
+      if(wantedStatus){
+        const target=(data?.batches||[]).find(batch=>batch.status===wantedStatus)
+        if(target&&Number(data?.selected_batch?.id)!==Number(target.id)){
+          response=await supabase.rpc('admin_payroll_home',{p_batch_id:target.id})
+          if(requestId!==loadRequestRef.current)return
+          if(response.error)throw response.error
+          data=response.data||null
+        }
+      }
+      if(requestId!==loadRequestRef.current)return
+      setState({loading:false,error:'',data})
+      if(targetTab==='工资导入'||targetTab==='导入记录')setBatchId(null)
+      else setBatchId(data?.selected_batch?.id||null)
+    }catch(error){
+      if(requestId!==loadRequestRef.current)return
+      setState({loading:false,error:error?.message||'工资资料读取失败',data:null})
     }
   }
-  useEffect(()=>{load(null)},[])
+  useEffect(()=>{
+    const nextTab=TABS.includes(urlTab)?urlTab:TABS[0]
+    setTabState(nextTab)
+    const selected=nextTab==='工资导入'||nextTab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:null
+    load(selected,nextTab)
+    return()=>{loadRequestRef.current+=1}
+  },[urlTab])
 
   const onFile=async file=>{
     if(!file)return
@@ -205,7 +250,7 @@ export default function AdminPayrollPage(){
     if(error){setMessage(`导入失败：${error.message}`);return}
     setMessage(`导入完成：${data.rows} 人，匹配员工 ${data.matched} 人，未匹配 ${data.unmatched} 人。`)
     setBatchId(data.batch_id);setFileState({file:null,rows:[],error:'',loading:false});if(fileRef.current)fileRef.current.value=''
-    await load(data.batch_id)
+    await load(data.batch_id,'待发布')
     setTabState('待发布');setParams({tab:'待发布'})
   }
 
@@ -215,7 +260,7 @@ export default function AdminPayrollPage(){
     setSaving(false)
     if(error){setMessage(`发布失败：${error.message}`);return}
     setMessage(`已发布 ${data.rows} 份工资单，员工现在可以在“我的工资”查看。`)
-    await load(id);setTabState('已发布');setParams({tab:'已发布'})
+    await load(id,'已发布');setTabState('已发布');setParams({tab:'已发布'})
   }
 
   const deleteBatch=async batch=>{
@@ -234,13 +279,12 @@ export default function AdminPayrollPage(){
   const selected=state.data?.selected_batch
   const visibleSelected=selected&&visibleBatches.some(batch=>Number(batch.id)===Number(selected.id))?selected:null
   const rows=state.data?.rows||[]
-  const matchState=row=>row.match_state||(row.matched?'active':'unmatched')
   const positionOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.position_name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
   const platformOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.platform)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
   const filteredRows=useMemo(()=>{
     const needle=key(rowSearch)
     return rows.filter(row=>{
-      if(rowFilter!=='all'&&matchState(row)!==rowFilter)return false
+      if(rowFilter!=='all'&&payrollMatchState(row)!==rowFilter)return false
       if(positionFilter&&clean(row.position_name)!==positionFilter)return false
       if(platformFilter&&clean(row.platform)!==platformFilter)return false
       if(needle){
@@ -250,7 +294,7 @@ export default function AdminPayrollPage(){
       return true
     })
   },[rows,rowFilter,rowSearch,positionFilter,platformFilter])
-  const unmatchedCount=Number(visibleSelected?.unmatched_count??rows.filter(row=>matchState(row)==='unmatched').length)||0
+  const unmatchedCount=Number(visibleSelected?.unmatched_count??rows.filter(row=>payrollMatchState(row)==='unmatched').length)||0
   const rowPages=Math.max(1,Math.ceil(filteredRows.length/rowPageSize))
   const pagedRows=useMemo(()=>filteredRows.slice((rowPage-1)*rowPageSize,rowPage*rowPageSize),[filteredRows,rowPage,rowPageSize])
   useEffect(()=>{setRowPage(1)},[batchId,rowFilter,rowSearch,positionFilter,platformFilter])
@@ -290,7 +334,7 @@ export default function AdminPayrollPage(){
       hire_date:clean(row.hire_date),
       resign_date:clean(row.departure_date),
       group_name:clean(row.source_group),
-      status:matchState(row),
+      status:payrollMatchState(row),
     }
     setEmployeePanel({loading:true,error:'',employee:fallback})
     try{
@@ -310,7 +354,7 @@ export default function AdminPayrollPage(){
   }
 
   return <div className="content-page payroll-admin-page">
-    <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>工资中心</h1></div><button className="payroll-refresh" onClick={()=>load()}>刷新资料</button></div>
+    <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>工资中心</h1></div><button className="payroll-refresh" onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>刷新资料</button></div>
     {state.error&&<div className="payroll-alert error">{state.error}</div>}
     {message&&<div className="payroll-alert">{message}</div>}
     <div className="module-tabs payroll-tabs">{TABS.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item}</button>)}</div>
@@ -335,18 +379,18 @@ export default function AdminPayrollPage(){
         <div className="payroll-section-head"><div><h2>导入预览</h2><p>共 {fileState.rows.length} 行；发布前先写入“待发布”批次。</p></div><button disabled={saving} onClick={importRows}>{saving?'导入中…':'确认导入'}</button></div>
         <PayrollRows rows={fileState.rows.slice(0,60)} currency={form.currency} preview/>
       </section>}
-    </>:<>
+    </>:tab==='导入记录'?<PayrollImportHistory batches={batches} onOpenEmployee={openEmployee}/>:<>
       <section className="payroll-batch-strip">
         {visibleBatches.length?visibleBatches.map(batch=><button key={batch.id} className={Number(batchId)===Number(batch.id)?'active':''} onClick={()=>{clearRowFilters();setBatchId(batch.id);load(batch.id)}}>
-          <span>{String(batch.period_start).slice(0,7)}</span><strong>{batch.title}</strong><small>{batch.row_count} 人 · 在职 {batch.active_count??batch.matched_count??0} · 离职 {batch.resigned_count??0} · 未匹配 {batch.unresolved_count??batch.unmatched_count??0}</small>
+          <span>{String(batch.period_start).slice(0,7)}</span><strong>{batch.title}</strong><small>{batch.row_count} 人 · 在职/试用 {batch.active_count??batch.matched_count??0} · 停用 {batch.suspended_count??0} · 离职 {batch.resigned_count??0} · 未匹配 {batch.unresolved_count??batch.unmatched_count??0}</small>
         </button>):<div className="payroll-empty-small">暂无对应工资批次</div>}
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
         <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
-        <div className="payroll-summary-grid"><button type="button" className={rowFilter==='all'?'active':''} onClick={()=>setRowFilter('all')}><span>工资单</span><strong>{visibleSelected.row_count}</strong><small>全部记录</small></button><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职员工</span><strong>{visibleSelected.active_count??rows.filter(row=>matchState(row)==='active').length}</strong><small>当前在职</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>matchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
+        <div className="payroll-summary-grid"><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职 / 试用</span><strong>{visibleSelected.active_count??rows.filter(row=>payrollMatchState(row)==='active').length}</strong><small>在职与试用</small></button><button type="button" className={rowFilter==='suspended'?'active':''} onClick={()=>setRowFilter('suspended')}><span>停用员工</span><strong>{visibleSelected.suspended_count??rows.filter(row=>payrollMatchState(row)==='suspended').length}</strong><small>停用 / inactive</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>payrollMatchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.row_count} 人 · {visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
         <div className="payroll-record-filters">
           <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
-          <label><span>员工状态</span><select value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">全部状态</option><option value="active">在职员工</option><option value="resigned">离职员工</option><option value="unmatched" disabled={unmatchedCount===0}>未匹配{unmatchedCount===0?'（没有数据）':''}</option></select></label>
+          <label><span>员工状态</span><select value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">全部状态</option><option value="active">在职 / 试用</option><option value="suspended">停用员工</option><option value="resigned">离职员工</option><option value="unmatched" disabled={unmatchedCount===0}>未匹配{unmatchedCount===0?'（没有数据）':''}</option></select></label>
           <label><span>岗位</span><select value={positionFilter} onChange={event=>setPositionFilter(event.target.value)}><option value="">全部岗位</option>{positionOptions.map(value=><option key={value}>{value}</option>)}</select></label>
           <label><span>盘口</span><select value={platformFilter} onChange={event=>setPlatformFilter(event.target.value)}><option value="">全部盘口</option>{platformOptions.map(value=><option key={value}>{value}</option>)}</select></label>
           <div className="payroll-filter-actions"><button type="button" onClick={clearRowFilters}>重置</button></div>
@@ -359,6 +403,132 @@ export default function AdminPayrollPage(){
     </>}
     {employeePanel&&<PayrollEmployeeDrawer panel={employeePanel} onClose={closeEmployee}/>}
   </div>
+}
+
+function PayrollImportHistory({batches,onOpenEmployee}){
+  const requestRef=useRef(0)
+  const [panel,setPanel]=useState(null)
+  const [search,setSearch]=useState('')
+  const [matchFilter,setMatchFilter]=useState('all')
+  const [positionFilter,setPositionFilter]=useState('')
+  const [platformFilter,setPlatformFilter]=useState('')
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(20)
+  const history=useMemo(()=>[...(batches||[])].sort((left,right)=>{
+    const byCreated=new Date(right.created_at||0).getTime()-new Date(left.created_at||0).getTime()
+    if(byCreated)return byCreated
+    return Number(right.id||0)-Number(left.id||0)
+  }),[batches])
+  const rows=panel?.rows||[]
+  const selected=panel?.selected||panel?.batch||null
+  const positionOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.position_name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
+  const platformOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.platform)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
+  const filteredRows=useMemo(()=>{
+    const needle=key(search)
+    return rows.filter(row=>{
+      if(matchFilter!=='all'&&payrollMatchState(row)!==matchFilter)return false
+      if(positionFilter&&clean(row.position_name)!==positionFilter)return false
+      if(platformFilter&&clean(row.platform)!==platformFilter)return false
+      if(!needle)return true
+      return key([row.employee_no,row.full_name,row.platform,row.source_group,row.position_name,row.payment_name,row.payment_method,row.card_number,row.remark].join(' ')).includes(needle)
+    })
+  },[rows,search,matchFilter,positionFilter,platformFilter])
+  const pages=Math.max(1,Math.ceil(filteredRows.length/pageSize))
+  const pagedRows=useMemo(()=>filteredRows.slice((page-1)*pageSize,page*pageSize),[filteredRows,page,pageSize])
+  const totalAmount=rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0)
+  const unmatched=rows.filter(row=>payrollMatchState(row)==='unmatched').length
+
+  const resetFilters=()=>{
+    setSearch('');setMatchFilter('all');setPositionFilter('');setPlatformFilter('');setPage(1)
+  }
+  const closePanel=()=>{
+    requestRef.current+=1
+    setPanel(null)
+    resetFilters()
+  }
+  const openBatch=async batch=>{
+    const requestId=requestRef.current+1
+    requestRef.current=requestId
+    resetFilters()
+    setPanel({batch,selected:batch,rows:[],loading:true,error:''})
+    try{
+      const {data,error}=await supabase.rpc('admin_payroll_home',{p_batch_id:batch.id})
+      if(requestRef.current!==requestId)return
+      if(error){
+        setPanel({batch,selected:batch,rows:[],loading:false,error:error.message||'批次记录读取失败'})
+        return
+      }
+      setPanel({batch,selected:data?.selected_batch||batch,rows:data?.rows||[],loading:false,error:''})
+    }catch(error){
+      if(requestRef.current!==requestId)return
+      setPanel({batch,selected:batch,rows:[],loading:false,error:error?.message||'批次记录读取失败'})
+    }
+  }
+  useEffect(()=>{setPage(1)},[search,matchFilter,positionFilter,platformFilter,selected?.id])
+  useEffect(()=>{setPage(current=>Math.min(current,pages))},[pages])
+  useEffect(()=>{
+    if(!panel)return undefined
+    const previousOverflow=document.body.style.overflow
+    const onKeyDown=event=>{if(event.key==='Escape')closePanel()}
+    document.body.style.overflow='hidden'
+    window.addEventListener('keydown',onKeyDown)
+    return()=>{
+      document.body.style.overflow=previousOverflow
+      window.removeEventListener('keydown',onKeyDown)
+    }
+  },[Boolean(panel)])
+
+  return <>
+    <section className="payroll-import-history-card">
+      <div className="payroll-import-history-head">
+        <div><h2>导入批次</h2><p>默认只显示文档摘要；点击任一批次查看该文档的全部员工明细。</p></div>
+        <span>共 {history.length} 个批次</span>
+      </div>
+      <div className="payroll-import-history-list">
+        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>工资月份</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span/></div>
+        {history.length?history.map(batch=>{
+          const hasTotal=batch.total_amount!==undefined&&batch.total_amount!==null
+          return <button type="button" key={batch.id} className="payroll-import-history-row" onClick={()=>openBatch(batch)}>
+            <span className="payroll-import-file"><b>{batch.source_file_name||batch.title||'未命名工资文档'}</b><small>{batch.source_file_name&&batch.title&&batch.source_file_name!==batch.title?batch.title:(batch.source_type==='upload'?'文件上传':'系统导入')}</small></span>
+            <span className="payroll-import-period">{String(batch.period_start||'').slice(0,7)||'—'}</span>
+            <span className="payroll-import-time">{dateTime(batch.created_at)}</span>
+            <span className="payroll-import-count"><b>{Number(batch.row_count||0).toLocaleString()}</b><small>人</small></span>
+            <span className="payroll-import-total"><b>{hasTotal?money(batch.total_amount,batch.currency):'—'}</b><small>{batch.currency||'USD'}</small></span>
+            <span><i className={`payroll-batch-status ${clean(batch.status).toLowerCase()}`}>{payrollBatchStatus(batch.status)}</i></span>
+            <span className="payroll-import-open">查看记录 <b aria-hidden="true">→</b></span>
+          </button>
+        }):<div className="payroll-import-history-empty">暂无工资导入记录</div>}
+      </div>
+    </section>
+    {panel&&<div className="payroll-batch-modal-backdrop" role="presentation" onMouseDown={closePanel}>
+      <section className="payroll-batch-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-batch-modal-title" onMouseDown={event=>event.stopPropagation()}>
+        <header className="payroll-batch-modal-head">
+          <div><span>PAYROLL IMPORT RECORD</span><h2 id="payroll-batch-modal-title">{selected?.source_file_name||selected?.title||'工资导入记录'}</h2><p>{selected?.title||'—'} · {String(selected?.period_start||'').slice(0,7)||'—'}</p></div>
+          <button type="button" className="payroll-dialog-close" aria-label="关闭批次记录" onClick={closePanel}><span aria-hidden="true">×</span></button>
+        </header>
+        <div className="payroll-batch-modal-body">
+          <div className="payroll-batch-facts">
+            <div><span>导入时间</span><strong>{dateTime(selected?.created_at)}</strong></div>
+            <div><span>工资单</span><strong>{Number(selected?.row_count||rows.length).toLocaleString()} 人</strong></div>
+            <div><span>合计实发</span><strong>{panel.loading?'读取中…':money(totalAmount,selected?.currency)}</strong></div>
+            <div><span>币种 / 状态</span><strong>{selected?.currency||'USD'} · {payrollBatchStatus(selected?.status)}</strong></div>
+          </div>
+          {panel.loading?<div className="payroll-batch-loading"><i/><span>正在读取该文档的员工工资记录…</span></div>:panel.error?<div className="payroll-batch-load-error"><span>{panel.error}</span><button type="button" onClick={()=>openBatch(panel.batch)}>重试</button></div>:<>
+            <div className="payroll-record-filters payroll-batch-record-filters">
+              <label className="payroll-search-wide"><span>综合搜索</span><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
+              <label><span>员工状态</span><select value={matchFilter} onChange={event=>setMatchFilter(event.target.value)}><option value="all">全部状态</option><option value="active">在职 / 试用</option><option value="suspended">停用员工</option><option value="resigned">离职员工</option><option value="unmatched" disabled={unmatched===0}>未匹配{unmatched===0?'（没有数据）':''}</option></select></label>
+              <label><span>岗位</span><select value={positionFilter} onChange={event=>setPositionFilter(event.target.value)}><option value="">全部岗位</option>{positionOptions.map(value=><option key={value}>{value}</option>)}</select></label>
+              <label><span>盘口</span><select value={platformFilter} onChange={event=>setPlatformFilter(event.target.value)}><option value="">全部盘口</option>{platformOptions.map(value=><option key={value}>{value}</option>)}</select></label>
+              <div className="payroll-filter-actions"><button type="button" onClick={resetFilters}>重置</button></div>
+            </div>
+            <div className="payroll-filter-result">筛选结果 {filteredRows.length} / {rows.length} 条 · 第 {page} / {pages} 页</div>
+            <PayrollRows rows={pagedRows} currency={selected?.currency||'USD'} onOpenEmployee={onOpenEmployee}/>
+            <Pagination page={page} pages={pages} total={filteredRows.length} pageSize={pageSize} loading={panel.loading} onPage={setPage} onPageSize={value=>{setPageSize(value);setPage(1)}}/>
+          </>}
+        </div>
+      </section>
+    </div>}
+  </>
 }
 
 function PayrollRows({rows,currency,preview=false,onOpenEmployee}){
@@ -374,9 +544,8 @@ function PayrollRows({rows,currency,preview=false,onOpenEmployee}){
       window.removeEventListener('keydown',close)
     }
   },[detailDialog])
-  const stateOf=row=>row.match_state||(row.matched?'active':'unmatched')
-  const matchLabel=row=>({active:'在职',resigned:'离职',unmatched:'未匹配'}[stateOf(row)]||'未匹配')
-  const matchClass=row=>({active:'ok',resigned:'resigned',unmatched:'bad'}[stateOf(row)]||'bad')
+  const matchLabel=row=>({active:'在职 / 试用',suspended:'停用',resigned:'离职',unmatched:'未匹配'}[payrollMatchState(row)]||'未匹配')
+  const matchClass=row=>({active:'ok',suspended:'neutral',resigned:'resigned',unmatched:'bad'}[payrollMatchState(row)]||'bad')
   const openText=(title,value)=>value&&setDetailDialog({title,value})
   const openItems=(title,items,subtitle='')=>setDetailDialog({title,items,subtitle})
   return <><div className="payroll-table-wrap"><table className="payroll-table payroll-table-complete payroll-table-compact"><thead><tr><th>#</th><th>员工</th><th>组织 / 岗位</th><th>任职日期</th><th>收款资料</th><th>基础工资</th><th>出勤工资</th><th>加扣明细</th><th>实发工资</th><th>匹配</th><th>备注</th></tr></thead>
@@ -446,7 +615,7 @@ const payrollPick=(record,...paths)=>{
   }
   return '—'
 }
-const payrollStatusLabel=value=>({active:'在职',resigned:'离职',unmatched:'未匹配',pending:'待入职'}[clean(value).toLowerCase()]||payrollDisplayValue(value)||'—')
+const payrollStatusLabel=value=>({active:'在职 / 试用',probation:'在职 / 试用',suspended:'停用',inactive:'停用',resigned:'离职',unmatched:'未匹配',pending:'待入职'}[clean(value).toLowerCase()]||payrollDisplayValue(value)||'—')
 const payrollTypeLabel=value=>({home_ph:'纯居家菲律宾',home_vn:'纯居家越南',home_id:'纯居家印尼',home_mm:'纯居家缅甸',onsite_to_home:'现场转居家',pure_remote:'纯居家',remote:'居家',onsite:'现场',hybrid:'混合办公'}[clean(value).toLowerCase()]||payrollDisplayValue(value)||'—')
 
 function PayrollEmployeeDrawer({panel,onClose}){

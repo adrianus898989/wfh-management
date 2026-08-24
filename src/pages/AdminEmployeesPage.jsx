@@ -384,6 +384,8 @@ export default function AdminEmployeesPage(){
   const [sp,setSp]=useSearchParams()
   const requestedEmployeeId=sp.get('employee')||''
   const requestedEmployeeRef=useRef('')
+  const lastAutoRefreshAtRef=useRef(0)
+  const refreshEmployeeDataRef=useRef(null)
   const tabs=['员工档案','人员分析','停电 / 断网记录','离职记录','操作日志']
   const requestedTab=sp.get('tab')
   const initialTab=requestedTab==='入离职记录'?'离职记录':['团队管理','岗位管理'].includes(requestedTab)?'人员分析':requestedTab
@@ -633,32 +635,27 @@ export default function AdminEmployeesPage(){
         jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(d=>setSelected(prev=>({...d,resignation_reason:text(prev?.resignation_reason||d?.resignation_reason)}))).catch(()=>{}))
       }
       await Promise.all(jobs)
+      lastAutoRefreshAtRef.current=Date.now()
     }finally{
       if(!silent) setRefreshing(false)
     }
   }
+  refreshEmployeeDataRef.current=refreshEmployeeData
 
-  useEffect(()=>{ loadMeta(); loadAnalytics(); loadArchiveStats(); const t=setInterval(()=>{ if(!document.hidden) loadArchiveStats(true) },300000); return()=>clearInterval(t) },[])
   useEffect(()=>{
-    if(tab!=='员工档案') return
-    const t=setInterval(async()=>{
-      if(document.hidden) return
-      try{
-        const d=new Date()
-        const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-        const [metaData,listData,analyticsData]=await Promise.all([
-          invoke({action:'meta'}),
-          fetchEmployeeListData(page,pageSize,appliedFilters),
-          invoke({action:'analytics',today}),
-        ])
-        setMeta(metaData)
-        setRows(listData.rows||[]); setTotal(listData.total||0)
-        setAnalytics({...analyticsData,loading:false})
-      }catch{}
-    },300000)
-    return()=>clearInterval(t)
-  },[tab,page,pageSize,JSON.stringify(appliedFilters)])
-  useEffect(()=>{ loadList(1,pageSize,{nextFilters:appliedFilters}) },[])
+    Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats()]).finally(()=>{lastAutoRefreshAtRef.current=Date.now()})
+    const refreshIfStale=()=>{
+      if(document.hidden||Date.now()-lastAutoRefreshAtRef.current<300000)return
+      lastAutoRefreshAtRef.current=Date.now()
+      refreshEmployeeDataRef.current?.({silent:true}).catch(()=>{})
+    }
+    window.addEventListener('focus',refreshIfStale)
+    document.addEventListener('visibilitychange',refreshIfStale)
+    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
+  },[])
+  useEffect(()=>{
+    loadList(1,pageSize,{nextFilters:appliedFilters})
+  },[])
 
   useEffect(()=>{
     const raw=sp.get('tab')
@@ -2363,7 +2360,7 @@ function ArchiveStructureStats({data,onTenure,onPosition,onCountry}){
   const changed=data?.latest_updated_at?formatDateTime(data.latest_updated_at):'—'
   return <section className="archive-structure-section">
     <div className="archive-structure-head">
-      <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；Realtime 自动刷新，60 秒静默轮询兜底。</p></div>
+      <div><h3>员工结构统计</h3><p>在职员工的入职时长、岗位、盘口和国家人数；首次进入、手动刷新或切回过期页面时按需读取。</p></div>
       <div className={`archive-sync-badge ${data?.error?'has-error':''}`}><i/><span title={`最近数据变更 ${changed}`}>{data?.error?'结构统计待部署':`实时已连接 · ${updated}`}</span></div>
     </div>
     <div className="archive-structure-grid">

@@ -1,7 +1,12 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const ROSTER_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA/填表'
-const ACCOUNT_URL = 'https://opensheet.elk.sh/1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA/账号'
+// Reuse the existing project cron secret. The raw value stays in Supabase
+// Vault; only its SHA-256 digest is committed here.
+const CRON_TOKEN_HASH = '988aa6dfb0151861cb16ed2e197ee137cff51cd2625e6c85c24cf04696f08a56'
+
+// The private roster/account sheets are pushed by their source-bound Apps
+// Script. This scheduled function must never fetch a public proxy or write
+// those snapshots, otherwise an older cached response can replace fresh data.
 const ERROR_SOURCES = [
   {
     name: '效率表/员工错误',
@@ -19,6 +24,12 @@ const ERROR_CHUNK_SIZE = 500
 const FETCH_TIMEOUT_MS = 25_000
 
 const text = (value: unknown) => String(value ?? '').trim()
+const MANILA_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Manila',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status,
   headers: {
@@ -26,6 +37,34 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
     'connection': 'keep-alive',
   },
 })
+
+function manilaDateKey(value = new Date()) {
+  const parts: Record<string, string> = {}
+  for (const part of MANILA_DATE_FORMATTER.formatToParts(value)) {
+    if (part.type !== 'literal') parts[part.type] = part.value
+  }
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+function addIsoDays(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+async function sha256(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function secureEqual(left: string, right: string) {
+  if (left.length !== right.length) return false
+  let difference = 0
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  }
+  return difference === 0
+}
 
 function pick(row: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -212,11 +251,11 @@ function scoreNumber(value: unknown) {
   return match ? Number(match[0]) : 0
 }
 
-function riskLevel(monthErrorCount: number) {
-  if (monthErrorCount >= 31) return 'high'
-  if (monthErrorCount >= 16) return 'watch'
-  if (monthErrorCount >= 9) return 'attention'
-  if (monthErrorCount >= 1) return 'normal'
+function riskLevel(totalErrorCount: number) {
+  if (totalErrorCount >= 31) return 'high'
+  if (totalErrorCount >= 16) return 'watch'
+  if (totalErrorCount >= 9) return 'attention'
+  if (totalErrorCount >= 1) return 'normal'
   return 'excellent'
 }
 
@@ -235,6 +274,11 @@ function payloadHash(payload: unknown) {
 
 function noteHash(note: unknown) {
   return text(note).match(/(?:^|;)hash:([a-z0-9]+)(?:;|$)/i)?.[1] || ''
+}
+
+function noteValue(note: unknown, key: string) {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text(note).match(new RegExp(`(?:^|;)${escapedKey}:([^;]+)(?:;|$)`, 'i'))?.[1] || ''
 }
 
 function normalizeErrors(rawErrors: Record<string, unknown>[], sourceName: string) {
@@ -269,15 +313,13 @@ function normalizeErrors(rawErrors: Record<string, unknown>[], sourceName: strin
   ))
 }
 
-function buildRiskSummaries(errors: ReturnType<typeof normalizeErrors>) {
-  const now = new Date()
-  const today = now.toISOString().slice(0, 10)
+function buildRiskSummaries(
+  errors: ReturnType<typeof normalizeErrors>,
+  now = new Date(),
+) {
+  const today = manilaDateKey(now)
   const monthKey = today.slice(0, 7)
-  const cut30 = new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() - 29,
-  )).toISOString().slice(0, 10)
+  const cut30 = addIsoDays(today, -29)
   const summaries = new Map<string, any>()
 
   for (const errorRow of errors) {
@@ -341,6 +383,43 @@ async function loadSnapshotStates(service: any) {
     ])
   if (error) throw new Error(`snapshot states: ${error.message}`)
   return new Map((data || []).map((row: any) => [row.source, row]))
+}
+
+async function loadErrorStatusPayload(service: any) {
+  const { data, error } = await service
+    .from('report_sheet_snapshots')
+    .select('payload')
+    .eq('source', '效率表/员工错误状态')
+    .maybeSingle()
+  if (error) throw new Error(`error status payload: ${error.message}`)
+  return Array.isArray(data?.payload) && data.payload[0] && typeof data.payload[0] === 'object'
+    ? data.payload[0]
+    : {}
+}
+
+async function loadErrorDetailGeneration(service: any) {
+  const chunks: Array<{ source_name: string, chunk_index: number, content_hash: string }> = []
+  const pageSize = 1_000
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await service
+      .from('report_error_sync_chunks')
+      .select('source_name,chunk_index,content_hash')
+      .order('source_name')
+      .order('chunk_index')
+      .range(from, from + pageSize - 1)
+    if (error) throw new Error(`错误明细版本读取失败: ${error.message}`)
+    const page = data || []
+    chunks.push(...page.map((row: any) => ({
+      source_name: text(row.source_name),
+      chunk_index: Number(row.chunk_index),
+      content_hash: text(row.content_hash),
+    })))
+    if (page.length < pageSize) break
+  }
+  // This generation is derived from durable database state after all detail
+  // writes/finalization. If a request dies before the summary marker is saved,
+  // the next run still sees a generation mismatch and repairs the summary.
+  return sha256(JSON.stringify(chunks))
 }
 
 async function writeChunkedSnapshot(
@@ -500,7 +579,7 @@ async function loadAllSyncedErrors(service: any) {
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await service
       .from('report_employee_errors_v')
-      .select('record_key,source_row,employee_no,member_order,amount,error_note,correct_action,error_type,score,qc_person,qc_date,leader_review,qc_result,review_date')
+      .select('record_key,employee_no,error_type,score,qc_date,review_date')
       .order('record_key')
       .range(from, from + pageSize - 1)
     if (error) throw new Error(`read synced errors: ${error.message}`)
@@ -540,26 +619,49 @@ async function syncChangedSummaries(service: any, summaries: any[]) {
   const nextEmployees = new Set(summaries.map((summary) => text(summary.employee_no).toUpperCase()))
   const updatedAt = new Date().toISOString()
   const changedRows = summaries
-    .filter((summary) => summaryChanged(summary, currentByEmployee.get(summary.employee_no)))
+    .filter((summary) => summaryChanged(
+      summary,
+      currentByEmployee.get(text(summary.employee_no).toUpperCase()),
+    ))
     .map((summary) => ({ ...summary, updated_at: updatedAt }))
-  const removedEmployees = currentRows
-    .map((row) => text(row.employee_no).toUpperCase())
-    .filter((employeeNo) => employeeNo && !nextEmployees.has(employeeNo))
+  const monthKey = manilaDateKey(new Date(updatedAt)).slice(0, 7)
+  const clearedRows = currentRows
+    .filter((row) => {
+      const employeeNo = text(row.employee_no).toUpperCase()
+      if (!employeeNo || nextEmployees.has(employeeNo)) return false
+      return summaryChanged({
+        employee_no: employeeNo,
+        month_key: monthKey,
+        month_error_count: 0,
+        last_30d_error_count: 0,
+        total_error_count: 0,
+        total_deduct: 0,
+        last_error_date: null,
+        main_error_type: null,
+        risk_level: 'excellent',
+      }, row)
+    })
+    .map((row) => ({
+      employee_no: text(row.employee_no).toUpperCase(),
+      month_key: monthKey,
+      month_error_count: 0,
+      last_30d_error_count: 0,
+      total_error_count: 0,
+      total_deduct: 0,
+      last_error_date: null,
+      main_error_type: null,
+      risk_level: 'excellent',
+      updated_at: updatedAt,
+    }))
+  const rowsToUpsert = [...changedRows, ...clearedRows]
 
-  for (let index = 0; index < changedRows.length; index += 250) {
+  for (let index = 0; index < rowsToUpsert.length; index += 250) {
     const { error } = await service
       .from('employee_error_summary')
-      .upsert(changedRows.slice(index, index + 250), { onConflict: 'employee_no' })
+      .upsert(rowsToUpsert.slice(index, index + 250), { onConflict: 'employee_no' })
     if (error) throw new Error(`error summary: ${error.message}`)
   }
-  for (let index = 0; index < removedEmployees.length; index += 250) {
-    const { error } = await service
-      .from('employee_error_summary')
-      .delete()
-      .in('employee_no', removedEmployees.slice(index, index + 250))
-    if (error) throw new Error(`remove stale error summary: ${error.message}`)
-  }
-  return changedRows.length + removedEmployees.length
+  return rowsToUpsert.length
 }
 
 function orderRowsFromCsv(raw: string) {
@@ -649,8 +751,12 @@ async function syncOrderSheets(service: any) {
 Deno.serve(async (request) => {
   const startedAt = Date.now()
   try {
-    if (request.method !== 'POST' && request.method !== 'GET') {
+    if (request.method !== 'POST') {
       return json({ error: 'method' }, 405)
+    }
+    const cronToken = request.headers.get('x-report-cron-token') || ''
+    if (!cronToken || !secureEqual(await sha256(cronToken), CRON_TOKEN_HASH)) {
+      return json({ error: 'unauthorized' }, 401)
     }
 
     const service = createClient(
@@ -659,38 +765,9 @@ Deno.serve(async (request) => {
       { auth: { persistSession: false } },
     )
 
-    const [rawRoster, rawAccounts] = await Promise.all([
-      fetchJson(ROSTER_URL),
-      fetchJson(ACCOUNT_URL),
-    ])
-
     const rawErrorResults = await Promise.allSettled(
       ERROR_SOURCES.map((source) => fetchJson(source.url)),
     )
-
-    const roster = rawRoster.map((row: Record<string, unknown>, index: number) => ({
-      source_row: index + 2,
-      responsible: pick(row, ['负责人', '負責人']),
-      onsite_trainer: pick(row, ['现场培训', '現場培訓']),
-      online_leader: pick(row, ['线上组长', '線上組長', '组长', '組長']),
-      online_trainer: pick(row, ['线上培训', '線上培訓']),
-      group: pick(row, ['组别', '組別']),
-      team: pick(row, ['团队', '團隊']),
-      name: pick(row, ['姓名', '员工姓名', '員工姓名', 'Name']),
-      employee_id: pick(row, ['ID', '员工ID', '員工ID']).toUpperCase(),
-      shift: pick(row, ['班次', 'Shift']),
-      country: pick(row, ['国家', '國家', 'Country']),
-      position: pick(row, ['岗位', '崗位', 'Position']),
-      platform: pick(row, ['盘口', '盤口', 'ID WORKFOLIO', 'Workfolio']),
-      work_content: pick(row, ['工作内容', '工作內容', 'Work Content', 'Job Content']),
-    })).filter((row: any) => row.name && !['null', 'undefined'].includes(row.name.toLowerCase()))
-
-    const accounts = rawAccounts.map((row: Record<string, unknown>, index: number) => ({
-      source_row: index + 2,
-      employee_id: pick(row, ['ID', '员工ID', '員工ID']).toUpperCase(),
-      backend_accounts: pick(row, ['后台账号', '後台賬號']),
-      hire_date: normalizeDate(pick(row, ['入职时间', '入職時間', 'Join Date'])),
-    })).filter((row: any) => row.employee_id && row.employee_id !== 'ID')
 
     // Treat a successful-but-empty response as unavailable. A private sheet,
     // upstream proxy issue, or malformed publication can otherwise look like
@@ -728,27 +805,64 @@ Deno.serve(async (request) => {
       return { source: source.name, snapshot, rows }
     }))
     const rawErrorCount = errorSources.reduce((total, source) => total + source.rawRows.length, 0)
-    const errors = await loadAllSyncedErrors(service)
-    const summaries = buildRiskSummaries(errors)
-    const latestErrors = errors
-      .map((row) => row.qc_date || row.review_date || '')
-      .filter(Boolean)
-      .sort()
-      .at(-1) || ''
+    const [states, cachedErrorStatus, detailGeneration] = await Promise.all([
+      loadSnapshotStates(service),
+      loadErrorStatusPayload(service),
+      loadErrorDetailGeneration(service),
+    ])
+    const errorStatusState = states.get('效率表/员工错误状态')
+    const summaryAt = new Date()
+    const summaryDay = manilaDateKey(summaryAt)
+    const cachedSummaryHash = noteValue(errorStatusState?.note, 'summary-hash') ||
+      text(cachedErrorStatus.summary_hash)
+    const cachedSummaryDay = noteValue(errorStatusState?.note, 'summary-day') ||
+      text(cachedErrorStatus.summary_day)
+    const cachedSummaryGeneration = noteValue(errorStatusState?.note, 'summary-generation') ||
+      text(cachedErrorStatus.summary_generation)
+    const errorRowsChanged = errorSyncResults.some((result) =>
+      Number(result.rows.changed_chunks || 0) > 0 || Number(result.rows.deleted_rows || 0) > 0
+    )
+    const shouldRebuildSummaries = !cachedSummaryHash ||
+      !cachedSummaryGeneration || cachedSummaryGeneration !== detailGeneration ||
+      cachedSummaryDay !== summaryDay || errorRowsChanged ||
+      (cachedErrorStatus.summary_deferred === true && errorSourceFailures.length === 0)
+
+    let errorRowsUnique = Number(cachedErrorStatus.unique_rows || errorStatusState?.row_count || 0)
+    let summaryEmployees = Number(cachedErrorStatus.summary_employees || 0)
+    let summaryHash = cachedSummaryHash
+    let summaryChanges = 0
+    let summaryRebuilt = false
+    let summaryDeferred = cachedErrorStatus.summary_deferred === true
+    let summaryGeneration = cachedSummaryGeneration
+    let latestErrors = text(cachedErrorStatus.latest_date)
+
+    if (shouldRebuildSummaries) {
+      const errors = await loadAllSyncedErrors(service)
+      // If an upstream source is unavailable and the persisted detail view is
+      // unexpectedly empty, keep the last known-good summary instead of
+      // interpreting the outage as a legitimate full clear.
+      const unsafeEmptyDuringSourceFailure = errorSourceFailures.length > 0 &&
+        errors.length === 0
+      summaryDeferred = unsafeEmptyDuringSourceFailure
+      if (summaryDeferred && !summaryHash) summaryHash = 'deferred'
+      if (!summaryDeferred) {
+        const summaries = buildRiskSummaries(errors, summaryAt)
+        errorRowsUnique = errors.length
+        summaryEmployees = summaries.length
+        summaryHash = payloadHash(summaries)
+        latestErrors = errors
+          .map((row) => row.qc_date || row.review_date || '')
+          .filter(Boolean)
+          .sort()
+          .at(-1) || ''
+        summaryChanges = await syncChangedSummaries(service, summaries)
+        summaryGeneration = detailGeneration
+        summaryRebuilt = true
+      }
+    }
+
     const orderSyncResult = await syncOrderSheets(service)
-    const states = await loadSnapshotStates(service)
-    const summaryHash = payloadHash(summaries)
     const snapshotPlans: Array<[string, unknown[], string, number?]> = [
-      [
-        '居家排班表/填表',
-        roster,
-        '按源表变化同步；姓名有效即纳入，不依赖居家员工名单',
-      ],
-      [
-        '居家排班表/账号',
-        accounts,
-        '按源表变化同步；用于效率后台账号映射',
-      ],
       [
         '效率表/网站数据状态',
         [{ latest_date: orderSyncResult.latest_date, rows: orderSyncResult.rows }],
@@ -765,36 +879,8 @@ Deno.serve(async (request) => {
     for (const [source, payload, note, rowCount] of snapshotPlans) {
       const result = await writeSnapshot(service, states, source, payload, note, rowCount)
       snapshotResults.push(result)
-      // Reconcile when the source changed or the derived roster cache diverged.
-      // The health check repairs the failure window where a snapshot write
-      // succeeded but the previous cache rebuild failed, without rewriting the
-      // unchanged directory on every scheduled run.
-      if (source === '居家排班表/填表') {
-        const rosterIds = new Set(payload
-          .map((row: any) => String(row?.employee_id || '').trim().toUpperCase())
-          .filter(Boolean))
-        if (rosterIds.size === 0) throw new Error('居家排班表没有可用员工 ID；已保留上次正常目录')
-
-        let needsReconcile = result.changed
-        if (!needsReconcile) {
-          const { data: healthy, error: healthError } = await service.rpc(
-            'report_employee_directory_cache_matches',
-            { p_rows: payload },
-          )
-          if (healthError) throw new Error(`员工查询目录一致性检查失败: ${healthError.message}`)
-          needsReconcile = healthy !== true
-        }
-
-        if (needsReconcile) {
-          const { error } = await service.rpc('sync_report_employee_directory', { p_rows: payload })
-          if (error) throw new Error(`员工查询目录同步失败: ${error.message}`)
-        }
-      }
     }
 
-    // The summary table is a derived cache. Reconcile it on every run so a
-    // deleted source record cannot leave an employee with stale totals.
-    const summaryChanges = await syncChangedSummaries(service, summaries)
     snapshotResults.push(await writeSnapshot(
       service,
       states,
@@ -802,8 +888,13 @@ Deno.serve(async (request) => {
       [{
         latest_date: latestErrors,
         raw_rows: rawErrorCount,
-        unique_rows: errors.length,
-        summary_employees: summaries.length,
+        unique_rows: errorRowsUnique,
+        summary_employees: summaryEmployees,
+        summary_hash: summaryHash,
+        detail_generation: detailGeneration,
+        summary_generation: summaryGeneration,
+        summary_day: summaryDay,
+        summary_deferred: summaryDeferred,
         sources: errorSources.map((source) => ({
           source: source.name,
           raw_rows: source.rawRows.length,
@@ -811,25 +902,28 @@ Deno.serve(async (request) => {
         })),
         unavailable_sources: errorSourceFailures,
       }],
-      `多来源错误明细独立同步；按记录指纹去重；summary-hash:${summaryHash}`,
-      errors.length,
+      `多来源错误明细独立同步；按记录指纹去重；summary-hash:${summaryHash};detail-generation:${detailGeneration};summary-generation:${summaryGeneration};summary-day:${summaryDay}`,
+      errorRowsUnique,
     ))
 
     return json({
       ok: true,
-      roster_raw: rawRoster.length,
-      roster_rows: roster.length,
-      account_rows: accounts.length,
+      roster_raw: Number(states.get('居家排班表/填表')?.row_count || 0),
+      roster_rows: Number(states.get('居家排班表/填表')?.row_count || 0),
+      account_rows: Number(states.get('居家排班表/账号')?.row_count || 0),
+      roster_source: 'supabase_snapshot',
       error_rows_raw: rawErrorCount,
-      error_rows_unique: errors.length,
+      error_rows_unique: errorRowsUnique,
       error_sources: errorSources.map((source) => ({
         source: source.name,
         raw_rows: source.rawRows.length,
         normalized_rows: source.rows.length,
       })),
       error_source_failures: errorSourceFailures,
-      error_summary: summaries.length,
+      error_summary: summaryEmployees,
       summary_changes: summaryChanges,
+      summary_rebuilt: summaryRebuilt,
+      summary_deferred: summaryDeferred,
       error_sync: errorSyncResults,
       snapshot_changes: snapshotResults.filter((result) => result.changed).map((result) => result.source),
       latest_orders: orderSyncResult.latest_date,
