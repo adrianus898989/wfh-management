@@ -17,12 +17,16 @@ as $$
 declare
   v_user_id uuid;
   v_session_id uuid;
-  v_portal text := lower(btrim(coalesce(p_portal, '')));
+  -- COALESCE is SQL syntax, not a normal pg_catalog function.  Keep this as a
+  -- CASE expression so SQL hardening/qualification tools cannot accidentally
+  -- rewrite it to the invalid pg_catalog.coalesce(...).
+  v_portal text := lower(btrim(case when p_portal is null then '' else p_portal end));
   v_now timestamptz := clock_timestamp();
   v_expires_at timestamptz := v_now + interval '5 minutes';
   v_existing public.app_session_leases%rowtype;
   v_had_existing boolean := false;
   v_replaced boolean := false;
+  v_revoked_sessions integer := 0;
 begin
   select identity.user_id, identity.session_id
   into v_user_id, v_session_id
@@ -41,6 +45,27 @@ begin
     return jsonb_build_object('ok', false, 'reason', 'auth_session_missing');
   end if;
 
+  -- A password-only (AAL1) token cannot create an admin lease for an account
+  -- that requires MFA.  Enforce this in PostgreSQL so callers cannot bypass
+  -- the MFA screen by invoking the public RPC directly.
+  if v_portal = 'admin'
+     and exists (
+       select 1
+       from public.user_access access
+       where access.auth_user_id = v_user_id
+         and access.active = true
+         and access.backend_enabled = true
+         and access.otp_required = true
+     )
+     and lower(btrim(
+       case
+         when (select auth.jwt() ->> 'aal') is null then ''
+         else (select auth.jwt() ->> 'aal')
+       end
+     )) <> 'aal2' then
+    return jsonb_build_object('ok', false, 'reason', 'mfa_required');
+  end if;
+
   -- Serialize takeovers so two nearly simultaneous logins cannot both remain.
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(v_user_id::text, 20260824)
@@ -56,13 +81,17 @@ begin
 
   if v_had_existing and v_existing.session_id <> v_session_id then
     v_replaced := true;
-
-    -- auth.refresh_tokens references auth.sessions with ON DELETE CASCADE.
-    -- Deleting only this user's prior session cannot affect another account.
-    delete from auth.sessions auth_session
-    where auth_session.id = v_existing.session_id
-      and auth_session.user_id = v_user_id;
   end if;
+
+  -- Failed historical claims can leave valid Auth sessions that never reached
+  -- app_session_leases. Remove every other session for this user, not only the
+  -- one referenced by the old lease, so the latest completed login is truly
+  -- the sole browser. auth.refresh_tokens cascades with auth.sessions.
+  delete from auth.sessions auth_session
+  where auth_session.user_id = v_user_id
+    and auth_session.id <> v_session_id;
+  get diagnostics v_revoked_sessions = row_count;
+  if v_revoked_sessions > 0 then v_replaced := true; end if;
 
   insert into public.app_session_leases as lease (
     user_id,
@@ -105,8 +134,10 @@ $$;
 
 revoke all on function session_private.app_session_claim(text)
   from public, anon, authenticated;
-grant execute on function session_private.app_session_claim(text)
-  to authenticated;
+
+-- Browsers call only the public SECURITY DEFINER wrapper created by the base
+-- session migration.  The private implementation must remain unreachable.
+grant execute on function public.app_session_claim(text) to authenticated;
 
 comment on function session_private.app_session_claim(text) is
   'Atomically makes the authenticated JWT session the sole current app session and revokes the previous auth session.';

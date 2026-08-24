@@ -54,9 +54,7 @@ function isInvalidCredentials(error: any) {
 }
 
 async function findAccess(admin: any, username: string, mode: string) {
-  if (username === 'founder' && mode === 'admin') {
-    return { access: founderAccess, unavailable: false }
-  }
+  const isFounder = username === 'founder' && mode === 'admin'
 
   let lastError: any = null
 
@@ -67,7 +65,11 @@ async function findAccess(admin: any, username: string, mode: string) {
     query = mode === 'staff' ? query.ilike('login_email', username) : query.ilike('login_username', username)
     const { data, error } = await query.maybeSingle()
 
-    if (!error) return { access: data, unavailable: false }
+    if (!error) {
+      // Prefer the live row so later MFA/entry-setting changes also apply to
+      // Founder. Keep the locked fallback only when that row is unavailable.
+      return { access: data || (isFounder ? founderAccess : null), unavailable: false }
+    }
 
     lastError = error
     console.error('ADMIN_LOGIN_ACCESS_RETRY', {
@@ -77,6 +79,11 @@ async function findAccess(admin: any, username: string, mode: string) {
     })
 
     if (attempt < 3) await sleep(attempt * 500)
+  }
+
+  if (isFounder) {
+    console.error('ADMIN_LOGIN_FOUNDER_ACCESS_FALLBACK', lastError?.message || 'unknown')
+    return { access: founderAccess, unavailable: false }
   }
 
   console.error('ADMIN_LOGIN_ACCESS_UNAVAILABLE', lastError?.message || 'unknown')
@@ -107,6 +114,26 @@ async function authenticate(authClient: any, email: string, password: string) {
     data: { user: null, session: null },
     error: lastError || new Error('AUTH_UNAVAILABLE'),
   }
+}
+
+async function claimCandidateSession(authClient: any, mode: 'admin' | 'staff') {
+  let lastResult: any = { data: null, error: new Error('SESSION_CLAIM_UNAVAILABLE') }
+
+  // Claim is idempotent for the same JWT session_id. Retrying is therefore
+  // safe even when PostgREST lost only the first response after commit.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    lastResult = await authClient.rpc('app_session_claim', { p_portal: mode })
+    if (!lastResult.error) return lastResult
+
+    console.error('ADMIN_LOGIN_SESSION_CLAIM_RETRY', {
+      attempt,
+      code: lastResult.error.code || null,
+      message: lastResult.error.message || null,
+    })
+    if (attempt < 3) await sleep(attempt * 350)
+  }
+
+  return lastResult
 }
 
 async function discardCandidateSession(authClient: any) {
@@ -217,10 +244,7 @@ Deno.serve(async (req) => {
       // token leaves this trusted boundary, atomically make it the current app
       // session. The database revokes the previous browser's auth session and
       // lease; MFA admins defer takeover until their JWT is promoted to AAL2.
-      const { data: lease, error: leaseError } = await authClient.rpc(
-        'app_session_claim',
-        { p_portal: mode },
-      )
+      const { data: lease, error: leaseError } = await claimCandidateSession(authClient, mode)
 
       if (leaseError) {
         console.error('ADMIN_LOGIN_SESSION_CLAIM_ERROR', {
@@ -277,6 +301,7 @@ Deno.serve(async (req) => {
     return json(req, {
       ok: true,
       mfa_required: mfaRequired,
+      session_claimed: !mfaRequired,
       access_token: authData.session.access_token,
       refresh_token: authData.session.refresh_token,
     })

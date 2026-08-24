@@ -6,12 +6,14 @@ export const SESSION_IDLE_LIMIT_MS=24*60*60*1000
 export const APP_SESSION_HEARTBEAT_MS=60*1000
 export const APP_SESSION_RPC_TIMEOUT_MS=15*1000
 export const SESSION_SETUP_TIMEOUT_MS=25*1000
+export const SESSION_LOCAL_SIGNOUT_TIMEOUT_MS=4*1000
 const appBasePath=String(import.meta.env.BASE_URL||'/').replace(/\/+$/,'')
 const browserPath=typeof window==='undefined'?'':window.location.pathname
 const appPath=appBasePath&&(browserPath===appBasePath||browserPath.startsWith(`${appBasePath}/`))
   ?browserPath.slice(appBasePath.length)||'/'
   :browserPath
 const portal=appPath==='/admin'||appPath.startsWith('/admin/')?'admin':'staff'
+const AUTH_STORAGE_KEY=`wfh-${portal}-auth-token`
 const SESSION_ACTIVITY_KEY=`wfh_${portal}_session_last_activity`
 const SESSION_NOTICE_KEY=`wfh_${portal}_session_notice`
 let lastActivityWrite=0
@@ -54,11 +56,15 @@ export const consumeAppSessionNotice=(requestedPortal=portal)=>{
 
 const authenticatedFetch=async(input,init)=>{
   const response=await fetch(input,init)
-  if(response.status===401&&typeof window!=='undefined'){
+  if([400,401,403].includes(response.status)&&typeof window!=='undefined'){
     let body=''
     try{body=await response.clone().text()}catch(_){body=''}
-    const terminal=/invalid[_\s-]*(jwt|token)|jwt[_\s-]*(expired|malformed)|refresh[_\s-]*token|(?:auth[_\s-]*)?session[_\s-]*(missing|expired)|not[_\s-]*authenticated|no[_\s-]*authorization/i.test(body)
-    window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail:{terminal}}))
+    const leaseEnded=/(?:app[_\s-]*)?session[_\s-]*not[_\s-]*current|auth[_\s-]*session[_\s-]*missing|not[_\s-]*owner|active[_\s-]*elsewhere/i.test(body)
+    const invalidAuth=/invalid[_\s-]*(jwt|token)|jwt[_\s-]*(expired|malformed)|refresh[_\s-]*token|(?:auth[_\s-]*)?session[_\s-]*(missing|expired)|not[_\s-]*authenticated|no[_\s-]*authorization/i.test(body)
+    const terminal=leaseEnded||invalidAuth
+    if(terminal||response.status===401){
+      window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail:{terminal}}))
+    }
   }
   return response
 }
@@ -66,7 +72,7 @@ const authenticatedFetch=async(input,init)=>{
 export const supabase=configured?createClient(url,key,{
   // Admin and staff are often opened in two tabs on the same browser. Keeping
   // separate storage namespaces prevents either login replacing the other JWT.
-  auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,storageKey:`wfh-${portal}-auth-token`},
+  auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,storageKey:AUTH_STORAGE_KEY},
   global:{fetch:authenticatedFetch},
 }):null
 
@@ -102,6 +108,11 @@ export const claimAppSession=(requestedPortal=portal)=>timedAppSessionRpc(
   {p_portal:requestedPortal==='admin'?'admin':'staff'},
 )
 
+export const bootstrapAppSessionAccess=()=>timedAppSessionRpc(
+  supabase,
+  'app_session_bootstrap_access',
+)
+
 export const heartbeatAppSession=()=>timedAppSessionRpc(supabase,'app_session_heartbeat')
 
 export const releaseAppSession=()=>timedAppSessionRpc(supabase,'app_session_release')
@@ -111,7 +122,24 @@ export const releaseAppSession=()=>timedAppSessionRpc(supabase,'app_session_rele
 // this path remains for setup/network failures before a candidate is usable.
 export const discardLocalAppSession=async()=>{
   clearSessionActivity()
-  try{return await supabase.auth.signOut({scope:'local'})}catch(error){return {error}}
+  let result={error:null}
+  try{
+    result=await withPromiseTimeout(
+      supabase.auth.signOut({scope:'local'}),
+      SESSION_LOCAL_SIGNOUT_TIMEOUT_MS,
+      'LOCAL_SIGNOUT_TIMEOUT',
+    )
+  }catch(error){
+    result={error}
+  }finally{
+    // A network failure must not leave a rejected JWT trapped in a redirect
+    // loop. The server session/lease expires independently; remove only this
+    // portal's namespaced browser token.
+    if(typeof window!=='undefined'){
+      try{window.localStorage.removeItem(AUTH_STORAGE_KEY)}catch(_){}
+    }
+  }
+  return result
 }
 
 export const signOutAppSession=async()=>{

@@ -1,12 +1,9 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  claimAppSession,
   configured,
   consumeAppSessionNotice,
-  discardLocalAppSession,
   setAppSession,
-  signOutAppSession,
   supabase,
   touchSessionActivity,
 } from '../lib/supabase'
@@ -60,41 +57,12 @@ export default function StaffLoginPage() {
       return setError(t('auth.loginFailed','登录失败，请重试'))
     }
 
-    const { data: lease, error: leaseError } = await claimAppSession('staff')
-    if (leaseError) {
-      await signOutAppSession()
-      setLoading(false)
-      return setError(t('auth.sessionCheckFailed','Unable to verify this browser session. Please try again.'))
-    }
-    if (!lease?.ok) {
-      await discardLocalAppSession()
-      setLoading(false)
-      return setError(lease?.reason === 'active_elsewhere'
-        ? t('auth.sessionTakeoverFailed','Unable to replace the previous session. Please try signing in again.')
-        : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.'))
-    }
-
     touchSessionActivity(true)
-
-    const { data: access, error: accessError } = await supabase
-      .from('user_access')
-      .select('employee_portal_enabled,active')
-      .eq('auth_user_id', sessionData.user.id)
-      .single()
-
     setLoading(false)
-
-    if (accessError) {
-      resetLocale()
-      navigate('/staff', { replace: true })
-      return
-    }
-
-    if (!access?.active || !access?.employee_portal_enabled) {
-      await signOutAppSession()
-      return setError(t('auth.accountUnavailable','账号不可用'))
-    }
-
+    // admin-login already verifies active staff-portal access and atomically
+    // claims the candidate session. Protected revalidates through the narrow
+    // self-only bootstrap RPC after navigation, so no duplicate RLS read is
+    // needed here.
     resetLocale()
     navigate('/staff', { replace: true })
   }
@@ -109,7 +77,8 @@ export default function StaffLoginPage() {
 
         <form className="login-card" onSubmit={submit}>
           <div className="auth-language-row"><StaffLanguageSwitcher /></div>
-          <div className="login-title">{t('auth.staffLogin','员工登录')}</div>
+          <div className="login-title">{t('auth.staffLogin','WFH 登录')}</div>
+          <div className="login-subtitle">{t('auth.staffLoginSubtitle','安全进入个人工作台')}</div>
 
           <label className="login-field">
             {t('auth.email','邮箱')}

@@ -1,11 +1,8 @@
 import React, { useState } from 'react'
 import {
-  claimAppSession,
   configured,
   consumeAppSessionNotice,
-  discardLocalAppSession,
   setAppSession,
-  signOutAppSession,
   supabase,
   touchSessionActivity,
 } from '../lib/supabase'
@@ -75,18 +72,6 @@ export default function AdminLoginPage() {
         return
       }
 
-      const { data: lease, error: leaseError } = await claimAppSession('admin')
-      if (leaseError) {
-        await signOutAppSession()
-        return setError('登录会话验证暂不可用，请稍后重试')
-      }
-      if (!lease?.ok) {
-        await discardLocalAppSession()
-        return setError(lease?.reason === 'active_elsewhere'
-          ? '旧会话接管未完成，请重新登录；成功后旧设备会自动退出'
-          : '登录会话已失效，请重试')
-      }
-
       touchSessionActivity(true)
       window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}admin`)
     } catch (requestError) {
@@ -107,7 +92,8 @@ export default function AdminLoginPage() {
         </div>
 
         <form className="login-card" onSubmit={submit}>
-          <div className="login-title">登录</div>
+          <div className="login-title">WFH 登录</div>
+          <div className="login-subtitle">管理后台 · 安全访问</div>
 
           <label className="login-field">
             用户名

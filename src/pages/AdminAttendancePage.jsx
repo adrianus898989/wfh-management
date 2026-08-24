@@ -10,6 +10,23 @@ import { EmployeeDrawer } from './AdminEmployeesPage'
 const TABS=['排班表','出勤表','今日考勤','考勤记录','请假审批','奖金 / 扣款']
 const ATTENDANCE_EVENT_KINDS=new Set(['public_holiday','home_leave','leave','half_day','absence','absent','resignation'])
 const text=value=>String(value??'').trim()
+const MISSING_TEAM_LABELS=new Set(['未分配团队','未匹配团队','未分团队','未分类','—','-'])
+const organizationName=value=>{
+  if(!value)return ''
+  if(typeof value==='object')return organizationName(value.name||value.team_name||value.teamName||value.label)
+  return text(value).normalize('NFKC').replace(/\s+/g,' ')
+}
+const scheduleTeamName=(row,profile={})=>{
+  const values=[
+    row?.team_name,row?.team,row?.employee_team_name,row?.profile_team_name,
+    row?.employee?.team_name,row?.employee?.team,row?.employee?.teams,
+    row?.employee_profile?.team_name,row?.employee_profile?.team,row?.employee_profile?.teams,
+    row?.profile?.team_name,row?.profile?.team,row?.profile?.teams,row?.teams,
+    profile?.team_name,profile?.team,profile?.teams,
+  ]
+  return values.map(organizationName).find(value=>value&&!MISSING_TEAM_LABELS.has(value))||''
+}
+const scheduleTeamKey=value=>organizationName(value).toLocaleLowerCase().replace(/\s+/g,'')
 const BUSINESS_TIME_ZONE='Asia/Manila'
 const todayIso=()=>{
   try{
@@ -275,22 +292,30 @@ function SchedulePane(){
       else{
         const payload=data||{}
         const rawRows=payload.rows||payload.employees||payload.schedule||[]
+        const profiles=[payload.employee_profiles,payload.profiles,payload.employee_directory,payload.directory].find(Array.isArray)||[]
+        if(!alive)return
+        const profilesById=new Map(profiles.map(profile=>[text(profile.id||profile.employee_id),profile]).filter(([key])=>key))
+        const profilesByNo=new Map(profiles.map(profile=>[text(profile.employee_no||profile.staff_id).toUpperCase(),profile]).filter(([key])=>key))
         const refreshedAt=rawRows.map(row=>text(row?.refreshed_at)).filter(Boolean).sort().at(-1)||''
-        const rows=rawRows.map((row,index)=>({
-          ...row,
-          id:row.id||row.employee_id||`${row.employee_no||row.full_name}-${index}`,
-          employee_no:row.employee_no||row.staff_id||row.employee_code||'',
-          full_name:row.full_name||row.employee_name||row.name||'',
-          team_name:row.team_name||row.team||'未分配团队',
-          group_name:row.group_name||row.group||row.team_group||'',
-          shift_name:row.shift_display||row.shift_raw||row.shift_name||row.shift||'',
-          shift_bucket:row.shift_bucket||shiftTone(row.shift_display||row.shift_raw||row.shift_name||row.shift),
-          position_name:row.position_name||row.position||'',
-          country:row.country_name||row.country||row.nationality||'',
-          platform:row.platform_name||row.platform||row.platform_scope||'',
-          manager:row.responsible||row.manager||'',
-          work_mode:row.work_mode||row.source_group||employeeWorkMode(row),
-        }))
+        const rows=rawRows.map((row,index)=>{
+          const employeeNo=text(row.employee_no||row.staff_id||row.employee_code)
+          const profile=profilesById.get(text(row.employee_id||row.id))||profilesByNo.get(employeeNo.toUpperCase())||{}
+          return {
+            ...row,
+            id:row.id||row.employee_id||`${employeeNo||row.full_name}-${index}`,
+            employee_no:employeeNo,
+            full_name:row.full_name||row.employee_name||row.name||profile.full_name||'',
+            team_name:scheduleTeamName(row,profile)||'未分配团队',
+            group_name:row.group_name||row.group||row.team_group||profile.group_name||'',
+            shift_name:row.shift_display||row.shift_raw||row.shift_name||row.shift||profile.shift_name||'',
+            shift_bucket:row.shift_bucket||shiftTone(row.shift_display||row.shift_raw||row.shift_name||row.shift||profile.shift_name),
+            position_name:row.position_name||row.position||profile.position_name||profile.positions?.name||'',
+            country:row.country_name||row.country||row.nationality||profile.country||profile.nationality||'',
+            platform:row.platform_name||row.platform||row.platform_scope||profile.platform||profile.platform_scope||'',
+            manager:row.responsible||row.manager||profile.responsible||profile.manager||profile.leader_name||'',
+            work_mode:row.work_mode||row.source_group||profile.work_mode||profile.source_group||employeeWorkMode({...profile,...row}),
+          }
+        })
         setState({loading:false,error:'',rows,options:payload.options||payload.filters||{},sync:syncMeta({...payload,refreshed_at:payload.refreshed_at||refreshedAt})})
       }
     }
@@ -299,10 +324,18 @@ function SchedulePane(){
   },[applied,refreshKey])
   const optionValues=(key,selector)=>{
     const supplied=state.options?.[key]||state.options?.[`${key}s`]||[]
-    const values=supplied.length?supplied.map(item=>text(item?.value??item?.name??item?.label??item)):state.rows.map(selector)
+    const values=[...supplied.map(item=>text(item?.value??item?.name??item?.label??item)),...state.rows.map(selector)]
     return Array.from(new Set(values.map(text).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'zh-CN'))
   }
-  const teams=useMemo(()=>optionValues('team',row=>row.team_name),[state.options,state.rows])
+  const teams=useMemo(()=>{
+    const values=new Map()
+    state.rows.forEach(row=>{
+      const name=scheduleTeamName(row)||'未分配团队'
+      const key=scheduleTeamKey(name)||'__unassigned__'
+      if(!values.has(key))values.set(key,name)
+    })
+    return Array.from(values.values()).sort((a,b)=>a.localeCompare(b,'zh-CN'))
+  },[state.rows])
   const groups=useMemo(()=>optionValues('group',row=>row.group_name),[state.options,state.rows])
   const positions=useMemo(()=>optionValues('position',row=>row.position_name),[state.options,state.rows])
   const shifts=useMemo(()=>optionValues('shift',row=>row.shift_name).sort(shiftSort),[state.options,state.rows])
@@ -314,7 +347,7 @@ function SchedulePane(){
       &&includes(employee.full_name,applied.employee_name)
       &&(!applied.work_mode||employeeWorkMode(employee)===applied.work_mode)
       &&(!applied.employee_status||text(employee.employee_status).toLowerCase()===text(applied.employee_status).toLowerCase())
-      &&(!applied.team||text(employee.team_name)===applied.team)
+      &&(!applied.team||scheduleTeamKey(employee.team_name)===scheduleTeamKey(applied.team))
       &&(!applied.group||text(employee.group_name)===applied.group)
       &&(!applied.position||text(employee.position_name)===applied.position)
       &&(!applied.shift||text(employee.shift_name)===applied.shift)
@@ -326,9 +359,10 @@ function SchedulePane(){
   const matrix=useMemo(()=>{
     const teamsMap=new Map()
     visibleRows.forEach(employee=>{
-      const teamName=employee.team_name||'未分配团队'
-      if(!teamsMap.has(teamName))teamsMap.set(teamName,{team:teamName,day:[],mid:[],night:[],other:[]})
-      teamsMap.get(teamName)[employee.shift_bucket||shiftTone(employee.shift_name)].push(employee)
+      const teamName=scheduleTeamName(employee)||'未分配团队'
+      const teamKey=scheduleTeamKey(teamName)||'__unassigned__'
+      if(!teamsMap.has(teamKey))teamsMap.set(teamKey,{team:teamName,day:[],mid:[],night:[],other:[]})
+      teamsMap.get(teamKey)[employee.shift_bucket||shiftTone(employee.shift_name)].push(employee)
     })
     return Array.from(teamsMap.values()).sort((a,b)=>a.team.localeCompare(b.team,'zh-CN'))
   },[visibleRows])

@@ -235,7 +235,8 @@
 .exam-page .exam-question-table .exam-row-actions{gap:4px}
 .exam-page .exam-question-table .exam-row-actions button{padding:6px 8px;font-size:9px}
 
-.exam-page .exam-session-table{width:100%;min-width:1420px!important;table-layout:fixed}
+.exam-page .exam-session-wrap{width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch}
+.exam-page .exam-session-table{width:100%;min-width:1540px!important;table-layout:fixed}
 .exam-page .exam-session-table th:nth-child(1){width:64px}
 .exam-page .exam-session-table th:nth-child(2){width:88px}
 .exam-page .exam-session-table th:nth-child(3){width:118px}
@@ -249,8 +250,11 @@
 .exam-page .exam-session-table th:nth-child(11){width:205px}
 .exam-page .exam-session-table th:nth-child(12){width:68px}
 .exam-page .exam-session-table th:nth-child(13){width:64px}
-.exam-page .exam-session-table th:nth-child(14){width:82px}
+.exam-page .exam-session-table th:nth-child(14){width:190px}
 .exam-page .exam-session-table th,.exam-page .exam-session-table td{padding:8px 7px;font-size:10px}
+.exam-page .exam-session-table th:last-child,.exam-page .exam-session-table td:last-child{white-space:nowrap}
+.exam-page .exam-session-table .exam-row-actions{display:inline-flex;flex-flow:row nowrap;align-items:center;min-width:max-content;white-space:nowrap}
+.exam-page .exam-session-table .exam-row-actions button{flex:0 0 auto;white-space:nowrap;word-break:keep-all}
 .exam-record-name-cell{position:relative;display:grid;min-width:0;gap:3px;align-items:start}
 .exam-page .exam-record-name{display:block!important;width:100%;max-width:104px;overflow:hidden!important;color:#203b5d!important;font-size:10px!important;line-height:1.35;white-space:nowrap!important;text-overflow:ellipsis;text-decoration:none!important}
 .exam-record-name-cell.expanded .exam-record-name{overflow:visible!important;white-space:normal!important;overflow-wrap:anywhere;text-decoration:none!important}

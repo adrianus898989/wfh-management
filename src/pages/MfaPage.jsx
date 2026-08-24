@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { bootstrapAppSessionAccess, supabase } from '../lib/supabase'
 
 export default function MfaPage() {
   const [loading, setLoading] = useState(true)
@@ -22,13 +22,16 @@ export default function MfaPage() {
         return
       }
 
-      const { data: access } = await supabase
-        .from('user_access')
-        .select('otp_required,backend_enabled,active')
-        .eq('auth_user_id', session.user.id)
-        .single()
+      const { data: bootstrap, error: bootstrapError } = await bootstrapAppSessionAccess()
+      const access = bootstrap?.access || null
 
       if (!alive) return
+
+      if (bootstrapError || !bootstrap?.ok) {
+        setError('登录权限验证暂时失败，请重新登录')
+        setLoading(false)
+        return
+      }
 
       if (!access?.active || !access?.backend_enabled) {
         setLoading(false)
