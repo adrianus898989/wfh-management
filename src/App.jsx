@@ -1,6 +1,19 @@
 import React, { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { clearSessionActivity, configured, isSessionIdleExpired, supabase, touchSessionActivity } from './lib/supabase'
+import {
+  APP_SESSION_HEARTBEAT_MS,
+  claimAppSession,
+  clearSessionActivity,
+  configured,
+  discardLocalAppSession,
+  heartbeatAppSession,
+  isSessionIdleExpired,
+  releaseAppSession,
+  setAppSessionNotice,
+  signOutAppSession,
+  supabase,
+  touchSessionActivity,
+} from './lib/supabase'
 import AdminLoginPage from './pages/AdminLoginPage'
 import StaffLoginPage from './pages/StaffLoginPage'
 import StaffRegisterPage from './pages/StaffRegisterPage'
@@ -30,21 +43,37 @@ function Protected({ children, mode }) {
   useEffect(() => {
     let alive = true
     let authSubscription
-    const localSignOut = async () => {
-      accessCache.clear()
-      clearSessionActivity()
-      try { await supabase.auth.signOut({ scope:'local' }) } catch (_) {}
-      if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
+    let bootstrapTimer
+    let leaseCheckPromise = null
+    let bootstrapPromise = null
+    let signOutPromise = null
+    let leaseOwned = false
+    let leaseEligible = false
+    const sessionCheckMessage = mode==='staff'
+      ? t('auth.sessionCheckFailed','无法验证当前浏览器会话，请稍后重试。')
+      : '无法验证当前浏览器会话，请稍后重试。'
+    const localSignOut = ({ release=true, notice='' } = {}) => {
+      if (notice) setAppSessionNotice(notice, mode)
+      if (signOutPromise) return signOutPromise
+      signOutPromise = (async () => {
+        accessCache.clear()
+        leaseOwned = false
+        leaseEligible = false
+        if (release) await signOutAppSession()
+        else await discardLocalAppSession()
+        if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
+      })().finally(() => { signOutPromise = null })
+      return signOutPromise
     }
-    const terminalAuthError = error => /refresh token|invalid.*token|jwt|session.*missing|not authenticated/i.test(error?.message || '')
+    const terminalAuthError = error => /refresh[_\s-]*token|invalid.*token|jwt|(?:auth[_\s-]*)?session.*missing|not[_\s-]*authenticated/i.test(error?.message || '')
     const freshSession = async (force = false) => {
       if (isSessionIdleExpired()) {
-        await localSignOut()
+        await localSignOut({ release:true })
         return { session:null, error:null }
       }
       const { data, error } = await supabase.auth.getSession()
       if (terminalAuthError(error)) {
-        await localSignOut()
+        await localSignOut({ release:false, notice:'session_ended' })
         return { session:null, error:null }
       }
       let session = data?.session || null
@@ -52,54 +81,116 @@ function Protected({ children, mode }) {
         const refreshed = await supabase.auth.refreshSession(session)
         if (!refreshed.error && refreshed.data?.session) session = refreshed.data.session
         else if (terminalAuthError(refreshed.error)) {
-          await localSignOut()
+          await localSignOut({ release:false, notice:'session_ended' })
           return { session:null, error:null }
         }
       }
       return { session, error }
     }
-    const bootstrap = async () => {
-      const { session, error: sessionError } = await freshSession()
-      if (sessionError) {
-        if (alive) setState({ loading:false, session:null, access:null, aal:null, error:mode==='staff'?t('auth.readFailed','登录状态读取失败，请检查网络后重试。'):'登录状态读取失败，请检查网络后重试。' })
-        return
+    const checkLease = (method = 'claim') => {
+      if (leaseCheckPromise) return leaseCheckPromise
+      leaseCheckPromise = Promise.resolve(
+        method === 'heartbeat' ? heartbeatAppSession() : claimAppSession(mode),
+      ).catch(error => ({ data:null, error }))
+        .finally(() => { leaseCheckPromise = null })
+      return leaseCheckPromise
+    }
+    const acceptLease = async (result) => {
+      if (result?.error) return false
+      if (!result?.data?.ok) {
+        const reason = result?.data?.reason
+        await localSignOut({
+          release:false,
+          notice:reason==='active_elsewhere'||reason==='not_owner'
+            ? 'active_elsewhere'
+            : 'session_ended',
+        })
+        return false
       }
-      if (!session) {
-        if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
-        return
-      }
-      touchSessionActivity()
-      // Founder 已经由 Supabase Auth 完成密码和用户 ID 校验。Founder 是系统锁定
-      // 账号，数据库连接繁忙时不应因 user_access 暂时 503 而被送回登录页。
-      let access = accessCache.get(session.user.id)
-      if (session.user.id === FOUNDER_AUTH_USER_ID) {
-        access = {
-          backend_enabled: true,
-          employee_portal_enabled: false,
-          active: true,
-          otp_required: false,
-        }
-      } else if (!access) {
-        const result = await supabase.from('user_access')
-          .select('backend_enabled,employee_portal_enabled,active,otp_required')
-          .eq('auth_user_id', session.user.id)
-          .maybeSingle()
-        if (result.error) {
-          if (alive) setState({ loading:false, session, access:null, aal:null, error:mode==='staff'?t('auth.accessFailed','权限验证暂时失败，请重试。登录状态仍为你保留。'):'权限验证暂时失败，请重试。登录状态仍为你保留。' })
+      leaseOwned = leaseEligible
+      return true
+    }
+    const bootstrap = (force = false) => {
+      if (bootstrapPromise) return bootstrapPromise
+      bootstrapPromise = (async () => {
+        const { session, error: sessionError } = await freshSession(force)
+        if (sessionError) {
+          if (alive) setState({ loading:false, session:null, access:null, aal:null, error:mode==='staff'?t('auth.readFailed','登录状态读取失败，请检查网络后重试。'):'登录状态读取失败，请检查网络后重试。' })
           return
         }
-        access = result.data
-      }
-      if (access) accessCache.set(session.user.id, access)
-      let aal = null
-      if (mode === 'admin' && access?.otp_required) {
-        const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-        aal = data?.currentLevel || null
-      }
-      if (alive) setState({ loading:false, session, access, aal, error:'' })
+        if (!session) {
+          if (alive) setState({ loading:false, session:null, access:null, aal:null, error:'' })
+          return
+        }
+
+        leaseEligible = false
+        leaseOwned = false
+        touchSessionActivity()
+        // Founder 已经由 Supabase Auth 完成密码和用户 ID 校验。Founder 是系统锁定
+        // 账号，数据库连接繁忙时不应因 user_access 暂时 503 而被送回登录页。
+        let access = accessCache.get(session.user.id)
+        if (session.user.id === FOUNDER_AUTH_USER_ID) {
+          access = {
+            backend_enabled: true,
+            employee_portal_enabled: false,
+            active: true,
+            otp_required: false,
+          }
+        } else if (!access) {
+          const result = await supabase.from('user_access')
+            .select('backend_enabled,employee_portal_enabled,active,otp_required')
+            .eq('auth_user_id', session.user.id)
+            .maybeSingle()
+          if (result.error) {
+            if (alive) setState({ loading:false, session, access:null, aal:null, error:mode==='staff'?t('auth.accessFailed','权限验证暂时失败，请重试。登录状态仍为你保留。'):'权限验证暂时失败，请重试。登录状态仍为你保留。' })
+            return
+          }
+          access = result.data
+        }
+        if (access) accessCache.set(session.user.id, access)
+
+        const entryEnabled = mode==='admin'
+          ? access?.backend_enabled
+          : access?.employee_portal_enabled
+        if (!access?.active || !entryEnabled) {
+          if (alive) setState({ loading:false, session, access, aal:null, error:'' })
+          return
+        }
+
+        let aal = null
+        if (mode === 'admin' && access?.otp_required) {
+          const aalResult = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+          if (aalResult.error) {
+            if (alive) setState({ loading:false, session, access, aal:null, error:'安全验证状态读取失败，请重试。' })
+            return
+          }
+          aal = aalResult.data?.currentLevel || null
+          if (aal !== 'aal2') {
+            // AAL1 may render only /admin/mfa. It neither claims nor renews the
+            // unique browser lease until the MFA verify call upgrades this JWT.
+            // Best-effort cleanup also removes a lease created by an older app
+            // version, and the RPC can only target this JWT's session_id.
+            void releaseAppSession().catch(()=>{})
+            if (alive) setState({ loading:false, session, access, aal, error:'' })
+            return
+          }
+        }
+
+        leaseEligible = true
+        const leaseResult = await checkLease('claim')
+        if (!(await acceptLease(leaseResult))) {
+          if (leaseResult?.error && alive) {
+            leaseEligible = false
+            leaseOwned = false
+            setState({ loading:false, session, access:null, aal:null, error:sessionCheckMessage })
+          }
+          return
+        }
+        if (alive) setState({ loading:false, session, access, aal, error:'' })
+      })().finally(() => { bootstrapPromise = null })
+      return bootstrapPromise
     }
     bootstrap()
-    let bootstrapTimer
     const scheduleBootstrap = () => {
       window.clearTimeout(bootstrapTimer)
       // Avoid awaiting Supabase calls inside its auth callback. Re-run the full
@@ -110,6 +201,8 @@ function Protected({ children, mode }) {
       if (!alive) return
       if (event === 'SIGNED_OUT') {
         accessCache.clear()
+        leaseOwned = false
+        leaseEligible = false
         clearSessionActivity()
         setState({ loading:false, session:null, access:null, aal:null, error:'' })
       } else if (session) {
@@ -118,17 +211,29 @@ function Protected({ children, mode }) {
       }
     })
     authSubscription = data.subscription
-    const recover = async (force = false) => {
+    const recover = (force = false) => {
       if (document.hidden || !navigator.onLine) return
-      const { session } = await freshSession(force)
-      if (alive && session) setState(current => ({ ...current, session, error:'' }))
+      return bootstrap(force)
+    }
+    const heartbeat = async () => {
+      if (!alive || !leaseEligible || !leaseOwned || !navigator.onLine) return
+      const result = await checkLease('heartbeat')
+      if (!leaseEligible) return
+      if (!(await acceptLease(result)) && result?.error && alive) {
+        setState(current => current.session
+          ? { ...current, loading:false, error:sessionCheckMessage }
+          : current)
+      }
     }
     const onVisible = () => { if (!document.hidden) recover() }
     const onOnline = () => recover()
     const onFocus = () => recover()
     const onActivity = () => touchSessionActivity()
-    const onAuthCheck = event => event?.detail?.terminal ? localSignOut() : recover(true)
-    const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut() }, 60*1000)
+    const onAuthCheck = event => event?.detail?.terminal
+      ? localSignOut({ release:false, notice:'session_ended' })
+      : recover(true)
+    const heartbeatTimer = window.setInterval(heartbeat, APP_SESSION_HEARTBEAT_MS)
+    const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut({ release:true }) }, 60*1000)
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('online', onOnline)
     window.addEventListener('focus', onFocus)
@@ -138,6 +243,7 @@ function Protected({ children, mode }) {
       alive = false
       window.clearTimeout(bootstrapTimer)
       authSubscription?.unsubscribe()
+      window.clearInterval(heartbeatTimer)
       window.clearInterval(idleTimer)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('online', onOnline)

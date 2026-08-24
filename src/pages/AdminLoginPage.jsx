@@ -1,5 +1,14 @@
 import React, { useState } from 'react'
-import { supabase, configured } from '../lib/supabase'
+import {
+  claimAppSession,
+  configured,
+  consumeAppSessionNotice,
+  discardLocalAppSession,
+  setAppSession,
+  signOutAppSession,
+  supabase,
+  touchSessionActivity,
+} from '../lib/supabase'
 
 function withTimeout(promise, ms = 25000) {
   let timer
@@ -13,7 +22,14 @@ export default function AdminLoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() => {
+    const notice = consumeAppSessionNotice('admin')
+    return notice === 'active_elsewhere'
+      ? '当前会话已结束：该账号正在另一浏览器使用'
+      : notice === 'session_ended'
+        ? '登录会话已失效，请重新登录'
+        : ''
+  })
   const [loading, setLoading] = useState(false)
 
   const submit = async (e) => {
@@ -33,16 +49,45 @@ export default function AdminLoginPage() {
         })
       )
 
-      if (error || !data?.access_token || !data?.refresh_token) {
-        return setError(data?.error || '用户名或密码错误')
+      let responseData = data
+      if (error && !responseData?.error) {
+        try { responseData = await error.context?.json() } catch (_) {}
       }
 
-      const { error: sessionError } = await withTimeout(supabase.auth.setSession({
-        access_token: data.access_token,
-        refresh_token: data.refresh_token,
-      }))
+      if (error || !responseData?.access_token || !responseData?.refresh_token) {
+        return setError(responseData?.error || '用户名或密码错误')
+      }
 
-      if (sessionError) return setError('登录失败，请重试')
+      const { data: sessionData, error: sessionError } = await setAppSession({
+        access_token: responseData.access_token,
+        refresh_token: responseData.refresh_token,
+      })
+
+      if (sessionError || !sessionData?.session) {
+        return setError(sessionError?.code==='SESSION_SETUP_TIMEOUT'
+          ? '登录状态设置超时，请重试'
+          : '登录失败，请重试')
+      }
+
+      if (responseData.mfa_required) {
+        touchSessionActivity(true)
+        window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}admin/mfa`)
+        return
+      }
+
+      const { data: lease, error: leaseError } = await claimAppSession('admin')
+      if (leaseError) {
+        await signOutAppSession()
+        return setError('登录会话验证暂不可用，请稍后重试')
+      }
+      if (!lease?.ok) {
+        await discardLocalAppSession()
+        return setError(lease?.reason === 'active_elsewhere'
+          ? '该账号已在另一浏览器登录，请先退出原会话后重试'
+          : '登录会话已失效，请重试')
+      }
+
+      touchSessionActivity(true)
       window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}admin`)
     } catch (requestError) {
       setError(requestError?.message === 'TIMEOUT'

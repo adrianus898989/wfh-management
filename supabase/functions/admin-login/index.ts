@@ -9,6 +9,7 @@ const founderAccess = {
   login_email: 'adrianus898989@gmail.com',
   backend_enabled: true,
   active: true,
+  otp_required: false,
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -62,7 +63,7 @@ async function findAccess(admin: any, username: string, mode: string) {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let query = admin
       .from('user_access')
-      .select('auth_user_id,login_email,backend_enabled,employee_portal_enabled,active')
+      .select('auth_user_id,login_email,backend_enabled,employee_portal_enabled,active,otp_required')
     query = mode === 'staff' ? query.ilike('login_email', username) : query.ilike('login_username', username)
     const { data, error } = await query.maybeSingle()
 
@@ -105,6 +106,24 @@ async function authenticate(authClient: any, email: string, password: string) {
   return {
     data: { user: null, session: null },
     error: lastError || new Error('AUTH_UNAVAILABLE'),
+  }
+}
+
+async function discardCandidateSession(authClient: any) {
+  try {
+    const { error } = await authClient.auth.signOut({ scope: 'local' })
+    if (error) console.error('ADMIN_LOGIN_CANDIDATE_SIGNOUT_ERROR', error.message)
+  } catch (error: any) {
+    console.error('ADMIN_LOGIN_CANDIDATE_SIGNOUT_ERROR', error?.message || error)
+  }
+}
+
+async function releaseCandidateLease(authClient: any) {
+  try {
+    const { error } = await authClient.rpc('app_session_release')
+    if (error) console.error('ADMIN_LOGIN_CANDIDATE_RELEASE_ERROR', error.message)
+  } catch (error: any) {
+    console.error('ADMIN_LOGIN_CANDIDATE_RELEASE_ERROR', error?.message || error)
   }
 }
 
@@ -187,7 +206,55 @@ Deno.serve(async (req) => {
       authData.user.id !== access.auth_user_id
     ) {
       console.error('ADMIN_LOGIN_ID_MISMATCH')
+      await discardCandidateSession(authClient)
       return json(req, { error: '用户名或密码错误' }, 401)
+    }
+
+    const mfaRequired = mode === 'admin' && Boolean(access.otp_required)
+
+    if (!mfaRequired) {
+      // Password verification creates a new Supabase Auth session. Before any
+      // token leaves this trusted boundary, atomically claim the per-user lease
+      // using the session_id in that session's JWT. MFA admins defer this until
+      // their session is promoted to AAL2 by the protected bootstrap.
+      const { data: lease, error: leaseError } = await authClient.rpc(
+        'app_session_claim',
+        { p_portal: mode },
+      )
+
+      if (leaseError) {
+        console.error('ADMIN_LOGIN_SESSION_CLAIM_ERROR', {
+          code: leaseError.code || null,
+          message: leaseError.message || null,
+        })
+        // The claim may have committed even if its response was interrupted.
+        // Release only this candidate's session_id, then revoke that session.
+        await releaseCandidateLease(authClient)
+        await discardCandidateSession(authClient)
+        return json(req, {
+          error: '登录会话验证暂不可用，请稍后重试',
+          code: 'SESSION_CHECK_UNAVAILABLE',
+        }, 503)
+      }
+
+      if (!lease?.ok) {
+        // Do not call app_session_release here: the rejected candidate does not
+        // own the lease. Local sign-out revokes only the new Auth session and
+        // cannot log the incumbent browser out.
+        await discardCandidateSession(authClient)
+        if (lease?.reason === 'active_elsewhere') {
+          return json(req, {
+            error: '该账号已在另一浏览器登录，请先退出原会话后重试',
+            code: 'ACTIVE_SESSION_EXISTS',
+            retry_after_seconds: lease.retry_after_seconds || 1,
+          }, 409)
+        }
+        console.error('ADMIN_LOGIN_SESSION_REJECTED', lease?.reason || 'unknown')
+        return json(req, {
+          error: '登录会话已失效，请重试',
+          code: 'SESSION_REJECTED',
+        }, 401)
+      }
     }
 
     // 审计写入不能阻塞已通过的登录，数据库恢复后仍会正常记录。
@@ -210,6 +277,7 @@ Deno.serve(async (req) => {
 
     return json(req, {
       ok: true,
+      mfa_required: mfaRequired,
       access_token: authData.session.access_token,
       refresh_token: authData.session.refresh_token,
     })

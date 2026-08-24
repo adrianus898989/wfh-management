@@ -3,8 +3,12 @@ const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
 export const SESSION_IDLE_LIMIT_MS=24*60*60*1000
+export const APP_SESSION_HEARTBEAT_MS=60*1000
+export const APP_SESSION_RPC_TIMEOUT_MS=15*1000
+export const SESSION_SETUP_TIMEOUT_MS=25*1000
 const portal=typeof window!=='undefined'&&window.location.pathname.startsWith('/admin')?'admin':'staff'
 const SESSION_ACTIVITY_KEY=`wfh_${portal}_session_last_activity`
+const SESSION_NOTICE_KEY=`wfh_${portal}_session_notice`
 let lastActivityWrite=0
 
 export const touchSessionActivity=(force=false)=>{
@@ -12,17 +16,35 @@ export const touchSessionActivity=(force=false)=>{
   const now=Date.now()
   if(!force&&now-lastActivityWrite<60*1000)return
   lastActivityWrite=now
-  window.localStorage.setItem(SESSION_ACTIVITY_KEY,String(now))
+  try{window.localStorage.setItem(SESSION_ACTIVITY_KEY,String(now))}catch(_){}
 }
 export const clearSessionActivity=()=>{
-  if(typeof window!=='undefined')window.localStorage.removeItem(SESSION_ACTIVITY_KEY)
+  if(typeof window!=='undefined'){
+    try{window.localStorage.removeItem(SESSION_ACTIVITY_KEY)}catch(_){}
+  }
   lastActivityWrite=0
 }
 export const isSessionIdleExpired=()=>{
   if(typeof window==='undefined')return false
-  const last=Number(window.localStorage.getItem(SESSION_ACTIVITY_KEY)||0)
+  let last=0
+  try{last=Number(window.localStorage.getItem(SESSION_ACTIVITY_KEY)||0)}catch(_){return false}
   if(!last){touchSessionActivity(true);return false}
   return Date.now()-last>=SESSION_IDLE_LIMIT_MS
+}
+
+export const setAppSessionNotice=(reason,requestedPortal=portal)=>{
+  if(typeof window==='undefined')return
+  try{window.sessionStorage.setItem(`wfh_${requestedPortal}_session_notice`,String(reason||''))}catch(_){}
+}
+
+export const consumeAppSessionNotice=(requestedPortal=portal)=>{
+  if(typeof window==='undefined')return ''
+  const key=requestedPortal===portal?SESSION_NOTICE_KEY:`wfh_${requestedPortal}_session_notice`
+  try{
+    const reason=window.sessionStorage.getItem(key)||''
+    window.sessionStorage.removeItem(key)
+    return reason
+  }catch(_){return ''}
 }
 
 const authenticatedFetch=async(input,init)=>{
@@ -30,7 +52,7 @@ const authenticatedFetch=async(input,init)=>{
   if(response.status===401&&typeof window!=='undefined'){
     let body=''
     try{body=await response.clone().text()}catch(_){body=''}
-    const terminal=/invalid\s*(jwt|token)|jwt\s*(expired|malformed)|refresh\s*token|session\s*(missing|expired)|not\s*authenticated|no\s*authorization/i.test(body)
+    const terminal=/invalid[_\s-]*(jwt|token)|jwt[_\s-]*(expired|malformed)|refresh[_\s-]*token|(?:auth[_\s-]*)?session[_\s-]*(missing|expired)|not[_\s-]*authenticated|no[_\s-]*authorization/i.test(body)
     window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail:{terminal}}))
   }
   return response
@@ -42,3 +64,108 @@ export const supabase=configured?createClient(url,key,{
   auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,storageKey:`wfh-${portal}-auth-token`},
   global:{fetch:authenticatedFetch},
 }):null
+
+const timeoutError=code=>Object.assign(new Error(code),{code})
+
+export const withPromiseTimeout=(promise,ms,code='TIMEOUT')=>{
+  let timer
+  const timeout=new Promise((_,reject)=>{
+    timer=globalThis.setTimeout(()=>reject(timeoutError(code)),ms)
+  })
+  return Promise.race([Promise.resolve(promise),timeout])
+    .finally(()=>globalThis.clearTimeout(timer))
+}
+
+const timedAppSessionRpc=(client,name,args)=>{
+  const controller=new AbortController()
+  let timer
+  const request=Promise.resolve(client.rpc(name,args).abortSignal(controller.signal))
+    .catch(error=>({data:null,error}))
+  const timeout=new Promise(resolve=>{
+    timer=globalThis.setTimeout(()=>{
+      controller.abort()
+      resolve({data:null,error:timeoutError('APP_SESSION_TIMEOUT')})
+    },APP_SESSION_RPC_TIMEOUT_MS)
+  })
+  return Promise.race([request,timeout])
+    .finally(()=>globalThis.clearTimeout(timer))
+}
+
+export const claimAppSession=(requestedPortal=portal)=>timedAppSessionRpc(
+  supabase,
+  'app_session_claim',
+  {p_portal:requestedPortal==='admin'?'admin':'staff'},
+)
+
+export const heartbeatAppSession=()=>timedAppSessionRpc(supabase,'app_session_heartbeat')
+
+export const releaseAppSession=()=>timedAppSessionRpc(supabase,'app_session_release')
+
+// A rejected candidate session must never release the incumbent browser's
+// lease. The server-side release RPC also checks session_id, but keeping this
+// path explicit makes that invariant harder to accidentally weaken later.
+export const discardLocalAppSession=async()=>{
+  clearSessionActivity()
+  try{return await supabase.auth.signOut({scope:'local'})}catch(error){return {error}}
+}
+
+export const signOutAppSession=async()=>{
+  let releaseError=null
+  try{
+    const result=await releaseAppSession()
+    releaseError=result.error||null
+  }catch(error){releaseError=error}
+  const signOutResult=await discardLocalAppSession()
+  return {error:signOutResult?.error||null,releaseError}
+}
+
+const jwtSessionId=token=>{
+  try{
+    const encoded=String(token||'').split('.')[1]||''
+    const padded=encoded.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(encoded.length/4)*4,'=')
+    return JSON.parse(globalThis.atob(padded))?.session_id||''
+  }catch(_){return ''}
+}
+
+// Uses the candidate JWT as a custom access token, so cleanup cannot release
+// a different session already stored by this browser. The local session is
+// cleared only after an exact session_id match.
+export const cleanupCandidateAppSession=async accessToken=>{
+  if(!configured||!accessToken)return {data:null,error:null}
+  let releaseResult={data:null,error:null}
+  try{
+    const candidateClient=createClient(url,key,{accessToken:async()=>accessToken})
+    releaseResult=await timedAppSessionRpc(candidateClient,'app_session_release')
+  }catch(error){releaseResult={data:null,error}}
+
+  const candidateSessionId=jwtSessionId(accessToken)
+  if(candidateSessionId){
+    try{
+      const current=await withPromiseTimeout(supabase.auth.getSession(),2000,'SESSION_READ_TIMEOUT')
+      if(jwtSessionId(current?.data?.session?.access_token)===candidateSessionId){
+        await discardLocalAppSession()
+      }
+    }catch(_){}
+  }
+  return releaseResult
+}
+
+export const setAppSession=async tokens=>{
+  const request=supabase.auth.setSession(tokens)
+  try{
+    const result=await withPromiseTimeout(request,SESSION_SETUP_TIMEOUT_MS,'SESSION_SETUP_TIMEOUT')
+    if(result?.error||!result?.data?.session){
+      await cleanupCandidateAppSession(tokens?.access_token)
+    }
+    return result
+  }catch(error){
+    // Auth does not expose an AbortSignal for setSession. If it finishes after
+    // our deadline, run the same session_id-scoped cleanup once more.
+    void request.then(
+      ()=>cleanupCandidateAppSession(tokens?.access_token),
+      ()=>cleanupCandidateAppSession(tokens?.access_token),
+    ).catch(()=>{})
+    await cleanupCandidateAppSession(tokens?.access_token)
+    return {data:{session:null,user:null},error}
+  }
+}

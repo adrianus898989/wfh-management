@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { clearSessionActivity, supabase } from '../lib/supabase'
+import { signOutAppSession } from '../lib/supabase'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 
 const enc = value => encodeURIComponent(value)
@@ -75,8 +75,7 @@ export default function AppLayout({ mode, children }) {
   },[location.pathname])
 
   const logout = async()=>{
-    clearSessionActivity()
-    await supabase.auth.signOut()
+    await signOutAppSession()
     if (mode === 'staff') resetLocale()
     navigate(mode==='admin'?'/admin/login':'/staff/login')
   }
