@@ -35,6 +35,12 @@ const evidenceMime=file=>{
   return ({jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',gif:'image/gif',heic:'image/heic',heif:'image/heif',mp4:'video/mp4',mov:'video/quicktime',webm:'video/webm'}[ext]||'')
 }
 const safeFileName=name=>text(name).replace(/[^\p{L}\p{N}._-]+/gu,'-').replace(/^-+|-+$/g,'').slice(-90)||'evidence'
+const safeRemoteUrl=value=>{
+  try{
+    const parsed=new URL(text(value),globalThis.location?.origin||'https://invalid.local')
+    return ['http:','https:'].includes(parsed.protocol)?parsed.href:''
+  }catch{return ''}
+}
 
 function EvidenceLinks({items=[],legacyUrl='',t}){
   const tr=typeof t==='function'?t:(_key,fallback)=>fallback
@@ -43,13 +49,26 @@ function EvidenceLinks({items=[],legacyUrl='',t}){
   const open=async item=>{
     if(!item?.path)return
     setBusy(item.path)
-    const {data,error}=await supabase.storage.from(EVIDENCE_BUCKET).createSignedUrl(item.path,300)
-    setBusy('')
-    if(error){window.alert(`${tr('connectivity.openFailed','附件打开失败')}：${error.message}`);return}
-    setPreview({url:data.signedUrl,mime:item.mime||'',name:item.name||tr('connectivity.evidenceFile','证明文件')})
+    try{
+      const {data,error}=await supabase.storage.from(EVIDENCE_BUCKET).createSignedUrl(item.path,300)
+      const url=safeRemoteUrl(data?.signedUrl)
+      if(error||!url){
+        setPreview({item,url:'',mime:item.mime||'',name:item.name||tr('connectivity.evidenceFile','证明文件'),error:true})
+        return
+      }
+      setPreview({item,url,mime:item.mime||'',name:item.name||tr('connectivity.evidenceFile','证明文件'),error:false})
+    }catch{
+      setPreview({item,url:'',mime:item.mime||'',name:item.name||tr('connectivity.evidenceFile','证明文件'),error:true})
+    }finally{
+      setBusy('')
+    }
+  }
+  const openLegacy=()=>{
+    const url=safeRemoteUrl(legacyUrl)
+    setPreview({url,mime:'image/*',name:tr('connectivity.legacyEvidence','旧证明'),error:!url})
   }
   if(!items.length&&!legacyUrl)return null
-  return <><div className="connectivity-evidence-links">{items.map((item,index)=><button type="button" key={item.path||index} onClick={()=>open(item)} disabled={busy===item.path}>{busy===item.path?tr('connectivity.opening','打开中…'):`${tr(String(item.mime||'').startsWith('video/')?'connectivity.video':'connectivity.image',String(item.mime||'').startsWith('video/')?'视频':'图片')} ${index+1}`}</button>)}{legacyUrl&&<button type="button" onClick={()=>setPreview({url:legacyUrl,mime:'image/*',name:tr('connectivity.legacyEvidence','旧证明')})}>{tr('connectivity.legacyEvidence','旧证明')}</button>}</div>{preview&&<div className="connectivity-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onMouseDown={()=>setPreview(null)}><div onMouseDown={event=>event.stopPropagation()}><header><strong>{preview.name}</strong><button type="button" aria-label={tr('common.close','关闭')} onClick={()=>setPreview(null)}>×</button></header>{String(preview.mime).startsWith('video/')?<video src={preview.url} controls autoPlay/>:<img src={preview.url} alt={preview.name}/>}</div></div>}</>
+  return <><div className="connectivity-evidence-links">{items.map((item,index)=><button type="button" key={item.path||index} onClick={()=>open(item)} disabled={busy===item.path}>{busy===item.path?tr('connectivity.opening','打开中…'):`${tr(String(item.mime||'').startsWith('video/')?'connectivity.video':'connectivity.image',String(item.mime||'').startsWith('video/')?'视频':'图片')} ${index+1}`}</button>)}{legacyUrl&&<button type="button" onClick={openLegacy}>{tr('connectivity.legacyEvidence','旧证明')}</button>}</div>{preview&&<div className="connectivity-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onMouseDown={()=>setPreview(null)}><div onMouseDown={event=>event.stopPropagation()}><header><strong>{preview.name}</strong><button type="button" aria-label={tr('common.close','关闭')} onClick={()=>setPreview(null)}>×</button></header>{preview.error||!preview.url?<div className="connectivity-preview-fallback" role="alert"><strong>{tr('connectivity.previewFailed','图片暂时无法预览，可以重试或打开原文件。')}</strong><div>{preview.item&&<button type="button" onClick={()=>open(preview.item)}>{tr('connectivity.retry','重试预览')}</button>}{preview.url&&<a href={preview.url} target="_blank" rel="noopener noreferrer">{tr('connectivity.openOriginal','打开原文件')}</a>}</div></div>:<div className="connectivity-preview-media">{String(preview.mime).startsWith('video/')?<video src={preview.url} controls autoPlay onError={()=>setPreview(current=>({...current,error:true}))}/>:<img src={preview.url} alt={preview.name} onError={()=>setPreview(current=>({...current,error:true}))}/>}<a href={preview.url} target="_blank" rel="noopener noreferrer">{tr('connectivity.openOriginal','打开原文件')}</a></div>}</div></div>}</>
 }
 
 export function ConnectivityRecordsPage(){

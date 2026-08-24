@@ -16,11 +16,7 @@ import './styles-exams.css'
 import './styles-payroll.css'
 import './styles-connectivity.css'
 import './styles-attendance.css'
-import { startStableErrorUiEnhancer } from './stableErrorUiEnhancer'
-import { startUiPolishV2713Fix } from './uiPolishV2713Fix'
-import { startUiV2714Enhancer } from './uiV2714Enhancer'
-import { startAdminUiV2717Fix } from './adminUiV2717Fix'
-import { startAdminFinalV2722 } from './adminFinalV2722'
+import { configured } from './lib/supabase'
 
 for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles]')) old.remove()
 const base = document.createElement('style'); base.setAttribute('data-wfh-inline-styles', 'true'); base.textContent = appStyles; document.head.appendChild(base)
@@ -32,8 +28,19 @@ ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><B
 
 // Keep only legacy layers that still provide UI not owned by the React pages.
 // They are DOM driven; native report/employee pages own workload and grade data.
-startUiV2714Enhancer()
-startStableErrorUiEnhancer()
-startUiPolishV2713Fix()
-startAdminUiV2717Fix()
-startAdminFinalV2722()
+// A missing environment configuration should still render the normal setup
+// screen instead of crashing while a legacy enhancer patches Supabase.
+if (configured) {
+  void (async () => {
+    const starts = [
+      () => import('./uiV2714Enhancer').then(module => module.startUiV2714Enhancer()),
+      () => import('./stableErrorUiEnhancer').then(module => module.startStableErrorUiEnhancer()),
+      () => import('./uiPolishV2713Fix').then(module => module.startUiPolishV2713Fix()),
+      () => import('./adminUiV2717Fix').then(module => module.startAdminUiV2717Fix()),
+      () => import('./adminFinalV2722').then(module => module.startAdminFinalV2722()),
+    ]
+    for (const start of starts) {
+      try { await start() } catch (error) { console.error('Optional UI enhancer failed to start', error) }
+    }
+  })()
+}

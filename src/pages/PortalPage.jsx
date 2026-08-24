@@ -8,6 +8,27 @@ import { useStaffLocale } from '../lib/staffI18n'
 const inactiveStatuses = ['left', 'resigned', 'inactive', 'terminated', '离职', '停用']
 const text = v => String(v ?? '').trim()
 
+const currentStaffShift = (profile = {}, schedule = {}, fallback) => {
+  const liveShift = text(
+    profile.current_shift
+    || profile.schedule_shift
+    || profile.schedule_shift_name
+    || schedule.current_shift
+    || schedule.shift_name
+    || schedule.shift,
+  )
+  if (liveShift) return liveShift
+  return text(profile.shift_name) || fallback
+}
+
+const staffPaymentMode = payment => {
+  const descriptor = text(`${text(payment?.payment_mode)} ${text(payment?.transfer_using)}`).toLowerCase()
+  if (/(usdt|trc\s*-?20|erc\s*-?20|crypto|虚拟币|泰达币)/i.test(descriptor)) return 'usdt'
+  if (descriptor) return 'bank_wallet'
+  if (!payment?.bank_account_masked && payment?.usdt_address_masked) return 'usdt'
+  return 'bank_wallet'
+}
+
 function isActive(row) {
   return !inactiveStatuses.includes(text(row?.status).toLowerCase())
 }
@@ -214,6 +235,14 @@ const staffTenure = (date, t) => {
 }
 
 const staffDate = value => value ? String(value).slice(0, 10) : '—'
+const staffMonthValue = () => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date()).map(part => [part.type, part.value]))
+  return `${parts.year}-${parts.month}`
+}
 const localeCode = locale => ({ zh: 'zh-CN', en: 'en-US', vi: 'vi-VN', id: 'id-ID' }[locale] || 'en-US')
 const staffDateTime = (value, locale) => value ? new Date(value).toLocaleString(localeCode(locale), { hour12: false }) : '—'
 const staffExamBreakdown = (row, t) => {
@@ -239,6 +268,7 @@ export const StaffHome = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [activity, setActivity] = useState({ loading: true, error: '', data: null })
+  const [selfAttendance, setSelfAttendance] = useState({ loading: true, error: '', data: null })
   const [errorHistory, setErrorHistory] = useState({ rows: [], total: 0, page: 1, pages: 1 })
   const [errorPage, setErrorPage] = useState(1)
   const [errorsLoading, setErrorsLoading] = useState(false)
@@ -253,15 +283,24 @@ export const StaffHome = () => {
     setLoading(true)
     setError('')
     setActivity(current => ({ ...current, loading: true, error: '' }))
-    const [{ data: result, error: loadError }, { data: activityResult, error: activityError }] = await Promise.all([
+    setSelfAttendance(current => ({ ...current, loading: true, error: '' }))
+    const [
+      { data: result, error: loadError },
+      { data: activityResult, error: activityError },
+      { data: attendanceResult, error: attendanceError },
+    ] = await Promise.all([
       supabase.rpc('staff_portal_home'),
       supabase.rpc('staff_activity_home'),
+      supabase.rpc('staff_attendance_home', { p_month: staffMonthValue() }),
     ])
     if (loadError) setError(loadError.message || t('portal.profileLoadFailed', 'Failed to load profile'))
     else setData(result)
     setActivity(activityError
       ? { loading: false, error: activityError.message || t('portal.activityLoadFailed', 'Failed to load attendance and connectivity records'), data: null }
       : { loading: false, error: '', data: activityResult || null })
+    setSelfAttendance(attendanceError
+      ? { loading: false, error: attendanceError.message || t('portal.activityLoadFailed', 'Failed to load attendance records'), data: null }
+      : { loading: false, error: '', data: attendanceResult || null })
     setLoading(false)
   }
 
@@ -291,8 +330,10 @@ export const StaffHome = () => {
   const summary = data?.error_summary || {}
   const exam = data?.exam_summary || {}
   const errors = errorHistory?.rows || []
-  const attendance = activity.data?.attendance || {}
+  const attendance = selfAttendance.data || {}
   const connectivity = activity.data?.connectivity || {}
+  const shiftDisplay = currentStaffShift(p, data?.schedule || data?.current_schedule || {}, t('portal.shiftUnset', 'Shift not set'))
+  const paymentMode = staffPaymentMode(pay)
   const toggleSensitive = async field => {
     if (revealed[field]) {
       setRevealed(current => ({ ...current, [field]: '' }))
@@ -315,7 +356,7 @@ export const StaffHome = () => {
     [t('profile.team', 'Team'), p.team_name],
     [t('profile.group', 'Group'), p.group_name],
     [t('profile.position', 'Position'), p.position_name],
-    [t('profile.shift', 'Shift'), p.shift_name],
+    [t('profile.shift', 'Shift'), shiftDisplay],
     [t('profile.leader', 'Manager / team leader'), p.person_in_charge || p.leader_name],
     [t('profile.trainer', 'Trainer'), p.online_trainer || p.trainer_name],
     [t('profile.platform', 'Platform'), p.platform_scope],
@@ -344,7 +385,7 @@ export const StaffHome = () => {
   return <div className="staff-portal-page">
     <header className="staff-portal-hero">
       <div className="staff-avatar">{(p.full_name || 'W').slice(0, 1).toUpperCase()}</div>
-      <div><small>{t('portal.workspace', 'MY WORKSPACE')}</small><h1>{p.full_name || t('portal.myHome', 'My workspace')}</h1><p>{p.employee_no || '—'} · {p.team_name || t('portal.teamUnset', 'Team not set')} · {p.position_name || t('portal.positionUnset', 'Position not set')}</p><div className="staff-hero-tags"><span>{p.shift_name || t('portal.shiftUnset', 'Shift not set')}</span><span>{staffTenure(p.hire_date, t)}</span></div></div>
+      <div><small>{t('portal.workspace', 'MY WORKSPACE')}</small><h1>{p.full_name || t('portal.myHome', 'My workspace')}</h1><p>{p.employee_no || '—'} · {p.team_name || t('portal.teamUnset', 'Team not set')} · {p.position_name || t('portal.positionUnset', 'Position not set')}</p><div className="staff-hero-tags"><span>{shiftDisplay}</span><span>{staffTenure(p.hire_date, t)}</span></div></div>
       <button onClick={load}>↻ {t('portal.refresh', 'Refresh')}</button>
     </header>
     {error && <div className="exam-error">{error}<button onClick={() => setError('')}>×</button></div>}
@@ -352,8 +393,8 @@ export const StaffHome = () => {
       <div><span>{t('portal.monthErrors', 'Errors this month')}</span><strong>{summary.month_error_count || 0}</strong><small>{t('portal.totalErrors', 'Total {count}', { count: summary.total_error_count || 0 })}</small></div>
       <div><span>{t('portal.examRecords', 'Exam records')}</span><strong>{exam.total || 0}</strong><small>{t('portal.passedTimes', 'Passed {count} times', { count: exam.passed || 0 })}</small></div>
       <div><span>{t('portal.averageScore', 'Average score')}</span><strong>{exam.average || 0}%</strong><small>{t('portal.gradedTimes', 'Graded {count} times', { count: exam.completed || 0 })}</small></div>
-      <div><span>{t('portal.monthAbsent', 'Absent this month')}</span><strong>{activity.loading ? '—' : attendance.summary?.month_absent || 0}</strong><small>{t('portal.attendanceRecords', 'Attendance records')}</small></div>
-      <div><span>{t('portal.monthLeave', 'Leave this month')}</span><strong>{activity.loading ? '—' : attendance.summary?.month_leave || 0}</strong><small>{t('portal.leaveDays', 'Leave / rest days')}</small></div>
+      <div><span>{t('portal.monthAbsent', 'Absent this month')}</span><strong>{selfAttendance.loading ? '—' : attendance.summary?.month_absent || 0}</strong><small>{t('portal.attendanceRecords', 'Attendance records')}</small></div>
+      <div><span>{t('portal.monthLeave', 'Leave this month')}</span><strong>{selfAttendance.loading ? '—' : attendance.summary?.month_leave || 0}</strong><small>{t('portal.leaveDays', 'Leave / rest days')}</small></div>
       <div><span>{t('portal.connectivity', 'Power / internet')}</span><strong>{activity.loading ? '—' : connectivity.total || 0}</strong><small>{t('portal.powerInternetCounts', 'Power {power} · Internet {internet}', { power: connectivity.power || 0, internet: connectivity.internet || 0 })}</small></div>
     </section>
     <nav className="staff-profile-tabs">{tabs.map(([key, label]) => <button key={key} className={activeSection === key ? 'active' : ''} onClick={() => setActiveSection(key)}>{label}</button>)}</nav>
@@ -361,31 +402,94 @@ export const StaffHome = () => {
       <section className="staff-profile-panel"><header><div><small>{t('decor.profile', 'PERSONAL PROFILE')}</small><h2>{t('profile.title', 'Personal information')}</h2></div><span>{t('profile.private', 'Only you can view')}</span></header><div className="staff-profile-fields">{fields.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value || '—'}</strong></div>)}</div></section>
       <section className="staff-payment-panel"><header><div><small>{t('decor.payment', 'PAYMENT & CONTACT')}</small><h2>{t('payment.title', 'Payment & contact')}</h2></div><span>🔒 {t('payment.protected', 'Safely hidden')}</span></header><div className="staff-payment-grid">
         <div><span>{t('payment.method', 'Payment method')}</span><strong>{pay.transfer_using || pay.payment_mode || '—'}</strong></div><div><span>{t('payment.accountName', 'Account name')}</span><strong>{pay.account_name || '—'}</strong></div>
-        <div className="staff-sensitive-row"><span>{t('payment.bankAccount', 'Bank / wallet account')}</span><strong>{revealed.bank_account || pay.bank_account_masked || '—'}</strong>{pay.bank_account_masked && <button onClick={() => toggleSensitive('bank_account')} disabled={revealLoading === 'bank_account'}>{revealLoading === 'bank_account' ? t('payment.reading', 'Loading') : revealed.bank_account ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>
-        <div className="staff-sensitive-row"><span>{t('payment.usdt', 'USDT address')}</span><strong>{revealed.usdt_address || pay.usdt_address_masked || '—'}</strong>{pay.usdt_address_masked && <button onClick={() => toggleSensitive('usdt_address')} disabled={revealLoading === 'usdt_address'}>{revealLoading === 'usdt_address' ? t('payment.reading', 'Loading') : revealed.usdt_address ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>
+        {paymentMode === 'bank_wallet' && <div className="staff-sensitive-row"><span>{t('payment.bankAccount', 'Bank / wallet account')}</span><strong>{revealed.bank_account || pay.bank_account_masked || '—'}</strong>{pay.bank_account_masked && <button onClick={() => toggleSensitive('bank_account')} disabled={revealLoading === 'bank_account'}>{revealLoading === 'bank_account' ? t('payment.reading', 'Loading') : revealed.bank_account ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>}
+        {paymentMode === 'usdt' && <div className="staff-sensitive-row"><span>{t('payment.usdt', 'USDT address')}</span><strong>{revealed.usdt_address || pay.usdt_address_masked || '—'}</strong>{pay.usdt_address_masked && <button onClick={() => toggleSensitive('usdt_address')} disabled={revealLoading === 'usdt_address'}>{revealLoading === 'usdt_address' ? t('payment.reading', 'Loading') : revealed.usdt_address ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>}
         <div><span>{t('payment.phone', 'Phone')}</span><strong>{pay.contact_phone || '—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number || '—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook || '—'}</strong></div><div><span>{t('payment.address', 'Contact address')}</span><strong>{pay.employee_address || '—'}</strong></div>
       </div></section>
-    </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to="/staff/exams"><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link><Link to="/staff/schedule"><b>{t('quick.schedule', 'Schedule')}</b><span>{t('quick.viewSchedule', 'View my schedule →')}</span></Link><Link to="/staff/attendance"><b>{t('quick.attendance', 'Attendance')}</b><span>{t('quick.viewAttendance', 'View my attendance →')}</span></Link></section></div>}
+    </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to="/staff/exams"><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link></section></div>}
     {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => setErrorPage(value => Math.max(1, value - 1))}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => setErrorPage(value => value + 1)}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
     {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
-    {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={activity.loading} error={activity.error} t={t} />}
+    {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={selfAttendance.loading} error={selfAttendance.error} profile={p} t={t} />}
     {activeSection === 'connectivity' && <EmployeeConnectivityPanel data={connectivity} loading={activity.loading} error={activity.error} t={t} />}
     {activeSection === 'payroll' && <StaffPayrollWorkspace embedded />}
     {examDetail && <StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={() => setExamDetail(null)} t={t} locale={locale} />}
   </div>
 }
 
-function StaffAttendancePanel({ data, loading, error, t }) {
-  const rows = data?.rows || []
-  const summary = data?.summary || {}
-  const label = value => ({
-    normal: t('attendance.normal', 'Present'),
-    rest: t('attendance.rest', 'Rest day'),
-    absent: t('attendance.absent', 'Absent'),
-    leave: t('attendance.leave', 'Leave'),
-    late: t('attendance.late', 'Late'),
-  }[String(value || '').toLowerCase()] || value || '—')
-  return <section className="staff-activity-panel"><header><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>{t('attendance.title', 'Attendance')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: data?.total || 0 })}</span></header><div className="staff-activity-summary"><div><span>{label('normal')}</span><strong>{summary.normal || 0}</strong></div><div><span>{label('rest')}</span><strong>{summary.rest || 0}</strong></div><div><span>{label('absent')}</span><strong>{summary.absent || 0}</strong></div><div><span>{label('leave')}</span><strong>{summary.leave || 0}</strong></div></div>{loading ? <div className="staff-history-empty">{t('attendance.loading', 'Loading attendance…')}</div> : error ? <div className="staff-history-empty">{error}</div> : rows.length ? <div className="staff-attendance-list">{rows.map(row => <article key={row.id}><strong>{row.report_date}</strong><span className={`staff-attendance-status ${row.attendance_status}`}>{label(row.attendance_status)}</span><span>{row.shift_name || '—'}</span><span>{row.status_note || '—'}</span></article>)}</div> : <div className="staff-history-empty">{t('attendance.none', 'No attendance records yet.')}</div>}</section>
+const staffAttendanceKinds = [
+  ['public_holiday', '休', '公休'],
+  ['home_leave', '假', '休假'],
+  ['leave', '请', '请假'],
+  ['half_day', '半', '半天'],
+  ['absence', '缺', '缺席'],
+  ['resignation', '离', '离职'],
+]
+
+const staffAttendanceCount = value => Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 1 })
+
+function StaffAttendancePanel({ data, loading, error, profile, t }) {
+  const [month, setMonth] = useState(data?.month || staffMonthValue())
+  const [view, setView] = useState({ data: data || null, loading, error: error || '' })
+  const [selectedDay, setSelectedDay] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    if (data?.month === month) {
+      setView({ data, loading, error: error || '' })
+      return () => { alive = false }
+    }
+    ;(async () => {
+      setView(current => ({ ...current, loading: true, error: '' }))
+      const { data: result, error: loadError } = await supabase.rpc('staff_attendance_home', { p_month: month })
+      if (!alive) return
+      setView(loadError
+        ? { data: null, loading: false, error: loadError.message || t('portal.activityLoadFailed', 'Failed to load attendance records') }
+        : { data: result || null, loading: false, error: '' })
+    })()
+    return () => { alive = false }
+  }, [month, data, loading, error, t])
+
+  const result = view.data || {}
+  const employee = result.employee || {}
+  const monthSummary = result.month_summary || {}
+  const allTimeSummary = result.all_time_summary || {}
+  const days = result.days || {}
+  const daysInMonth = Number(result.days_in_month || new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate())
+  const dayNumbers = Array.from({ length: daysInMonth }, (_, index) => index + 1)
+  const fullName = employee.full_name || profile?.full_name || '—'
+  const employeeNo = employee.employee_no || profile?.employee_no || '—'
+  const hireDate = staffDate(employee.hire_date || profile?.hire_date)
+  const monthLabel = `${month.slice(0, 4)}年${month.slice(5, 7)}月`
+  const primaryRecord = records => Array.isArray(records) ? records[0] : null
+
+  return <section className="staff-activity-panel staff-self-attendance">
+    <header className="staff-self-attendance-head"><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>我的出勤表</h2><p>只显示本人资料；空白代表当天没有登记异常，不代表系统确认正常出勤。</p></div><label><span>查看月份</span><input type="month" value={month} onChange={event => { setSelectedDay(null); setMonth(event.target.value || staffMonthValue()) }} /></label></header>
+    <div className="staff-self-attendance-legend">{staffAttendanceKinds.map(([kind, code, label]) => <span className={kind} key={kind}><i>{code}</i>{label}</span>)}</div>
+    {view.error && <div className="staff-self-attendance-error">{view.error}</div>}
+    <div className="staff-self-summary-groups">
+      <StaffAttendanceSummary title={`${monthLabel}统计`} summary={monthSummary} />
+      <StaffAttendanceSummary title="累计统计（截至今天）" summary={allTimeSummary} />
+    </div>
+    {view.loading && !view.data ? <div className="staff-history-empty">{t('attendance.loading', 'Loading attendance…')}</div> : <div className="staff-self-attendance-scroll">
+      <table><thead><tr><th className="staff-self-identity-head">本人资料</th>{dayNumbers.map(day => <th key={day}>{day}</th>)}<th className="staff-self-total-head">本月合计</th></tr></thead><tbody><tr><td className="staff-self-identity"><strong title={fullName}>{fullName}</strong><span>{employeeNo} · 入职 {hireDate}</span></td>{dayNumbers.map(day => {
+        const records = Array.isArray(days[String(day)]) ? days[String(day)] : []
+        const record = primaryRecord(records)
+        const kind = String(record?.event_kind || '').toLowerCase()
+        const meta = staffAttendanceKinds.find(([value]) => value === kind)
+        return <td className="staff-self-day" key={day}>{record && meta ? <button type="button" className={kind} title={`${month}-${String(day).padStart(2, '0')} · ${meta[2]} · 点击查看详情`} onClick={() => setSelectedDay({ date: `${month}-${String(day).padStart(2, '0')}`, records })}>{meta[1]}{records.length > 1 ? <sup>+{records.length - 1}</sup> : null}</button> : <i>—</i>}</td>
+      })}<td className="staff-self-total"><strong>{staffAttendanceCount(monthSummary.total_days)}</strong><span>天</span></td></tr></tbody></table>
+      {view.loading && <div className="staff-self-attendance-updating">正在更新出勤表…</div>}
+    </div>}
+    {selectedDay && <StaffAttendanceDayModal day={selectedDay} employee={{ full_name: fullName, employee_no: employeeNo }} onClose={() => setSelectedDay(null)} />}
+  </section>
+}
+
+function StaffAttendanceSummary({ title, summary }) {
+  return <section className="staff-self-summary"><header><h3>{title}</h3><strong>{staffAttendanceCount(summary?.total_days)}<small>天</small></strong></header><div>{staffAttendanceKinds.map(([kind, code, label]) => <span className={kind} key={kind}><i>{code}</i><small>{label}</small><b>{staffAttendanceCount(summary?.[kind])}</b></span>)}</div></section>
+}
+
+function StaffAttendanceDayModal({ day, employee, onClose }) {
+  return <div className="modal-mask staff-self-day-mask" onMouseDown={onClose}><div className="staff-self-day-modal" role="dialog" aria-modal="true" aria-labelledby="staff-attendance-day-title" onMouseDown={event => event.stopPropagation()}><header><div><small>MY ATTENDANCE DETAIL</small><h2 id="staff-attendance-day-title">{day.date} · 出勤详情</h2><p>{employee.employee_no} · {employee.full_name}</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header><div className="staff-self-day-records">{day.records.map((record, index) => { const kind = String(record.event_kind || '').toLowerCase(); const meta = staffAttendanceKinds.find(([value]) => value === kind); return <article key={record.id || `${kind}-${index}`}><span className={kind}>{meta?.[2] || record.event_kind || '—'}</span><div><small>原因</small><p>{record.reason || '—'}</p></div><div><small>备注</small><p>{record.note || '—'}</p></div></article> })}</div><footer><button type="button" onClick={onClose}>关闭</button></footer></div></div>
 }
 
 function StaffPortalExamModal({ detail, loading, error, onClose, t, locale }) {

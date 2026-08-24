@@ -41,3 +41,17 @@
 @media(max-width:1280px){.connectivity-filter-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.employee-connectivity-list article{grid-template-columns:95px minmax(145px,.75fr) 78px minmax(190px,1.3fr) auto}}
 @media(max-width:850px){.connectivity-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.employee-connectivity-list article{grid-template-columns:1fr 1fr}.employee-connectivity-details,.employee-connectivity-list .connectivity-panel-proof{grid-column:1/-1}}
 @media(max-width:560px){.connectivity-filter-grid,.employee-connectivity-list article{grid-template-columns:1fr}.connectivity-filter-actions,.employee-connectivity-details,.employee-connectivity-list .connectivity-panel-proof{grid-column:auto}}
+
+/* V27.25 — readable employee incident details and resilient evidence preview. */
+.connectivity-preview-media{position:relative;display:flex;min-height:260px;align-items:center;justify-content:center;overflow:auto}
+.connectivity-preview-media>a{position:absolute;right:14px;bottom:14px;padding:8px 12px;border:1px solid #ffffff66;border-radius:9px;background:#142846dc;color:#fff;font-size:12px;font-weight:850;text-decoration:none;box-shadow:0 8px 20px #0005}
+.connectivity-preview-fallback{display:grid;min-height:300px;place-content:center;gap:10px;padding:30px;color:#dfeaff;text-align:center}
+.connectivity-preview-fallback>strong{max-width:520px;font-size:16px;line-height:1.55}.connectivity-preview-fallback>small{max-width:560px;color:#9fb2ce;overflow-wrap:anywhere}
+.connectivity-preview-fallback>div{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}.connectivity-preview-fallback button,.connectivity-preview-fallback a{padding:8px 12px;border:1px solid #8eaddb;border-radius:9px;background:#eef4ff;color:#235cc8;font-size:12px;font-weight:850;text-decoration:none}
+.staff-portal-page .employee-connectivity-list article{grid-template-columns:120px minmax(190px,.8fr) 100px minmax(280px,1.6fr) minmax(130px,.55fr);gap:14px;padding:14px}
+.staff-portal-page .employee-connectivity-list article small{font-size:11px;font-weight:750}.staff-portal-page .employee-connectivity-list article p{font-size:13px;line-height:1.55}
+.staff-portal-page .employee-connectivity-details small{font-size:11px}.staff-portal-page .employee-connectivity-details p{max-height:none;margin-top:5px;overflow:visible;color:#1f3b60;font-size:14px;line-height:1.65}
+.staff-portal-page .employee-connectivity-list .connectivity-panel-proof{min-width:120px}.staff-portal-page .connectivity-panel-proof .connectivity-evidence-links button{min-height:34px;padding:6px 11px;font-size:12px}
+@media(max-width:1200px){.staff-portal-page .employee-connectivity-list article{grid-template-columns:105px minmax(165px,.75fr) 90px minmax(240px,1.4fr) minmax(115px,.5fr)}}
+@media(max-width:850px){.staff-portal-page .employee-connectivity-list article{grid-template-columns:1fr 1fr}.staff-portal-page .employee-connectivity-details,.staff-portal-page .employee-connectivity-list .connectivity-panel-proof{grid-column:1/-1}}
+@media(max-width:560px){.staff-portal-page .employee-connectivity-list article{grid-template-columns:1fr}.staff-portal-page .employee-connectivity-details,.staff-portal-page .employee-connectivity-list .connectivity-panel-proof{grid-column:auto}}

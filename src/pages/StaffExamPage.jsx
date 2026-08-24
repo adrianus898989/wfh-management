@@ -15,13 +15,11 @@ const copy = {
   passedTimes: ['次通过', 'passes', 'lần đạt', 'kali lulus'],
   pickerEyebrow: ['自主选考', 'CHOOSE YOUR EXAM', 'TỰ CHỌN BÀI THI', 'PILIH UJIAN'],
   pickerTitle: ['选择考试', 'Choose an exam', 'Chọn bài thi', 'Pilih ujian'],
-  pickerSubtitle: ['按团队、系列与考试项目选择可用试卷。', 'Choose any available team, series and exam type.', 'Chọn nhóm, bộ đề và loại bài thi có sẵn.', 'Pilih tim, seri, dan jenis ujian yang tersedia.'],
-  team: ['团队', 'Team', 'Nhóm', 'Tim'],
-  series: ['考试系列', 'Exam series', 'Bộ đề', 'Seri ujian'],
-  examType: ['考试项目', 'Exam type', 'Loại bài thi', 'Jenis ujian'],
-  selectTeam: ['请选择团队', 'Select a team', 'Chọn nhóm', 'Pilih tim'],
-  selectSeries: ['请选择考试系列', 'Select an exam series', 'Chọn bộ đề', 'Pilih seri ujian'],
-  selectExam: ['请选择考试项目', 'Select an exam type', 'Chọn loại bài thi', 'Pilih jenis ujian'],
+  pickerSubtitle: ['按题库来源的盘口和岗位选择可用试卷。', 'Choose an available exam by platform and position.', 'Chọn bài thi theo nền tảng và vị trí.', 'Pilih ujian berdasarkan platform dan posisi.'],
+  platform: ['盘口', 'Platform', 'Nền tảng', 'Platform'],
+  position: ['岗位', 'Position', 'Vị trí', 'Posisi'],
+  selectPlatform: ['请选择盘口', 'Select a platform', 'Chọn nền tảng', 'Pilih platform'],
+  selectPosition: ['请选择岗位', 'Select a position', 'Chọn vị trí', 'Pilih posisi'],
   selected: ['当前选择', 'Selected exam', 'Bài thi đã chọn', 'Ujian terpilih'],
   inProgress: ['进行中', 'In progress', 'Đang làm', 'Sedang berlangsung'],
   questions: ['题目', 'Questions', 'Câu hỏi', 'Soal'],
@@ -29,7 +27,7 @@ const copy = {
   minutes: ['分钟', 'Minutes', 'Phút', 'Menit'],
   passScore: ['及格', 'Pass score', 'Điểm đạt', 'Nilai lulus'],
   poolWarning: ['题库不足：5分题 {five}/10、10分题 {ten}/3、20分题 {twenty}/1。', 'Question pool incomplete: 5-point {five}/10, 10-point {ten}/3, 20-point {twenty}/1.', 'Ngân hàng câu hỏi chưa đủ: câu 5 điểm {five}/10, 10 điểm {ten}/3, 20 điểm {twenty}/1.', 'Bank soal belum lengkap: soal 5 poin {five}/10, 10 poin {ten}/3, 20 poin {twenty}/1.'],
-  startConfirm: ['确认开始“{team} · {series} · {exam}”吗？开始后将连续计时 60 分钟。', 'Start “{team} · {series} · {exam}”? The 60-minute timer will begin immediately.', 'Bắt đầu “{team} · {series} · {exam}”? Đồng hồ 60 phút sẽ chạy ngay.', 'Mulai “{team} · {series} · {exam}”? Waktu 60 menit akan langsung berjalan.'],
+  startConfirm: ['确认开始“{platform} · {position}”吗？开始后将连续计时 60 分钟。', 'Start “{platform} · {position}”? The 60-minute timer will begin immediately.', 'Bắt đầu “{platform} · {position}”? Đồng hồ 60 phút sẽ chạy ngay.', 'Mulai “{platform} · {position}”? Waktu 60 menit akan langsung berjalan.'],
   resume: ['继续考试', 'Resume exam', 'Tiếp tục', 'Lanjutkan'],
   start: ['开始考试', 'Start exam', 'Bắt đầu thi', 'Mulai ujian'],
   preparing: ['题库准备中', 'Question pool unavailable', 'Ngân hàng đề chưa sẵn sàng', 'Bank soal belum siap'],
@@ -70,6 +68,9 @@ const copy = {
   feedback: ['老师评语', 'Reviewer feedback', 'Nhận xét người chấm', 'Catatan penilai'],
   noFeedback: ['老师未填写评语', 'No feedback provided', 'Chưa có nhận xét', 'Tidak ada catatan'],
   noAnswerDetails: ['该场考试没有可显示的逐题明细。', 'No per-question details are available for this exam.', 'Không có chi tiết từng câu cho bài thi này.', 'Detail per soal tidak tersedia untuk ujian ini.'],
+  resultLoading: ['正在读取逐题结果…', 'Loading result details…', 'Đang tải chi tiết kết quả…', 'Memuat detail hasil…'],
+  resultLoadFailed: ['考试结果读取失败', 'Could not load the exam result', 'Không thể tải kết quả thi', 'Hasil ujian tidak dapat dimuat'],
+  retry: ['重试', 'Retry', 'Thử lại', 'Coba lagi'],
   close: ['关闭', 'Close', 'Đóng', 'Tutup'],
   onlineExam: ['在线考试', 'ONLINE EXAM', 'BÀI THI TRỰC TUYẾN', 'UJIAN ONLINE'],
   runningExam: ['正在考试', 'Exam in progress', 'Đang thi', 'Ujian berlangsung'],
@@ -95,6 +96,8 @@ const copy = {
   imageAlt: ['考试题目图片', 'Exam question image', 'Ảnh câu hỏi', 'Gambar soal'],
   imageOpen: ['点击放大', 'Enlarge', 'Phóng to', 'Perbesar'],
   imageFallback: ['图片暂时无法预览，点击打开原图', 'Preview unavailable. Open original image.', 'Không thể xem trước. Mở ảnh gốc.', 'Pratinjau tidak tersedia. Buka gambar asli.'],
+  imageOriginal: ['打开原图', 'Open original', 'Mở ảnh gốc', 'Buka gambar asli'],
+  imageNumber: ['图片 {count}', 'Image {count}', 'Hình {count}', 'Gambar {count}'],
 }
 
 const languageIndex = { zh: 0, en: 1, vi: 2, id: 3 }
@@ -104,11 +107,60 @@ const template = (value, vars = {}) => String(value).replace(/\{(\w+)\}/g, (matc
 const baseText = (locale, key) => copy[key]?.[languageIndex[locale] ?? 1] || copy[key]?.[1] || key
 const fmt = (value, locale) => value ? new Date(value).toLocaleString(dateLocale[locale] || 'en-US', { hour12: false }) : '—'
 const score = (value, locale) => value == null ? '—' : Number(value).toLocaleString(dateLocale[locale] || 'en-US', { maximumFractionDigits: 2 })
-const driveId = url => String(url || '').match(/\/d\/([^/?]+)/)?.[1] || String(url || '').match(/[?&]id=([^&]+)/)?.[1] || ''
-const imageSources = url => { const id = driveId(url); return id ? [`https://drive.google.com/thumbnail?id=${id}&sz=w1600`, `https://lh3.googleusercontent.com/d/${id}=w1600`, url] : [url] }
+const safeHttpUrl = value => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const candidate = raw.startsWith('//') ? `https:${raw}` : /^www\./i.test(raw) ? `https://${raw}` : raw
+  try {
+    const parsed = new URL(candidate)
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : ''
+  } catch { return '' }
+}
+const driveId = url => {
+  const safe = safeHttpUrl(url)
+  if (!safe) return ''
+  try {
+    const parsed = new URL(safe)
+    return parsed.pathname.match(/\/d\/([^/]+)/)?.[1] || parsed.searchParams.get('id') || ''
+  } catch { return '' }
+}
+const imageSources = url => {
+  const original = safeHttpUrl(url)
+  if (!original) return []
+  const id = driveId(original)
+  return [...new Set((id ? [
+    `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w2000`,
+    `https://drive.usercontent.google.com/download?id=${encodeURIComponent(id)}&export=view`,
+    `https://lh3.googleusercontent.com/d/${encodeURIComponent(id)}=w2000`,
+    original,
+  ] : [original]).map(safeHttpUrl).filter(Boolean))]
+}
+const normalizedImageUrls = value => {
+  let rows = Array.isArray(value) ? value.flat(Infinity) : [value]
+  if (rows.length === 1 && typeof rows[0] === 'string' && rows[0].trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(rows[0])
+      if (Array.isArray(parsed)) rows = parsed.flat(Infinity)
+    } catch { /* Keep the original value. */ }
+  }
+  return [...new Set(rows.flatMap(item => typeof item === 'string' ? item.split(/[\n;]+/) : []).map(safeHttpUrl).filter(Boolean))]
+}
+const cleanLabel = value => String(value || '').trim().replace(/\s+/g, ' ')
+const normalizedLabel = value => cleanLabel(value).normalize('NFKC').toLocaleLowerCase()
 const optionKey = exam => JSON.stringify(
-  [exam?.team_name, exam?.series_name, exam?.position_name].map(value => String(value || '').trim()),
+  [exam?.series_name, exam?.position_name].map(normalizedLabel),
 )
+const optionRank = exam => {
+  const attempts = Number(exam?.attempts || 0)
+  const maximum = Number(exam?.max_attempts || 0)
+  return (exam?.resume_session_id ? 100 : 0) + (exam?.pool_ready ? 20 : 0) + (!maximum || attempts < maximum ? 5 : 0)
+}
+const cleanOptions = values => [...values.reduce((options, value) => {
+  const label = cleanLabel(value)
+  const key = normalizedLabel(label)
+  if (key && !options.has(key)) options.set(key, label)
+  return options
+}, new Map()).values()].sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }))
 
 function useExamText() {
   const { locale, setLocale, t } = useStaffLocale()
@@ -129,13 +181,13 @@ export default function StaffExamPage() {
   const { locale, setLocale, tr, languageLabel } = useExamText()
   const [home, setHome] = useState(null)
   const [session, setSession] = useState(null)
-  const [result, setResult] = useState(null)
+  const [resultState, setResultState] = useState(null)
   const [answers, setAnswers] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [selectedTeam, setSelectedTeam] = useState('')
-  const [selectedSeries, setSelectedSeries] = useState('')
+  const [selectedPlatform, setSelectedPlatform] = useState('')
   const [selectedExamKey, setSelectedExamKey] = useState('')
+  const resultRequest = useRef(0)
 
   const load = async () => {
     setLoading(true)
@@ -153,46 +205,40 @@ export default function StaffExamPage() {
       if (!exam.pool_ready && !exam.resume_session_id) continue
       const key = optionKey(exam)
       const previous = unique.get(key)
-      if (!previous || (!previous.resume_session_id && exam.resume_session_id)) unique.set(key, exam)
+      if (!previous || optionRank(exam) > optionRank(previous)) unique.set(key, exam)
     }
-    return [...unique.values()]
+    return [...unique.values()].sort((left, right) => {
+      const platform = String(left.series_name || '').localeCompare(String(right.series_name || ''), undefined, { numeric: true, sensitivity: 'base' })
+      return platform || String(left.position_name || '').localeCompare(String(right.position_name || ''), undefined, { numeric: true, sensitivity: 'base' })
+    })
   }, [home])
 
   useEffect(() => {
     if (!assignments.length) {
-      setSelectedTeam(''); setSelectedSeries(''); setSelectedExamKey('')
+      setSelectedPlatform(''); setSelectedExamKey('')
       return
     }
     if (assignments.some(exam => optionKey(exam) === selectedExamKey)) return
     const first = assignments.find(exam => exam.resume_session_id) || assignments[0]
-    setSelectedTeam(first.team_name || '')
-    setSelectedSeries(first.series_name || '')
+    setSelectedPlatform(cleanLabel(first.series_name))
     setSelectedExamKey(optionKey(first))
   }, [assignments, selectedExamKey])
 
-  const teamOptions = useMemo(() => [...new Set(assignments.map(exam => exam.team_name).filter(Boolean))], [assignments])
-  const seriesOptions = useMemo(() => [...new Set(assignments.filter(exam => exam.team_name === selectedTeam).map(exam => exam.series_name).filter(Boolean))], [assignments, selectedTeam])
-  const examOptions = useMemo(() => assignments.filter(exam => exam.team_name === selectedTeam && exam.series_name === selectedSeries), [assignments, selectedTeam, selectedSeries])
+  const platformOptions = useMemo(() => cleanOptions(assignments.map(exam => exam.series_name)), [assignments])
+  const positionOptions = useMemo(() => assignments.filter(exam => normalizedLabel(exam.series_name) === normalizedLabel(selectedPlatform)), [assignments, selectedPlatform])
   const selectedExam = assignments.find(exam => optionKey(exam) === selectedExamKey) || null
   const history = home?.history || []
   const passedCount = history.filter(item => item.status === 'graded' && item.passed).length
 
-  const chooseTeam = value => {
-    const first = assignments.find(exam => exam.team_name === value)
-    setSelectedTeam(value)
-    setSelectedSeries(first?.series_name || '')
-    setSelectedExamKey(first ? optionKey(first) : '')
-  }
-
-  const chooseSeries = value => {
-    const first = assignments.find(exam => exam.team_name === selectedTeam && exam.series_name === value)
-    setSelectedSeries(value)
+  const choosePlatform = value => {
+    const first = assignments.find(exam => normalizedLabel(exam.series_name) === normalizedLabel(value))
+    setSelectedPlatform(value)
     setSelectedExamKey(first ? optionKey(first) : '')
   }
 
   const start = async exam => {
     if (!exam) return
-    if (!exam.resume_session_id && !window.confirm(tr('startConfirm', { team: exam.team_name || '—', series: exam.series_name || '—', exam: exam.position_name || '—' }))) return
+    if (!exam.resume_session_id && !window.confirm(tr('startConfirm', { platform: exam.series_name || '—', position: exam.position_name || '—' }))) return
     const { data, error: requestError } = await supabase.rpc('staff_exam_start_open', {
       p_team: exam.team_name,
       p_series: exam.series_name,
@@ -203,13 +249,19 @@ export default function StaffExamPage() {
     setAnswers(data?.saved_answers || {})
   }
 
-  const viewResult = async id => {
-    setLoading(true)
-    const { data, error: requestError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: id })
-    setLoading(false)
-    if (requestError) return setError(msg(requestError))
-    setResult(data)
+  const viewResult = async item => {
+    const requestId = ++resultRequest.current
+    setResultState({ loading: true, error: '', data: null, preview: item })
+    const { data, error: requestError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: item.id })
+    if (requestId !== resultRequest.current) return
+    if (requestError) {
+      setResultState({ loading: false, error: msg(requestError), data: null, preview: item })
+      return
+    }
+    setResultState({ loading: false, error: '', data, preview: item })
   }
+
+  const closeResult = () => { resultRequest.current += 1; setResultState(null) }
 
   if (session) return <ExamRunner session={session} answers={answers} setAnswers={setAnswers} onDone={() => { setSession(null); load() }} />
 
@@ -247,16 +299,15 @@ export default function StaffExamPage() {
         <div className="staff-section-head"><div><small>{tr('pickerEyebrow')}</small><h2>{tr('pickerTitle')}</h2><p>{tr('pickerSubtitle')}</p></div></div>
         {assignments.length ? <div className="staff-exam-picker">
           <div className="staff-exam-picker-controls">
-            <label><span>{tr('team')}</span><select value={selectedTeam} onChange={event => chooseTeam(event.target.value)}><option value="">{tr('selectTeam')}</option>{teamOptions.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
-            <label><span>{tr('series')}</span><select value={selectedSeries} onChange={event => chooseSeries(event.target.value)} disabled={!selectedTeam}><option value="">{tr('selectSeries')}</option>{seriesOptions.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
-            <label><span>{tr('examType')}</span><select value={selectedExamKey} onChange={event => setSelectedExamKey(event.target.value)} disabled={!selectedSeries}><option value="">{tr('selectExam')}</option>{examOptions.map(exam => <option key={optionKey(exam)} value={optionKey(exam)}>{exam.position_name}</option>)}</select></label>
+            <label><span>{tr('platform')}</span><select value={selectedPlatform} onChange={event => choosePlatform(event.target.value)}><option value="">{tr('selectPlatform')}</option>{platformOptions.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>{tr('position')}</span><select value={selectedExamKey} onChange={event => setSelectedExamKey(event.target.value)} disabled={!selectedPlatform}><option value="">{tr('selectPosition')}</option>{positionOptions.map(exam => <option key={optionKey(exam)} value={optionKey(exam)}>{cleanLabel(exam.position_name)}</option>)}</select></label>
           </div>
 
           {selectedExam && <div className="staff-exam-selection">
             <div className="staff-exam-selection-main">
               <small>{tr('selected')}</small>
-              <strong>{selectedExam.team_name} · {selectedExam.series_name}</strong>
-              <span>{selectedExam.position_name}</span>
+              <strong>{cleanLabel(selectedExam.series_name)}</strong>
+              <span>{cleanLabel(selectedExam.position_name)}</span>
               {selectedExam.resume_session_id && <em>{tr('inProgress')}</em>}
             </div>
             <div className="staff-exam-selection-facts">
@@ -280,18 +331,18 @@ export default function StaffExamPage() {
           <td><b>{item.percentage == null ? tr('pending') : `${score(item.earned_score, locale)}/${score(item.total_score, locale)} · ${score(item.percentage, locale)}%`}</b></td>
           <td><span className="staff-history-breakdown">{answerBreakdown(item, tr)}</span></td>
           <td><span className={`result-chip ${item.status === 'graded' ? (item.passed ? 'pass' : 'fail') : 'pending'}`}>{item.status === 'graded' ? (item.passed ? tr('pass') : tr('fail')) : tr('pending')}</span></td>
-          <td><button className="exam-table-action" onClick={() => viewResult(item.id)}>{tr('viewResult')}</button></td>
+          <td><button className="exam-table-action" onClick={() => viewResult(item)}>{tr('viewResult')}</button></td>
         </tr>)}</tbody></table></div> : <div className="staff-history-empty">{tr('noHistory')}</div>}
       </section>
-      {result && <ExamResult result={result} onClose={() => setResult(null)} />}
+      {resultState && <ExamResult state={resultState} onClose={closeResult} onRetry={() => viewResult(resultState.preview)} />}
     </>}
   </div>
 }
 
-function ExamResult({ result, onClose }) {
+function ExamResult({ state, onClose, onRetry }) {
   const { locale, tr } = useExamText()
-  const session = result?.session || {}
-  const items = result?.answers || []
+  const session = state?.data?.session || state?.preview || {}
+  const items = state?.data?.answers || []
 
   useEffect(() => {
     const closeOnEscape = event => { if (event.key === 'Escape') onClose() }
@@ -302,26 +353,36 @@ function ExamResult({ result, onClose }) {
   return <div className="exam-modal-backdrop" onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
     <div className="exam-modal wide staff-result-modal" role="dialog" aria-modal="true" aria-labelledby="staff-exam-result-title">
       <header><div><small>{tr('resultTitle')}</small><h2 id="staff-exam-result-title">{session.title || tr('resultsTitle')}</h2><p>{tr('attemptValue', { count: session.attempt_no || 1 })}</p></div><button type="button" className="exam-icon-close" onClick={onClose} aria-label={tr('close')}>×</button></header>
-      <div className="staff-result-summary">
-        <div><span>{tr('score')}</span><strong>{session.percentage == null ? tr('pending') : `${score(session.percentage, locale)}%`}</strong></div>
-        <div><span>{tr('result')}</span><strong>{session.status === 'graded' ? (session.passed ? tr('pass') : tr('fail')) : tr('pending')}</strong></div>
-        <div><span>{tr('awarded')}</span><strong>{score(session.earned_score, locale)} / {score(session.total_score, locale)}</strong></div>
-        <div><span>{tr('answerStats')}</span><strong>{answerBreakdown(session, tr)}</strong></div>
-      </div>
-      <div className="staff-result-audit"><span><b>{tr('startedAt')}</b>{fmt(session.started_at, locale)}</span><span><b>{tr('submittedAt')}</b>{fmt(session.submitted_at, locale)}</span><span><b>{tr('gradedAt')}</b>{fmt(session.graded_at, locale)}</span></div>
-      {session.grader_note && <div className="staff-result-note"><b>{tr('overallFeedback')}</b><p>{session.grader_note}</p></div>}
-      {items.length ? <div className="staff-result-list">{items.map((item, index) => {
+      {state.loading ? <ExamResultSkeleton label={tr('resultLoading')} /> : state.error ? <div className="staff-result-load-error" role="alert"><strong>{tr('resultLoadFailed')}</strong><p>{state.error}</p><button type="button" onClick={onRetry}>↻ {tr('retry')}</button></div> : <>
+        <div className="staff-result-summary">
+          <div><span>{tr('score')}</span><strong>{session.percentage == null ? tr('pending') : `${score(session.percentage, locale)}%`}</strong></div>
+          <div><span>{tr('result')}</span><strong>{session.status === 'graded' ? (session.passed ? tr('pass') : tr('fail')) : tr('pending')}</strong></div>
+          <div><span>{tr('awarded')}</span><strong>{score(session.earned_score, locale)} / {score(session.total_score, locale)}</strong></div>
+          <div><span>{tr('answerStats')}</span><strong>{answerBreakdown(session, tr)}</strong></div>
+        </div>
+        <div className="staff-result-audit"><span><b>{tr('startedAt')}</b>{fmt(session.started_at, locale)}</span><span><b>{tr('submittedAt')}</b>{fmt(session.submitted_at, locale)}</span><span><b>{tr('gradedAt')}</b>{fmt(session.graded_at, locale)}</span></div>
+        {session.grader_note && <div className="staff-result-note"><b>{tr('overallFeedback')}</b><p>{session.grader_note}</p></div>}
+        {items.length ? <div className="staff-result-list">{items.map((item, index) => {
         const question = item.question || {}
-        const state = item.grade_status === 'correct' ? 'pass' : item.grade_status === 'partial' ? 'partial' : item.grade_status === 'wrong' ? 'fail' : 'pending'
-        return <article key={question.id || index}><header><b>{index + 1}</b><div><strong>{preferredQuestion(question, locale)}</strong><small>{tr('questionPoints', { count: score(question.points, locale) })}</small></div><span className={`result-chip ${state}`}>{item.awarded_score == null ? tr('pending') : `${score(item.awarded_score, locale)}/${score(question.points, locale)}`}</span></header>
+        const gradeState = item.grade_status === 'correct' ? 'pass' : item.grade_status === 'partial' ? 'partial' : item.grade_status === 'wrong' ? 'fail' : 'pending'
+        return <article key={question.id || index}><header><b>{index + 1}</b><div><strong>{preferredQuestion(question, locale)}</strong><small>{tr('questionPoints', { count: score(question.points, locale) })}</small></div><span className={`result-chip ${gradeState}`}>{item.awarded_score == null ? tr('pending') : `${score(item.awarded_score, locale)}/${score(question.points, locale)}`}</span></header>
           <QuestionTranslations question={question} locale={locale} label={tr('showLanguages')} />
           <ExamMedia urls={question.image_urls} />
           <div className="staff-result-answer"><b>{tr('myAnswer')}</b><p>{item.answer_text || tr('unanswered')}</p></div>
           {item.awarded_score != null && <div className="staff-result-feedback"><b>{tr('feedback')}</b><p>{item.grader_feedback || tr('noFeedback')}</p><small>{tr('gradedAt')} · {fmt(item.graded_at || session.graded_at, locale)}</small></div>}
         </article>
-      })}</div> : <div className="staff-history-empty result-empty">{tr('noAnswerDetails')}</div>}
+        })}</div> : <div className="staff-history-empty result-empty">{tr('noAnswerDetails')}</div>}
+      </>}
       <footer><button type="button" className="exam-footer-close" onClick={onClose}>{tr('close')}</button></footer>
     </div>
+  </div>
+}
+
+function ExamResultSkeleton({ label }) {
+  return <div className="staff-result-skeleton" aria-live="polite" aria-busy="true">
+    <div className="staff-result-skeleton-label"><span className="exam-loading-spinner" />{label}</div>
+    <div className="staff-result-skeleton-summary">{[0, 1, 2, 3].map(value => <i key={value} />)}</div>
+    <div className="staff-result-skeleton-list">{[0, 1, 2].map(value => <i key={value} />)}</div>
   </div>
 }
 
@@ -394,16 +455,47 @@ function ExamRunner({ session, answers, setAnswers, onDone }) {
 
 function ExamMedia({ urls = [] }) {
   const { tr } = useExamText()
-  const [preview, setPreview] = useState('')
-  if (!urls?.length) return null
-  return <><div className="exam-media-grid">{urls.map((url, index) => <ProgressiveImage key={`${url}-${index}`} url={url} onOpen={setPreview} />)}</div>{preview && <div className="exam-image-lightbox" onClick={() => setPreview('')}><button className="exam-lightbox-close" aria-label={tr('imageClose')}>×</button><img src={preview} alt={tr('imageAlt')} referrerPolicy="no-referrer" onClick={event => event.stopPropagation()} /></div>}</>
+  const [preview, setPreview] = useState(null)
+  const media = useMemo(() => normalizedImageUrls(urls), [urls])
+  if (!media.length) return null
+  return <>
+    <div className="exam-media-grid">{media.map((url, index) => <ProgressiveImage key={url} url={url} number={index + 1} onOpen={setPreview} />)}</div>
+    {preview && <ExamImageLightbox media={preview} onClose={() => setPreview(null)} tr={tr} />}
+  </>
 }
 
-function ProgressiveImage({ url, onOpen }) {
+function ProgressiveImage({ url, number, onOpen }) {
   const { tr } = useExamText()
   const sources = imageSources(url)
-  const [index, setIndex] = useState(0)
-  const src = sources[index]
-  if (!src) return <a className="exam-media-fallback" href={url} target="_blank" rel="noreferrer">{tr('imageFallback')}</a>
-  return <button type="button" className="exam-media-thumb" onClick={() => onOpen(src)}><img src={src} alt={tr('imageAlt')} referrerPolicy="no-referrer" onError={() => setIndex(value => value + 1)} /><span>{tr('imageOpen')}</span></button>
+  const [sourceIndex, setSourceIndex] = useState(0)
+  const src = sources[sourceIndex] || ''
+
+  useEffect(() => { setSourceIndex(0) }, [url])
+
+  const tryNext = () => setSourceIndex(value => value + 1)
+  return <article className="exam-media-card">
+    {src ? <button type="button" className="exam-media-thumb" onClick={() => onOpen({ sources, original: url, number })} aria-label={`${tr('imageNumber', { count: number })} · ${tr('imageOpen')}`}><img src={src} alt={`${tr('imageAlt')} ${number}`} referrerPolicy="no-referrer" onError={tryNext} /><span>{tr('imageOpen')}</span></button> : <div className="exam-media-fallback"><span>{tr('imageFallback')}</span></div>}
+    <a className="exam-media-original" href={url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{tr('imageNumber', { count: number })} · {tr('imageOriginal')} ↗</a>
+  </article>
+}
+
+function ExamImageLightbox({ media, onClose, tr }) {
+  const [sourceIndex, setSourceIndex] = useState(0)
+  const sources = media.sources || []
+  const src = sources[sourceIndex] || ''
+
+  useEffect(() => {
+    setSourceIndex(0)
+    const closeOnEscape = event => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [media, onClose])
+
+  return <div className="exam-image-lightbox" role="dialog" aria-modal="true" aria-label={tr('imageNumber', { count: media.number })} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
+    <div className="exam-lightbox-toolbar">
+      <a href={media.original} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{tr('imageOriginal')} ↗</a>
+      <button type="button" className="exam-lightbox-close" onClick={onClose} aria-label={tr('imageClose')}>×</button>
+    </div>
+    {src ? <img src={src} alt={`${tr('imageAlt')} ${media.number}`} referrerPolicy="no-referrer" onError={() => setSourceIndex(value => value + 1)} onClick={event => event.stopPropagation()} /> : <a className="exam-lightbox-fallback" href={media.original} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={event => event.stopPropagation()}>{tr('imageFallback')} ↗</a>}
+  </div>
 }
