@@ -765,9 +765,30 @@ Deno.serve(async (request) => {
     for (const [source, payload, note, rowCount] of snapshotPlans) {
       const result = await writeSnapshot(service, states, source, payload, note, rowCount)
       snapshotResults.push(result)
-      if (source === '居家排班表/填表' && result.changed) {
-        const { error } = await service.rpc('sync_report_employee_directory', { p_rows: payload })
-        if (error) throw new Error(`员工查询目录同步失败: ${error.message}`)
+      // Reconcile when the source changed or the derived roster cache diverged.
+      // The health check repairs the failure window where a snapshot write
+      // succeeded but the previous cache rebuild failed, without rewriting the
+      // unchanged directory on every scheduled run.
+      if (source === '居家排班表/填表') {
+        const rosterIds = new Set(payload
+          .map((row: any) => String(row?.employee_id || '').trim().toUpperCase())
+          .filter(Boolean))
+        if (rosterIds.size === 0) throw new Error('居家排班表没有可用员工 ID；已保留上次正常目录')
+
+        let needsReconcile = result.changed
+        if (!needsReconcile) {
+          const { data: healthy, error: healthError } = await service.rpc(
+            'report_employee_directory_cache_matches',
+            { p_rows: payload },
+          )
+          if (healthError) throw new Error(`员工查询目录一致性检查失败: ${healthError.message}`)
+          needsReconcile = healthy !== true
+        }
+
+        if (needsReconcile) {
+          const { error } = await service.rpc('sync_report_employee_directory', { p_rows: payload })
+          if (error) throw new Error(`员工查询目录同步失败: ${error.message}`)
+        }
       }
     }
 

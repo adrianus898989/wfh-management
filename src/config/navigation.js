@@ -21,7 +21,7 @@ export const adminNavigation = [
     children: [
       { label: '排班总览', path: '/admin/schedule', permission: PERMISSIONS.SCHEDULE_VIEW },
       { label: '考勤记录', path: '/admin/attendance', permission: PERMISSIONS.ATTENDANCE_VIEW },
-      { label: '请假 / 公休 / 回家 / 换班', path: '/admin/leave', permission: PERMISSIONS.LEAVE_APPROVE },
+      { label: '请假 / 公休 / 回家', path: '/admin/leave', permission: PERMISSIONS.LEAVE_APPROVE },
       { label: '轮班规则', path: '/admin/rotation', permission: PERMISSIONS.SCHEDULE_EDIT }
     ]
   },

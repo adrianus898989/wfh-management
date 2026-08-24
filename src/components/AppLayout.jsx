@@ -24,10 +24,10 @@ const ADMIN_NAV = [
   ]},
   { to:'/admin/schedule', label:'排班与考勤', icon:'班', children:[
     ['排班表', `/admin/schedule?tab=${enc('排班表')}`],
+    ['出勤表', `/admin/schedule?tab=${enc('出勤表')}`],
     ['今日考勤', `/admin/schedule?tab=${enc('今日考勤')}`],
     ['考勤记录', `/admin/schedule?tab=${enc('考勤记录')}`],
     ['请假审批', `/admin/schedule?tab=${enc('请假审批')}`],
-    ['换班记录', `/admin/schedule?tab=${enc('换班记录')}`],
     ['奖金 / 扣款', `/admin/schedule?tab=${enc('奖金 / 扣款')}`],
   ]},
   { to:'/admin/daily', label:'每日工作', icon:'日', children:[
