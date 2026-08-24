@@ -2,10 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
 import { attendanceAmount, attendanceCurrency, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
+import { PERMISSIONS } from '../config/permissions'
+import { useAdminAccess } from '../lib/adminAccess'
 import { supabase } from '../lib/supabase'
 import { EmployeeDrawer } from './AdminEmployeesPage'
 
 const TABS=['排班表','出勤表','今日考勤','考勤记录','请假审批','奖金 / 扣款']
+const ATTENDANCE_EVENT_KINDS=new Set(['public_holiday','home_leave','leave','half_day','absence','absent','resignation'])
 const text=value=>String(value??'').trim()
 const BUSINESS_TIME_ZONE='Asia/Manila'
 const todayIso=()=>{
@@ -73,7 +76,15 @@ const SyncIndicator=({sync})=><div className={`attendance-sync-indicator ${sync?
 
 export default function AdminAttendancePage(){
   const [params,setParams]=useSearchParams()
-  const tab=TABS.includes(params.get('tab'))?params.get('tab'):TABS[0]
+  const access=useAdminAccess()
+  const requestedTab=params.get('tab')
+  const visibleTabs=access.loading?[]:TABS.filter(value=>{
+    if(value==='排班表')return access.hasPermission(PERMISSIONS.SCHEDULE_VIEW)
+    if(value==='请假审批')return access.hasAllPermissions([PERMISSIONS.ATTENDANCE_VIEW,PERMISSIONS.LEAVE_APPROVE])
+    if(value==='奖金 / 扣款')return access.hasPermission(PERMISSIONS.ADJUSTMENT_VIEW)
+    return access.hasPermission(PERMISSIONS.ATTENDANCE_VIEW)
+  })
+  const tab=access.loading?(TABS.includes(requestedTab)?requestedTab:TABS[0]):(visibleTabs.includes(requestedTab)?requestedTab:(visibleTabs[0]||''))
   const [draft,setDraft]=useState(()=>tabFilters(tab))
   const [applied,setApplied]=useState(()=>tabFilters(tab))
   const [page,setPage]=useState(1)
@@ -87,14 +98,19 @@ export default function AdminAttendancePage(){
   const [employeeError,setEmployeeError]=useState('')
   const employeeRequest=useRef(0)
 
-  const setTab=value=>setParams(value===TABS[0]?{}:{tab:value})
+  const setTab=value=>{if(visibleTabs.includes(value))setParams(value===TABS[0]?{}:{tab:value})}
+  useEffect(()=>{
+    if(access.loading||!tab)return
+    if(requestedTab===tab||(!requestedTab&&tab===TABS[0]))return
+    setParams(tab===TABS[0]?{}:{tab},{replace:true})
+  },[access.loading,access.founder,access.permissionKey,requestedTab,tab,setParams])
   useEffect(()=>{
     const next=tabFilters(tab)
     setDraft(next);setApplied(next);setPage(1);setState({loading:false,error:'',data:null});setEmployeeError('')
   },[tab])
 
   useEffect(()=>{
-    if(!requestTab(tab))return undefined
+    if(access.loading||!tab||!requestTab(tab))return undefined
     let alive=true
     const load=async()=>{
       setState(current=>({...current,loading:true,error:''}))
@@ -113,7 +129,7 @@ export default function AdminAttendancePage(){
     }
     load()
     return()=>{alive=false}
-  },[tab,applied,page,pageSize,refreshKey])
+  },[access.loading,access.founder,access.permissionKey,tab,applied,page,pageSize,refreshKey])
 
   const query=()=>{setApplied({...draft});setPage(1)}
   const reset=()=>{const next=tabFilters(tab);setDraft(next);setApplied(next);setPage(1)}
@@ -141,15 +157,18 @@ export default function AdminAttendancePage(){
     </header>
 
     <nav className="module-tabs attendance-tabs" aria-label="排班与考勤页面">
-      {TABS.map(value=><button type="button" key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{value}</button>)}
+      {visibleTabs.map(value=><button type="button" key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{value}</button>)}
     </nav>
+
+    {access.loading&&<div className="attendance-table-state">正在读取页面权限…</div>}
+    {!access.loading&&!tab&&<div className="attendance-error" role="alert"><span>当前账号没有排班与考勤页面权限。</span></div>}
 
     {employeeError&&<div className="attendance-error" role="alert"><span>{employeeError}</span><button type="button" onClick={()=>setEmployeeError('')}>×</button></div>}
     {tab==='排班表'&&<SchedulePane/>}
     {tab==='出勤表'&&<AttendanceMatrixPane/>}
 
     {requestTab(tab)&&<>
-      {tab==='请假审批'&&<div className="attendance-readonly-notice"><b>当前为记录视图</b><span>页面默认筛选“请假”，也可以切换公休、回家 / 居家假、半天等真实类别。</span></div>}
+      {tab==='请假审批'&&<div className="attendance-readonly-notice"><b>当前为记录视图</b><span>页面默认筛选“请假”，也可以切换公休、回家、半天等真实类别。</span></div>}
       {tab==='今日考勤'&&<div className="attendance-context-note"><b>{todayIso()}</b><span>仅显示今天已经登记的记录；没有记录不等同于正常出勤。</span></div>}
       <AttendanceFilters tab={tab} draft={draft} setDraft={setDraft} options={options} advanced={advanced} setAdvanced={setAdvanced} loading={state.loading} sync={syncMeta(data)} onQuery={query} onReset={reset}/>
       {state.error&&<div className="attendance-error" role="alert"><span>考勤数据读取失败：{state.error}</span><button type="button" onClick={()=>setRefreshKey(value=>value+1)}>重试</button></div>}
@@ -165,7 +184,8 @@ export default function AdminAttendancePage(){
 
 function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,loading,sync,onQuery,onReset}){
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
-  const kindOptions=optionEntries(options.event_kinds,attendanceKindLabel)
+  const allowedKinds=tab==='奖金 / 扣款'?new Set(['bonus','deduction']):ATTENDANCE_EVENT_KINDS
+  const kindOptions=optionEntries(options.event_kinds,attendanceKindLabel).filter(item=>allowedKinds.has(item.value.toLowerCase())).map(item=>({...item,label:attendanceKindLabel(item.value)}))
   if(draft.event_kind&&!kindOptions.some(item=>item.value===draft.event_kind))kindOptions.unshift({value:draft.event_kind,label:attendanceKindLabel(draft.event_kind),key:`selected-${draft.event_kind}`})
   const select=(label,key,values,allLabel,labeler)=><label><span>{label}</span><select value={draft[key]} onChange={event=>update(key,event.target.value)}><option value="">{allLabel}</option>{optionEntries(values,labeler).map(item=><option value={item.value} key={item.key}>{item.label}</option>)}</select></label>
   return <section className="attendance-filter-card">
@@ -199,7 +219,7 @@ function AttendanceSummary({scope,summary,total}){
   const count=(currency,key)=>currencySummary[currency]?currencySummary[currency]?.[key]||0:'—'
   const items=scope==='adjustment'?
     [['记录总数',total],['USD 奖金',`${count('USD','bonus_count')} 笔 · ${money('USD','bonus_total')}`,'positive'],['USD 扣款',`${count('USD','deduction_count')} 笔 · ${money('USD','deduction_total')}`,'negative'],['USD 净额',money('USD','net_amount')],['PHP 奖金',`${count('PHP','bonus_count')} 笔 · ${money('PHP','bonus_total')}`,'positive'],['PHP 扣款',`${count('PHP','deduction_count')} 笔 · ${money('PHP','deduction_total')}`,'negative'],['PHP 净额',money('PHP','net_amount')],['待核对记录',summary.unmatched||0,'warning'],['币种待核对',summary.currency_review_count||0,'warning'],['金额未解析',summary.incomplete||0,'warning']]:
-    [['记录总数',total],['公休',summary.public_holiday||0],['回家 / 居家假',summary.home_leave||0],['请假',summary.leave||0,'warning'],['半天',summary.half_day||0,'warning'],['缺勤',summary.absence||0,'negative'],['离职',summary.resignation||0],['待核对记录',summary.unmatched||0,'warning']]
+    [['记录总数 / Records',total],['公休 / Rest day',summary.public_holiday||0],['回家 / Home leave',summary.home_leave||0],['请假 / Leave',summary.leave||0,'warning'],['半天 / Half day',summary.half_day||0,'warning'],['缺席 / Absent',summary.absence||0,'negative'],['离职 / Resigned',summary.resignation||0]]
   return <section className="attendance-summary-grid">{items.map(([label,value,tone])=><div key={label} className={tone||''}><span>{label}</span><strong>{value}</strong></div>)}</section>
 }
 
@@ -379,8 +399,8 @@ const monthMeta=value=>{
 }
 const matrixPersonKey=row=>text(row.employee_id)||text(row.id)||text(row.employee_no).toUpperCase()
 const matrixKindMeta=value=>({
-  public_holiday:['休','public_holiday'],home_leave:['回','home_leave'],leave:['请','leave'],half_day:['半','half_day'],absence:['缺','absence'],absent:['缺','absence'],resignation:['离','resignation'],late:['迟','late'],normal:['勤','normal'],present:['勤','normal'],
-}[text(value).toLowerCase()]||['记','other'])
+  public_holiday:['休','public_holiday'],home_leave:['回','home_leave'],leave:['请','leave'],half_day:['半','half_day'],absence:['缺','absence'],absent:['缺','absence'],resignation:['离','resignation'],
+}[text(value).toLowerCase()]||null)
 
 const matrixKinds=['public_holiday','home_leave','leave','half_day','absence','resignation']
 const matrixKindKey=value=>{
@@ -481,7 +501,7 @@ const matrixOverviewFromPayload=(payload,bounds)=>{
 }
 
 function AttendanceMatrixOverview({overview,month}){
-  const labels={public_holiday:'公休',home_leave:'回家',leave:'请假',half_day:'半天',absence:'缺勤',resignation:'离职'}
+  const labels={public_holiday:'公休 / Rest day',home_leave:'回家 / Home leave',leave:'请假 / Leave',half_day:'半天 / Half day',absence:'缺席 / Absent',resignation:'离职 / Resigned'}
   const monthly=matrixKinds.filter(kind=>overview.monthly[kind].days>0)
   const days=overview.daily.filter(day=>matrixKinds.some(kind=>day[kind].days>0))
   const today=todayIso(),todayDay=Number(today.slice(-2))
@@ -598,7 +618,7 @@ function AttendanceMatrixPane(){
     </section>
     {state.error&&<div className="attendance-error"><span>月度出勤读取失败：{state.error}</span><button type="button" onClick={()=>load(true)}>重试</button></div>}
     {!state.loading&&people.length>0&&<AttendanceMatrixOverview overview={overview} month={month}/>}
-    <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；空白表示当天没有登记异常，不代表已完成打卡。同日多种状态时，离职优先计入总计。</p></div><div className="matrix-legend"><span className="public_holiday">休 公休</span><span className="home_leave">回 居家假</span><span className="leave">请 请假</span><span className="half_day">半 半天</span><span className="absence">缺 缺勤</span><span className="resignation">离 离职</span></div></header>
+    <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；同日多种状态时，离职优先计入总计。</p></div><div className="matrix-legend"><span className="public_holiday">休 公休 / Rest day</span><span className="home_leave">回 回家 / Home leave</span><span className="leave">请 请假 / Leave</span><span className="half_day">半 半天 / Half day</span><span className="absence">缺 缺席 / Absent</span><span className="resignation">离 离职 / Resigned</span></div></header>
       {state.loading&&!state.people.length?<div className="attendance-table-state">正在生成月度出勤表…</div>:!people.length?<div className="attendance-table-state">当前条件下暂无员工</div>:<div className="attendance-matrix-scroll"><table><thead><tr><th className="matrix-sticky matrix-scope">盘口 / 国家</th><th className="matrix-sticky matrix-position">岗位 / 团队</th><th className="matrix-sticky matrix-employee">员工</th><th className="matrix-sticky matrix-hire">入职</th><th className="matrix-sticky matrix-summary">本月统计</th>{bounds.days.map(day=><th className="matrix-day-head" key={day}>{day}</th>)}<th className="matrix-total-head">总计</th></tr></thead><tbody>{pagePeople.map(employee=><AttendanceMatrixRow key={matrixPersonKey(employee)} employee={employee} bounds={bounds} month={month} onDay={setDayDetail}/>)}</tbody></table></div>}
       {state.loading&&state.people.length>0&&<div className="attendance-loading-overlay">正在更新月度出勤…</div>}
     </section>
@@ -620,7 +640,7 @@ function AttendanceMatrixRow({employee,bounds,month,onDay}){
     <td className="matrix-sticky matrix-summary"><div className="matrix-summary-chips" title={`本月合计 ${formatDayCount(summary.total)} 天`}>{chips}</div></td>
     {bounds.days.map(day=>{
       const date=`${month}-${String(day).padStart(2,'0')}`
-      const records=matrixDayRecords(employee,day,month)
+      const records=matrixDayRecords(employee,day,month).filter(record=>matrixKindKey(record.event_kind||record.kind||record.status))
       const primaryRecord=matrixPrimaryRecord(matrixEffectiveDayRecords(employee,day,month))
       const primary=primaryRecord&&matrixKindMeta(primaryRecord.event_kind||primaryRecord.kind||primaryRecord.status)
       return <td className="matrix-day-cell" key={day}>{primary?<button type="button" className={primary[1]} aria-label={`${employee.full_name||employee.employee_no} ${date} 查看出勤详情`} title={`${attendanceKindLabel(primaryRecord.event_kind||primaryRecord.kind||primaryRecord.status)}${records.length>1?'（同日其他记录详见详情）':''} · 点击查看完整原因与备注`} onClick={()=>onDay({employee,date,records,effectiveKind:matrixKindKey(primaryRecord.event_kind||primaryRecord.kind||primaryRecord.status)})}>{primary[0]}</button>:<i title="无异常记录">—</i>}</td>

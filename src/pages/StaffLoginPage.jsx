@@ -43,7 +43,7 @@ export default function StaffLoginPage() {
     if (error || !responseData?.access_token || !responseData?.refresh_token) {
       setLoading(false)
       if (responseData?.code === 'ACTIVE_SESSION_EXISTS') {
-        return setError(t('auth.sessionActiveElsewhere','This account is already active in another browser. Sign out there before trying again.'))
+        return setError(t('auth.sessionTakeoverFailed','Unable to replace the previous session. Please try signing in again.'))
       }
       if (responseData?.code === 'SESSION_CHECK_UNAVAILABLE') {
         return setError(t('auth.sessionCheckFailed','Unable to verify this browser session. Please try again.'))
@@ -70,7 +70,7 @@ export default function StaffLoginPage() {
       await discardLocalAppSession()
       setLoading(false)
       return setError(lease?.reason === 'active_elsewhere'
-        ? t('auth.sessionActiveElsewhere','This account is already active in another browser. Sign out there before trying again.')
+        ? t('auth.sessionTakeoverFailed','Unable to replace the previous session. Please try signing in again.')
         : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.'))
     }
 

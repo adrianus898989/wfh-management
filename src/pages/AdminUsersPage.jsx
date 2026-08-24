@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAdminAccess } from '../lib/adminAccess'
 
 const USER_TABS = ['backend', 'staff', 'roles']
 
@@ -38,6 +39,7 @@ const actionLabels = {
   publish: '发布',
   manage: '管理',
   disable: '停用',
+  generate: '生成',
   reset_password: '重置密码',
   otp_toggle: 'OTP开关',
   mfa_reset: '重置OTP',
@@ -60,6 +62,10 @@ const permissionSectionDefinitions = [
 const permissionModuleMeta = {
   account: { section: 'access', label: '后台账号', description: '创建、停用、删除账号及登录安全设置' },
   user: { section: 'access', label: '用户与权限', description: '查看账号并管理角色权限' },
+  'user.account': { section: 'access', label: '员工登录账号', description: '创建、启停及删除员工前端登录账号' },
+  'user.activation': { section: 'access', label: '员工激活码', description: '生成或重置员工前端账号激活码' },
+  'user.email': { section: 'access', label: '员工登录邮箱', description: '修改员工前端账号登录邮箱' },
+  'user.password': { section: 'access', label: '员工登录密码', description: '重置员工前端账号登录密码' },
   role: { section: 'access', label: '角色管理', description: '创建、编辑及分配系统角色' },
   employee: { section: 'employee', label: '员工档案', description: '员工资料的查看、新增、编辑与离职操作' },
   'employee.compensation': { section: 'employee', label: '员工薪资资料', description: '员工固定薪资及补贴等资料' },
@@ -84,7 +90,7 @@ const permissionModuleMeta = {
 }
 
 const permissionModuleOrder = Object.keys(permissionModuleMeta)
-const permissionActionOrder = ['view', 'create', 'submit', 'edit', 'review', 'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable', 'resign', 'reset_password', 'otp_toggle', 'mfa_reset', 'general']
+const permissionActionOrder = ['view', 'create', 'generate', 'submit', 'edit', 'review', 'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable', 'resign', 'reset_password', 'otp_toggle', 'mfa_reset', 'general']
 
 function getRole(a) {
   return Array.isArray(a?.roles) ? a.roles[0] : a?.roles
@@ -106,6 +112,7 @@ function permissionShape(code) {
 }
 
 export default function AdminUsersPage() {
+  const sharedAccess = useAdminAccess()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const [tab, setTabState] = useState(USER_TABS.includes(requestedTab) ? requestedTab : 'backend')
@@ -148,13 +155,36 @@ export default function AdminUsersPage() {
   }, [requestedTab])
 
   const setTab = next => {
+    if ((!sharedAccess.loading || data) && !tabAllowed(next)) return
     setTabState(next)
     setSearchDraft('')
     setSearchQuery('')
     setSearchParams(next === 'backend' ? {} : { tab: next }, { replace: true })
   }
 
-  const callerFounder = data?.caller?.is_founder
+  const callerFounder = sharedAccess.founder || data?.caller?.is_founder
+  const callerPermissions = new Set(data?.caller?.permissions || [])
+  const callerCan = code => Boolean(callerFounder || sharedAccess.hasPermission(code) || callerPermissions.has('*') || callerPermissions.has(code))
+  const backendPermissionCodes = ['user.view','account.view','account.create','account.edit','account.disable','account.delete','account.reset_password','account.otp_toggle','account.mfa_reset']
+  const staffPermissionCodes = ['user.view','user.account.create','user.account.disable','user.account.delete','user.password.reset','account.mfa_reset']
+  const tabAllowed = key => key === 'backend'
+    ? backendPermissionCodes.some(callerCan)
+    : key === 'staff'
+      ? staffPermissionCodes.some(callerCan)
+      : callerCan('role.manage')
+  const visibleTabs = sharedAccess.loading && !data ? [] : USER_TABS.filter(tabAllowed)
+  const canCreateBackend = callerCan('account.create')
+  const canEditBackend = callerCan('account.edit')
+  const canToggleBackend = callerCan('account.disable')
+  const canDeleteBackend = callerCan('account.delete')
+  const canResetBackendPassword = callerCan('account.reset_password')
+  const canToggleOtp = callerCan('account.otp_toggle')
+  const canResetMfa = callerCan('account.mfa_reset')
+  const canManageScope = callerCan('scope.manage')
+  const canCreateStaff = callerCan('user.account.create')
+  const canToggleStaff = callerCan('user.account.disable')
+  const canDeleteStaff = callerCan('user.account.delete')
+  const canResetStaffPassword = callerCan('user.password.reset')
   const backend = data?.backend_accounts || []
   const staff = data?.employee_accounts || []
   const employees = data?.employees || []
@@ -165,6 +195,14 @@ export default function AdminUsersPage() {
   const scopeTeams = data?.scope_teams || []
   const scopeEmployees = data?.scope_employees || []
 
+  useEffect(() => {
+    if ((sharedAccess.loading && !data) || tabAllowed(tab)) return
+    const fallback = visibleTabs[0]
+    if (!fallback) return
+    setTabState(fallback)
+    setSearchParams(fallback === 'backend' ? {} : { tab: fallback }, { replace: true })
+  }, [data, tab, sharedAccess.loading, sharedAccess.permissionKey])
+
   const editableRoles = roles.filter(r => !['founder', 'employee'].includes(r.code))
   const normalizedSearch = searchQuery.trim().toLowerCase()
   const matchesSearch = (...values) => !normalizedSearch || values.some(value => String(value || '').toLowerCase().includes(normalizedSearch))
@@ -174,6 +212,7 @@ export default function AdminUsersPage() {
   })
   const visibleStaff = staff.filter(a => matchesSearch(a.login_email, a.employee?.employee_no, a.employee?.full_name, a.employee?.teams?.name, a.employee?.positions?.name))
   const visibleRoles = roles.filter(r => r.code !== 'employee' && matchesSearch(r.name, r.code))
+  const visibleTab = visibleTabs.includes(tab) ? tab : ''
 
   const rolePermissionMap = useMemo(() => {
     const map = new Map()
@@ -357,7 +396,7 @@ export default function AdminUsersPage() {
   }
 
   const createRole = async () => {
-    if (!newRoleName.trim()) return
+    if (!callerFounder || !newRoleName.trim()) return
     try {
       await call({ action: 'create_role', name: newRoleName.trim() })
       setNewRoleName('')
@@ -382,7 +421,7 @@ export default function AdminUsersPage() {
   }
 
   const saveRole = async () => {
-    if (!roleModal) return
+    if (!roleModal || !callerFounder) return
     if (!roleModal.name.trim()) {
       setRoleModal(x => ({ ...x, error: '角色名称不能为空。' }))
       return
@@ -407,6 +446,7 @@ export default function AdminUsersPage() {
   }
 
   const deleteRole = async (role) => {
+    if (!callerFounder) return
     if (!window.confirm(`确认删除角色「${role.name}」？`)) return
     try {
       await call({ action: 'delete_role', role_id: role.id })
@@ -415,9 +455,11 @@ export default function AdminUsersPage() {
   }
 
   const roleIsLocked = roleModal?.role.code === 'founder'
+  const roleReadOnly = !callerFounder || roleIsLocked
   const selectedPermissionIds = new Set(roleModal?.permission_ids || [])
 
   const updatePermissionSelection = (permissionIds, checked) => {
+    if (!callerFounder) return
     setRoleModal(current => {
       if (!current || current.role.code === 'founder') return current
       const next = new Set(current.permission_ids)
@@ -474,27 +516,27 @@ export default function AdminUsersPage() {
       </div>
 
       <div className="access-tabs">
-        <button className={tab === 'backend' ? 'active' : ''} onClick={() => setTab('backend')}>后台账号</button>
-        <button className={tab === 'staff' ? 'active' : ''} onClick={() => setTab('staff')}>员工账号</button>
-        <button className={tab === 'roles' ? 'active' : ''} onClick={() => setTab('roles')}>角色与权限</button>
+        {visibleTabs.includes('backend') && <button className={visibleTab === 'backend' ? 'active' : ''} onClick={() => setTab('backend')}>后台账号</button>}
+        {visibleTabs.includes('staff') && <button className={visibleTab === 'staff' ? 'active' : ''} onClick={() => setTab('staff')}>员工账号</button>}
+        {visibleTabs.includes('roles') && <button className={visibleTab === 'roles' ? 'active' : ''} onClick={() => setTab('roles')}>角色与权限</button>}
       </div>
 
       {error && <div className="page-error">{error}</div>}
 
-      {tab !== 'roles' && <div className="access-searchbar">
+      {visibleTab && visibleTab !== 'roles' && <div className="access-searchbar">
         <input value={searchDraft} onChange={e => setSearchDraft(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && setSearchQuery(searchDraft)}
-          placeholder={tab === 'backend' ? '搜索用户名、员工ID、姓名、角色或管理范围' : '搜索用户名、员工ID、姓名、团队或岗位'} />
+          placeholder={visibleTab === 'backend' ? '搜索用户名、员工ID、姓名、角色或管理范围' : '搜索用户名、员工ID、姓名、团队或岗位'} />
         <button className="primary-action" onClick={() => setSearchQuery(searchDraft)}>查询</button>
         <button className="secondary-action" onClick={() => { setSearchDraft(''); setSearchQuery('') }}>重置</button>
-        <button className="primary-action" onClick={tab === 'backend' ? openCreate : openCreateStaff}>
-          {tab === 'backend' ? '＋ 新增后台账号' : '＋ 新增员工账号'}
-        </button>
+        {((visibleTab === 'backend' && canCreateBackend) || (visibleTab === 'staff' && canCreateStaff)) && <button className="primary-action" onClick={visibleTab === 'backend' ? openCreate : openCreateStaff}>
+          {visibleTab === 'backend' ? '＋ 新增后台账号' : '＋ 新增员工账号'}
+        </button>}
       </div>}
 
       {loading ? <div className="data-card"><div className="empty-state">读取中...</div></div> : (
         <>
-          {tab === 'backend' && (
+          {visibleTab === 'backend' && (
             <div className="data-card table-scroll">
               <table className="data-table">
                 <thead><tr><th>用户名</th><th>关联员工ID</th><th>姓名</th><th>角色</th><th>范围</th><th>OTP</th><th>状态</th><th>操作</th></tr></thead>
@@ -509,17 +551,17 @@ export default function AdminUsersPage() {
                       <td>{role?.name || '-'}</td>
                       <td>{scopeLabel(a.data_scope)}</td>
                       <td>
-                        <button className={`switch-button ${a.otp_required ? 'on' : ''}`} onClick={() => toggleOtp(a)}>
-                          <i/><span>{a.otp_required ? '开' : '关'}</span>
-                        </button>
+                        {canToggleOtp
+                          ? <button className={`switch-button ${a.otp_required ? 'on' : ''}`} onClick={() => toggleOtp(a)}><i/><span>{a.otp_required ? '开' : '关'}</span></button>
+                          : <span className={`status-chip ${a.otp_required ? '' : 'off'}`}>{a.otp_required ? '开启' : '关闭'}</span>}
                       </td>
                       <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{a.active ? '正常' : '停用'}</span></td>
                       <td><div className="access-grid-actions">
-                        {!founder && <button onClick={() => openEdit(a)}>编辑</button>}
-                        <button onClick={() => resetPassword(a)}>重置密码</button>
-                        <button onClick={() => resetMfa(a)}>重置OTP</button>
-                        {!founder && <button onClick={() => toggleActive(a)}>{a.active ? '停用' : '启用'}</button>}
-                        {!founder && <button className="danger" onClick={() => deleteAccount(a)}>删除账号</button>}
+                        {!founder && canEditBackend && <button onClick={() => openEdit(a)}>编辑</button>}
+                        {canResetBackendPassword && <button onClick={() => resetPassword(a)}>重置密码</button>}
+                        {canResetMfa && <button onClick={() => resetMfa(a)}>重置OTP</button>}
+                        {!founder && canToggleBackend && <button onClick={() => toggleActive(a)}>{a.active ? '停用' : '启用'}</button>}
+                        {!founder && canDeleteBackend && <button className="danger" onClick={() => deleteAccount(a)}>删除账号</button>}
                       </div></td>
                     </tr>
                   })}
@@ -528,7 +570,7 @@ export default function AdminUsersPage() {
             </div>
           )}
 
-          {tab === 'staff' && (
+          {visibleTab === 'staff' && (
             <div className="data-card table-scroll">
               {staff.length === 0 ? <div className="empty-state">暂无员工账号</div> :
               <table className="data-table">
@@ -541,17 +583,17 @@ export default function AdminUsersPage() {
                   <td>{a.employee?.positions?.name || '-'}</td>
                   <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{a.active ? '正常' : '停用'}</span></td>
                   <td><div className="access-grid-actions">
-                    <button onClick={() => resetPassword(a)}>重置密码</button>
-                    <button onClick={() => resetMfa(a)}>重置OTP</button>
-                    <button onClick={() => toggleActive(a)}>{a.active ? '停用' : '启用'}</button>
-                    <button className="danger" onClick={() => deleteAccount(a)}>删除登录账号</button>
+                    {canResetStaffPassword && <button onClick={() => resetPassword(a)}>重置密码</button>}
+                    {canResetMfa && <button onClick={() => resetMfa(a)}>重置OTP</button>}
+                    {canToggleStaff && <button onClick={() => toggleActive(a)}>{a.active ? '停用' : '启用'}</button>}
+                    {canDeleteStaff && <button className="danger" onClick={() => deleteAccount(a)}>删除登录账号</button>}
                   </div></td>
                 </tr>)}</tbody>
               </table>}
             </div>
           )}
 
-          {tab === 'roles' && (
+          {visibleTab === 'roles' && (
             <div className="roles-workspace">
               <div className="roles-overview">
                 <div className="roles-overview-copy">
@@ -609,8 +651,8 @@ export default function AdminUsersPage() {
                       </div>
                     </div>
                     <div className="role-card-actions">
-                      <button className="primary" onClick={() => openRole(role)}>{role.code === 'founder' ? '查看固定权限' : '配置权限'}</button>
-                      {!role.system_locked && <button className="danger" onClick={() => deleteRole(role)}>删除角色</button>}
+                      <button className="primary" onClick={() => openRole(role)}>{role.code === 'founder' ? '查看固定权限' : callerFounder ? '配置权限' : '查看权限'}</button>
+                      {callerFounder&&!role.system_locked && <button className="danger" onClick={() => deleteRole(role)}>删除角色</button>}
                     </div>
                   </div>
                 })}
@@ -632,7 +674,7 @@ export default function AdminUsersPage() {
             {accountModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{accountModal.error}</div>}
             <div className="account-modal-body"><div className="form-grid">
               <label>关联员工档案
-                <select value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value, data_scope:!e.target.value&&['own_team','self'].includes(x.form.data_scope)?'all':x.form.data_scope}}))}>
+                <select disabled={accountModal.mode === 'edit' && !canManageScope} value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value, data_scope:!e.target.value&&['own_team','self'].includes(x.form.data_scope)?'all':x.form.data_scope}}))}>
                   <option value="">不关联（请选择全部或指定范围）</option>
                   {employees.map(e => <option key={e.id} value={e.id}>{e.employee_no} · {e.full_name}</option>)}
                 </select>
@@ -654,12 +696,13 @@ export default function AdminUsersPage() {
               </label>
 
               <label>管理范围
-                <select value={accountModal.form.data_scope} onChange={e => setAccountModal(x => ({...x, form:{...x.form, data_scope:e.target.value}}))}>
+                <select disabled={accountModal.mode === 'edit' && !canManageScope} value={accountModal.form.data_scope} onChange={e => setAccountModal(x => ({...x, form:{...x.form, data_scope:e.target.value}}))}>
                   {accountModal.form.employee_id && <option value="self">仅关联员工本人</option>}
                   {accountModal.form.employee_id && <option value="own_team">关联员工所在团队</option>}
                   <option value="assigned_teams">指定团队 / 指定员工</option>
                   <option value="all">全部数据</option>
                 </select>
+                {accountModal.mode === 'edit' && !canManageScope && <small>当前账号没有“管理账号数据范围”权限。</small>}
               </label>
 
               {accountModal.mode === 'create' && <label>登录 OTP
@@ -672,17 +715,19 @@ export default function AdminUsersPage() {
               {accountModal.form.data_scope === 'assigned_teams' && (
                 <div className="scope-panel">
                   <div className="scope-columns">
-                    <div><div className="scope-column-head"><strong>团队</strong><span>已选 {accountModal.form.team_ids.length}</span></div><input className="scope-search" placeholder="搜索团队" value={accountModal.form.scope_team_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_team_search:e.target.value}}))}/><div className="check-list">
+                    <div><div className="scope-column-head"><strong>团队</strong><span>已选 {accountModal.form.team_ids.length}</span></div><input className="scope-search" disabled={accountModal.mode === 'edit' && !canManageScope} placeholder="搜索团队" value={accountModal.form.scope_team_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_team_search:e.target.value}}))}/><div className="check-list">
                       {teams.length === 0 ? <div className="empty-state">暂无团队</div> : teams.filter(t=>String(t.name||'').toLowerCase().includes(accountModal.form.scope_team_search.toLowerCase())).map(t => (
                         <label key={t.id}><input type="checkbox"
+                          disabled={accountModal.mode === 'edit' && !canManageScope}
                           checked={accountModal.form.team_ids.includes(t.id)}
                           onChange={e => setAccountModal(x => ({...x,form:{...x.form,team_ids:e.target.checked?[...x.form.team_ids,t.id]:x.form.team_ids.filter(id=>id!==t.id)}}))}
                         />{t.name}</label>
                       ))}
                     </div></div>
-                    <div><div className="scope-column-head"><strong>指定员工</strong><span>已选 {accountModal.form.employee_ids.length}</span></div><input className="scope-search" placeholder="搜索员工ID或姓名" value={accountModal.form.scope_employee_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_search:e.target.value}}))}/><div className="check-list">
+                    <div><div className="scope-column-head"><strong>指定员工</strong><span>已选 {accountModal.form.employee_ids.length}</span></div><input className="scope-search" disabled={accountModal.mode === 'edit' && !canManageScope} placeholder="搜索员工ID或姓名" value={accountModal.form.scope_employee_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_search:e.target.value}}))}/><div className="check-list">
                       {employees.length === 0 ? <div className="empty-state">暂无员工</div> : employees.filter(emp=>`${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(accountModal.form.scope_employee_search.toLowerCase())).slice(0,100).map(emp => (
                         <label key={emp.id}><input type="checkbox"
+                          disabled={accountModal.mode === 'edit' && !canManageScope}
                           checked={accountModal.form.employee_ids.includes(emp.id)}
                           onChange={e => setAccountModal(x => ({...x,form:{...x.form,employee_ids:e.target.checked?[...x.form.employee_ids,emp.id]:x.form.employee_ids.filter(id=>id!==emp.id)}}))}
                         />{emp.employee_no} · {emp.full_name}</label>
@@ -745,8 +790,8 @@ export default function AdminUsersPage() {
               <div className="role-modal-heading">
                 <span className="role-modal-icon">权</span>
                 <div>
-                  <h2 id="role-permission-title">配置「{roleModal.role.name}」的权限</h2>
-                  <p>按业务模块与对应页面逐项授权；带“敏感”标记的权限请谨慎开放。</p>
+                  <h2 id="role-permission-title">{roleReadOnly?'查看':'配置'}「{roleModal.role.name}」的权限</h2>
+                  <p>{roleReadOnly?'当前账号仅可查看角色权限，修改操作仅限 Founder。':'按业务模块与对应页面逐项授权；带“敏感”标记的权限请谨慎开放。'}</p>
                 </div>
               </div>
               <button aria-label="关闭" disabled={roleModal.saving} onClick={() => setRoleModal(null)}>×</button>
@@ -757,7 +802,7 @@ export default function AdminUsersPage() {
 
               <div className="role-identity-panel">
                 <label className="role-name-field"><span>角色名称</span>
-                  <input disabled={roleModal.role.system_locked} value={roleModal.name}
+                  <input disabled={roleReadOnly||roleModal.role.system_locked} value={roleModal.name}
                     onChange={e => setRoleModal(x => ({...x, name:e.target.value, error:''}))}/>
                 </label>
                 <div className="role-selection-summary">
@@ -773,8 +818,8 @@ export default function AdminUsersPage() {
                 </label>
                 <div className="permission-toolbar-actions">
                   {roleModal.permission_search && <button onClick={() => setRoleModal(x => ({...x, permission_search:''}))}>清除搜索</button>}
-                  <button disabled={roleIsLocked} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), true)}>全部勾选</button>
-                  <button disabled={roleIsLocked} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), false)}>全部取消</button>
+                  <button disabled={roleReadOnly} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), true)}>全部勾选</button>
+                  <button disabled={roleReadOnly} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), false)}>全部取消</button>
                   <button disabled={roleModal.collapsed_sections.length === 0} onClick={() => setRoleModal(x => ({...x, collapsed_sections:[]}))}>全部展开</button>
                 </div>
               </div>
@@ -793,7 +838,7 @@ export default function AdminUsersPage() {
                   return <section className={`permission-section ${sectionCollapsed ? 'collapsed' : ''}`} key={section.key}>
                     <div className="permission-section-head">
                       <label className="permission-section-head-main">
-                        <input type="checkbox" disabled={roleIsLocked}
+                        <input type="checkbox" disabled={roleReadOnly}
                           ref={node => { if (node) node.indeterminate = sectionSelectedCount > 0 && sectionSelectedCount < sectionPermissionIds.length }}
                           checked={sectionSelectedCount === sectionPermissionIds.length && sectionPermissionIds.length > 0}
                           onChange={e => updatePermissionSelection(sectionPermissionIds, e.target.checked)} />
@@ -822,7 +867,7 @@ export default function AdminUsersPage() {
                         return <article className="permission-page" key={page.key}>
                           <div className="permission-page-head">
                             <label className="permission-page-title">
-                              <input type="checkbox" disabled={roleIsLocked}
+                              <input type="checkbox" disabled={roleReadOnly}
                                 ref={node => { if (node) node.indeterminate = pageSelectedCount > 0 && pageSelectedCount < pagePermissionIds.length }}
                                 checked={pageSelectedCount === pagePermissionIds.length && pagePermissionIds.length > 0}
                                 onChange={e => updatePermissionSelection(pagePermissionIds, e.target.checked)} />
@@ -833,8 +878,8 @@ export default function AdminUsersPage() {
                           <div className="permission-options">
                             {page.items.map(permission => {
                               const checked = roleIsLocked || selectedPermissionIds.has(permission.id)
-                              return <label className={`permission-option ${checked ? 'selected' : ''} ${roleIsLocked ? 'locked' : ''}`} key={permission.id}>
-                                <input type="checkbox" disabled={roleIsLocked} checked={checked}
+                              return <label className={`permission-option ${checked ? 'selected' : ''} ${roleReadOnly ? 'locked' : ''}`} key={permission.id}>
+                                <input type="checkbox" disabled={roleReadOnly} checked={checked}
                                   onChange={e => updatePermissionSelection([permission.id], e.target.checked)} />
                                 <span className="permission-option-copy"><strong>{displayPermissionName(permission)}</strong><small>{permission.code}</small></span>
                                 {permission.sensitive && <em className="sensitive-badge">敏感</em>}
@@ -850,10 +895,10 @@ export default function AdminUsersPage() {
             </div>
 
             <div className="modal-actions">
-              <span className="role-modal-actions-note">权限保存后立即应用于使用该角色的后台账号。</span>
+              <span className="role-modal-actions-note">{roleReadOnly?'只读查看，不会修改角色或权限。':'权限保存后立即应用于使用该角色的后台账号。'}</span>
               <div className="role-modal-actions-buttons">
-                {!roleIsLocked && <button className="secondary-action" disabled={roleModal.saving} onClick={() => setRoleModal(null)}>取消</button>}
-                <button className="primary-action" disabled={roleModal.saving} onClick={roleIsLocked ? () => setRoleModal(null) : saveRole}>{roleIsLocked ? '完成' : roleModal.saving ? '保存中…' : '保存权限'}</button>
+                {!roleReadOnly && <button className="secondary-action" disabled={roleModal.saving} onClick={() => setRoleModal(null)}>取消</button>}
+                <button className="primary-action" disabled={roleModal.saving} onClick={roleReadOnly ? () => setRoleModal(null) : saveRole}>{roleReadOnly ? '完成' : roleModal.saving ? '保存中…' : '保存权限'}</button>
               </div>
             </div>
           </div>

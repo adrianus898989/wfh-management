@@ -83,7 +83,7 @@ export default function AdminLoginPage() {
       if (!lease?.ok) {
         await discardLocalAppSession()
         return setError(lease?.reason === 'active_elsewhere'
-          ? '该账号已在另一浏览器登录，请先退出原会话后重试'
+          ? '旧会话接管未完成，请重新登录；成功后旧设备会自动退出'
           : '登录会话已失效，请重试')
       }
 

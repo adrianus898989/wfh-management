@@ -233,7 +233,7 @@ Deno.serve(async (req) => {
       scopeContextPromise = (async () => {
         const [employeeRes, teamRes, scopeTeamRes, scopeEmployeeRes] = await Promise.all([
           admin.from('employees')
-            .select('id,employee_no,full_name,status,team_id,position_id,teams(id,name),positions(id,name)')
+            .select('id,employee_no,full_name,status,team_id,position_id,hire_date,resign_date,country,nationality,employment_type,shift_name,source_type,profile_status,created_at,updated_at,teams(id,name),positions(id,name)')
             .order('employee_no')
             .limit(10000),
           admin.from('teams').select('id,name').order('name').limit(5000),
@@ -474,11 +474,105 @@ Deno.serve(async (req) => {
       return { ...targetAccess, targetRole }
     }
 
+    if (action === 'access') {
+      return json(req, {
+        ok: true,
+        caller: {
+          auth_user_id: userData.user.id,
+          role_code: callerRole?.code || null,
+          is_founder: isFounder,
+          permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
+        },
+      })
+    }
+
+    if (action === 'dashboard') {
+      const mayViewEmployees = can('employee.view')
+      const mayViewStaffCoverage = can('user.view') || can('account.view') ||
+        can('user.activation.generate') || can('user.account.create')
+      const mayViewBackendAccounts = can('user.view') || can('account.view') ||
+        can('account.create') || can('account.edit')
+      const scopedEmployees = (mayViewEmployees || mayViewStaffCoverage)
+        ? await getScopedEmployees(false)
+        : []
+      const employees = mayViewEmployees
+        ? scopedEmployees.filter((employee: any) => {
+          const employeeNo = cleanString(employee.employee_no).toUpperCase()
+          return employeeNo && !['SYSTEM', 'ADMIN'].includes(employeeNo) &&
+            !employeeNo.startsWith('TEST') && cleanString(employee.source_type) !== 'google_deleted'
+        })
+        : []
+
+      let accountSummary: Record<string, number> | null = null
+      if (mayViewStaffCoverage || mayViewBackendAccounts) {
+        const scope = await getScopeContext()
+        const { data: accessRows, error: accessError } = await admin.from('user_access')
+          .select('auth_user_id,employee_id,backend_enabled,employee_portal_enabled,active')
+        if (accessError) return json(req, { error: accessError.message }, 500)
+
+        const visibleAccounts = (accessRows || []).filter((row: any) =>
+          isFounder || (row.employee_id && scope.allowedEmployeeIds.has(row.employee_id))
+        )
+        const inactiveEmployeeStatuses = new Set(['left', 'resigned', 'inactive', 'suspended', 'terminated', '离职', '停用'])
+        const activeScopedEmployees = scopedEmployees.filter((employee: any) => {
+          const employeeNo = cleanString(employee.employee_no).toUpperCase()
+          return !inactiveEmployeeStatuses.has(cleanString(employee.status).toLowerCase()) && employeeNo &&
+            !['SYSTEM', 'ADMIN'].includes(employeeNo) && !employeeNo.startsWith('TEST') &&
+            cleanString(employee.source_type) !== 'google_deleted'
+        })
+        const activeScopedEmployeeIds = new Set(activeScopedEmployees.map((employee: any) => employee.id))
+        const portalEmployeeIds = new Set(visibleAccounts
+          .filter((row: any) => row.employee_portal_enabled && row.active !== false &&
+            row.employee_id && activeScopedEmployeeIds.has(row.employee_id))
+          .map((row: any) => row.employee_id))
+
+        accountSummary = {
+          can_view_staff_accounts: mayViewStaffCoverage ? 1 : 0,
+          active_staff_scope: mayViewStaffCoverage ? activeScopedEmployees.length : 0,
+          staff_accounts: mayViewStaffCoverage ? portalEmployeeIds.size : 0,
+          pending_staff_accounts: mayViewStaffCoverage
+            ? activeScopedEmployees.filter((employee: any) => !portalEmployeeIds.has(employee.id)).length
+            : 0,
+          backend_accounts: mayViewBackendAccounts
+            ? visibleAccounts.filter((row: any) => row.backend_enabled && row.active !== false).length
+            : 0,
+        }
+      }
+
+      return json(req, {
+        ok: true,
+        caller: {
+          auth_user_id: userData.user.id,
+          role_code: callerRole?.code || null,
+          is_founder: isFounder,
+          permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
+        },
+        employees,
+        account_summary: accountSummary,
+        dashboard_access: {
+          employee_metrics: mayViewEmployees,
+          staff_account_metrics: mayViewStaffCoverage,
+          backend_account_metrics: mayViewBackendAccounts,
+        },
+      })
+    }
+
     if (action === 'bootstrap') {
-      if (!can('user.view') && !can('account.create') && !can('role.manage')) {
+      const backendActionPermissions = [
+        'user.view', 'account.view', 'account.create', 'account.edit',
+        'account.delete', 'account.disable', 'account.mfa_reset',
+        'account.otp_toggle', 'account.reset_password',
+      ]
+      const staffActionPermissions = [
+        'user.view', 'user.account.create', 'user.account.delete',
+        'user.account.disable', 'user.password.reset', 'account.mfa_reset',
+      ]
+      const mayViewBackendAccounts = backendActionPermissions.some(code => can(code))
+      const mayViewStaffAccounts = staffActionPermissions.some(code => can(code))
+      const mayViewAccounts = mayViewBackendAccounts || mayViewStaffAccounts
+      if (!mayViewAccounts && !can('role.manage')) {
         return json(req, { error: '无账号与权限查看权限' }, 403)
       }
-      const mayViewAccounts = can('user.view') || can('account.create')
       const mayManageRoles = can('role.manage')
       const mayCreateAccounts = can('account.create')
       const scope = await getScopeContext()
@@ -497,7 +591,7 @@ Deno.serve(async (req) => {
         mayViewAccounts ? admin.from('user_access')
           .select('auth_user_id,employee_id,role_id,login_username,login_email,backend_enabled,employee_portal_enabled,otp_required,data_scope,active,must_change_password,roles(id,code,name,system_locked,active)')
           .order('created_at', { ascending: true }) : emptyResult(),
-        (mayManageRoles || mayCreateAccounts)
+        (mayManageRoles || mayCreateAccounts || can('account.edit'))
           ? admin.from('roles').select('id,code,name,system_locked,active').order('name')
           : emptyResult(),
         mayManageRoles
@@ -543,19 +637,21 @@ Deno.serve(async (req) => {
         const targetPermissions = await getAccountPermissionCodes(account.auth_user_id, account.role_id)
         if (permissionsWithinCaller(targetPermissions, true)) manageableAccounts.push(account)
       }
-      const manageableAccountIds = new Set(manageableAccounts.map((account: any) => account.auth_user_id))
       const decorate = (x: any) => ({
         ...x,
         employee: x.employee_id ? scope.employeeMap.get(x.employee_id) || null : null,
       })
 
-      const backendAccounts = manageableAccounts
+      const backendAccounts = (mayViewBackendAccounts ? manageableAccounts : [])
         .filter((x: any) => x.backend_enabled)
         .map(decorate)
 
-      const employeeAccounts = manageableAccounts
+      const employeeAccounts = (mayViewStaffAccounts ? manageableAccounts : [])
         .filter((x: any) => x.employee_portal_enabled)
         .map(decorate)
+      const manageableAccountIds = new Set(
+        [...backendAccounts, ...employeeAccounts].map((account: any) => account.auth_user_id)
+      )
 
       let roles = roleRes.data || []
       if (!mayManageRoles) {
@@ -797,7 +893,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'update_backend') {
-      if (!can('account.create')) return json(req, { error: '无编辑账号权限' }, 403)
+      if (!can('account.edit')) return json(req, { error: '无编辑账号权限' }, 403)
 
       const target = cleanString(body.auth_user_id)
       const roleId = cleanString(body.role_id)
@@ -816,6 +912,26 @@ Deno.serve(async (req) => {
       }
       if (!current.backend_enabled) return json(req, { error: '该账号不是后台账号' }, 400)
 
+      let previousScope: { teamIds: string[], employeeIds: string[] }
+      try {
+        previousScope = await readScope(target)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '管理范围读取失败' }, 400)
+      }
+      const sameIds = (left: string[], right: string[]) => {
+        const a = [...new Set(left)].sort()
+        const b = [...new Set(right)].sort()
+        return a.length === b.length && a.every((value, index) => value === b[index])
+      }
+      const assignedScopeChanged = dataScope === 'assigned_teams' && (
+        !sameIds(previousScope.teamIds, teamIds) || !sameIds(previousScope.employeeIds, employeeIds)
+      )
+      const scopeChanged = cleanString(current.employee_id) !== cleanString(employeeId) ||
+        cleanString(current.data_scope) !== dataScope || assignedScopeChanged
+      if (scopeChanged && !can('scope.manage')) {
+        return json(req, { error: '无管理账号数据范围权限' }, 403)
+      }
+
       const { data: role } = await admin.from('roles').select('id,code,active').eq('id', roleId).maybeSingle()
       if (!role || !role.active || role.code === 'employee' || (role.code === 'founder' && !isFounder)) {
         return json(req, { error: '角色不可用' }, 400)
@@ -830,9 +946,7 @@ Deno.serve(async (req) => {
         return json(req, { error: error instanceof Error ? error.message : '管理范围不正确' }, 403)
       }
 
-      let previousScope: { teamIds: string[], employeeIds: string[] }
       try {
-        previousScope = await readScope(target)
         if (dataScope === 'assigned_teams') {
           await saveScope(target, teamIds, employeeIds)
         }
@@ -880,7 +994,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'create_staff') {
-      if (!can('account.create')) return json(req, { error: '无创建账号权限' }, 403)
+      if (!can('user.account.create')) return json(req, { error: '无创建员工账号权限' }, 403)
 
       const employeeId = cleanString(body.employee_id)
       const email = cleanString(body.email).toLowerCase()
@@ -947,7 +1061,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'generate_activation_code') {
-      if (!can('account.create')) return json(req, { error: '无生成激活码权限' }, 403)
+      if (!can('user.activation.generate')) return json(req, { error: '无生成激活码权限' }, 403)
       const employeeNo = cleanString(body.employee_no).toUpperCase()
       const hours = Math.max(1, Math.min(Number(body.valid_hours) || 72, 168))
       const employees = await getScopedEmployees()
@@ -993,7 +1107,6 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'toggle_active') {
-      if (!can('account.disable')) return json(req, { error: '无停用账号权限' }, 403)
       const target = cleanString(body.auth_user_id)
       const active = Boolean(body.active)
 
@@ -1001,11 +1114,14 @@ Deno.serve(async (req) => {
         return json(req, { error: '不能停用当前登录账号' }, 400)
       }
 
+      let current: any
       try {
-        await getTargetAccount(target)
+        current = await getTargetAccount(target)
       } catch (error) {
         return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
       }
+      const requiredPermission = current.backend_enabled ? 'account.disable' : 'user.account.disable'
+      if (!can(requiredPermission)) return json(req, { error: '无停用 / 启用该类账号的权限' }, 403)
 
       const { error } = await admin.from('user_access').update({ active }).eq('auth_user_id', target)
       if (error) return json(req, { error: error.message }, 400)
@@ -1015,18 +1131,20 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'reset_password') {
-      if (!can('account.reset_password')) return json(req, { error: '无重置密码权限' }, 403)
       const target = cleanString(body.auth_user_id)
       const password = String(body.password || '')
       if (!passwordOk(password)) {
         return json(req, { error: '新密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
       }
 
+      let current: any
       try {
-        await getTargetAccount(target)
+        current = await getTargetAccount(target)
       } catch (error) {
         return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
       }
+      const requiredPermission = current.backend_enabled ? 'account.reset_password' : 'user.password.reset'
+      if (!can(requiredPermission)) return json(req, { error: '无重置该类账号密码的权限' }, 403)
 
       const { error } = await admin.auth.admin.updateUserById(target, { password })
       if (error) return json(req, { error: error.message }, 400)
@@ -1078,15 +1196,17 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'delete_account') {
-      if (!can('account.delete')) return json(req, { error: '无删除账号权限' }, 403)
       const target = cleanString(body.auth_user_id)
       if (target === userData.user.id) return json(req, { error: '不能删除当前登录账号' }, 400)
 
+      let current: any
       try {
-        await getTargetAccount(target)
+        current = await getTargetAccount(target)
       } catch (error) {
         return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
       }
+      const requiredPermission = current.backend_enabled ? 'account.delete' : 'user.account.delete'
+      if (!can(requiredPermission)) return json(req, { error: '无删除该类账号的权限' }, 403)
 
       // Related access/scope/override rows all have ON DELETE CASCADE from auth.users.
       // Auth deletion is therefore the only destructive call and cannot leave a live user with partial access rows.

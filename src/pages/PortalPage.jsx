@@ -5,7 +5,7 @@ import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
 import { StaffPayrollWorkspace } from './StaffPayrollPage'
 import { useStaffLocale } from '../lib/staffI18n'
 
-const inactiveStatuses = ['left', 'resigned', 'inactive', 'terminated', '离职', '停用']
+const inactiveStatuses = ['left', 'resigned', 'inactive', 'suspended', 'terminated', '离职', '停用']
 const text = v => String(v ?? '').trim()
 
 const currentStaffShift = (profile = {}, schedule = {}, fallback) => {
@@ -53,7 +53,7 @@ export const AdminHome = () => {
     let alive = true
     ;(async () => {
       const { data, error } = await supabase.functions.invoke('admin-accounts', {
-        body: { action: 'bootstrap' },
+        body: { action: 'dashboard' },
       })
       if (!alive) return
       if (error || data?.error) setError(data?.error || error?.message || '读取失败')
@@ -66,15 +66,28 @@ export const AdminHome = () => {
   const view = useMemo(() => {
     const employees = data?.employees || []
     const active = employees.filter(isActive)
-    const staffAccounts = data?.employee_accounts || []
-    const backendAccounts = data?.backend_accounts || []
-    const staffIds = new Set(staffAccounts.map(x => x.employee_id).filter(Boolean))
-    const onsite = active.filter(e => ['onsite', '现场人员'].includes(text(e.source_type)) || text(e.employment_type) === '现场人员')
-    const needsProfile = active.filter(e => text(e.profile_status).startsWith('needs_'))
+    const accountSummary = data?.account_summary || null
+    const accounts = accountSummary?.can_view_staff_accounts ? accountSummary : null
+    const today = dashboardToday()
+    const thirtyDaysAgo = dashboardAddDays(today, -29)
+    const hires30 = employees.filter(e => dateOnly(e.hire_date) >= thirtyDaysAgo && dateOnly(e.hire_date) <= today)
+    const resignations30 = employees.filter(e => dateOnly(e.resign_date) >= thirtyDaysAgo && dateOnly(e.resign_date) <= today)
+    const completeProfiles = active.filter(e => [
+      e.hire_date,
+      e.country || e.nationality,
+      e.employment_type,
+      e?.teams?.name,
+      e?.positions?.name,
+    ].every(value => text(value)))
     const recentHires = active
       .filter(e => e.hire_date)
       .sort((a,b) => text(b.hire_date).localeCompare(text(a.hire_date)))
       .slice(0,6)
+    const movement = dashboardMonths(today).map(month => ({
+      ...month,
+      hires: employees.filter(e => dateOnly(e.hire_date).startsWith(month.key)).length,
+      resignations: employees.filter(e => dateOnly(e.resign_date).startsWith(month.key)).length,
+    }))
 
     return {
       total: employees.length,
@@ -83,11 +96,13 @@ export const AdminHome = () => {
       positions: groupCount(active, e => e?.positions?.name),
       types: groupCount(active, e => e?.employment_type),
       countries: groupCount(active, e => e?.country || e?.nationality),
-      staffAccounts: staffAccounts.length,
-      backendAccounts: backendAccounts.length,
-      pendingAccounts: active.filter(e => !staffIds.has(e.id)).length,
-      onsite: onsite.length,
-      needsProfile: needsProfile.length,
+      hires30: hires30.length,
+      resignations30: resignations30.length,
+      profileCompletion: active.length ? Math.round(completeProfiles.length / active.length * 100) : 0,
+      accounts,
+      accountSummary,
+      canViewEmployees: Boolean(data?.dashboard_access?.employee_metrics),
+      movement,
       recentHires,
     }
   }, [data])
@@ -98,7 +113,6 @@ export const AdminHome = () => {
         <div>
           <div className="dashboard-kicker">MANAGEMENT OVERVIEW</div>
           <h1>综合 Dashboard</h1>
-          <p className="page-subtitle">员工主档、团队与账号数据已接入；出勤、日报、工资等未接模块保持“—”，不显示假数据。</p>
         </div>
         <div className="dashboard-date">
           {new Intl.DateTimeFormat('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date())}
@@ -107,54 +121,36 @@ export const AdminHome = () => {
 
       {error && <div className="page-error">{error}</div>}
 
-      <div className="quick-actions">
-        <Link to="/admin/employees" className="quick-action primary-quick">查看员工档案</Link>
-        <Link to="/admin/schedule" className="quick-action">查看排班</Link>
-        <Link to="/admin/daily" className="quick-action">每日工作</Link>
-        <Link to="/admin/reports" className="quick-action">统计报表</Link>
+      {!loading && !data ? <DashboardLoadUnavailable /> : !loading && !view.canViewEmployees ? <DashboardAccessLimited summary={view.accountSummary} access={data.dashboard_access} /> : <>
+      <div className="kpi-grid kpi-grid-pro dashboard-kpi-grid">
+        <Kpi label="在职员工" value={loading ? '—' : view.active} hint={`范围内共 ${view.total} 笔员工资料`} icon="人" />
+        <Kpi label="团队总数" value={loading ? '—' : view.teams.length} hint="按当前管理范围统计" icon="组" tone="violet" />
+        <Kpi label="近 30 天入职" value={loading ? '—' : view.hires30} hint="取员工主档入职日期" icon="入" tone="green" />
+        <Kpi label="近 30 天离职" value={loading ? '—' : view.resignations30} hint="取员工主档离职日期" icon="离" tone="orange" />
+        <Kpi label="资料完整率" value={loading ? '—' : `${view.profileCompletion}%`} hint="日期、国家、类型、团队、岗位" icon="档" tone="cyan" />
+        {view.accounts
+          ? <Kpi label="员工账号覆盖" value={loading ? '—' : `${view.accounts.staff_accounts}/${view.accounts.active_staff_scope}`} hint={`待开通 ${view.accounts.pending_staff_accounts} 个`} icon="账" tone="indigo" />
+          : <Kpi label="岗位种类" value={loading ? '—' : view.positions.length} hint="当前员工主档岗位" icon="岗" tone="indigo" />}
       </div>
 
-      <div className="kpi-grid kpi-grid-pro">
-        <Kpi label="员工总数" value={loading ? '—' : view.total} hint="当前数据库" />
-        <Kpi label="在职员工" value={loading ? '—' : view.active} hint="排除离职/停用" />
-        <Kpi label="团队数" value={loading ? '—' : view.teams.length} hint="已匹配团队" />
-        <Kpi label="现场 / 补录" value={loading ? '—' : view.onsite} hint="来自排班补录" />
-        <Kpi label="待补资料" value={loading ? '—' : view.needsProfile} hint="需要人工完善" tone="warn" />
-        <Kpi label="员工账号" value={loading ? '—' : view.staffAccounts} hint="已开通 Portal" />
-        <Kpi label="待开通账号" value={loading ? '—' : view.pendingAccounts} hint="可生成激活码" />
-        <Kpi label="后台账号" value={loading ? '—' : view.backendAccounts} hint="管理端账号" />
-      </div>
+      <div className="dashboard-grid dashboard-grid-pro">
+        <DashboardCard title="近 6 个月人员变化" meta="员工主档日期" className="dashboard-span-8 dashboard-trend-card">
+          <MovementChart rows={view.movement} />
+        </DashboardCard>
 
-      <div className="dashboard-grid">
-        <DashboardCard title="团队人数分布" meta="TOP 8">
+        <DashboardCard title="员工类型构成" meta="在职员工" className="dashboard-span-4">
+          <DonutChart rows={view.types} total={view.active} />
+        </DashboardCard>
+
+        <DashboardCard title="团队人数排名" meta="TOP 8" className="dashboard-span-6">
           <BarList rows={view.teams} total={view.active || 1} />
         </DashboardCard>
 
-        <DashboardCard title="员工类型" meta="当前主档">
-          <BarList rows={view.types} total={view.active || 1} />
-        </DashboardCard>
-
-        <DashboardCard title="国家 / 国籍分布" meta="TOP 8">
-          <BarList rows={view.countries} total={view.active || 1} />
-        </DashboardCard>
-
-        <DashboardCard title="岗位分布" meta="TOP 8">
+        <DashboardCard title="岗位分布" meta="TOP 8" className="dashboard-span-6">
           <BarList rows={view.positions} total={view.active || 1} />
         </DashboardCard>
 
-        <DashboardCard title="今日出勤" meta="等待出勤表接入">
-          <CompactStats rows={[
-            ['正常', '—'], ['请假', '—'], ['公休', '—'], ['回家', '—'], ['缺席', '—']
-          ]} />
-        </DashboardCard>
-
-        <DashboardCard title="待处理" meta="后续工作流">
-          <CompactStats rows={[
-            ['请假审批', '—'], ['日报未提交', '—'], ['待接收交接', '—'], ['资料修改', '—'], ['待发布工资', '—']
-          ]} />
-        </DashboardCard>
-
-        <DashboardCard title="最近入职" meta="已录入日期">
+        <DashboardCard title="最近入职" meta="最新 6 人" className="dashboard-span-8">
           {view.recentHires.length ? (
             <div className="recent-list">
               {view.recentHires.map(e => (
@@ -167,33 +163,50 @@ export const AdminHome = () => {
           ) : <div className="empty-state compact">暂无日期资料</div>}
         </DashboardCard>
 
-        <DashboardCard title="系统接入状态" meta="当前阶段">
-          <CompactStats rows={[
-            ['员工主档', loading ? '读取中' : '已接入'],
-            ['团队 / 岗位', loading ? '读取中' : '已接入'],
-            ['排班关系', '部分已接入'],
-            ['出勤 / 请假', '待接入'],
-            ['日报 / 交接', '待接入'],
-          ]} />
-        </DashboardCard>
+        {view.accounts ? <DashboardCard title="账号开通情况" meta="权限范围内" className="dashboard-span-4">
+          <AccountCoverage summary={view.accounts} active={view.accounts.active_staff_scope} />
+        </DashboardCard> : <DashboardCard title="国家 / 国籍分布" meta="TOP 8" className="dashboard-span-4">
+          <BarList rows={view.countries} total={view.active || 1} />
+        </DashboardCard>}
       </div>
+      </>}
     </div>
   )
 }
 
-function Kpi({ label, value, hint, tone }) {
+function DashboardLoadUnavailable() {
+  return <DashboardCard title="首页数据暂不可用" meta="未显示估算值" className="dashboard-access-card">
+    <div className="dashboard-access-copy"><span>!</span><div><strong>没有可安全展示的实时结果</strong><p>请稍后重新打开首页。读取失败时系统不会用 0 或示例数字代替真实员工及账号数据。</p></div></div>
+  </DashboardCard>
+}
+
+function DashboardAccessLimited({ summary, access }) {
+  const hasAccountMetrics = access?.staff_account_metrics || access?.backend_account_metrics
+  return <div className="dashboard-limited">
+    {hasAccountMetrics && <div className="kpi-grid kpi-grid-pro dashboard-kpi-grid dashboard-limited-kpis">
+      {access?.staff_account_metrics && <Kpi label="范围内在职员工" value={Number(summary?.active_staff_scope || 0)} hint="账号覆盖率服务端分母" icon="人" />}
+      {access?.staff_account_metrics && <Kpi label="已开通员工账号" value={Number(summary?.staff_accounts || 0)} hint="有效员工前端账号" icon="账" tone="green" />}
+      {access?.staff_account_metrics && <Kpi label="待开通员工账号" value={Number(summary?.pending_staff_accounts || 0)} hint="范围内在职员工" icon="待" tone="orange" />}
+      {access?.backend_account_metrics && <Kpi label="有效后台账号" value={Number(summary?.backend_accounts || 0)} hint="当前管理范围" icon="管" tone="violet" />}
+    </div>}
+    <DashboardCard title="数据权限说明" meta="按角色授权" className="dashboard-access-card">
+      <div className="dashboard-access-copy"><span>权</span><div><strong>当前角色未获员工数据查看权限</strong><p>首页不会用 0 模拟员工总数或人员分布。勾选“查看员工（employee.view）”后，这里会显示范围内的实时员工、团队、岗位及人员变化数据。</p></div></div>
+    </DashboardCard>
+  </div>
+}
+
+function Kpi({ label, value, hint, tone, icon }) {
   return (
     <div className={`kpi-card kpi-card-pro ${tone ? `kpi-${tone}` : ''}`}>
-      <div className="kpi-label-row"><span>{label}</span><i /></div>
-      <strong>{value}</strong>
-      <small>{hint}</small>
+      <div className="kpi-icon" aria-hidden="true">{icon}</div>
+      <div className="kpi-card-copy"><span>{label}</span><strong>{value}</strong><small>{hint}</small></div>
     </div>
   )
 }
 
-function DashboardCard({ title, meta, children }) {
+function DashboardCard({ title, meta, children, className = '' }) {
   return (
-    <section className="dashboard-card dashboard-card-pro">
+    <section className={`dashboard-card dashboard-card-pro ${className}`}>
       <div className="card-head"><h2>{title}</h2><span>{meta}</span></div>
       {children}
     </section>
@@ -214,12 +227,87 @@ function BarList({ rows, total }) {
   )
 }
 
-function CompactStats({ rows }) {
+const dashboardToday = () => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date()).map(part => [part.type, part.value]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+const dashboardAddDays = (value, days) => {
+  const date = new Date(`${value}T12:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+const dateOnly = value => /^\d{4}-\d{2}-\d{2}/.test(text(value)) ? text(value).slice(0, 10) : ''
+
+const dashboardMonths = today => {
+  const current = new Date(`${today.slice(0, 7)}-01T12:00:00Z`)
+  return Array.from({ length: 6 }, (_, index) => {
+    const date = new Date(current)
+    date.setUTCMonth(date.getUTCMonth() - (5 - index))
+    return {
+      key: date.toISOString().slice(0, 7),
+      label: `${date.getUTCMonth() + 1}月`,
+    }
+  })
+}
+
+function MovementChart({ rows }) {
+  const width = 680
+  const height = 205
+  const padding = { top: 18, right: 18, bottom: 36, left: 30 }
+  const maxValue = Math.max(1, ...(rows || []).flatMap(row => [Number(row.hires || 0), Number(row.resignations || 0)]))
+  const x = index => padding.left + index * ((width - padding.left - padding.right) / Math.max(1, rows.length - 1))
+  const y = value => padding.top + (maxValue - Number(value || 0)) / maxValue * (height - padding.top - padding.bottom)
+  const points = key => rows.map((row, index) => `${x(index)},${y(row[key])}`).join(' ')
+  const area = key => `${padding.left},${height - padding.bottom} ${points(key)} ${x(rows.length - 1)},${height - padding.bottom}`
+
+  return <div className="movement-chart">
+    <div className="movement-legend"><span className="hire">入职</span><span className="resign">离职</span></div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="最近六个月入职及离职人数趋势">
+      {[0, .25, .5, .75, 1].map(ratio => <line key={ratio} x1={padding.left} x2={width - padding.right} y1={padding.top + ratio * (height - padding.top - padding.bottom)} y2={padding.top + ratio * (height - padding.top - padding.bottom)} className="chart-grid-line" />)}
+      <polygon points={area('hires')} className="chart-area hire" />
+      <polyline points={points('hires')} className="chart-line hire" />
+      <polyline points={points('resignations')} className="chart-line resign" />
+      {rows.map((row, index) => <g key={row.key}>
+        <circle cx={x(index)} cy={y(row.hires)} r="4" className="chart-dot hire"><title>{row.label}入职 {row.hires} 人</title></circle>
+        <circle cx={x(index)} cy={y(row.resignations)} r="4" className="chart-dot resign"><title>{row.label}离职 {row.resignations} 人</title></circle>
+        <text x={x(index)} y={height - 12} textAnchor="middle">{row.label}</text>
+      </g>)}
+    </svg>
+  </div>
+}
+
+const dashboardChartColors = ['#3973df', '#7458df', '#22a47a', '#e29b32', '#27a8c7', '#e36579', '#73859e', '#9b6bd2']
+
+function DonutChart({ rows, total }) {
+  if (!rows?.length || !total) return <div className="empty-state compact">暂无员工类型资料</div>
+  let cursor = 0
+  const segments = rows.slice(0, 8).map((row, index) => {
+    const start = cursor
+    cursor += row.count / total * 100
+    return `${dashboardChartColors[index]} ${start}% ${cursor}%`
+  })
+  return <div className="donut-layout">
+    <div className="donut-chart" style={{ background: `conic-gradient(${segments.join(',')})` }}><div><strong>{total}</strong><span>在职员工</span></div></div>
+    <div className="donut-legend">{rows.slice(0, 8).map((row, index) => <div key={row.name}><i style={{ background: dashboardChartColors[index] }} /><span title={row.name}>{row.name}</span><strong>{row.count}</strong></div>)}</div>
+  </div>
+}
+
+function AccountCoverage({ summary, active }) {
+  const opened = Number(summary?.staff_accounts || 0)
+  const pending = Number(summary?.pending_staff_accounts || 0)
+  const rate = active ? Math.min(100, Math.round(opened / active * 100)) : 0
   return (
-    <div className="compact-stats">
-      {rows.map(([label,value]) => (
-        <div className="compact-stat" key={label}><span>{label}</span><strong>{value}</strong></div>
-      ))}
+    <div className="account-coverage">
+      <div className="coverage-ring" style={{ '--coverage': `${rate * 3.6}deg` }}><div><strong>{rate}%</strong><span>开通率</span></div></div>
+      <div className="coverage-stats">
+        <div><span>已开通员工账号</span><strong>{opened}</strong></div>
+        <div><span>待开通员工账号</span><strong>{pending}</strong></div>
+        <div><span>有效后台账号</span><strong>{Number(summary?.backend_accounts || 0)}</strong></div>
+      </div>
     </div>
   )
 }
@@ -409,7 +497,7 @@ export const StaffHome = () => {
     </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to="/staff/exams"><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link></section></div>}
     {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => setErrorPage(value => Math.max(1, value - 1))}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => setErrorPage(value => value + 1)}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
     {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
-    {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={selfAttendance.loading} error={selfAttendance.error} profile={p} t={t} />}
+    {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={selfAttendance.loading} error={selfAttendance.error} profile={p} t={t} locale={locale} />}
     {activeSection === 'connectivity' && <EmployeeConnectivityPanel data={connectivity} loading={activity.loading} error={activity.error} t={t} />}
     {activeSection === 'payroll' && <StaffPayrollWorkspace embedded />}
     {examDetail && <StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={() => setExamDetail(null)} t={t} locale={locale} />}
@@ -417,17 +505,27 @@ export const StaffHome = () => {
 }
 
 const staffAttendanceKinds = [
-  ['public_holiday', '休', '公休'],
-  ['home_leave', '假', '休假'],
-  ['leave', '请', '请假'],
-  ['half_day', '半', '半天'],
-  ['absence', '缺', '缺席'],
-  ['resignation', '离', '离职'],
+  ['public_holiday', 'attendance.statusCode.publicHoliday', 'R', 'attendance.status.publicHoliday', 'Rest day'],
+  ['home_leave', 'attendance.statusCode.home', 'H', 'attendance.status.home', 'Go home'],
+  ['leave', 'attendance.statusCode.leave', 'L', 'attendance.status.leave', 'Leave'],
+  ['half_day', 'attendance.statusCode.halfDay', '½', 'attendance.status.halfDay', 'Half day'],
+  ['absence', 'attendance.statusCode.absence', 'A', 'attendance.status.absence', 'Absent'],
+  ['resignation', 'attendance.statusCode.resignation', 'X', 'attendance.status.resignation', 'Resigned'],
 ]
 
-const staffAttendanceCount = value => Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 1 })
+const staffAttendanceKind = value => {
+  const normalized = String(value || '').trim().toLowerCase()
+  const kind = normalized === 'absent' ? 'absence' : normalized
+  return staffAttendanceKinds.find(([candidate]) => candidate === kind)
+}
+const staffAttendanceCount = (value, locale) => Number(value || 0).toLocaleString(localeCode(locale), { maximumFractionDigits: 1 })
+const staffAttendanceMonthLabel = (month, locale) => {
+  const [year, monthNumber] = String(month || '').split('-').map(Number)
+  if (!year || !monthNumber) return month || '—'
+  return new Intl.DateTimeFormat(localeCode(locale), { year: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(year, monthNumber - 1, 1)))
+}
 
-function StaffAttendancePanel({ data, loading, error, profile, t }) {
+function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
   const [month, setMonth] = useState(data?.month || staffMonthValue())
   const [view, setView] = useState({ data: data || null, loading, error: error || '' })
   const [selectedDay, setSelectedDay] = useState(null)
@@ -459,37 +557,39 @@ function StaffAttendancePanel({ data, loading, error, profile, t }) {
   const fullName = employee.full_name || profile?.full_name || '—'
   const employeeNo = employee.employee_no || profile?.employee_no || '—'
   const hireDate = staffDate(employee.hire_date || profile?.hire_date)
-  const monthLabel = `${month.slice(0, 4)}年${month.slice(5, 7)}月`
-  const primaryRecord = records => Array.isArray(records) ? records[0] : null
+  const monthLabel = staffAttendanceMonthLabel(month, locale)
+  const primaryRecord = records => Array.isArray(records) ? records.find(record => staffAttendanceKind(record?.event_kind)) : null
 
   return <section className="staff-activity-panel staff-self-attendance">
-    <header className="staff-self-attendance-head"><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>我的出勤表</h2><p>只显示本人资料；空白代表当天没有登记异常，不代表系统确认正常出勤。</p></div><label><span>查看月份</span><input type="month" value={month} onChange={event => { setSelectedDay(null); setMonth(event.target.value || staffMonthValue()) }} /></label></header>
-    <div className="staff-self-attendance-legend">{staffAttendanceKinds.map(([kind, code, label]) => <span className={kind} key={kind}><i>{code}</i>{label}</span>)}</div>
+    <header className="staff-self-attendance-head"><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>{t('attendance.selfTitle', 'My attendance')}</h2></div><label><span>{t('attendance.viewMonth', 'View month')}</span><input type="month" value={month} onChange={event => { setSelectedDay(null); setMonth(event.target.value || staffMonthValue()) }} /></label></header>
+    <div className="staff-self-attendance-legend">{staffAttendanceKinds.map(([kind, codeKey, codeFallback, labelKey, labelFallback]) => <span className={kind} key={kind}><i>{t(codeKey, codeFallback)}</i>{t(labelKey, labelFallback)}</span>)}</div>
     {view.error && <div className="staff-self-attendance-error">{view.error}</div>}
     <div className="staff-self-summary-groups">
-      <StaffAttendanceSummary title={`${monthLabel}统计`} summary={monthSummary} />
-      <StaffAttendanceSummary title="累计统计（截至今天）" summary={allTimeSummary} />
+      <StaffAttendanceSummary title={t('attendance.monthSummary', '{month} summary', { month: monthLabel })} summary={monthSummary} t={t} locale={locale} />
+      <StaffAttendanceSummary title={t('attendance.cumulativeSummary', 'Cumulative summary (through today)')} summary={allTimeSummary} t={t} locale={locale} />
     </div>
     {view.loading && !view.data ? <div className="staff-history-empty">{t('attendance.loading', 'Loading attendance…')}</div> : <div className="staff-self-attendance-scroll">
-      <table><thead><tr><th className="staff-self-identity-head">本人资料</th>{dayNumbers.map(day => <th key={day}>{day}</th>)}<th className="staff-self-total-head">本月合计</th></tr></thead><tbody><tr><td className="staff-self-identity"><strong title={fullName}>{fullName}</strong><span>{employeeNo} · 入职 {hireDate}</span></td>{dayNumbers.map(day => {
+      <table><thead><tr><th className="staff-self-identity-head">{t('attendance.myInformation', 'My information')}</th>{dayNumbers.map(day => <th key={day}>{day}</th>)}<th className="staff-self-total-head">{t('attendance.monthTotal', 'Monthly total')}</th></tr></thead><tbody><tr><td className="staff-self-identity"><strong title={fullName}>{fullName}</strong><span>{employeeNo} · {t('attendance.hireDateValue', 'Hired {date}', { date: hireDate })}</span></td>{dayNumbers.map(day => {
         const records = Array.isArray(days[String(day)]) ? days[String(day)] : []
         const record = primaryRecord(records)
-        const kind = String(record?.event_kind || '').toLowerCase()
-        const meta = staffAttendanceKinds.find(([value]) => value === kind)
-        return <td className="staff-self-day" key={day}>{record && meta ? <button type="button" className={kind} title={`${month}-${String(day).padStart(2, '0')} · ${meta[2]} · 点击查看详情`} onClick={() => setSelectedDay({ date: `${month}-${String(day).padStart(2, '0')}`, records })}>{meta[1]}{records.length > 1 ? <sup>+{records.length - 1}</sup> : null}</button> : <i>—</i>}</td>
-      })}<td className="staff-self-total"><strong>{staffAttendanceCount(monthSummary.total_days)}</strong><span>天</span></td></tr></tbody></table>
-      {view.loading && <div className="staff-self-attendance-updating">正在更新出勤表…</div>}
+        const meta = staffAttendanceKind(record?.event_kind)
+        const kind = meta?.[0]
+        const visibleRecords = records.filter(item => staffAttendanceKind(item?.event_kind))
+        const label = meta ? t(meta[3], meta[4]) : ''
+        return <td className="staff-self-day" key={day}>{record && meta ? <button type="button" className={kind} title={`${month}-${String(day).padStart(2, '0')} · ${label} · ${t('attendance.viewDetail', 'View details')}`} onClick={() => setSelectedDay({ date: `${month}-${String(day).padStart(2, '0')}`, records: visibleRecords })}>{t(meta[1], meta[2])}{visibleRecords.length > 1 ? <sup>+{visibleRecords.length - 1}</sup> : null}</button> : <i>—</i>}</td>
+      })}<td className="staff-self-total"><strong>{staffAttendanceCount(monthSummary.total_days, locale)}</strong><span>{t('attendance.days', 'days')}</span></td></tr></tbody></table>
+      {view.loading && <div className="staff-self-attendance-updating">{t('attendance.updating', 'Updating attendance…')}</div>}
     </div>}
-    {selectedDay && <StaffAttendanceDayModal day={selectedDay} employee={{ full_name: fullName, employee_no: employeeNo }} onClose={() => setSelectedDay(null)} />}
+    {selectedDay && <StaffAttendanceDayModal day={selectedDay} employee={{ full_name: fullName, employee_no: employeeNo }} t={t} onClose={() => setSelectedDay(null)} />}
   </section>
 }
 
-function StaffAttendanceSummary({ title, summary }) {
-  return <section className="staff-self-summary"><header><h3>{title}</h3><strong>{staffAttendanceCount(summary?.total_days)}<small>天</small></strong></header><div>{staffAttendanceKinds.map(([kind, code, label]) => <span className={kind} key={kind}><i>{code}</i><small>{label}</small><b>{staffAttendanceCount(summary?.[kind])}</b></span>)}</div></section>
+function StaffAttendanceSummary({ title, summary, t, locale }) {
+  return <section className="staff-self-summary"><header><h3>{title}</h3><strong>{staffAttendanceCount(summary?.total_days, locale)}<small>{t('attendance.days', 'days')}</small></strong></header><div>{staffAttendanceKinds.map(([kind, codeKey, codeFallback, labelKey, labelFallback]) => <span className={kind} key={kind}><i>{t(codeKey, codeFallback)}</i><small>{t(labelKey, labelFallback)}</small><b>{staffAttendanceCount(summary?.[kind], locale)}</b></span>)}</div></section>
 }
 
-function StaffAttendanceDayModal({ day, employee, onClose }) {
-  return <div className="modal-mask staff-self-day-mask" onMouseDown={onClose}><div className="staff-self-day-modal" role="dialog" aria-modal="true" aria-labelledby="staff-attendance-day-title" onMouseDown={event => event.stopPropagation()}><header><div><small>MY ATTENDANCE DETAIL</small><h2 id="staff-attendance-day-title">{day.date} · 出勤详情</h2><p>{employee.employee_no} · {employee.full_name}</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header><div className="staff-self-day-records">{day.records.map((record, index) => { const kind = String(record.event_kind || '').toLowerCase(); const meta = staffAttendanceKinds.find(([value]) => value === kind); return <article key={record.id || `${kind}-${index}`}><span className={kind}>{meta?.[2] || record.event_kind || '—'}</span><div><small>原因</small><p>{record.reason || '—'}</p></div><div><small>备注</small><p>{record.note || '—'}</p></div></article> })}</div><footer><button type="button" onClick={onClose}>关闭</button></footer></div></div>
+function StaffAttendanceDayModal({ day, employee, t, onClose }) {
+  return <div className="modal-mask staff-self-day-mask" onMouseDown={onClose}><div className="staff-self-day-modal" role="dialog" aria-modal="true" aria-labelledby="staff-attendance-day-title" onMouseDown={event => event.stopPropagation()}><header><div><small>{t('attendance.detailKicker', 'MY ATTENDANCE DETAIL')}</small><h2 id="staff-attendance-day-title">{day.date} · {t('attendance.dayDetail', 'Attendance details')}</h2><p>{employee.employee_no} · {employee.full_name}</p></div><button type="button" aria-label={t('common.close', 'Close')} onClick={onClose}>×</button></header><div className="staff-self-day-records">{day.records.map((record, index) => { const meta = staffAttendanceKind(record.event_kind); const kind = meta?.[0]; const syntheticResignation = record.synthetic && kind === 'resignation'; return meta ? <article key={record.id || `${kind}-${index}`}><span className={kind}>{t(meta[3], meta[4])}</span><div><small>{t('attendance.reason', 'Reason')}</small><p>{syntheticResignation ? t('attendance.synthetic.resignation', 'Resigned') : record.reason || '—'}</p></div><div><small>{t('attendance.notes', 'Notes')}</small><p>{syntheticResignation ? t('attendance.synthetic.resignationFromDate', 'Automatically marked from the resignation date') : record.note || '—'}</p></div></article> : null })}</div><footer><button type="button" onClick={onClose}>{t('common.close', 'Close')}</button></footer></div></div>
 }
 
 function StaffPortalExamModal({ detail, loading, error, onClose, t, locale }) {

@@ -1,78 +1,72 @@
 import React, { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { signOutAppSession } from '../lib/supabase'
+import { signOutAppSession, supabase } from '../lib/supabase'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
-
-const enc = value => encodeURIComponent(value)
-
-const ADMIN_NAV = [
-  { to:'/admin', label:'首页', icon:'⌂' },
-  { to:'/admin/employees', label:'员工管理', icon:'人', children:[
-    ['员工档案', `/admin/employees?tab=${enc('员工档案')}`],
-    ['人员分析', `/admin/employees?tab=${enc('人员分析')}`],
-    ['停电 / 断网记录', `/admin/employees?tab=${enc('停电 / 断网记录')}`],
-    ['离职记录', `/admin/employees?tab=${enc('离职记录')}`],
-    ['操作日志', `/admin/employees?tab=${enc('操作日志')}`],
-  ]},
-  { to:'/admin/reports', label:'统计报表', icon:'报', children:[
-    ['总汇', `/admin/reports?tab=${enc('总汇')}`],
-    ['人员', `/admin/reports?tab=${enc('人员')}`],
-    ['排班表', `/admin/reports?tab=${enc('排班表')}`],
-    ['盘口人数', `/admin/reports?tab=${enc('盘口人数')}`],
-    ['统计', `/admin/reports?tab=${enc('统计')}`],
-    ['错误统计', `/admin/reports?tab=${enc('错误统计')}`],
-  ]},
-  { to:'/admin/schedule', label:'排班与考勤', icon:'班', children:[
-    ['排班表', `/admin/schedule?tab=${enc('排班表')}`],
-    ['出勤表', `/admin/schedule?tab=${enc('出勤表')}`],
-    ['今日考勤', `/admin/schedule?tab=${enc('今日考勤')}`],
-    ['考勤记录', `/admin/schedule?tab=${enc('考勤记录')}`],
-    ['请假审批', `/admin/schedule?tab=${enc('请假审批')}`],
-    ['奖金 / 扣款', `/admin/schedule?tab=${enc('奖金 / 扣款')}`],
-  ]},
-  { to:'/admin/daily', label:'每日工作', icon:'日', children:[
-    ['线上培训报告', '/admin/daily'],
-  ]},
-  { to:'/admin/training', label:'考试管理', icon:'考', children:[
-    ['考试概览', `/admin/training?tab=${enc('考试概览')}`],
-    ['考试记录', `/admin/training?tab=${enc('考试记录')}`],
-    ['题库', `/admin/training?tab=${enc('题库')}`],
-    ['人工批改', `/admin/training?tab=${enc('人工批改')}`],
-  ]},
-  { to:'/admin/payroll', label:'工资中心', icon:'薪', children:[
-    ['工资导入', `/admin/payroll?tab=${enc('工资导入')}`],
-    ['待发布', `/admin/payroll?tab=${enc('待发布')}`],
-    ['已发布', `/admin/payroll?tab=${enc('已发布')}`],
-    ['导入记录', `/admin/payroll?tab=${enc('导入记录')}`],
-  ]},
-  { to:'/admin/users', label:'用户与权限', icon:'权', children:[
-    ['后台账号', '/admin/users?tab=backend'],
-    ['员工账号', '/admin/users?tab=staff'],
-    ['角色与权限', '/admin/users?tab=roles'],
-  ]},
-]
-
-const STAFF_NAV = [
-  ['/staff','nav.home','首页'], ['/staff/exams','nav.exams','我的考试'],
-]
+import { adminNavigation, staffNavigation } from '../config/navigation'
+import { AdminAccessProvider } from '../lib/adminAccess'
 
 export default function AppLayout({ mode, children }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { t, resetLocale } = useStaffLocale()
+  const [adminAccess,setAdminAccess] = useState({loading:mode==='admin',founder:false,permissions:[],error:''})
+
+  useEffect(()=>{
+    if(mode!=='admin')return undefined
+    let alive=true
+    setAdminAccess(current=>({...current,loading:true,error:''}))
+    ;(async()=>{
+      const {data,error}=await supabase.functions.invoke('admin-accounts',{body:{action:'access'}})
+      if(!alive)return
+      if(error||data?.error){
+        setAdminAccess({loading:false,founder:false,permissions:[],error:data?.error||error?.message||'权限读取失败'})
+        return
+      }
+      setAdminAccess({
+        loading:false,
+        founder:Boolean(data?.caller?.is_founder),
+        permissions:Array.isArray(data?.caller?.permissions)?data.caller.permissions:[],
+        error:'',
+      })
+    })()
+    return()=>{alive=false}
+  },[mode])
+
+  const permissionSet=new Set(adminAccess.permissions)
+  const permissionAllowed=code=>adminAccess.founder||permissionSet.has('*')||permissionSet.has(code)
+  const navAllowed=item=>{
+    if(item.allPermissions?.some(code=>!permissionAllowed(code)))return false
+    return !item.permissions?.length||item.permissions.some(permissionAllowed)
+  }
+  const visibleAdminNav=adminAccess.loading?[adminNavigation[0]]:adminNavigation.map(item=>item.children?({...item,children:item.children.filter(navAllowed)}):item).filter(item=>navAllowed(item)&&(!item.children||item.children.length))
 
   const childPath = to => new URL(to,'https://wfh.local').pathname
-  const groupActive = item => location.pathname.startsWith(item.to) || item.children?.some(([,to])=>{
-    const path=childPath(to)
+  const groupActive = item => location.pathname.startsWith(item.to) || item.children?.some(child=>{
+    const path=childPath(child.to)
     return location.pathname===path || location.pathname.startsWith(`${path}/`)
   })
-  const pathGroup = ADMIN_NAV.find(x => x.children && groupActive(x))?.to || null
+  const pathGroup = adminNavigation.find(x => x.children && groupActive(x))?.to || null
   const [openGroup,setOpenGroup] = useState(pathGroup)
 
   useEffect(()=>{
     if (pathGroup && openGroup && openGroup !== pathGroup) setOpenGroup(pathGroup)
     if (!pathGroup && openGroup) setOpenGroup(null)
   },[location.pathname])
+
+  useEffect(()=>{
+    if(mode!=='admin'||adminAccess.loading||adminAccess.error||location.pathname==='/admin')return
+    const group=adminNavigation.find(item=>item.children&&location.pathname===childPath(item.to))
+    if(!group)return
+    const activeTab=new URLSearchParams(location.search).get('tab')
+    const requested=group.children.find((child,index)=>{
+      const target=new URL(child.to,'https://wfh.local')
+      const targetTab=target.searchParams.get('tab')
+      return target.pathname===location.pathname&&(targetTab?targetTab===activeTab:(!activeTab&&index===0))
+    })||group.children[0]
+    if(requested&&navAllowed(requested))return
+    const fallback=group.children.find(navAllowed)
+    navigate(fallback?.to||'/admin',{replace:true})
+  },[mode,adminAccess.loading,adminAccess.error,adminAccess.founder,adminAccess.permissions.join('|'),location.pathname,location.search])
 
   const logout = async()=>{
     await signOutAppSession()
@@ -95,7 +89,7 @@ export default function AppLayout({ mode, children }) {
         </div>
 
         {mode==='admin' ? <nav className="sidebar-nav sidebar-nav-pro">
-          {ADMIN_NAV.map(item=>{
+          {visibleAdminNav.map(item=>{
             const expanded = openGroup===item.to
 
             if(!item.children) return (
@@ -113,27 +107,30 @@ export default function AppLayout({ mode, children }) {
               </button>
 
               {expanded && <div className="nav-children">
-                {item.children.map(([label,to],index)=>{
-                  const target = new URL(to,'https://wfh.local')
+                {item.children.map((child,index)=>{
+                  const target = new URL(child.to,'https://wfh.local')
                   const targetTab = target.searchParams.get('tab')
                   const samePath = location.pathname===target.pathname || location.pathname.startsWith(`${target.pathname}/`)
                   const childActive = samePath && (targetTab ? (activeTab ? activeTab===targetTab : index===0) : true)
-                  return <NavLink key={label} to={to} className={childActive?'active-child':''}>
-                    <span className="child-dot"/>{label}
+                  return <NavLink key={child.label} to={child.to} className={childActive?'active-child':''}>
+                    <span className="child-dot"/>{child.label}
                   </NavLink>
                 })}
               </div>}
             </div>
           })}
         </nav> : <nav className="sidebar-nav">
-          {STAFF_NAV.map(([to,key,label])=><NavLink key={to} to={to} end={to==='/staff'} className={({isActive})=>isActive?'active':''}>{t(key,label)}</NavLink>)}
+          {staffNavigation.map(item=><NavLink key={item.to} to={item.to} end={item.to==='/staff'} className={({isActive})=>isActive?'active':''}>{t(item.key,item.label)}</NavLink>)}
         </nav>}
 
         {mode==='staff'&&<StaffLanguageSwitcher className="sidebar-language-switcher" />}
+        {mode==='admin'&&adminAccess.error&&<div className="sidebar-access-error" title={adminAccess.error}>权限目录读取失败</div>}
         <div className="sidebar-footnote">{mode==='admin'?'ADMIN CONSOLE':t('nav.employeePortal','员工门户')}</div>
         <button className="sidebar-logout" onClick={logout}>{mode==='admin'?'退出登录':t('nav.signOut','退出登录')}</button>
       </aside>
-      <main className="main">{children}</main>
+      <main className="main">
+        {mode === 'admin' ? <AdminAccessProvider access={adminAccess}>{children}</AdminAccessProvider> : children}
+      </main>
     </div>
   )
 }

@@ -6,17 +6,19 @@ const KIND_LABELS = {
   normal: '正常出勤',
   present: '正常出勤',
   public_holiday: '公休',
-  home_leave: '回家 / 居家假',
+  home_leave: '回家',
   leave: '请假',
   half_day: '半天',
-  absence: '缺勤',
-  absent: '缺勤',
+  absence: '缺席',
+  absent: '缺席',
   resignation: '离职',
   late: '迟到',
   bonus: '奖金',
   deduction: '扣款',
   penalty: '扣款',
 }
+
+const ATTENDANCE_EVENT_KINDS = new Set(['public_holiday','home_leave','leave','half_day','absence','absent','resignation'])
 
 export const attendanceKindLabel = value => KIND_LABELS[text(value).toLowerCase()] || text(value) || '未分类'
 export const attendanceSourceGroupLabel = value => ({home:'纯居家',onsite_to_home:'现场转居家'}[text(value).toLowerCase()]||text(value)||'—')
@@ -87,14 +89,15 @@ function RecordDetailsModal({row,onClose,adjustment=false}){
 }
 
 export function EmployeeAttendancePanel({data,loading,error}){
-  const rows=data?.rows||data?.history||[]
+  const sourceRows=data?.rows||data?.history||[]
+  const rows=sourceRows.filter(row=>ATTENDANCE_EVENT_KINDS.has(text(row?.event_kind||row?.kind).toLowerCase()))
   const summary=data?.summary||{}
   const [selected,setSelected]=useState(null)
   return <section className="detail-panel employee-attendance-panel">
-    <div className="detail-panel-head"><div><h3>员工出勤记录</h3><p>按日期查看该员工的完整历史记录。</p></div><span className="employee-exam-count">{data?.total||rows.length||0} 条</span></div>
+    <div className="detail-panel-head"><div><h3>员工出勤记录</h3><p>仅显示公休、回家、请假、半天、缺席与离职六类记录。</p></div><span className="employee-exam-count">{rows.length} 条</span></div>
     {loading?<div className="attendance-panel-state">正在读取出勤记录…</div>:error?<div className="attendance-panel-state error">{error}</div>:<>
       <div className="employee-attendance-summary">
-        <SummaryItem label="公休" value={summary.public_holiday}/><SummaryItem label="回家 / 居家假" value={summary.home_leave}/><SummaryItem label="请假" value={summary.leave}/><SummaryItem label="半天" value={summary.half_day}/><SummaryItem label="缺勤" value={summary.absence} tone="negative"/><SummaryItem label="离职" value={summary.resignation}/>
+        <SummaryItem label="公休" value={summary.public_holiday}/><SummaryItem label="回家" value={summary.home_leave}/><SummaryItem label="请假" value={summary.leave}/><SummaryItem label="半天" value={summary.half_day}/><SummaryItem label="缺席" value={summary.absence} tone="negative"/><SummaryItem label="离职" value={summary.resignation}/>
       </div>
       {rows.length?<div className="employee-attendance-list">{rows.map((row,index)=><article key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <div className="employee-attendance-record-head"><div><strong>{row.event_date||'—'}</strong><span className={`attendance-kind ${kindTone(row.event_kind)}`}>{attendanceKindLabel(row.event_kind)}</span></div><button type="button" onClick={()=>setSelected(row)}>查看完整说明</button></div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useStaffLocale } from '../lib/staffI18n'
+import { ExamImageGallery } from '../components/ExamImageGallery'
 
 const copy = {
   eyebrow: ['WFH · 学习中心', 'WFH · LEARNING CENTER', 'WFH · TRUNG TÂM HỌC TẬP', 'WFH · PUSAT BELAJAR'],
@@ -95,8 +96,7 @@ const copy = {
   imageClose: ['关闭图片', 'Close image', 'Đóng ảnh', 'Tutup gambar'],
   imageAlt: ['考试题目图片', 'Exam question image', 'Ảnh câu hỏi', 'Gambar soal'],
   imageOpen: ['点击放大', 'Enlarge', 'Phóng to', 'Perbesar'],
-  imageFallback: ['图片暂时无法预览，点击打开原图', 'Preview unavailable. Open original image.', 'Không thể xem trước. Mở ảnh gốc.', 'Pratinjau tidak tersedia. Buka gambar asli.'],
-  imageOriginal: ['打开原图', 'Open original', 'Mở ảnh gốc', 'Buka gambar asli'],
+  imageFallback: ['图片暂时无法预览，请在弹窗内重试', 'Preview unavailable. Retry in this window.', 'Không thể xem trước. Hãy thử lại trong cửa sổ này.', 'Pratinjau tidak tersedia. Coba lagi di jendela ini.'],
   imageNumber: ['图片 {count}', 'Image {count}', 'Hình {count}', 'Gambar {count}'],
 }
 
@@ -107,44 +107,6 @@ const template = (value, vars = {}) => String(value).replace(/\{(\w+)\}/g, (matc
 const baseText = (locale, key) => copy[key]?.[languageIndex[locale] ?? 1] || copy[key]?.[1] || key
 const fmt = (value, locale) => value ? new Date(value).toLocaleString(dateLocale[locale] || 'en-US', { hour12: false }) : '—'
 const score = (value, locale) => value == null ? '—' : Number(value).toLocaleString(dateLocale[locale] || 'en-US', { maximumFractionDigits: 2 })
-const safeHttpUrl = value => {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
-  const candidate = raw.startsWith('//') ? `https:${raw}` : /^www\./i.test(raw) ? `https://${raw}` : raw
-  try {
-    const parsed = new URL(candidate)
-    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : ''
-  } catch { return '' }
-}
-const driveId = url => {
-  const safe = safeHttpUrl(url)
-  if (!safe) return ''
-  try {
-    const parsed = new URL(safe)
-    return parsed.pathname.match(/\/d\/([^/]+)/)?.[1] || parsed.searchParams.get('id') || ''
-  } catch { return '' }
-}
-const imageSources = url => {
-  const original = safeHttpUrl(url)
-  if (!original) return []
-  const id = driveId(original)
-  return [...new Set((id ? [
-    `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w2000`,
-    `https://drive.usercontent.google.com/download?id=${encodeURIComponent(id)}&export=view`,
-    `https://lh3.googleusercontent.com/d/${encodeURIComponent(id)}=w2000`,
-    original,
-  ] : [original]).map(safeHttpUrl).filter(Boolean))]
-}
-const normalizedImageUrls = value => {
-  let rows = Array.isArray(value) ? value.flat(Infinity) : [value]
-  if (rows.length === 1 && typeof rows[0] === 'string' && rows[0].trim().startsWith('[')) {
-    try {
-      const parsed = JSON.parse(rows[0])
-      if (Array.isArray(parsed)) rows = parsed.flat(Infinity)
-    } catch { /* Keep the original value. */ }
-  }
-  return [...new Set(rows.flatMap(item => typeof item === 'string' ? item.split(/[\n;]+/) : []).map(safeHttpUrl).filter(Boolean))]
-}
 const cleanLabel = value => String(value || '').trim().replace(/\s+/g, ' ')
 const normalizedLabel = value => cleanLabel(value).normalize('NFKC').toLocaleLowerCase()
 const optionKey = exam => JSON.stringify(
@@ -455,47 +417,12 @@ function ExamRunner({ session, answers, setAnswers, onDone }) {
 
 function ExamMedia({ urls = [] }) {
   const { tr } = useExamText()
-  const [preview, setPreview] = useState(null)
-  const media = useMemo(() => normalizedImageUrls(urls), [urls])
-  if (!media.length) return null
-  return <>
-    <div className="exam-media-grid">{media.map((url, index) => <ProgressiveImage key={url} url={url} number={index + 1} onOpen={setPreview} />)}</div>
-    {preview && <ExamImageLightbox media={preview} onClose={() => setPreview(null)} tr={tr} />}
-  </>
-}
-
-function ProgressiveImage({ url, number, onOpen }) {
-  const { tr } = useExamText()
-  const sources = imageSources(url)
-  const [sourceIndex, setSourceIndex] = useState(0)
-  const src = sources[sourceIndex] || ''
-
-  useEffect(() => { setSourceIndex(0) }, [url])
-
-  const tryNext = () => setSourceIndex(value => value + 1)
-  return <article className="exam-media-card">
-    {src ? <button type="button" className="exam-media-thumb" onClick={() => onOpen({ sources, original: url, number })} aria-label={`${tr('imageNumber', { count: number })} · ${tr('imageOpen')}`}><img src={src} alt={`${tr('imageAlt')} ${number}`} referrerPolicy="no-referrer" onError={tryNext} /><span>{tr('imageOpen')}</span></button> : <div className="exam-media-fallback"><span>{tr('imageFallback')}</span></div>}
-    <a className="exam-media-original" href={url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{tr('imageNumber', { count: number })} · {tr('imageOriginal')} ↗</a>
-  </article>
-}
-
-function ExamImageLightbox({ media, onClose, tr }) {
-  const [sourceIndex, setSourceIndex] = useState(0)
-  const sources = media.sources || []
-  const src = sources[sourceIndex] || ''
-
-  useEffect(() => {
-    setSourceIndex(0)
-    const closeOnEscape = event => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [media, onClose])
-
-  return <div className="exam-image-lightbox" role="dialog" aria-modal="true" aria-label={tr('imageNumber', { count: media.number })} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
-    <div className="exam-lightbox-toolbar">
-      <a href={media.original} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{tr('imageOriginal')} ↗</a>
-      <button type="button" className="exam-lightbox-close" onClick={onClose} aria-label={tr('imageClose')}>×</button>
-    </div>
-    {src ? <img src={src} alt={`${tr('imageAlt')} ${media.number}`} referrerPolicy="no-referrer" onError={() => setSourceIndex(value => value + 1)} onClick={event => event.stopPropagation()} /> : <a className="exam-lightbox-fallback" href={media.original} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={event => event.stopPropagation()}>{tr('imageFallback')} ↗</a>}
-  </div>
+  return <ExamImageGallery urls={urls} labels={{
+    imageAlt:tr('imageAlt'),
+    imageOpen:tr('imageOpen'),
+    imageClose:tr('imageClose'),
+    imageFallback:tr('imageFallback'),
+    imageRetry:tr('retry'),
+    imageNumber:count=>tr('imageNumber',{count}),
+  }}/>
 }

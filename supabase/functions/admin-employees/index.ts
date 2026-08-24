@@ -621,11 +621,12 @@ Deno.serve(async (req) => {
       }
       const [
         { data: teams }, { data: positions }, total, active, noTeam, officialPending, options, platformMap,
-        canCreateRaw, canEditRaw, canViewEmployeeSensitiveRaw, canEditPaymentRaw, canEditCompensationRaw,
+        canCreateRaw, canEditRaw, canGenerateActivationRaw, canViewEmployeeSensitiveRaw, canEditPaymentRaw, canEditCompensationRaw,
       ] = await Promise.all([
         teamQuery,service.from("positions").select("id,name,code,status").order("name"),countScoped(service,scope),countScoped(service,scope,q=>q.eq("status","active")),countScoped(service,scope,q=>q.eq("status","active").is("team_id",null)),countScoped(service,scope,q=>q.eq("status","active").eq("official_id_pending",true)),collectEmployeeOptions(service,scope),fetchPlatformMapFromSchedule(),
         permissionAllowed(service,caller.access,caller.userId,"employee.create"),
         permissionAllowed(service,caller.access,caller.userId,"employee.edit"),
+        permissionAllowed(service,caller.access,caller.userId,"user.activation.generate"),
         permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.employee.edit","sensitive.employee.view"]),
         permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.payout.edit","sensitive.payment.edit"]),
         permissionAllowedFirstDefined(service,caller.access,caller.userId,["payroll.edit","employee.compensation.edit"]),
@@ -633,6 +634,7 @@ Deno.serve(async (req) => {
       const founder=caller.roleCode==="founder";
       const canCreate=(founder||canCreateRaw)&&scope.mode!=="self";
       const canEdit=(founder||canEditRaw)&&scope.mode!=="self";
+      const canGenerateActivation=founder||canGenerateActivationRaw;
       const canViewEmployeeSensitive=founder||canViewEmployeeSensitiveRaw;
       const canEditPayment=founder||canEditPaymentRaw;
       const canEditCompensation=founder||canEditCompensationRaw;
@@ -650,6 +652,7 @@ Deno.serve(async (req) => {
         actions:{
           can_create:canCreate,
           can_edit:canEdit,
+          can_generate_activation_code:canGenerateActivation,
           can_create_sensitive_employee:canCreate&&canViewEmployeeSensitive,
           can_create_payment:canCreate&&canEditPayment,
           can_create_compensation:canCreate&&canEditCompensation,
@@ -1126,6 +1129,7 @@ Deno.serve(async (req) => {
           can_edit_compensation:canEditCompensation,
           can_resign:canResignEmployee,
           can_reactivate:canReactivateEmployee,
+          can_delete:canDeleteEmployee,
           can_cancel_hire:canDeleteEmployee && employee.status==="active" && employee.source_type==="backend" && !(portalRows||[]).length,
         },
         missing_fields:missing,
@@ -1224,9 +1228,10 @@ Deno.serve(async (req) => {
       const from=(page-1)*pageSize;
       const enriched=enrichedAll.slice(from,from+pageSize);
 
-      const [canEditRaw,canRestoreRaw]=await Promise.all([
+      const [canEditRaw,canRestoreRaw,canDeleteRaw]=await Promise.all([
         permissionAllowed(service,caller.access,caller.userId,"employee.resign"),
         permissionAllowed(service,caller.access,caller.userId,"employee.reactivate"),
+        permissionAllowed(service,caller.access,caller.userId,"employee.delete"),
       ]);
       const founder=caller.roleCode==="founder";
 
@@ -1239,6 +1244,7 @@ Deno.serve(async (req) => {
         permissions:{
           can_edit:founder || canEditRaw,
           can_restore:founder || canRestoreRaw,
+          can_delete:founder || canDeleteRaw,
         },
       });
     }

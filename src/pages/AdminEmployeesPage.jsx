@@ -4,6 +4,16 @@ import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
+import { useAdminAccess } from '../lib/adminAccess'
+
+const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','离职记录','操作日志']
+const EMPLOYEE_TAB_PERMISSIONS = {
+  '员工档案': 'employee.view',
+  '人员分析': 'employee.view',
+  '停电 / 断网记录': 'connectivity.view',
+  '离职记录': 'employee.view',
+  '操作日志': 'audit.view',
+}
 
 const text = v => String(v ?? '').trim()
 const localDateIso = () => {
@@ -224,14 +234,6 @@ function tenureCompactLabel(hireDate,resignDate,status){
   const years=Math.floor(months/12), rest=months%12
   return rest?`${years}年${rest}个月`:`${years}年`
 }
-function isPendingHireForCancel(hireDate,status){
-  if(!['active','resigned'].includes(text(status))) return false
-  const hire=parseIsoDateOnly(hireDate)
-  if(!hire) return false
-  const now=new Date()
-  const todayUtc=new Date(Date.UTC(now.getFullYear(),now.getMonth(),now.getDate(),12))
-  return hire.getTime()>=todayUtc.getTime()
-}
 const sheetSyncSucceeded=sync=>Boolean(sync)&&sync.skipped!==true&&sync.ok===true&&sync.body?.ok!==false&&!sync.error
 const sheetSyncMessage=sync=>text(sync?.body?.error||sync?.error||sync?.reason||'正式 Google Sheet 写入失败')
 const normPlatform = v => text(v).replace(/\s+/g,'').toUpperCase()
@@ -381,15 +383,18 @@ function bundleToForm(detail,capabilities){
 }
 
 export default function AdminEmployeesPage(){
+  const adminAccess=useAdminAccess()
   const [sp,setSp]=useSearchParams()
   const requestedEmployeeId=sp.get('employee')||''
   const requestedEmployeeRef=useRef('')
   const lastAutoRefreshAtRef=useRef(0)
   const refreshEmployeeDataRef=useRef(null)
-  const tabs=['员工档案','人员分析','停电 / 断网记录','离职记录','操作日志']
+  const canViewEmployees=adminAccess.hasPermission('employee.view')
+  const canViewAudit=adminAccess.hasPermission('audit.view')
+  const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>adminAccess.hasPermission(EMPLOYEE_TAB_PERMISSIONS[item]))
   const requestedTab=sp.get('tab')
   const initialTab=requestedTab==='入离职记录'?'离职记录':['团队管理','岗位管理'].includes(requestedTab)?'人员分析':requestedTab
-  const [tab,setTabState]=useState(tabs.includes(initialTab)?initialTab:'员工档案')
+  const [tab,setTabState]=useState(EMPLOYEE_TABS.includes(initialTab)?initialTab:'员工档案')
 
   const [meta,setMeta]=useState({
     teams:[],positions:[],position_options:[],total:0,active:0,no_team:0,official_id_pending:0,
@@ -444,7 +449,7 @@ export default function AdminEmployeesPage(){
   const [appliedResignationAnalyticsFilters,setAppliedResignationAnalyticsFilters]=useState(blankResignationAnalyticsFilters)
 
   const [history,setHistory]=useState([])
-  const [historyPermissions,setHistoryPermissions]=useState({can_edit:false,can_restore:false})
+  const [historyPermissions,setHistoryPermissions]=useState({can_edit:false,can_restore:false,can_delete:false})
   const [historyTotal,setHistoryTotal]=useState(0)
   const [historyPage,setHistoryPage]=useState(1)
   const [historyPageSize,setHistoryPageSizeState]=useState(()=>Number(localStorage.getItem('wfh_history_page_size'))||20)
@@ -478,7 +483,7 @@ export default function AdminEmployeesPage(){
   }
 
   useEffect(()=>{
-    if(!requestedEmployeeId||requestedEmployeeRef.current===requestedEmployeeId)return
+    if(!canViewEmployees||!requestedEmployeeId||requestedEmployeeRef.current===requestedEmployeeId)return
     requestedEmployeeRef.current=requestedEmployeeId
     setSelected({employee:{id:requestedEmployeeId},missing_fields:[]})
     setDetailLoading(true)
@@ -486,7 +491,7 @@ export default function AdminEmployeesPage(){
       .then(setSelected)
       .catch(e=>{setError(e.message);setSelected(null);requestedEmployeeRef.current=''})
       .finally(()=>setDetailLoading(false))
-  },[requestedEmployeeId])
+  },[requestedEmployeeId,canViewEmployees])
 
   const writeEmployee=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employee-write',{body})
@@ -606,7 +611,7 @@ export default function AdminEmployeesPage(){
       const productionRows=rawRows.filter(r=>!isTestEmployeeNo(r.employee_no))
       const cleaned=dedupeAnalysisRows(productionRows)
       setHistory(cleaned)
-      setHistoryPermissions(data.permissions||{can_edit:false,can_restore:false})
+      setHistoryPermissions(data.permissions||{can_edit:false,can_restore:false,can_delete:false})
       const hiddenTest=rawRows.length-productionRows.length
       setHistoryTotal(Math.max(0,(data.total||0)-hiddenTest-(productionRows.length-cleaned.length)))
     }catch(e){ if(!silent) setError(e.message) }
@@ -626,12 +631,12 @@ export default function AdminEmployeesPage(){
   const refreshEmployeeData=async({silent=false}={})=>{
     if(!silent) setRefreshing(true)
     try{
-      const jobs=[loadMeta(),loadAnalytics(),loadArchiveStats(true)]
-      if(tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
-      if(tab==='人员分析') jobs.push(loadPeopleAnalytics(appliedAnalysisFilters),loadResignationAnalytics(appliedResignationAnalyticsFilters))
-      if(tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
-      if(tab==='操作日志') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
-      if(selected?.employee?.id){
+      const jobs=canViewEmployees?[loadMeta(),loadAnalytics(),loadArchiveStats(true)]:[]
+      if(canViewEmployees&&tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
+      if(canViewEmployees&&tab==='人员分析') jobs.push(loadPeopleAnalytics(appliedAnalysisFilters),loadResignationAnalytics(appliedResignationAnalyticsFilters))
+      if(canViewEmployees&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
+      if(canViewAudit&&tab==='操作日志') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
+      if(canViewEmployees&&selected?.employee?.id){
         jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(d=>setSelected(prev=>({...d,resignation_reason:text(prev?.resignation_reason||d?.resignation_reason)}))).catch(()=>{}))
       }
       await Promise.all(jobs)
@@ -643,6 +648,7 @@ export default function AdminEmployeesPage(){
   refreshEmployeeDataRef.current=refreshEmployeeData
 
   useEffect(()=>{
+    if(adminAccess.loading||!canViewEmployees)return undefined
     Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats()]).finally(()=>{lastAutoRefreshAtRef.current=Date.now()})
     const refreshIfStale=()=>{
       if(document.hidden||Date.now()-lastAutoRefreshAtRef.current<300000)return
@@ -652,43 +658,54 @@ export default function AdminEmployeesPage(){
     window.addEventListener('focus',refreshIfStale)
     document.addEventListener('visibilitychange',refreshIfStale)
     return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
-  },[])
+  },[adminAccess.loading,canViewEmployees])
   useEffect(()=>{
+    if(adminAccess.loading||!canViewEmployees)return
     loadList(1,pageSize,{nextFilters:appliedFilters})
-  },[])
+  },[adminAccess.loading,canViewEmployees])
 
   useEffect(()=>{
+    if(adminAccess.loading)return
     const raw=sp.get('tab')
     const t=raw==='入离职记录'?'离职记录':raw
+    const normalized=t==='团队管理'||t==='岗位管理'?'人员分析':t||'员工档案'
+    if(!tabs.includes(normalized)){
+      const fallback=tabs[0]
+      if(fallback){
+        setTabState(fallback)
+        setSp(fallback==='员工档案'?{}:{tab:fallback},{replace:true})
+      }
+      return
+    }
     if(t==='团队管理'||t==='岗位管理'){
       setTabState('人员分析')
       setAnalysisView(t==='团队管理'?'团队分析':'岗位分析')
-    }else if(tabs.includes(t)) setTabState(t)
-  },[sp])
+    }else setTabState(normalized)
+  },[sp,adminAccess.loading,adminAccess.permissionKey])
 
   useEffect(()=>{
-    if(tab!=='离职记录') return
+    if(!canViewEmployees||tab!=='离职记录') return
     const t=setTimeout(()=>{ setHistoryPage(1); loadHistory(1,historyPageSize,historyFilters) },80)
     return()=>clearTimeout(t)
-  },[tab])
+  },[tab,canViewEmployees])
 
   useEffect(()=>{
-    if(tab!=='操作日志') return
+    if(!canViewAudit||tab!=='操作日志') return
     const t=setTimeout(()=>{ setAuditPage(1); loadAudit(1,auditPageSize,auditFilters) },80)
     return()=>clearTimeout(t)
-  },[tab])
+  },[tab,canViewAudit])
 
   useEffect(()=>{
-    if(tab!=='人员分析') return
+    if(!canViewEmployees||tab!=='人员分析') return
     const t=setTimeout(()=>loadPeopleAnalytics(appliedAnalysisFilters),80)
     return()=>clearTimeout(t)
-  },[tab])
+  },[tab,canViewEmployees])
 
   useEffect(()=>{
-    if(tab!=='人员分析') return
+    if(!canViewEmployees||tab!=='人员分析') return
     const t=setTimeout(()=>loadResignationAnalytics(appliedResignationAnalyticsFilters),100)
     return()=>clearTimeout(t)
-  },[tab])
+  },[tab,canViewEmployees])
 
   useEffect(()=>{
     const handler=e=>{
@@ -700,6 +717,7 @@ export default function AdminEmployeesPage(){
   },[])
 
   const setTab=v=>{
+    if(!tabs.includes(v))return
     setTabState(v)
     setSp(v==='员工档案'?{}:{tab:v})
   }
@@ -1108,6 +1126,7 @@ export default function AdminEmployeesPage(){
   },[analytics.positions,appliedPositionKeyword])
   const positionPages=Math.max(1,Math.ceil(filteredPositions.length/positionPageSize))
   const positionSlice=filteredPositions.slice((positionPage-1)*positionPageSize,positionPage*positionPageSize)
+  const visibleTab=tabs.includes(tab)?tab:''
 
   return <div className="content-page employee-page pro-employee-page">
     <div className="module-title-row">
@@ -1116,17 +1135,17 @@ export default function AdminEmployeesPage(){
         <h1>员工管理</h1>
       </div>
       <div className="employee-title-actions">
-        <button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>
-        {tab==='员工档案'&&meta.actions?.can_create&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
+        {visibleTab&&visibleTab!=='停电 / 断网记录'&&<button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>}
+        {visibleTab==='员工档案'&&meta.actions?.can_create&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
       </div>
     </div>
 
     <div className="module-tabs">
-      {tabs.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}
+      {tabs.map(x=><button key={x} className={visibleTab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}
     </div>
 
     {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {tab==='员工档案'&&<>
+    {visibleTab==='员工档案'&&<>
       <div className="archive-compact-head">
         <div><h2>员工档案</h2><span>当前仅显示在职员工 · 共 {meta.active||0} 人</span></div>
       </div>
@@ -1170,7 +1189,7 @@ export default function AdminEmployeesPage(){
               <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
               <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
               <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
-              <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
+              <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&meta.actions?.can_generate_activation_code&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
             </tr>)}</tbody>
           </table>
         </div>}
@@ -1179,9 +1198,9 @@ export default function AdminEmployeesPage(){
       {generated&&<ActivationCodeModal data={generated} copyStatus={activationCopyStatus} onCopy={copyActivationCode} onClose={closeActivationCode}/>}
     </>}
 
-    {tab==='停电 / 断网记录'&&<ConnectivityRecordsPage/>}
+    {visibleTab==='停电 / 断网记录'&&<ConnectivityRecordsPage/>}
 
-    {tab==='人员分析'&&<>
+    {visibleTab==='人员分析'&&<>
       <div className="analysis-head-row people-analysis-title">
         <h2>人员分析</h2>
         <div className="analysis-badge">实时数据</div>
@@ -1263,7 +1282,7 @@ export default function AdminEmployeesPage(){
         onOpen={args=>openAnalysisDetail({...args,filters:appliedResignationAnalyticsFilters})}
       />}
     </>}
-    {tab==='人员分析'&&analysisView==='团队分析'&&<>
+    {visibleTab==='人员分析'&&analysisView==='团队分析'&&<>
       <div className="analysis-head-row">
         <div><h2>团队结构分析</h2><p>团队人数、占全体比例、人员流动和团队内部岗位构成。</p></div>
         <div className="analysis-badge">{analytics.teams?.length||0} 个团队</div>
@@ -1280,7 +1299,7 @@ export default function AdminEmployeesPage(){
       </div>
     </>}
 
-    {tab==='人员分析'&&analysisView==='岗位分析'&&<>
+    {visibleTab==='人员分析'&&analysisView==='岗位分析'&&<>
       <div className="analysis-head-row">
         <div><h2>岗位结构分析</h2><p>岗位人数、占全体比例、人员流动和岗位在各团队的分布。</p></div>
         <div className="analysis-badge">{analytics.positions?.length||0} 个岗位</div>
@@ -1297,7 +1316,7 @@ export default function AdminEmployeesPage(){
       </div>
     </>}
 
-    {tab==='离职记录'&&<div className="data-card resignation-card-pro">
+    {visibleTab==='离职记录'&&<div className="data-card resignation-card-pro">
       <div className="section-head resignation-section-head">
         <div><h2>离职记录</h2></div>
         <span>{historyTotal} 人</span>
@@ -1333,7 +1352,7 @@ export default function AdminEmployeesPage(){
               <button className="table-action" onClick={()=>openHistoryDetail(r)}>查看</button>
               {historyPermissions.can_edit&&<button className="table-action edit-history-action" onClick={()=>setEditResignModal({event_id:r.id,employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date||'',reason:r.reason||''})}>编辑</button>}
               {historyPermissions.can_restore&&<button className="table-action restore-action" onClick={()=>setRestoreModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,restore_portal:true})}>恢复在职</button>}
-              {r.employee_id&&<button className="table-action cancel-hire-history-action" title="未正式入职或后台新增员工可直接撤销；不符合条件时系统会安全拒绝" onClick={()=>setCancelHireModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,confirm_text:''})}>撤销入职</button>}
+              {historyPermissions.can_delete&&r.employee_id&&<button className="table-action cancel-hire-history-action" title="未正式入职或后台新增员工可直接撤销；不符合条件时系统会安全拒绝" onClick={()=>setCancelHireModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,confirm_text:''})}>撤销入职</button>}
             </div></td>
           </tr>
         })}</tbody>
@@ -1341,7 +1360,7 @@ export default function AdminEmployeesPage(){
       <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize,historyFilters)}} onPageSize={setHistoryPageSize}/>
     </div>}
 
-    {tab==='操作日志'&&<div className="data-card">
+    {visibleTab==='操作日志'&&<div className="data-card">
       <div className="section-head">
         <div><h2>操作日志</h2></div>
         <span>{auditTotal} 条</span>
@@ -1621,6 +1640,7 @@ function ActivationCodeModal({data,copyStatus,onCopy,onClose}){
 }
 
 export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn,readOnly=false}){
+  const adminAccess=useAdminAccess()
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
   const [profileSummary,setProfileSummary]=useState(null)
   const [profileSummaryLoading,setProfileSummaryLoading]=useState(false)
@@ -1647,7 +1667,19 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
   const paymentTitle=paymentMode==='usdt'?'USDT 收款资料':'银行卡 / 钱包收款资料'
+  const drawerTabs=useMemo(()=>[
+    ['info','员工信息',true],
+    ['errors','员工出错记录',adminAccess.hasPermission('employee.view')||adminAccess.hasPermission('report.view')],
+    ['exams','员工考试记录',adminAccess.hasPermission('employee.view')||adminAccess.hasPermission('exam.view')],
+    ['connectivity','停电 / 断网记录',adminAccess.hasPermission('connectivity.view')],
+    ['payroll','工资记录',adminAccess.hasPermission('payroll.view')],
+    ['attendance','员工出勤记录',adminAccess.hasPermission('attendance.view')],
+    ['penalties','奖金 / 扣款',adminAccess.hasPermission('adjustment.view')],
+  ].filter(([, ,allowed])=>allowed),[adminAccess.founder,adminAccess.permissionKey])
   useEffect(()=>setActiveSection('info'),[e.id])
+  useEffect(()=>{
+    if(!drawerTabs.some(([key])=>key===activeSection))setActiveSection('info')
+  },[activeSection,drawerTabs])
   useEffect(()=>{
     if(!e.id)return
     let alive=true
@@ -1727,7 +1759,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
         {returnToAnalysis&&<button className="back-outline" onClick={onReturn}>← 返回人员明细</button>}
         {!readOnly&&e.status!=='resigned'&&detail.actions?.can_resign&&<button className="danger-outline" onClick={onResign}>办理离职</button>}
         {!readOnly&&e.status==='resigned'&&detail.actions?.can_reactivate&&<button className="restore-outline" onClick={()=>window.dispatchEvent(new CustomEvent('wfh-restore-employee',{detail:{employee_id:e.id,employee_no:e.employee_no,full_name:e.full_name}}))}>恢复在职</button>}
-        {!readOnly&&(detail.actions?.can_cancel_hire||isPendingHireForCancel(e.hire_date,e.status)||detail.actions?.can_edit)&&<button className="cancel-hire-outline" title="不符合撤销条件时系统会安全拒绝，不会删除员工资料" onClick={onCancelHire}>撤销入职</button>}
+        {!readOnly&&detail.actions?.can_delete&&<button className="cancel-hire-outline" title="不符合撤销条件时系统会安全拒绝，不会删除员工资料" onClick={onCancelHire}>撤销入职</button>}
         {!readOnly&&detail.actions?.can_edit&&<button className="edit-outline" onClick={onEdit}>编辑</button>}
         <button className="drawer-close" onClick={onClose}>×</button>
       </div>
@@ -1736,7 +1768,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     {loading?<div className="empty-state">读取完整档案...</div>:<>
       <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
       <nav className="employee-drawer-tabs">
-        {[['info','员工信息'],['errors','员工出错记录'],['exams','员工考试记录'],['connectivity','停电 / 断网记录'],['payroll','工资记录'],['attendance','员工出勤记录'],['penalties','奖金 / 扣款']].map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
+        {drawerTabs.map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
       </nav>
       <div className="detail-sections detail-sections-v11">
         {activeSection==='exams'&&<EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>}

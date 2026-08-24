@@ -214,9 +214,9 @@ Deno.serve(async (req) => {
 
     if (!mfaRequired) {
       // Password verification creates a new Supabase Auth session. Before any
-      // token leaves this trusted boundary, atomically claim the per-user lease
-      // using the session_id in that session's JWT. MFA admins defer this until
-      // their session is promoted to AAL2 by the protected bootstrap.
+      // token leaves this trusted boundary, atomically make it the current app
+      // session. The database revokes the previous browser's auth session and
+      // lease; MFA admins defer takeover until their JWT is promoted to AAL2.
       const { data: lease, error: leaseError } = await authClient.rpc(
         'app_session_claim',
         { p_portal: mode },
@@ -238,9 +238,8 @@ Deno.serve(async (req) => {
       }
 
       if (!lease?.ok) {
-        // Do not call app_session_release here: the rejected candidate does not
-        // own the lease. Local sign-out revokes only the new Auth session and
-        // cannot log the incumbent browser out.
+        // A rejected candidate never owns the lease. Local sign-out revokes
+        // only the candidate session and cannot disturb the current browser.
         await discardCandidateSession(authClient)
         if (lease?.reason === 'active_elsewhere') {
           return json(req, {

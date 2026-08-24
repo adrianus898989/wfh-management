@@ -6,7 +6,12 @@ export const SESSION_IDLE_LIMIT_MS=24*60*60*1000
 export const APP_SESSION_HEARTBEAT_MS=60*1000
 export const APP_SESSION_RPC_TIMEOUT_MS=15*1000
 export const SESSION_SETUP_TIMEOUT_MS=25*1000
-const portal=typeof window!=='undefined'&&window.location.pathname.startsWith('/admin')?'admin':'staff'
+const appBasePath=String(import.meta.env.BASE_URL||'/').replace(/\/+$/,'')
+const browserPath=typeof window==='undefined'?'':window.location.pathname
+const appPath=appBasePath&&(browserPath===appBasePath||browserPath.startsWith(`${appBasePath}/`))
+  ?browserPath.slice(appBasePath.length)||'/'
+  :browserPath
+const portal=appPath==='/admin'||appPath.startsWith('/admin/')?'admin':'staff'
 const SESSION_ACTIVITY_KEY=`wfh_${portal}_session_last_activity`
 const SESSION_NOTICE_KEY=`wfh_${portal}_session_notice`
 let lastActivityWrite=0
@@ -101,9 +106,9 @@ export const heartbeatAppSession=()=>timedAppSessionRpc(supabase,'app_session_he
 
 export const releaseAppSession=()=>timedAppSessionRpc(supabase,'app_session_release')
 
-// A rejected candidate session must never release the incumbent browser's
-// lease. The server-side release RPC also checks session_id, but keeping this
-// path explicit makes that invariant harder to accidentally weaken later.
+// Candidate cleanup is session-id scoped. With last-login-wins semantics the
+// server normally accepts the new session and revokes the previous browser;
+// this path remains for setup/network failures before a candidate is usable.
 export const discardLocalAppSession=async()=>{
   clearSessionActivity()
   try{return await supabase.auth.signOut({scope:'local'})}catch(error){return {error}}

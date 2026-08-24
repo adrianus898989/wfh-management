@@ -1,82 +1,69 @@
-import {
-  LayoutDashboard, Users, CalendarDays, ClipboardList,
-  GraduationCap, WalletCards, BarChart3, Settings,
-  UserRound, BookOpenCheck, FileText
-} from 'lucide-react'
 import { PERMISSIONS } from './permissions'
 
+const enc = value => encodeURIComponent(value)
+
 export const adminNavigation = [
-  { label: '控制台', icon: LayoutDashboard, path: '/admin' },
+  { to: '/admin', label: '首页', icon: '⌂' },
   {
-    label: '人员与团队', icon: Users,
-    children: [
-      { label: '在职员工', path: '/admin/employees', permission: PERMISSIONS.EMPLOYEE_VIEW },
-      { label: '新增 / 异动', path: '/admin/employee-changes', permission: PERMISSIONS.EMPLOYEE_CREATE },
-      { label: '团队管理', path: '/admin/teams', permission: PERMISSIONS.TEAM_VIEW },
-      { label: '离职员工库', path: '/admin/resigned', permission: PERMISSIONS.EMPLOYEE_VIEW }
-    ]
+    to: '/admin/employees', label: '员工管理', icon: '人', children: [
+      { label: '员工档案', to: `/admin/employees?tab=${enc('员工档案')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
+      { label: '人员分析', to: `/admin/employees?tab=${enc('人员分析')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
+      { label: '停电 / 断网记录', to: `/admin/employees?tab=${enc('停电 / 断网记录')}`, permissions: [PERMISSIONS.CONNECTIVITY_VIEW] },
+      { label: '离职记录', to: `/admin/employees?tab=${enc('离职记录')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
+      { label: '操作日志', to: `/admin/employees?tab=${enc('操作日志')}`, permissions: [PERMISSIONS.AUDIT_VIEW] },
+    ],
   },
   {
-    label: '排班与考勤', icon: CalendarDays,
-    children: [
-      { label: '排班总览', path: '/admin/schedule', permission: PERMISSIONS.SCHEDULE_VIEW },
-      { label: '考勤记录', path: '/admin/attendance', permission: PERMISSIONS.ATTENDANCE_VIEW },
-      { label: '请假 / 公休 / 回家', path: '/admin/leave', permission: PERMISSIONS.LEAVE_APPROVE },
-      { label: '轮班规则', path: '/admin/rotation', permission: PERMISSIONS.SCHEDULE_EDIT }
-    ]
+    to: '/admin/reports', label: '统计报表', icon: '报', children: [
+      { label: '总汇', to: `/admin/reports?tab=${enc('总汇')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
+      { label: '人员', to: `/admin/reports?tab=${enc('人员')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
+      { label: '排班表', to: `/admin/reports?tab=${enc('排班表')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
+      { label: '盘口人数', to: `/admin/reports?tab=${enc('盘口人数')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
+      { label: '统计', to: `/admin/reports?tab=${enc('统计')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
+      { label: '错误统计', to: `/admin/reports?tab=${enc('错误统计')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
+    ],
   },
   {
-    label: '每日工作', icon: ClipboardList,
-    children: [
-      { label: '组长日报', path: '/admin/leader-reports', permission: PERMISSIONS.REPORT_VIEW },
-      { label: '培训日报', path: '/admin/trainer-reports', permission: PERMISSIONS.REPORT_VIEW },
-      { label: '问题 / 交接', path: '/admin/issues', permission: PERMISSIONS.REPORT_VIEW },
-      { label: '出错 / 扣款 / 奖金', path: '/admin/adjustments', permission: PERMISSIONS.ADJUSTMENT_CREATE }
-    ]
+    to: '/admin/schedule', label: '排班与考勤', icon: '班', children: [
+      { label: '排班表', to: `/admin/schedule?tab=${enc('排班表')}`, permissions: [PERMISSIONS.SCHEDULE_VIEW] },
+      { label: '出勤表', to: `/admin/schedule?tab=${enc('出勤表')}`, permissions: [PERMISSIONS.ATTENDANCE_VIEW] },
+      { label: '今日考勤', to: `/admin/schedule?tab=${enc('今日考勤')}`, permissions: [PERMISSIONS.ATTENDANCE_VIEW] },
+      { label: '考勤记录', to: `/admin/schedule?tab=${enc('考勤记录')}`, permissions: [PERMISSIONS.ATTENDANCE_VIEW] },
+      { label: '请假审批', to: `/admin/schedule?tab=${enc('请假审批')}`, allPermissions: [PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.LEAVE_APPROVE] },
+      { label: '奖金 / 扣款', to: `/admin/schedule?tab=${enc('奖金 / 扣款')}`, permissions: [PERMISSIONS.ADJUSTMENT_VIEW] },
+    ],
   },
   {
-    label: '考试管理', icon: GraduationCap,
-    children: [
-      { label: '考试总览', path: '/admin/exams', permission: PERMISSIONS.EXAM_VIEW },
-      { label: '题库同步', path: '/admin/question-bank', permission: PERMISSIONS.EXAM_MANAGE },
-      { label: '批改 / 成绩', path: '/admin/grading', permission: PERMISSIONS.EXAM_GRADE }
-    ]
+    to: '/admin/daily', label: '每日工作', icon: '日', children: [
+      { label: '线上培训报告', to: '/admin/daily', permissions: [PERMISSIONS.ONLINE_TRAINING_VIEW, PERMISSIONS.ONLINE_TRAINING_SUBMIT, PERMISSIONS.ONLINE_TRAINING_REVIEW, PERMISSIONS.ONLINE_TRAINING_MANAGE] },
+    ],
   },
   {
-    label: '工资中心', icon: WalletCards,
-    children: [
-      { label: '工资规则 / 配置', path: '/admin/payroll-rules', permission: PERMISSIONS.PAYROLL_RULE_EDIT },
-      { label: '月度工资', path: '/admin/payroll', permission: PERMISSIONS.PAYROLL_VIEW },
-      { label: '审核 / 发布', path: '/admin/payroll-publish', permission: PERMISSIONS.PAYROLL_APPROVE },
-      { label: '导出 / 修改记录', path: '/admin/payroll-history', permission: PERMISSIONS.PAYROLL_EXPORT }
-    ]
+    to: '/admin/training', label: '考试管理', icon: '考', children: [
+      { label: '考试概览', to: `/admin/training?tab=${enc('考试概览')}`, permissions: [PERMISSIONS.EXAM_VIEW] },
+      { label: '考试记录', to: `/admin/training?tab=${enc('考试记录')}`, permissions: [PERMISSIONS.EXAM_VIEW] },
+      { label: '题库', to: `/admin/training?tab=${enc('题库')}`, allPermissions: [PERMISSIONS.EXAM_VIEW, PERMISSIONS.EXAM_MANAGE] },
+      { label: '人工批改', to: `/admin/training?tab=${enc('人工批改')}`, allPermissions: [PERMISSIONS.EXAM_VIEW, PERMISSIONS.EXAM_GRADE] },
+    ],
   },
   {
-    label: '统计报表', icon: BarChart3,
-    children: [
-      { label: '团队 / 人员统计', path: '/admin/reports/teams', permission: PERMISSIONS.TEAM_VIEW },
-      { label: '离职率 / 人员异动', path: '/admin/reports/turnover', permission: PERMISSIONS.EMPLOYEE_VIEW },
-      { label: '考勤 / 工作量 / 出错', path: '/admin/reports/operations', permission: PERMISSIONS.ATTENDANCE_VIEW },
-      { label: '工资统计', path: '/admin/reports/payroll', permission: PERMISSIONS.PAYROLL_VIEW }
-    ]
+    to: '/admin/payroll', label: '工资中心', icon: '薪', children: [
+      { label: '工资导入', to: `/admin/payroll?tab=${enc('工资导入')}`, allPermissions: [PERMISSIONS.PAYROLL_VIEW, PERMISSIONS.PAYROLL_EDIT] },
+      { label: '待发布', to: `/admin/payroll?tab=${enc('待发布')}`, allPermissions: [PERMISSIONS.PAYROLL_VIEW], permissions: [PERMISSIONS.PAYROLL_APPROVE, PERMISSIONS.PAYROLL_PUBLISH] },
+      { label: '已发布', to: `/admin/payroll?tab=${enc('已发布')}`, permissions: [PERMISSIONS.PAYROLL_VIEW] },
+      { label: '导入记录', to: `/admin/payroll?tab=${enc('导入记录')}`, permissions: [PERMISSIONS.PAYROLL_VIEW] },
+    ],
   },
   {
-    label: '系统管理', icon: Settings,
-    children: [
-      { label: '用户与权限 / OTP', path: '/admin/users', permission: PERMISSIONS.USER_VIEW },
-      { label: '收款资料修改审核', path: '/admin/payout-approvals', permission: PERMISSIONS.SENSITIVE_PAYOUT_APPROVE },
-      { label: '操作日志', path: '/admin/audit', permission: PERMISSIONS.AUDIT_VIEW },
-      { label: '帮助中心 / 教程', path: '/admin/help' },
-      { label: '系统设置', path: '/admin/settings', permission: PERMISSIONS.USER_MANAGE }
-    ]
-  }
+    to: '/admin/users', label: '用户与权限', icon: '权', children: [
+      { label: '后台账号', to: '/admin/users?tab=backend', permissions: [PERMISSIONS.USER_VIEW, PERMISSIONS.ACCOUNT_VIEW, PERMISSIONS.ACCOUNT_CREATE, PERMISSIONS.ACCOUNT_EDIT, PERMISSIONS.ACCOUNT_DISABLE, PERMISSIONS.ACCOUNT_DELETE, PERMISSIONS.ACCOUNT_RESET_PASSWORD, PERMISSIONS.ACCOUNT_OTP_TOGGLE, PERMISSIONS.ACCOUNT_MFA_RESET] },
+      { label: '员工账号', to: '/admin/users?tab=staff', permissions: [PERMISSIONS.USER_VIEW, PERMISSIONS.USER_ACCOUNT_CREATE, PERMISSIONS.USER_ACCOUNT_DISABLE, PERMISSIONS.USER_ACCOUNT_DELETE, PERMISSIONS.USER_PASSWORD_RESET, PERMISSIONS.ACCOUNT_MFA_RESET] },
+      { label: '角色与权限', to: '/admin/users?tab=roles', permissions: [PERMISSIONS.ROLE_MANAGE] },
+    ],
+  },
 ]
 
 export const staffNavigation = [
-  { label: '首页', icon: LayoutDashboard, path: '/staff' },
-  { label: '我的排班 / 出勤', icon: CalendarDays, path: '/staff/schedule' },
-  { label: '我的工资', icon: WalletCards, path: '/staff/payroll' },
-  { label: '我的考试', icon: BookOpenCheck, path: '/staff/exams' },
-  { label: '我的申请', icon: FileText, path: '/staff/requests' },
-  { label: '我的资料', icon: UserRound, path: '/staff/profile' }
+  { to: '/staff', key: 'nav.home', label: '首页' },
+  { to: '/staff/exams', key: 'nav.exams', label: '我的考试' },
 ]

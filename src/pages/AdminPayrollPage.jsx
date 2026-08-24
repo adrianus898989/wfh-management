@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
+import { PERMISSIONS } from '../config/permissions'
+import { useAdminAccess } from '../lib/adminAccess'
 import { supabase } from '../lib/supabase'
 
 const TABS = ['工资导入','待发布','已发布','导入记录']
@@ -168,7 +170,14 @@ function normalizeRows(sheetRows){
 
 export default function AdminPayrollPage(){
   const [params,setParams]=useSearchParams()
+  const access=useAdminAccess()
   const urlTab=params.get('tab')
+  const visibleTabs=access.loading?[]:TABS.filter(value=>{
+    if(!access.hasPermission(PERMISSIONS.PAYROLL_VIEW))return false
+    if(value==='工资导入')return access.hasPermission(PERMISSIONS.PAYROLL_EDIT)
+    if(value==='待发布')return access.hasAnyPermission([PERMISSIONS.PAYROLL_APPROVE,PERMISSIONS.PAYROLL_PUBLISH])
+    return true
+  })
   const [tab,setTabState]=useState(TABS.includes(urlTab)?urlTab:TABS[0])
   const [state,setState]=useState({loading:true,error:'',data:null})
   const [batchId,setBatchId]=useState(null)
@@ -188,6 +197,7 @@ export default function AdminPayrollPage(){
   const loadRequestRef=useRef(0)
 
   const setTab=value=>{
+    if(!visibleTabs.includes(value))return
     setTabState(value);setParams(value===TABS[0]?{}:{tab:value})
     setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');setRowPage(1)
   }
@@ -220,12 +230,18 @@ export default function AdminPayrollPage(){
     }
   }
   useEffect(()=>{
-    const nextTab=TABS.includes(urlTab)?urlTab:TABS[0]
+    if(access.loading)return undefined
+    const nextTab=visibleTabs.includes(urlTab)?urlTab:(visibleTabs[0]||'')
+    if(!nextTab){setTabState('');setState({loading:false,error:'',data:null});return undefined}
+    if(urlTab!==nextTab&&!(urlTab===null&&nextTab===TABS[0])){
+      setParams(nextTab===TABS[0]?{}:{tab:nextTab},{replace:true})
+      return undefined
+    }
     setTabState(nextTab)
     const selected=nextTab==='工资导入'||nextTab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:null
     load(selected,nextTab)
     return()=>{loadRequestRef.current+=1}
-  },[urlTab])
+  },[access.loading,access.founder,access.permissionKey,urlTab])
 
   const onFile=async file=>{
     if(!file)return
@@ -354,12 +370,12 @@ export default function AdminPayrollPage(){
   }
 
   return <div className="content-page payroll-admin-page">
-    <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>工资中心</h1></div><button className="payroll-refresh" onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>刷新资料</button></div>
+    <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>工资中心</h1></div><button className="payroll-refresh" disabled={access.loading||!tab} onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>刷新资料</button></div>
     {state.error&&<div className="payroll-alert error">{state.error}</div>}
     {message&&<div className="payroll-alert">{message}</div>}
-    <div className="module-tabs payroll-tabs">{TABS.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item}</button>)}</div>
+    <div className="module-tabs payroll-tabs">{visibleTabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item}</button>)}</div>
 
-    {tab==='工资导入'?<>
+    {access.loading?<div className="payroll-empty-small">正在读取页面权限…</div>:!tab?<div className="payroll-alert error">当前账号没有工资中心页面权限。</div>:tab==='工资导入'?<>
       <section className="payroll-upload-card">
         <div className="payroll-upload-copy"><span>01</span><div><h2>上传工资表</h2><p>支持 XLSX、CSV、TSV；自动识别中文、英文、越南文和印尼文常用表头。</p></div></div>
         <div className="payroll-import-form">
@@ -386,7 +402,7 @@ export default function AdminPayrollPage(){
         </button>):<div className="payroll-empty-small">暂无对应工资批次</div>}
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
-        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
+        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&(visibleSelected.status!=='published'||state.data?.permissions?.publish)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
         <div className="payroll-summary-grid"><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职 / 试用</span><strong>{visibleSelected.active_count??rows.filter(row=>payrollMatchState(row)==='active').length}</strong><small>在职与试用</small></button><button type="button" className={rowFilter==='suspended'?'active':''} onClick={()=>setRowFilter('suspended')}><span>停用员工</span><strong>{visibleSelected.suspended_count??rows.filter(row=>payrollMatchState(row)==='suspended').length}</strong><small>停用 / inactive</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>payrollMatchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.row_count} 人 · {visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
         <div className="payroll-record-filters">
           <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
