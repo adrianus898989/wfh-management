@@ -68,6 +68,7 @@ export const PERMISSIONS = {
   EXAM_VIEW: 'exam.view',
   EXAM_MANAGE: 'exam.manage',
   EXAM_GRADE: 'exam.grade',
+  EXAM_DELETE: 'exam.delete',
 
   // 工资
   PAYROLL_VIEW: 'payroll.view',
@@ -268,7 +269,8 @@ export const PERMISSION_GROUPS = [
     items: [
       [PERMISSIONS.EXAM_VIEW, '查看考试'],
       [PERMISSIONS.EXAM_MANAGE, '创建/分配考试'],
-      [PERMISSIONS.EXAM_GRADE, '人工批改']
+      [PERMISSIONS.EXAM_GRADE, '人工批改'],
+      [PERMISSIONS.EXAM_DELETE, '删除本系统考试记录']
     ]
   },
   {

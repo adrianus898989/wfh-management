@@ -25,6 +25,9 @@ Supabase 快照被外部清除后因本地 hash 未变化而无法恢复，定�
    - 编辑时：`scheduleSheetOnEdit`
    - 每 5 分钟：`reconcileScheduleSheet`
 
+首次快照只有在 Supabase 接收成功后才会创建触发器；若运行失败，不会留下
+每 5 分钟持续重试的触发器。
+
 安装函数会立即完成一次全量同步。以后在 `填表!A:M` 修改负责人、培训、组长、
 组别、团队、姓名、ID、班次、国家、岗位、盘口或工作内容，后台将以 Supabase
 快照为准更新。M 列以外或其他标签页的修改不会触发 Edge Function。
@@ -37,6 +40,16 @@ Supabase 快照被外部清除后因本地 hash 未变化而无法恢复，定�
 - 需要重装触发器：再次运行 `installScheduleSync()`，它会先删除旧触发器，
   不会叠加重复任务。
 - 需要停用：运行 `removeScheduleSyncTriggers()`。
+
+## 出现 HTTP 400 时
+
+最新版 `Code.gs` 会在执行日志中同时显示服务端的非敏感校验码，例如
+`snapshot_duplicate_employee_id_123`（第 123 行 ID 重复）或
+`snapshot_hash_mismatch`（发送内容与校验摘要不一致）。请先把仓库中的
+最新版 `Code.gs` 全量覆盖到该表绑定的 Apps Script 项目并保存，再运行
+`installScheduleSync`。新版安装会先移除旧触发器，再尝试首次同步；失败时
+不会继续每 5 分钟请求。把“原因 …”和请求编号一并提供即可排查，切勿复制
+或截图 `SCHEDULE_SYNC_TOKEN`。修正表格后再次运行同一安装函数即可恢复触发器。
 - 若提示表头错误，请确认第 1 行 A:M 依次是：
   `负责人、现场培训、线上组长、线上培训、组别、团队、姓名、ID、班次、国家、岗位、盘口、工作内容`。
 - 若 HTTP 失败，先在 Apps Script 左侧「执行记录」查看请求编号，再到 Supabase

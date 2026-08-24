@@ -379,7 +379,7 @@ const monthMeta=value=>{
 }
 const matrixPersonKey=row=>text(row.employee_id)||text(row.id)||text(row.employee_no).toUpperCase()
 const matrixKindMeta=value=>({
-  public_holiday:['休','public_holiday'],home_leave:['回','home_leave'],leave:['假','leave'],half_day:['半','half_day'],absence:['缺','absence'],absent:['缺','absence'],resignation:['离','resignation'],late:['迟','late'],normal:['勤','normal'],present:['勤','normal'],
+  public_holiday:['休','public_holiday'],home_leave:['回','home_leave'],leave:['请','leave'],half_day:['半','half_day'],absence:['缺','absence'],absent:['缺','absence'],resignation:['离','resignation'],late:['迟','late'],normal:['勤','normal'],present:['勤','normal'],
 }[text(value).toLowerCase()]||['记','other'])
 
 const matrixKinds=['public_holiday','home_leave','leave','half_day','absence','resignation']
@@ -397,21 +397,21 @@ const matrixRawRecords=(employee,day,month)=>{
   const raw=employee.days?.[day]??employee.days?.[String(day)]??employee.days?.[date]??[]
   return Array.isArray(raw)?raw:(raw?[raw]:[])
 }
+const matrixEventPriority=kind=>({resignation:0,absence:1,leave:2,home_leave:3,public_holiday:4,half_day:5}[matrixKindKey(kind)]??9)
+const matrixPrimaryRecord=records=>[...records].sort((a,b)=>matrixEventPriority(a.event_kind||a.kind||a.status)-matrixEventPriority(b.event_kind||b.kind||b.status))[0]||null
 const matrixResignationWindow=(employee,month)=>{
   const directStart=dateOnly(employee.resign_date||employee.resignation_date||employee.resigned_at||employee.termination_date||employee.exit_date||employee.last_working_date)
   const directEnd=dateOnly(employee.rehire_date||employee.rehired_at||employee.reactivation_date||employee.return_date)
   const periods=employee.resignation_periods||employee.lifecycle_periods||employee.resigned_ranges||[]
   const normalizedPeriods=(Array.isArray(periods)?periods:[]).map(period=>({start:dateOnly(period.start||period.from||period.resign_date||period.resigned_at),end:dateOnly(period.end||period.to||period.rehire_date||period.rehired_at)})).filter(period=>period.start)
-  if(directStart)normalizedPeriods.push({start:directStart,end:directEnd})
-  if(!normalizedPeriods.length){
-    const eventDates=[]
-    Object.entries(employee.days||{}).forEach(([key,value])=>{
-      const day=Number(key)||Number(dateOnly(key).slice(-2))
-      const records=Array.isArray(value)?value:(value?[value]:[])
-      if(day&&records.some(record=>matrixKindKey(record.event_kind||record.kind||record.status)==='resignation'))eventDates.push(`${month}-${String(day).padStart(2,'0')}`)
-    })
-    if(eventDates.length)normalizedPeriods.push({start:eventDates.sort()[0],end:directEnd})
-  }
+  const eventDates=[]
+  Object.entries(employee.days||{}).forEach(([key,value])=>{
+    const day=Number(key)||Number(dateOnly(key).slice(-2))
+    const records=Array.isArray(value)?value:(value?[value]:[])
+    if(day&&records.some(record=>matrixKindKey(record.event_kind||record.kind||record.status)==='resignation'))eventDates.push(`${month}-${String(day).padStart(2,'0')}`)
+  })
+  const inferredStart=[directStart,...eventDates].filter(Boolean).sort()[0]
+  if(inferredStart)normalizedPeriods.push({start:inferredStart,end:directEnd})
   return normalizedPeriods
 }
 const matrixDayRecords=(employee,day,month)=>{
@@ -423,41 +423,76 @@ const matrixDayRecords=(employee,day,month)=>{
   const resignation=records.find(record=>matrixKindKey(record.event_kind||record.kind||record.status)==='resignation')||{event_kind:'resignation',reason:'员工已离职',note:'离职日期起由系统连续标记'}
   return [resignation,...remaining]
 }
-const numberValue=value=>value!==''&&value!==null&&value!==undefined&&Number.isFinite(Number(value))?Number(value):null
+const matrixEffectiveDayRecords=(employee,day,month)=>{
+  const date=`${month}-${String(day).padStart(2,'0')}`
+  const raw=employee.effective_days?.[day]??employee.effective_days?.[String(day)]??employee.effective_days?.[date]
+  if(raw!==undefined&&raw!==null)return Array.isArray(raw)?raw:(raw?[raw]:[])
+  const returnDate=dateOnly(employee.rehire_date||employee.rehired_at||employee.reactivation_date||employee.return_date)
+  const candidates=matrixDayRecords(employee,day,month).filter(record=>!(returnDate&&date>=returnDate&&matrixKindKey(record.event_kind||record.kind||record.status)==='resignation'))
+  const primary=matrixPrimaryRecord(candidates)
+  return primary?[primary]:[]
+}
 const matrixSummaryFor=(employee,bounds,month)=>{
   const fallback={public_holiday:0,home_leave:0,leave:0,half_day:0,absence:0,resignation:0}
   bounds.days.forEach(day=>{
-    const kinds=new Set(matrixDayRecords(employee,day,month).map(record=>matrixKindKey(record.event_kind||record.kind||record.status)).filter(Boolean))
-    kinds.forEach(kind=>{fallback[kind]+=kind==='half_day'?0.5:1})
+    const primary=matrixPrimaryRecord(matrixEffectiveDayRecords(employee,day,month))
+    const kind=matrixKindKey(primary?.event_kind||primary?.kind||primary?.status)
+    if(kind)fallback[kind]+=kind==='half_day'?0.5:1
   })
-  const sources=[employee.monthly_summary,employee.attendance_summary,employee.summary,employee.stats,employee.totals,employee].filter(source=>source&&typeof source==='object')
-  const aliases={
-    public_holiday:['public_holiday','public_holiday_days','rest_day','rest_days'],
-    home_leave:['home_leave','home_leave_days','home_vacation','home_vacation_days'],
-    leave:['leave','leave_days','vacation_leave','vacation_days'],
-    half_day:['half_day','half_days'],
-    absence:['absence','absence_days','absent','absent_days'],
-    resignation:['resignation','resignation_days','resigned','resigned_days'],
-  }
-  const result={}
-  Object.entries(aliases).forEach(([kind,keys])=>{
-    let value=null
-    for(const source of sources){for(const key of keys){value=numberValue(source[key]);if(value!==null)break}if(value!==null)break}
-    result[kind]=value??fallback[kind]
-  })
-  const totalKeys=['total','total_days','attendance_total','attendance_days','stat_total','statistics_total']
-  let total=null
-  for(const source of sources){for(const key of totalKeys){total=numberValue(source[key]);if(total!==null)break}if(total!==null)break}
-  if(total!==null){
-    const nonHalf=matrixKinds.filter(kind=>kind!=='half_day').reduce((sum,kind)=>sum+Number(result[kind]||0),0)
-    const weightedHalf=total-nonHalf
-    if(weightedHalf>=0&&weightedHalf<=Number(result.half_day||0))result.half_day=weightedHalf
-  }
-  result.total=total??matrixKinds.reduce((sum,kind)=>sum+Number(result[kind]||0),0)
-  return result
+  return {...fallback,total:matrixKinds.reduce((sum,kind)=>sum+Number(fallback[kind]||0),0)}
 }
 const matrixSummaryLabels={public_holiday:'休',home_leave:'回',leave:'请',half_day:'半',absence:'缺',resignation:'离'}
 const formatDayCount=value=>Number(value||0).toLocaleString('zh-CN',{maximumFractionDigits:1})
+const matrixOverviewFor=(people,bounds,month,scope='page')=>{
+  const empty=()=>Object.fromEntries(matrixKinds.map(kind=>[kind,{days:0,people:new Set()}]))
+  const monthly=empty()
+  const daily=bounds.days.map(day=>({day,...empty()}))
+  people.forEach((employee,index)=>bounds.days.forEach(day=>{
+    const primary=matrixPrimaryRecord(matrixEffectiveDayRecords(employee,day,month))
+    const kind=matrixKindKey(primary?.event_kind||primary?.kind||primary?.status)
+    if(!kind)return
+    const key=matrixPersonKey(employee)||`row-${index}`
+    const weight=kind==='half_day'?0.5:1
+    monthly[kind].days+=weight
+    monthly[kind].people.add(key)
+    daily[day-1][kind].days+=weight
+    daily[day-1][kind].people.add(key)
+  }))
+  return {scope,monthly,daily,totalDays:matrixKinds.reduce((sum,kind)=>sum+monthly[kind].days,0),totalPeople:new Set(matrixKinds.flatMap(kind=>[...monthly[kind].people])).size}
+}
+const matrixOverviewFromPayload=(payload,bounds)=>{
+  if(!payload||typeof payload!=='object')return null
+  const peopleSet=count=>new Set(Array.from({length:Math.max(0,Number(count)||0)},(_,index)=>index))
+  const empty=()=>Object.fromEntries(matrixKinds.map(kind=>[kind,{days:0,people:new Set()}]))
+  const monthly=empty()
+  matrixKinds.forEach(kind=>{
+    const value=payload.monthly?.[kind]
+    if(value){monthly[kind]={days:Number(value.days)||0,people:peopleSet(value.people)}}
+  })
+  const daily=bounds.days.map(day=>{
+    const item={day,...empty()}
+    matrixKinds.forEach(kind=>{
+      const people=Number(payload.daily?.[String(day)]?.[kind])||0
+      if(people)item[kind]={days:people,people:peopleSet(people)}
+    })
+    return item
+  })
+  return {scope:payload.scope==='filtered'?'filtered':'page',monthly,daily,totalDays:Number(payload.total_days)||0,totalPeople:Number(payload.total_people)||0}
+}
+
+function AttendanceMatrixOverview({overview,month}){
+  const labels={public_holiday:'公休',home_leave:'回家',leave:'请假',half_day:'半天',absence:'缺勤',resignation:'离职'}
+  const monthly=matrixKinds.filter(kind=>overview.monthly[kind].days>0)
+  const days=overview.daily.filter(day=>matrixKinds.some(kind=>day[kind].days>0))
+  const today=todayIso(),todayDay=Number(today.slice(-2))
+  const todayItem=month===today.slice(0,7)?overview.daily[todayDay-1]:null
+  return <section className="attendance-matrix-overview" aria-label="当前筛选员工的出勤统计">
+    <div className="attendance-overview-total"><small>{overview.scope==='filtered'?'当前筛选':'当前页'} · 月度状态</small><strong>{formatDayCount(overview.totalDays)}<em>天</em></strong><span>涉及 {overview.totalPeople} 人</span></div>
+    <div className="attendance-overview-monthly">{monthly.length?monthly.map(kind=><span className={kind} key={kind}><b>{labels[kind]}</b><i>{formatDayCount(overview.monthly[kind].days)} 天</i><small>{overview.monthly[kind].people.size} 人</small></span>):<span className="empty">本月暂无异常记录</span>}</div>
+    {todayItem&&<div className="attendance-overview-today" aria-label={`${todayDay}日状态人数`}><b>当日 · {todayDay}日</b><div>{matrixKinds.map(kind=><span className={kind} key={kind}><small>{labels[kind]}</small><strong>{todayItem[kind].people.size}<i>人</i></strong></span>)}</div></div>}
+    <div className="attendance-overview-daily" aria-label="每日状态人数">{days.length?days.map(item=>{const detail=matrixKinds.filter(kind=>item[kind].people.size).map(kind=>`${labels[kind]} ${item[kind].people.size} 人`).join(' · ');return <span key={item.day} title={`${item.day} 日：${detail}`}><b>{item.day}日</b><i>{detail}</i></span>}):<span className="empty">每日暂无异常</span>}</div>
+  </section>
+}
 
 async function fetchAttendanceMonth(month,filters={}){
   const {data,error}=await supabase.rpc('admin_attendance_monthly',{p_filters:{month,...filters}})
@@ -473,11 +508,11 @@ function AttendanceMatrixPane(){
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(30)
   const [dayDetail,setDayDetail]=useState(null)
-  const [state,setState]=useState({loading:true,error:'',people:[],options:{},sync:syncMeta({}),total:0,pages:1,serverPaged:false})
+  const [state,setState]=useState({loading:true,error:'',people:[],options:{},overview:null,sync:syncMeta({}),total:0,pages:1,serverPaged:false})
   const request=useRef(0)
   const load=async(force=false)=>{
     const sequence=++request.current
-    setState(current=>({...current,loading:true,error:''}))
+    setState(current=>({...current,loading:true,error:'',people:[],overview:null,total:0,pages:1}))
     try{
       const payload=await fetchAttendanceMonth(month,{
         ...applied,
@@ -503,14 +538,16 @@ function AttendanceMatrixPane(){
         employee_status:person.employee_status||person.status||'',
         employment_type:person.employment_type||person.employee_type||'',
         days:person.days||person.day_map||person.attendance_days||{},
+        effective_days:person.effective_days||person.effectiveDays||{},
       }))
       const serverPaged=payload.page!==undefined||payload.page_size!==undefined||payload.pages!==undefined
-      setState({loading:false,error:'',people,options:payload.options||{},sync:syncMeta(payload),total:Number(payload.total??people.length),pages:Math.max(1,Number(payload.pages||1)),serverPaged})
-    }catch(error){if(sequence===request.current)setState(current=>({...current,loading:false,error:message(error)}))}
+      setState({loading:false,error:'',people,options:payload.options||{},overview:payload.overview||null,sync:syncMeta(payload),total:Number(payload.total??people.length),pages:Math.max(1,Number(payload.pages||1)),serverPaged})
+    }catch(error){if(sequence===request.current)setState(current=>({...current,loading:false,error:message(error),people:[],overview:null,total:0,pages:1,serverPaged:false}))}
   }
   useEffect(()=>{load()},[month,applied,page,pageSize])
   const bounds=useMemo(()=>monthMeta(month),[month])
   const people=useMemo(()=>{
+    if(state.serverPaged)return state.people
     const includes=(value,needle)=>!needle||text(value).toLowerCase().includes(text(needle).toLowerCase())
     return state.people.filter(employee=>includes(employee.employee_no,applied.employee_no)
       &&includes(employee.full_name,applied.employee_name)
@@ -522,7 +559,7 @@ function AttendanceMatrixPane(){
       &&(!applied.platform||text(employee.platform)===applied.platform)
       &&includes(employee.manager,applied.manager)
     ).sort((a,b)=>text(a.team_name).localeCompare(text(b.team_name),'zh-CN')||text(a.full_name).localeCompare(text(b.full_name),'zh-CN'))
-  },[state.people,applied])
+  },[state.people,state.serverPaged,applied])
   const optionValues=(key,selector)=>{
     const supplied=state.options?.[key]||state.options?.[`${key}s`]||[]
     const values=supplied.length?supplied.map(item=>text(item?.value??item?.name??item?.label??item)):state.people.map(selector)
@@ -535,7 +572,7 @@ function AttendanceMatrixPane(){
   const pages=state.serverPaged?state.pages:Math.max(1,Math.ceil(people.length/pageSize))
   const pagePeople=state.serverPaged?people:people.slice((page-1)*pageSize,page*pageSize)
   const total=state.serverPaged?state.total:people.length
-  useEffect(()=>{setPage(1)},[month,applied,pageSize])
+  const overview=useMemo(()=>matrixOverviewFromPayload(state.overview,bounds)||matrixOverviewFor(people,bounds,month,state.serverPaged?'page':'filtered'),[state.overview,state.serverPaged,people,bounds,month])
   useEffect(()=>{if(page>pages)setPage(pages)},[page,pages])
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
   const apply=()=>{setApplied({...draft});setPage(1)}
@@ -543,7 +580,7 @@ function AttendanceMatrixPane(){
   return <>
     <section className="attendance-filter-card matrix-toolbar">
       <div className="attendance-filter-main">
-        <label className="schedule-inline-filter month"><span>查看月份</span><input type="month" value={month} onChange={event=>setMonth(event.target.value||monthValue())}/></label>
+        <label className="schedule-inline-filter month"><span>查看月份</span><input type="month" value={month} onChange={event=>{setMonth(event.target.value||monthValue());setPage(1)}}/></label>
         <label className="attendance-search attendance-search-id"><span>员工 ID</span><div><i>⌕</i><input value={draft.employee_no} onChange={event=>update('employee_no',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="输入员工 ID"/></div></label>
         <label className="attendance-search attendance-search-name"><span>员工姓名</span><div><i>⌕</i><input value={draft.employee_name} onChange={event=>update('employee_name',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="输入姓名"/></div></label>
         <button type="button" className="primary-action" onClick={apply} disabled={state.loading}>查询</button><button type="button" className="secondary-action" onClick={reset} disabled={state.loading}>重置</button><button type="button" className="attendance-filter-toggle" onClick={()=>load(true)} disabled={state.loading}>{state.loading?'读取中…':'刷新结果'}</button>
@@ -560,7 +597,8 @@ function AttendanceMatrixPane(){
       <div className="attendance-filter-foot"><SyncIndicator sync={state.sync}/><span>出勤页面只查询 Supabase；Google 表格同步成功后，刷新结果即可看到最新数据。</span></div>
     </section>
     {state.error&&<div className="attendance-error"><span>月度出勤读取失败：{state.error}</span><button type="button" onClick={()=>load(true)}>重试</button></div>}
-    <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；空白表示当天没有登记异常，不代表已完成打卡。</p></div><div className="matrix-legend"><span className="public_holiday">休 公休</span><span className="home_leave">回 居家假</span><span className="leave">假 请假</span><span className="half_day">半 半天</span><span className="absence">缺 缺勤</span><span className="resignation">离 离职</span></div></header>
+    {!state.loading&&people.length>0&&<AttendanceMatrixOverview overview={overview} month={month}/>}
+    <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；空白表示当天没有登记异常，不代表已完成打卡。同日多种状态时，离职优先计入总计。</p></div><div className="matrix-legend"><span className="public_holiday">休 公休</span><span className="home_leave">回 居家假</span><span className="leave">请 请假</span><span className="half_day">半 半天</span><span className="absence">缺 缺勤</span><span className="resignation">离 离职</span></div></header>
       {state.loading&&!state.people.length?<div className="attendance-table-state">正在生成月度出勤表…</div>:!people.length?<div className="attendance-table-state">当前条件下暂无员工</div>:<div className="attendance-matrix-scroll"><table><thead><tr><th className="matrix-sticky matrix-scope">盘口 / 国家</th><th className="matrix-sticky matrix-position">岗位 / 团队</th><th className="matrix-sticky matrix-employee">员工</th><th className="matrix-sticky matrix-hire">入职</th><th className="matrix-sticky matrix-summary">本月统计</th>{bounds.days.map(day=><th className="matrix-day-head" key={day}>{day}</th>)}<th className="matrix-total-head">总计</th></tr></thead><tbody>{pagePeople.map(employee=><AttendanceMatrixRow key={matrixPersonKey(employee)} employee={employee} bounds={bounds} month={month} onDay={setDayDetail}/>)}</tbody></table></div>}
       {state.loading&&state.people.length>0&&<div className="attendance-loading-overlay">正在更新月度出勤…</div>}
     </section>
@@ -583,9 +621,9 @@ function AttendanceMatrixRow({employee,bounds,month,onDay}){
     {bounds.days.map(day=>{
       const date=`${month}-${String(day).padStart(2,'0')}`
       const records=matrixDayRecords(employee,day,month)
-      const metas=Array.from(new Map(records.map(record=>{const kind=text(record.event_kind||record.kind||record.status);return [matrixKindKey(kind)||kind,matrixKindMeta(kind)]})).values())
-      const primary=metas[0]
-      return <td className="matrix-day-cell" key={day}>{primary?<button type="button" className={primary[1]} aria-label={`${employee.full_name||employee.employee_no} ${date} 查看出勤详情`} title={`${attendanceKindLabel(records[0]?.event_kind||records[0]?.kind||records[0]?.status)} · 点击查看完整原因与备注`} onClick={()=>onDay({employee,date,records})}>{metas.length>1?`${primary[0]}+${metas.length-1}`:primary[0]}</button>:<i title="无异常记录">—</i>}</td>
+      const primaryRecord=matrixPrimaryRecord(matrixEffectiveDayRecords(employee,day,month))
+      const primary=primaryRecord&&matrixKindMeta(primaryRecord.event_kind||primaryRecord.kind||primaryRecord.status)
+      return <td className="matrix-day-cell" key={day}>{primary?<button type="button" className={primary[1]} aria-label={`${employee.full_name||employee.employee_no} ${date} 查看出勤详情`} title={`${attendanceKindLabel(primaryRecord.event_kind||primaryRecord.kind||primaryRecord.status)}${records.length>1?'（同日其他记录详见详情）':''} · 点击查看完整原因与备注`} onClick={()=>onDay({employee,date,records,effectiveKind:matrixKindKey(primaryRecord.event_kind||primaryRecord.kind||primaryRecord.status)})}>{primary[0]}</button>:<i title="无异常记录">—</i>}</td>
     })}
     <td className="matrix-total-cell" title={`本月统计合计 ${formatDayCount(summary.total)} 天`}><strong>{formatDayCount(summary.total)}</strong><span>天</span></td>
   </tr>
@@ -593,5 +631,6 @@ function AttendanceMatrixRow({employee,bounds,month,onDay}){
 
 function AttendanceDayModal({data,onClose}){
   const employee=data.employee||{}
-  return <div className="modal-mask attendance-main-modal-mask" onMouseDown={onClose}><div className="attendance-main-modal attendance-day-modal" role="dialog" aria-modal="true" aria-labelledby="attendance-day-modal-title" onMouseDown={event=>event.stopPropagation()}><header><div><small>DAILY ATTENDANCE DETAIL</small><h2 id="attendance-day-modal-title">{data.date} · 出勤详情</h2><p>{employee.employee_no||'—'} · {employee.full_name||'—'}</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header><div className="attendance-modal-facts"><span><small>入职日期</small><b>{text(employee.hire_date).slice(0,10)||'—'}</b></span><span><small>盘口 / 国家</small><b>{[employee.platform,employee.country||employee.nationality].filter(Boolean).join(' · ')||'—'}</b></span><span><small>岗位 / 团队</small><b>{[employee.position_name,employee.team_name].filter(Boolean).join(' · ')||'—'}</b></span></div><div className="attendance-day-records">{data.records.map((record,index)=><article key={`${record.event_kind||record.kind}-${index}`}><span className={`attendance-kind kind-${text(record.event_kind||record.kind||record.status).toLowerCase()}`}>{attendanceKindLabel(record.event_kind||record.kind||record.status)}</span><div><small>原因</small><p>{record.reason||'—'}</p></div><div><small>备注</small><p>{record.note||'—'}</p></div></article>)}</div><footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer></div></div>
+  const hasResignation=data.effectiveKind==='resignation'
+  return <div className="modal-mask attendance-main-modal-mask" onMouseDown={onClose}><div className="attendance-main-modal attendance-day-modal" role="dialog" aria-modal="true" aria-labelledby="attendance-day-modal-title" onMouseDown={event=>event.stopPropagation()}><header><div><small>DAILY ATTENDANCE DETAIL</small><h2 id="attendance-day-modal-title">{data.date} · 出勤详情</h2><p>{employee.employee_no||'—'} · {employee.full_name||'—'}{hasResignation?' · 当日统计按离职计':' '}</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header><div className="attendance-modal-facts"><span><small>入职日期</small><b>{text(employee.hire_date).slice(0,10)||'—'}</b></span><span><small>盘口 / 国家</small><b>{[employee.platform,employee.country||employee.nationality].filter(Boolean).join(' · ')||'—'}</b></span><span><small>岗位 / 团队</small><b>{[employee.position_name,employee.team_name].filter(Boolean).join(' · ')||'—'}</b></span></div><div className="attendance-day-records">{data.records.map((record,index)=><article key={`${record.event_kind||record.kind}-${index}`}><span className={`attendance-kind kind-${text(record.event_kind||record.kind||record.status).toLowerCase()}`}>{attendanceKindLabel(record.event_kind||record.kind||record.status)}</span><div><small>原因</small><p>{record.reason||'—'}</p></div><div><small>备注</small><p>{record.note||'—'}</p></div></article>)}</div><footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer></div></div>
 }

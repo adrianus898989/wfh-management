@@ -77,9 +77,14 @@ function installScheduleSync() {
     );
   }
 
-  // 安装触发器之前先验证账号确实可以读取固定表格、gid 与 A:M 表头。
-  readScheduleSnapshot_();
+  // 先清理早期安装留下的触发器；后续任何读取或同步失败都不会继续循环请求。
   removeScheduleSyncTriggers();
+  // 安装触发器之前验证账号确实可以读取固定表格、gid 与 A:M 表头。
+  readScheduleSnapshot_();
+
+  // 首次快照必须先被 Supabase 接受。若这里失败，项目中不会遗留每 5 分钟
+  // 自动重试的触发器，避免一次配置/数据错误演变成持续请求循环。
+  syncScheduleInternal_(true, 'manual', false);
 
   ScriptApp.newTrigger(SCHEDULE_SYNC_ON_EDIT_HANDLER)
     .forSpreadsheet(SCHEDULE_SYNC_SOURCE.spreadsheetId)
@@ -89,8 +94,6 @@ function installScheduleSync() {
     .timeBased()
     .everyMinutes(5)
     .create();
-
-  syncScheduleInternal_(true, 'manual', false);
 }
 
 function removeScheduleSyncTriggers() {
@@ -153,7 +156,13 @@ function syncScheduleInternal_(force, triggerKind, allowPeriodicReconciliation) 
       // 不记录响应正文，避免日志意外收集敏感内容。
     }
     if (responseCode < 200 || responseCode >= 300 || !result || result.ok !== true) {
-      throw new Error('排班同步失败：HTTP ' + responseCode + '，请求编号 ' + requestId + '。');
+      // 此接口只会返回经过白名单限制的校验码；将其写入 Apps Script
+      // 执行日志，管理员无需查看或复制请求体即可找到具体失败原因。
+      const detail = scheduleSyncSafeError_(result && result.error);
+      throw new Error(
+        '排班同步失败：HTTP ' + responseCode + '，请求编号 ' + requestId +
+        (detail ? '，原因 ' + detail : '') + '。'
+      );
     }
 
     // 只有数据库接受完整快照后才推进 hash；失败会在下一次触发器自动重试。
@@ -232,6 +241,15 @@ function assertScheduleHeaders_(values) {
       );
     }
   });
+}
+
+/** 仅允许服务端定义的非敏感校验码进入 Apps Script 执行日志。 */
+function scheduleSyncSafeError_(value) {
+  const code = String(value || '').trim();
+  if (/^(invalid_|source_not_allowlisted$|sheet_|snapshot_|values_|cell_|payload_|malformed_json$)/.test(code)) {
+    return code;
+  }
+  return '';
 }
 
 function scheduleSha256Hex_(value) {
