@@ -2,6 +2,7 @@ import React,{useEffect,useMemo,useState} from 'react'
 import {createPortal} from 'react-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
+import {EmployeeDrawer} from './AdminEmployeesPage'
 import '../styles-online-training.css'
 
 const BUCKET='online-training'
@@ -12,6 +13,7 @@ const MAX_IMAGE_BYTES=4*1024*1024
 const MAX_IMAGE_EDGE=1600
 const text=value=>String(value??'').trim()
 const isoToday=()=>{const now=new Date();return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10)}
+const isoMonthStart=()=>`${isoToday().slice(0,7)}-01`
 const dateText=value=>value?new Date(`${value}T00:00:00`).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}):'—'
 const timeText=value=>value?new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'
 const safeFileName=name=>text(name).replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'')||'screenshot'
@@ -20,27 +22,10 @@ const attachmentWithUrl=item=>({...cleanAttachment(item),url:text(item?.url)})
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
-const defaultFilters=()=>{const today=isoToday();return {...EMPTY_FILTERS,from:today,to:today}}
+const defaultFilters=()=>({...EMPTY_FILTERS,from:isoMonthStart(),to:isoToday()})
 const delay=ms=>new Promise(resolve=>window.setTimeout(resolve,ms))
 const isTransientError=error=>/failed to fetch|networkerror|network request failed|load failed|connection|timeout/i.test(text(error?.message||error))
 const readableError=(error,fallback)=>isTransientError(error)?'连接短暂中断，请点击“重新读取”':text(error?.message)||fallback
-
-function parseIsoDateOnly(value){
-  const match=text(value).match(/^(\d{4})-(\d{2})-(\d{2})/)
-  return match?new Date(Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3]),12)):null
-}
-
-function tenureDurationLabel(hireDate){
-  const start=parseIsoDateOnly(hireDate)
-  if(!start)return '—'
-  const end=parseIsoDateOnly(isoToday())
-  const totalDays=Math.max(0,Math.floor((end-start)/86400000))
-  let cursor=new Date(start),years=0,months=0
-  while(true){const next=new Date(cursor);next.setUTCFullYear(next.getUTCFullYear()+1);if(next>end)break;cursor=next;years+=1}
-  while(true){const next=new Date(cursor);next.setUTCMonth(next.getUTCMonth()+1);if(next>end)break;cursor=next;months+=1}
-  const days=Math.max(0,Math.floor((end-cursor)/86400000))
-  return `${years?`${years}年 `:''}${months?`${months}个月 `:''}${days}天 · 共 ${totalDays} 天`
-}
 
 async function optimiseUpload(file){
   if(file.type==='image/gif'||typeof createImageBitmap!=='function')return file
@@ -391,20 +376,26 @@ export default function OnlineTrainingPage(){
   }
 
   const openProfile=async employeeId=>{
-    setProfile({loading:true,data:null,error:''})
-    try{setProfile({loading:false,data:await call('online_training_employee_profile',{p_employee_id:employeeId}),error:''})}
-    catch(err){setProfile({loading:false,data:null,error:err.message||'员工基础档案读取失败'})}
+    setProfile({loading:true,detail:{employee:{id:employeeId}},error:''})
+    try{
+      const {data,error:edgeError}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:employeeId}})
+      if(edgeError||data?.error)throw edgeError||new Error(data.error)
+      setProfile({loading:false,detail:data,error:''})
+    }catch(err){
+      setProfile({loading:false,detail:null,error:readableError(err,'员工完整档案读取失败')})
+    }
   }
 
   const openHistory=async person=>{
-    setHistory({person,loading:true,rows:[],error:''})
+    const period={from:filters.from||'',to:filters.to||''}
+    setHistory({person,period,loading:true,rows:[],error:''})
     try{
       const data=await call('online_training_list',{
-        p_query:'',p_date_from:null,p_date_to:null,
+        p_query:'',p_date_from:period.from||null,p_date_to:period.to||null,
         p_employee_id:person.employee_id,p_page:1,p_page_size:50,
       })
-      setHistory({person,loading:false,rows:data?.rows||[],error:''})
-    }catch(err){setHistory({person,loading:false,rows:[],error:err.message||'员工历史记录读取失败'})}
+      setHistory({person,period,loading:false,rows:data?.rows||[],error:''})
+    }catch(err){setHistory({person,period,loading:false,rows:[],error:err.message||'员工历史记录读取失败'})}
   }
 
   const copyTelegram=async row=>{
@@ -479,7 +470,7 @@ export default function OnlineTrainingPage(){
         <label><span>当日状态</span><select value={draftFilters.attendance} onChange={event=>setDraftFilter('attendance',event.target.value)}><option value="">全部状态</option>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>
         <div className="ot-filter-actions"><button type="submit" className="query" disabled={searching}>{searching?'查询中…':filterDirty?'查询新条件':'查询'}</button><button type="button" onClick={clearFilters} disabled={searching}>重置</button></div>
       </div>
-      <div className="ot-filter-foot"><span>首次进入只显示当天；修改任何条件后点击“查询”</span><strong>{activeFilterCount?`已应用 ${activeFilterCount} 项条件 · `:''}共 ${result.total||0} 条</strong></div>
+      <div className="ot-filter-foot"><span>首次进入显示本月至今；修改任何条件后点击“查询”</span><strong>{activeFilterCount?`已应用 ${activeFilterCount} 项条件 · `:''}共 ${result.total||0} 条</strong></div>
     </form>
     {searching&&<div className="ot-searching"><i/><span>正在搜索线上培训记录…</span></div>}
 
@@ -496,8 +487,9 @@ export default function OnlineTrainingPage(){
       onRemoveExisting={removeExisting} onOpenImage={setLightbox} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/></OverlayPortal>} 
     {viewing&&<OverlayPortal><ViewModal row={viewing} onClose={()=>setViewing(null)} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{setViewing(null);openEdit(viewing)}} onDelete={()=>{setViewing(null);setDeleteTarget(viewing)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>} 
     {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/></OverlayPortal>} 
-    {profile&&<OverlayPortal><ProfileDrawer state={profile} onClose={()=>setProfile(null)}/></OverlayPortal>} 
-    {history&&<OverlayPortal><HistoryModal state={history} onClose={()=>setHistory(null)} onView={row=>{setHistory(null);openView(row)}} onProfile={openProfile}/></OverlayPortal>} 
+    {profile&&!profile.error&&<EmployeeDrawer detail={profile.detail||{employee:{}}} loading={profile.loading} readOnly onClose={()=>setProfile(null)}/>}
+    {profile?.error&&<OverlayPortal><ProfileErrorDrawer state={profile} onClose={()=>setProfile(null)}/></OverlayPortal>}
+    {history&&<OverlayPortal><HistoryModal state={history} onClose={()=>setHistory(null)} onProfile={openProfile}/></OverlayPortal>}
     {lightbox&&<OverlayPortal><div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div></OverlayPortal>}
   </div>
 }
@@ -521,8 +513,9 @@ function PeopleList({rows,onHistory,onProfile}){
   return <section className="ot-people-list">{rows.map(person=><article key={person.employee_id}>
     <button className="identity" onClick={()=>onProfile(person.employee_id)}><span>{text(person.employee_name).slice(0,1).toUpperCase()}</span><div><strong>{person.employee_name}</strong><small>{person.employee_no} · {person.position_name||'未填写岗位'}</small></div></button>
     <div className="scope"><span>{person.team_name||'—'}</span><span>{person.group_name||'—'}</span><span>{person.shift_name||'—'}</span></div>
-    <div className="stats"><span><b>{person.report_count}</b>日报</span><span><b>{person.normal_count}</b>正常</span><span><b>{person.rest_count}</b>公休</span><span><b>{person.leave_count}</b>请假</span><span className={person.absent_count?'danger':''}><b>{person.absent_count}</b>缺席</span><span><b>{person.home_count||0}</b>回家</span><span className={person.issue_count?'warn':''}><b>{person.issue_count}</b>有问题</span></div>
-    <div className="last"><small>最近记录</small><strong>{dateText(person.last_report_date)}</strong><button onClick={()=>onHistory(person)}>查看全部每天记录</button></div>
+    <div className="period"><small>{person.period_label||'所选日期'}</small><strong>{person.period_days||0} 天</strong><span>有记录 {person.recorded_days||0} · 未记录 {person.missing_days||0}</span></div>
+    <div className="stats"><span><b>{person.normal_count}</b>正常</span><span><b>{person.rest_count}</b>公休</span><span><b>{person.leave_count}</b>请假</span><span className={person.absent_count?'danger':''}><b>{person.absent_count}</b>缺席</span><span><b>{person.home_count||0}</b>回家</span></div>
+    <div className="last"><small>最近记录</small><strong>{dateText(person.last_report_date)}</strong><button onClick={()=>onHistory(person)}>查看该员工每天记录</button></div>
   </article>)}</section>
 }
 
@@ -614,20 +607,16 @@ function MemberView({member,index,onProfile}){
   </article>
 }
 
-function ProfileDrawer({state,onClose}){
-  const p=state.data||{}
-  const tenure=tenureDurationLabel(p.hire_date)
-  const rows=[['员工ID',p.employee_no],['姓名',p.full_name],['状态',p.status==='active'?'在职':p.status],['国家',p.country],['员工类型',p.employment_type],['入职日期',p.hire_date],['入职时长',tenure],['团队',p.team],['组别',p.group],['岗位',p.position],['班次',p.shift],['盘口',p.platform],['负责人',p.responsible],['线上组长',p.online_leader],['线上培训',p.online_trainer],['工作内容',p.work_content]]
-  return <div className="ot-backdrop drawer-mask" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><aside className="ot-profile-drawer"><header><div><span>{text(p.full_name).slice(0,1).toUpperCase()||'人'}</span><div><small>安全员工档案</small><h2>{p.full_name||'读取中…'}</h2><b>{p.employee_no||'—'}</b></div></div><button onClick={onClose}>×</button></header>
-    {state.loading?<div className="ot-drawer-state">正在读取员工基础档案…</div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:<><div className="ot-sensitive-note"><strong>敏感资料已隐藏</strong><span>此处不会返回工资、收款账户、联系方式、地址或后台账号。</span></div><div className="ot-profile-rows">{rows.map(([label,value])=><div key={label}><span>{label}</span><strong>{text(value)||'—'}</strong></div>)}</div></>}
-  </aside></div>
+function ProfileErrorDrawer({state,onClose}){
+  return <div className="ot-backdrop drawer-mask" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><aside className="ot-profile-drawer"><header><div><span>!</span><div><small>EMPLOYEE PROFILE</small><h2>无法打开员工档案</h2><b>权限与负责范围已由后台核验</b></div></div><button onClick={onClose}>×</button></header><div className="ot-drawer-state error">{state.error}</div></aside></div>
 }
 
-function HistoryModal({state,onClose,onView,onProfile}){
+function HistoryModal({state,onClose,onProfile}){
   const person=state.person||{}
   return <div className="ot-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><div className="ot-modal ot-history"><header><div><span>EMPLOYEE TRAINING HISTORY</span><h2>{person.employee_no} · {person.employee_name}</h2></div><button onClick={onClose}>×</button></header><div className="ot-modal-scroll">
-    <div className="ot-history-profile"><div><strong>{person.position_name||'未填写岗位'} · {person.team_name||'未填写团队'} · {person.shift_name||'未填写班次'}</strong><span>每一天的培训情况独立成条，点击即可查看当日日报与截图。</span></div><div><b>{state.loading?'读取中':`${state.rows.length} 份记录`}</b><button onClick={()=>onProfile(person.employee_id)}>查看安全员工档案</button></div></div>
-    {state.loading?<div className="ot-drawer-state">正在读取全部每天记录…</div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!state.rows.length?<div className="ot-empty small"><h3>暂无记录</h3></div>:<div className="ot-history-list">{state.rows.map(row=>{const member=(row.members||[]).find(m=>m.employee_id===person.employee_id)||row.members?.[0]||{};const status=ATTENDANCE[member.attendance_status]||ATTENDANCE.normal;const normal=member.attendance_status==='normal';const details=normal?[['当天工作 / 培训评语',member.work_details],['工作表现',member.performance],['发现问题',member.issues],['后续安排',member.follow_up],['岗位数据 / 首次响应',member.metrics?.response_time]]:[['状态说明',member.status_note]];return <article key={row.id} className="ot-history-detail-card"><div className="ot-history-card-head"><div className="day"><strong>{dateText(row.report_date)}</strong><span>{row.shift_name||'未填写班次'} · {row.platform||'未填写盘口'}</span></div><em className={status.tone}>{status.label}</em><button onClick={()=>onView(row)}>查看完整日报</button></div><div className="ot-history-scope"><span>团队 <b>{member.team_name||row.team_name||person.team_name||'—'}</b></span><span>岗位 <b>{member.position_name||person.position_name||'—'}</b></span><span>线上培训 <b>{row.trainer_name||row.author_name||'—'}</b></span><span>截图 <b>{row.attachments?.length||0} 张</b></span></div><div className="ot-history-details">{details.filter(([,value])=>text(value)).map(([label,value],index)=><div className={index===0?'wide':''} key={label}><b>{label}</b><p>{value}</p></div>)}{!details.some(([,value])=>text(value))&&<div className="wide"><b>当天记录</b><p>已记录当天情况，暂无补充说明。</p></div>}</div><div className="ot-history-audit"><span>提交人：{row.author_name||'后台用户'}</span><span>提交时间：{timeText(row.created_at)}</span>{row.updated_at&&row.updated_at!==row.created_at&&<span>最后更新：{timeText(row.updated_at)}</span>}</div></article>})}</div>}
+    <div className="ot-history-profile"><div><strong>{person.position_name||'未填写岗位'} · {person.team_name||'未填写团队'} · {person.shift_name||'未填写班次'}</strong><span>{state.period?.from&&state.period?.to?`${dateText(state.period.from)} 至 ${dateText(state.period.to)}`:'所选日期范围'} · 这里只返回该员工本人的日报内容。</span></div><div><b>{state.loading?'读取中':`${person.recorded_days||state.rows.length} 个有记录日`}</b><button onClick={()=>onProfile(person.employee_id)}>查看完整员工档案</button></div></div>
+    <div className="ot-history-kpis"><span><small>区间天数</small><b>{person.period_days||0}</b></span><span><small>有记录</small><b>{person.recorded_days||0}</b></span><span className={person.missing_days?'warn':''}><small>未记录</small><b>{person.missing_days||0}</b></span><span><small>正常</small><b>{person.normal_count||0}</b></span><span><small>公休</small><b>{person.rest_count||0}</b></span><span><small>请假</small><b>{person.leave_count||0}</b></span><span className={person.absent_count?'danger':''}><small>缺席</small><b>{person.absent_count||0}</b></span><span><small>回家</small><b>{person.home_count||0}</b></span></div>
+    {state.loading?<div className="ot-drawer-state">正在读取该员工每天记录…</div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!state.rows.length?<div className="ot-empty small"><h3>所选日期内暂无该员工记录</h3></div>:<div className="ot-history-list">{state.rows.map(row=>{const member=(row.members||[])[0]||{};const status=ATTENDANCE[member.attendance_status]||ATTENDANCE.normal;const normal=member.attendance_status==='normal';const details=normal?[['当天工作 / 培训评语',member.work_details],['工作表现',member.performance],['发现问题',member.issues],['后续安排',member.follow_up],['岗位数据 / 首次响应',member.metrics?.response_time]]:[['状态说明',member.status_note]];return <article key={row.id} className="ot-history-detail-card"><div className="ot-history-card-head"><div className="day"><strong>{dateText(row.report_date)}</strong><span>{member.shift_name||row.shift_name||'未填写班次'} · {member.platform||row.platform||'未填写盘口'}</span></div><em className={status.tone}>{status.label}</em><span className="ot-history-member-only">仅该员工</span></div><div className="ot-history-scope"><span>团队 <b>{member.team_name||person.team_name||'—'}</b></span><span>岗位 <b>{member.position_name||person.position_name||'—'}</b></span><span>线上培训 <b>{member.trainer_name||row.trainer_name||row.author_name||'—'}</b></span></div><div className="ot-history-details">{details.filter(([,value])=>text(value)).map(([label,value],index)=><div className={index===0?'wide':''} key={label}><b>{label}</b><p>{value}</p></div>)}{!details.some(([,value])=>text(value))&&<div className="wide"><b>当天记录</b><p>已记录当天情况，暂无补充说明。</p></div>}</div><div className="ot-history-audit"><span>提交人：{row.author_name||'后台用户'}</span><span>提交时间：{timeText(row.created_at)}</span>{row.updated_at&&row.updated_at!==row.created_at&&<span>最后更新：{timeText(row.updated_at)}</span>}</div></article>})}</div>}
   </div><footer className="ot-modal-actions"><button className="primary" onClick={onClose}>关闭</button></footer></div></div>
 }
 

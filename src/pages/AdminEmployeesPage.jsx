@@ -278,6 +278,43 @@ function mergeOptions(options,current){
   return values.filter(Boolean)
 }
 
+const isMaskedPlaceholder = value => typeof value==='string' && /(?:\*{2,}|•{2,}|(?:^|\s)x{3,}(?:\s|$))/i.test(value)
+const safeFormValue = value => isMaskedPlaceholder(value) ? '' : (value??'')
+
+function employeeWriteCapabilities(source,mode){
+  const actions=source?.actions||{}
+  const permissions=source?.permissions||{}
+  const creating=mode==='create'
+  const basic=creating ? actions.can_create===true : actions.can_edit===true
+  return {
+    basic,
+    sensitiveEmployeeView:creating||permissions.sensitive_employee_view===true,
+    compensationView:creating||permissions.payroll_view===true,
+    paymentView:creating||permissions.sensitive_payment_view===true,
+    sensitiveEmployee:creating
+      ? actions.can_create_sensitive_employee===true
+      : actions.can_edit_sensitive_employee===true||permissions.sensitive_employee_edit===true,
+    compensation:creating
+      ? actions.can_create_compensation===true
+      : actions.can_edit_compensation===true||permissions.compensation_edit===true,
+    payment:creating
+      ? actions.can_create_payment===true
+      : actions.can_edit_payment===true||permissions.sensitive_payment_edit===true,
+  }
+}
+
+function patchSection(values,prefix,maskedFields,initialValues={},allowedKeys=null){
+  return Object.fromEntries(Object.entries(values||{}).filter(([key,value])=>{
+    if(allowedKeys&&!allowedKeys.includes(key)) return false
+    if(isMaskedPlaceholder(value)) return false
+    // A masked value is rendered as an empty control. Unless the operator types
+    // a genuine replacement, omission means preserve the server-side value.
+    if(maskedFields?.[`${prefix}.${key}`]&&text(value)==='') return false
+    if(Object.prototype.hasOwnProperty.call(initialValues||{},key)&&String(value??'')===String(initialValues?.[key]??'')) return false
+    return true
+  }))
+}
+
 function emptyForm(){
   return {
     employee:{
@@ -292,41 +329,55 @@ function emptyForm(){
   }
 }
 
-function bundleToForm(detail){
+function bundleToForm(detail,capabilities){
   const e=detail?.employee||{}
   const c=detail?.contact||{}
   const p=detail?.payment||{}
   const comp=detail?.compensation||{}
-  return {
+  const maskedFields={}
+  const field=(path,value,allowed=true)=>{
+    if(isMaskedPlaceholder(value)) maskedFields[path]=true
+    return allowed?safeFormValue(value):''
+  }
+  const form={
     employee:{
       employee_no:e.employee_no||'',full_name:e.full_name||'',country:e.country||'',nationality:e.nationality||'',
       employment_type:e.employment_type||'',team_id:e.team_id||'',position_id:e.position_id||'',position_name:e.positions?.name||'',
       market_country:e.market_country||'',market_position:e.market_position||'',shift_name:e.shift_name||'',
       group_name:e.group_name||'',leader_name:e.leader_name||'',trainer_name:e.trainer_name||'',
-      platform_scope:e.platform_scope||'',work_content:e.work_content||'',work_tg:e.work_tg||'',
-      backend_accounts:e.backend_accounts||'',hire_date:text(e.hire_date).slice(0,10),
+      platform_scope:e.platform_scope||'',work_content:e.work_content||'',
+      work_tg:field('employee.work_tg',e.work_tg,capabilities?.sensitiveEmployee),
+      backend_accounts:field('employee.backend_accounts',e.backend_accounts,capabilities?.sensitiveEmployee),hire_date:text(e.hire_date).slice(0,10),
       last_location:e.last_location||'',return_date:text(e.return_date).slice(0,10),home_date:text(e.home_date).slice(0,10),
     },
     contact:{
-      work_email:c.work_email||'',telegram_username:c.telegram_username||'',zoom_email:c.zoom_email||'',
-      facebook:c.facebook||'',whatsapp_phone:c.whatsapp_phone||'',
+      work_email:field('contact.work_email',c.work_email,capabilities?.sensitiveEmployee),
+      telegram_username:field('contact.telegram_username',c.telegram_username,capabilities?.sensitiveEmployee),
+      zoom_email:field('contact.zoom_email',c.zoom_email,capabilities?.sensitiveEmployee),
+      facebook:field('contact.facebook',c.facebook,capabilities?.sensitiveEmployee),
+      whatsapp_phone:field('contact.whatsapp_phone',c.whatsapp_phone,capabilities?.sensitiveEmployee),
     },
     compensation:{
-      base_salary:comp.base_salary??'',daily_rate:comp.daily_rate??'',performance_default:comp.performance_default??'',meal_allowance:comp.meal_allowance??'',
-      currency:comp.currency||defaultCurrency(e.employment_type),note:comp.note||'',
-      salary_basis:isPhpHome(e.employment_type)?phpSalaryBasis(comp):'',
+      base_salary:field('compensation.base_salary',comp.base_salary,capabilities?.compensation),
+      daily_rate:field('compensation.daily_rate',comp.daily_rate,capabilities?.compensation),
+      performance_default:field('compensation.performance_default',comp.performance_default,capabilities?.compensation),
+      meal_allowance:field('compensation.meal_allowance',comp.meal_allowance,capabilities?.compensation),
+      currency:capabilities?.compensation?(comp.currency||defaultCurrency(e.employment_type)):defaultCurrency(e.employment_type),
+      note:field('compensation.note',comp.note,capabilities?.compensation),
+      salary_basis:capabilities?.compensation&&isPhpHome(e.employment_type)?phpSalaryBasis(comp):'',
     },
     payment:{
       mode:p.mode||defaultPaymentMode(e.employment_type),
-      transfer_using:p.transfer_using||'',
-      bank_wallet_account:p.bank_wallet_account||'',
-      account_name:p.account_name||'',
-      usdt_address:p.usdt_address||'',
-      contact_phone:p.contact_phone||'',
-      whatsapp_number:p.whatsapp_number||'',
-      employee_address:p.employee_address||'',
+      transfer_using:field('payment.transfer_using',p.transfer_using,capabilities?.payment),
+      bank_wallet_account:field('payment.bank_wallet_account',p.bank_wallet_account,capabilities?.payment),
+      account_name:field('payment.account_name',p.account_name,capabilities?.payment),
+      usdt_address:field('payment.usdt_address',p.usdt_address,capabilities?.payment),
+      contact_phone:field('payment.contact_phone',p.contact_phone,capabilities?.payment),
+      whatsapp_number:field('payment.whatsapp_number',p.whatsapp_number,capabilities?.payment),
+      employee_address:field('payment.employee_address',p.employee_address,capabilities?.payment),
     },
   }
+  return {form,maskedFields}
 }
 
 export default function AdminEmployeesPage(){
@@ -342,7 +393,8 @@ export default function AdminEmployeesPage(){
     teams:[],positions:[],position_options:[],total:0,active:0,no_team:0,official_id_pending:0,
     options:{countries:[],nationalities:[],employment_types:[],shifts:[],groups:[],leaders:[],trainers:[],market_countries:[],market_positions:[],platforms:[]},
     platform_map:[],
-    schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]}
+    schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]},
+    permissions:{},actions:{can_create:false,can_edit:false},
   })
   const [rows,setRows]=useState([])
   const [total,setTotal]=useState(0)
@@ -699,25 +751,35 @@ export default function AdminEmployeesPage(){
   }
 
   const openCreate=()=>{
+    const capabilities=employeeWriteCapabilities(meta,'create')
+    if(!capabilities.basic) return setError('当前账号没有新增员工权限')
     const f=emptyForm()
-    setEmployeeModal({mode:'create',employee_id:null,original_employee_no:'',original_full_name:'',form:f})
+    setEmployeeModal({mode:'create',employee_id:null,original_employee_no:'',original_full_name:'',form:f,initial_form:f,capabilities,masked_fields:{}})
   }
 
   const openEdit=async()=>{
     if(!selected?.employee?.id) return
     const detail=selected
+    const capabilities=employeeWriteCapabilities(detail,'edit')
+    if(!capabilities.basic) return setError('当前账号没有编辑员工权限')
+    const bundle=bundleToForm(detail,capabilities)
     setEmployeeModal({
       mode:'edit',
       employee_id:detail.employee.id,
       original_employee_no:text(detail.employee.employee_no),
       original_full_name:text(detail.employee.full_name),
-      form:bundleToForm(detail),
+      form:bundle.form,
+      initial_form:bundle.form,
+      capabilities,
+      masked_fields:bundle.maskedFields,
     })
   }
 
   const saveEmployee=async()=>{
     if(!employeeModal) return
     const {mode,employee_id,form,original_employee_no,original_full_name}=employeeModal
+    const capabilities=employeeModal.capabilities||{basic:false,sensitiveEmployee:false,compensation:false,payment:false}
+    if(!capabilities.basic) return setError('当前账号没有保存员工资料的权限')
     const employeeNo=text(form.employee.employee_no).toUpperCase()
     if(!employeeNo||!text(form.employee.full_name)){
       return setError('员工ID和姓名必须填写')
@@ -726,16 +788,37 @@ export default function AdminEmployeesPage(){
       return setError('SYSTEM / ADMIN 是系统保留ID，不能用于员工。TEST 开头的ID可用于正式表流程测试，但不会计入统计KPI。')
     }
     try{
+      const initialForm=employeeModal.initial_form||emptyForm()
+      const {work_tg,backend_accounts,...ordinaryEmployee}=form.employee
+      const employee=patchSection({...ordinaryEmployee,employee_no:employeeNo},'employee',employeeModal.masked_fields,initialForm.employee)
+      if(capabilities.sensitiveEmployee){
+        Object.assign(employee,patchSection({work_tg,backend_accounts},'employee',employeeModal.masked_fields,initialForm.employee))
+      }
+      const contactPatch=capabilities.sensitiveEmployee
+        ? patchSection(form.contact,'contact',employeeModal.masked_fields,initialForm.contact)
+        : {}
+      const compensationPatch=capabilities.compensation
+        ? patchSection(form.compensation,'compensation',employeeModal.masked_fields,initialForm.compensation,['base_salary','daily_rate','performance_default','meal_allowance','note'])
+        : {}
+      const paymentPatch=capabilities.payment
+        ? patchSection(form.payment,'payment',employeeModal.masked_fields,initialForm.payment,['mode','transfer_using','bank_wallet_account','account_name','usdt_address','contact_phone','whatsapp_number','employee_address'])
+        : {}
       const payload={
         action:mode==='create'?'create_employee_full':'update_employee_full',
         employee_id,
         previous_employee_no:mode==='edit'?text(original_employee_no||selected?.employee?.employee_no):'',
         previous_full_name:mode==='edit'?text(original_full_name||selected?.employee?.full_name):'',
-        employee:{...form.employee,employee_no:employeeNo},
-        contact:form.contact,
-        compensation:form.compensation,
-        payment:form.payment,
+        employee,
+        sections:{
+          employee_sensitive:Object.prototype.hasOwnProperty.call(employee,'work_tg')||Object.prototype.hasOwnProperty.call(employee,'backend_accounts'),
+          contact:Object.keys(contactPatch).length>0,
+          compensation:Object.keys(compensationPatch).length>0,
+          payment:Object.keys(paymentPatch).length>0,
+        },
       }
+      if(payload.sections.contact) payload.contact=contactPatch
+      if(payload.sections.compensation) payload.compensation=compensationPatch
+      if(payload.sections.payment) payload.payment=paymentPatch
       const data=await writeEmployee(payload)
       if(mode==='create'&&!sheetSyncSucceeded(data?.sync)){
         let rollbackOk=false
@@ -1037,7 +1120,7 @@ export default function AdminEmployeesPage(){
       </div>
       <div className="employee-title-actions">
         <button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>
-        {tab==='员工档案'&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
+        {tab==='员工档案'&&meta.actions?.can_create&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
       </div>
     </div>
 
@@ -1311,6 +1394,7 @@ export default function AdminEmployeesPage(){
 function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity}){
   const f=state.form
   const e=f.employee
+  const capabilities=state.capabilities||{basic:false,sensitiveEmployee:false,compensation:false,payment:false}
   const phpHome=isPhpHome(e.employment_type)
   const paymentMode=f.payment.mode||defaultPaymentMode(e.employment_type)
   const [identityCheck,setIdentityCheck]=useState(null)
@@ -1357,7 +1441,10 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
     let payment={...f.payment}
     let compensation={...f.compensation}
 
-    if(k==='employment_type'){
+    // On create, derive a clean payroll/payment template from the employee type.
+    // During edit, changing an ordinary profile field must not silently clear or
+    // rewrite an existing sensitive section.
+    if(k==='employment_type'&&state.mode==='create'){
       payment={...payment,mode:defaultPaymentMode(v)}
       if(isPhpHome(v)){
         compensation={
@@ -1449,7 +1536,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
       </Field>
     </FormSection>
 
-    <FormSection title="组织与工作">
+    <FormSection title="组织与工作" subtitle={!capabilities.sensitiveEmployee?'工作 TG 与后台账号属于敏感资料；当前账号无编辑权限，保存不会修改现有值。':!capabilities.sensitiveEmployeeView?'当前值已隐藏；仅输入的新值会替换原资料，留空会保留原值。':''}>
       <Field label="盘口岗位">
         <WriteCombo
           value={e.market_position||''}
@@ -1462,8 +1549,8 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
       <Field label="盘口系列"><div className="readonly-choice">{derivedSeries||'—'}</div></Field>
       <Field label="当前团队（排班）"><div className="readonly-choice">{actualTeamName}</div></Field>
       <Field label="盘口国家"><div className="readonly-choice">{derivedMarketCountry||'—'}</div></Field>
-      <Field label="工作TG"><input value={e.work_tg} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
-      <Field label="后台账号"><input value={e.backend_accounts} onChange={x=>setEmployee('backend_accounts',x.target.value)}/></Field>
+      <Field label="工作TG"><input value={e.work_tg} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无敏感资料编辑权限'} onChange={x=>setEmployee('work_tg',x.target.value)}/></Field>
+      <Field label="后台账号"><input value={e.backend_accounts} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无敏感资料编辑权限'} onChange={x=>setEmployee('backend_accounts',x.target.value)}/></Field>
       <Field label="当前排班"><div className="readonly-choice live-assignment-note">主档岗位同步「居家员工名单」；排班岗位由「居家排班表」最新排班同步，二者独立不互相覆盖</div></Field>
     </FormSection>
 
@@ -1473,18 +1560,18 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
       <Field label="居家时间"><input type="date" value={e.home_date} onChange={x=>setEmployee('home_date',x.target.value)}/></Field>
     </FormSection>}
 
-    <FormSection title="联系方式">
-      <Field label="Workfolio 邮箱"><input value={f.contact.work_email} onChange={x=>setContact('work_email',x.target.value)}/></Field>
-      <Field label="Telegram"><input value={f.contact.telegram_username} onChange={x=>setContact('telegram_username',x.target.value)}/></Field>
-      <Field label="Zoom 邮箱"><input value={f.contact.zoom_email} onChange={x=>setContact('zoom_email',x.target.value)}/></Field>
-      <Field label="Facebook"><input value={f.contact.facebook} onChange={x=>setContact('facebook',x.target.value)}/></Field>
-      <Field label="WhatsApp / 手机"><input value={f.contact.whatsapp_phone} onChange={x=>setContact('whatsapp_phone',x.target.value)}/></Field>
+    <FormSection title="联系方式" subtitle={!capabilities.sensitiveEmployee?'当前账号无敏感联系方式编辑权限；这些字段不会提交，也不会覆盖原资料。':!capabilities.sensitiveEmployeeView?'当前值已隐藏；只填写需要替换的联系方式，留空会保留原值。':''}>
+      <Field label="Workfolio 邮箱"><input value={f.contact.work_email} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无编辑权限'} onChange={x=>setContact('work_email',x.target.value)}/></Field>
+      <Field label="Telegram"><input value={f.contact.telegram_username} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无编辑权限'} onChange={x=>setContact('telegram_username',x.target.value)}/></Field>
+      <Field label="Zoom 邮箱"><input value={f.contact.zoom_email} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无编辑权限'} onChange={x=>setContact('zoom_email',x.target.value)}/></Field>
+      <Field label="Facebook"><input value={f.contact.facebook} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无编辑权限'} onChange={x=>setContact('facebook',x.target.value)}/></Field>
+      <Field label="WhatsApp / 手机"><input value={f.contact.whatsapp_phone} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无编辑权限'} onChange={x=>setContact('whatsapp_phone',x.target.value)}/></Field>
     </FormSection>
 
-    {e.employment_type&&<FormSection title="工资设置">
+    {e.employment_type&&<FormSection title="工资设置" subtitle={!capabilities.compensation?'当前账号无工资编辑权限；保存普通资料不会修改工资设置。':!capabilities.compensationView?'当前工资值已隐藏；只填写需要替换的项目，留空会保留原值。':''}>
       {phpHome?<>
         <Field label="PHP 工资方式">
-          <select value={f.compensation.salary_basis||phpSalaryBasis(f.compensation)} onChange={x=>setPhpSalaryBasis(x.target.value)}>
+          <select disabled={!capabilities.compensation} value={f.compensation.salary_basis||phpSalaryBasis(f.compensation)} onChange={x=>setPhpSalaryBasis(x.target.value)}>
             <option value="">请选择</option>
             <option value="monthly">月薪制 · 25,000 PHP / 月</option>
             <option value="daily">日薪制 · 970 PHP / 天</option>
@@ -1493,25 +1580,25 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
         {!f.compensation.salary_basis && f.compensation.base_salary && f.compensation.daily_rate &&
           <Field label="旧资料状态" wide><div className="salary-warning">旧资料同时有月薪和日薪，请选择实际工资方式后保存。</div></Field>}
       </>:<>
-        <Field label="底薪（USD）"><input type="number" step="0.01" value={f.compensation.base_salary} onChange={x=>setComp('base_salary',x.target.value)}/></Field>
-        <Field label="默认绩效（USD）"><input type="number" step="0.01" value={f.compensation.performance_default} onChange={x=>setComp('performance_default',x.target.value)}/></Field>
-        {isOnsiteToHome(e.employment_type)&&<Field label="餐补（USD）"><input type="number" step="0.01" value={f.compensation.meal_allowance} onChange={x=>setComp('meal_allowance',x.target.value)}/></Field>}
+        <Field label="底薪（USD）"><input disabled={!capabilities.compensation} type="number" step="0.01" value={f.compensation.base_salary} onChange={x=>setComp('base_salary',x.target.value)}/></Field>
+        <Field label="默认绩效（USD）"><input disabled={!capabilities.compensation} type="number" step="0.01" value={f.compensation.performance_default} onChange={x=>setComp('performance_default',x.target.value)}/></Field>
+        {isOnsiteToHome(e.employment_type)&&<Field label="餐补（USD）"><input disabled={!capabilities.compensation} type="number" step="0.01" value={f.compensation.meal_allowance} onChange={x=>setComp('meal_allowance',x.target.value)}/></Field>}
       </>}
-      <Field label="备注" wide><input value={f.compensation.note} onChange={x=>setComp('note',x.target.value)}/></Field>
+      <Field label="备注" wide><input value={f.compensation.note} disabled={!capabilities.compensation} placeholder={capabilities.compensation?'':'无工资编辑权限'} onChange={x=>setComp('note',x.target.value)}/></Field>
     </FormSection>}
 
-    {e.employment_type&&<FormSection title="收款资料">
+    {e.employment_type&&<FormSection title="收款资料" subtitle={!capabilities.payment?'当前账号无收款资料编辑权限；脱敏值不会进入表单或提交。':!capabilities.paymentView?'当前收款值已隐藏；只填写需要替换的项目，留空会保留原值。':''}>
       <Field label="收款方式"><div className="readonly-choice">{paymentMode==='usdt'?'USDT':'银行卡 / 钱包'}</div></Field>
       {paymentMode==='usdt'?<>
-        <Field label="USDT 地址" wide><input value={f.payment.usdt_address} onChange={x=>setPayment('usdt_address',x.target.value)}/></Field>
+        <Field label="USDT 地址" wide><input value={f.payment.usdt_address} disabled={!capabilities.payment} placeholder={capabilities.payment?'':'无收款资料编辑权限'} onChange={x=>setPayment('usdt_address',x.target.value)}/></Field>
       </>:<>
-        <Field label="类型 / 银行"><input value={f.payment.transfer_using} onChange={x=>setPayment('transfer_using',x.target.value)} placeholder="GCash / Maya / BPI / Bank..."/></Field>
-        <Field label="账号"><input value={f.payment.bank_wallet_account} onChange={x=>setPayment('bank_wallet_account',x.target.value)}/></Field>
-        <Field label="收款姓名"><input value={f.payment.account_name} onChange={x=>setPayment('account_name',x.target.value)}/></Field>
+        <Field label="类型 / 银行"><input value={f.payment.transfer_using} disabled={!capabilities.payment} onChange={x=>setPayment('transfer_using',x.target.value)} placeholder={capabilities.payment?'GCash / Maya / BPI / Bank...':'无收款资料编辑权限'}/></Field>
+        <Field label="账号"><input value={f.payment.bank_wallet_account} disabled={!capabilities.payment} placeholder={capabilities.payment?'':'无收款资料编辑权限'} onChange={x=>setPayment('bank_wallet_account',x.target.value)}/></Field>
+        <Field label="收款姓名"><input value={f.payment.account_name} disabled={!capabilities.payment} placeholder={capabilities.payment?'':'无收款资料编辑权限'} onChange={x=>setPayment('account_name',x.target.value)}/></Field>
       </>}
-      <Field label="联系电话"><input value={f.payment.contact_phone} onChange={x=>setPayment('contact_phone',x.target.value)}/></Field>
-      <Field label="WhatsApp"><input value={f.payment.whatsapp_number} onChange={x=>setPayment('whatsapp_number',x.target.value)}/></Field>
-      <Field label="员工地址" wide><textarea value={f.payment.employee_address} onChange={x=>setPayment('employee_address',x.target.value)}/></Field>
+      <Field label="联系电话"><input value={f.payment.contact_phone} disabled={!capabilities.payment} placeholder={capabilities.payment?'':'无收款资料编辑权限'} onChange={x=>setPayment('contact_phone',x.target.value)}/></Field>
+      <Field label="WhatsApp"><input value={f.payment.whatsapp_number} disabled={!capabilities.payment} placeholder={capabilities.payment?'':'无收款资料编辑权限'} onChange={x=>setPayment('whatsapp_number',x.target.value)}/></Field>
+      <Field label="员工地址" wide><textarea value={f.payment.employee_address} disabled={!capabilities.payment} placeholder={capabilities.payment?'':'无收款资料编辑权限'} onChange={x=>setPayment('employee_address',x.target.value)}/></Field>
     </FormSection>}
 
     <div className="modal-actions employee-form-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" disabled={Boolean(idConflict)||Boolean(nameConflict)||identityChecking||!identityCheck||Boolean(identityCheck?.check_error)} onClick={onSave}>{identityChecking?'正在检查…':state.mode==='create'?'创建员工':'保存修改'}</button></div>
@@ -1698,6 +1785,19 @@ function EmployeeExamPanel({data,loading,error}){
   const [detailError,setDetailError]=useState('')
   const examStatus=x=>({in_progress:'答题中',submitted:'待批改',grading:'批改中',graded:'已完成',expired:'已过期'}[x]||x||'—')
   const result=x=>x.status==='graded'?(x.passed?'通过':'未通过'):examStatus(x.status)
+  const answerResult=x=>{
+    if(x.source_system==='legacy'&&!x.answer_detail_available)return x.percentage==null?'逐题明细未同步':'总成绩已保留 · 逐题明细未同步'
+    const parts=[`对 ${x.correct_count||0}`]
+    if(Number(x.partial_count||0)>0)parts.push(`半对 ${x.partial_count}`)
+    parts.push(`错 ${x.wrong_count||0}`)
+    if(Number(x.pending_count||0)>0)parts.push(`待评 ${x.pending_count}`)
+    if(x.source_system==='legacy'){
+      const total=Number(x.total_question_count||0),answered=Number(x.answer_detail_count||0)
+      const unanswered=Number(x.unanswered_count??Math.max(total-answered,0))
+      if(unanswered>0)parts.unshift(`未答 ${unanswered}`)
+    }
+    return parts.join(' · ')
+  }
   const openExam=async row=>{
     setExamDetail({session:row,answers:[]});setDetailLoading(true);setDetailError('')
     const fn=row.source_system==='legacy'?'admin_legacy_exam_session_detail':'admin_exam_session_detail'
@@ -1708,7 +1808,7 @@ function EmployeeExamPanel({data,loading,error}){
   return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{summary.attempts||0} 次</span></div>
     {loading?<div className="employee-exam-empty">正在读取考试记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:<>
       <div className="employee-exam-summary"><span><small>考试次数</small><b>{summary.attempts||0}</b></span><span><small>本系统 / 旧考试</small><b>{summary.current_attempts||0} / {summary.legacy_attempts||0}</b></span><span><small>已评分 / 待完成</small><b>{summary.graded||0} / {summary.pending||0}</b></span><span><small>通过次数</small><b>{summary.passed||0}</b></span><span><small>平均分</small><b>{summary.average==null?'—':`${summary.average}%`}</b></span></div>
-      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=>{const total=Number(x.total_question_count||0),answered=Number(x.answer_detail_count||0),legacyResult=!x.answer_detail_available?(x.percentage==null?'逐题明细等待同步':'总成绩已保留 · 逐题明细未同步'):`已答 ${answered}${total?`/${total}`:''} · 未答 ${Number(x.unanswered_count||Math.max(total-answered,0))} · 对 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`;return <tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{x.source_system==='legacy'?legacyResult:`对 ${x.correct_count||0} · 半对 ${x.partial_count||0} · 错 ${x.wrong_count||0} · 待评 ${x.pending_count||0}`}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>})}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
+      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{answerResult(x)}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
     </>}
     {examDetail&&<EmployeeExamDetailModal detail={examDetail} loading={detailLoading} error={detailError} onClose={()=>setExamDetail(null)}/>}
   </section>

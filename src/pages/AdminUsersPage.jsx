@@ -63,6 +63,7 @@ const permissionModuleMeta = {
   role: { section: 'access', label: '角色管理', description: '创建、编辑及分配系统角色' },
   employee: { section: 'employee', label: '员工档案', description: '员工资料的查看、新增、编辑与离职操作' },
   'employee.compensation': { section: 'employee', label: '员工薪资资料', description: '员工固定薪资及补贴等资料' },
+  connectivity: { section: 'employee', label: '停电 / 断网记录', description: '按负责范围查看与录入员工停电、断网记录' },
   team: { section: 'employee', label: '团队管理', description: '团队资料、组织关系及成员归属' },
   schedule: { section: 'attendance', label: '排班管理', description: '排班表与轮班规则' },
   attendance: { section: 'attendance', label: '考勤管理', description: '员工考勤记录的查看与维护' },
@@ -73,6 +74,7 @@ const permissionModuleMeta = {
   exam: { section: 'exam', label: '考试管理', description: '考试、题库、分配及成绩批改' },
   payroll: { section: 'payroll', label: '工资管理', description: '工资批次的查看、编辑、审核与发布' },
   'payroll.rule': { section: 'payroll', label: '工资规则', description: '工资计算规则及阈值配置' },
+  'sensitive.payment': { section: 'payroll', label: '敏感收款资料', description: '完整收款资料的查看、修改与审核' },
   'sensitive.payout': { section: 'payroll', label: '敏感收款资料', description: '完整收款资料的查看、修改与审核' },
   report: { section: 'report', label: '统计报表', description: '统计页面与范围内报表数据' },
   export: { section: 'report', label: '数据导出', description: '通用数据导出能力' },
@@ -90,7 +92,8 @@ function getRole(a) {
 
 function scopeLabel(scope) {
   if (scope === 'all') return '全部'
-  if (scope === 'assigned') return '指定范围'
+  if (scope === 'assigned_teams') return '指定范围'
+  if (scope === 'self') return '仅本人'
   return '自己团队'
 }
 
@@ -629,7 +632,7 @@ export default function AdminUsersPage() {
             {accountModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{accountModal.error}</div>}
             <div className="account-modal-body"><div className="form-grid">
               <label>关联员工档案
-                <select value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value, data_scope:!e.target.value&&x.form.data_scope==='own_team'?'all':x.form.data_scope}}))}>
+                <select value={accountModal.form.employee_id} onChange={e => setAccountModal(x => ({...x, form:{...x.form, employee_id:e.target.value, data_scope:!e.target.value&&['own_team','self'].includes(x.form.data_scope)?'all':x.form.data_scope}}))}>
                   <option value="">不关联（请选择全部或指定范围）</option>
                   {employees.map(e => <option key={e.id} value={e.id}>{e.employee_no} · {e.full_name}</option>)}
                 </select>
@@ -652,8 +655,9 @@ export default function AdminUsersPage() {
 
               <label>管理范围
                 <select value={accountModal.form.data_scope} onChange={e => setAccountModal(x => ({...x, form:{...x.form, data_scope:e.target.value}}))}>
+                  {accountModal.form.employee_id && <option value="self">仅关联员工本人</option>}
                   {accountModal.form.employee_id && <option value="own_team">关联员工所在团队</option>}
-                  <option value="assigned">指定团队 / 指定员工</option>
+                  <option value="assigned_teams">指定团队 / 指定员工</option>
                   <option value="all">全部数据</option>
                 </select>
               </label>
@@ -665,7 +669,7 @@ export default function AdminUsersPage() {
                 </select>
               </label>}
 
-              {accountModal.form.data_scope === 'assigned' && (
+              {accountModal.form.data_scope === 'assigned_teams' && (
                 <div className="scope-panel">
                   <div className="scope-columns">
                     <div><div className="scope-column-head"><strong>团队</strong><span>已选 {accountModal.form.team_ids.length}</span></div><input className="scope-search" placeholder="搜索团队" value={accountModal.form.scope_team_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_team_search:e.target.value}}))}/><div className="check-list">

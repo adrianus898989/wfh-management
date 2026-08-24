@@ -8,6 +8,7 @@ const cors = {
 }
 
 const text = (value: unknown) => String(value ?? '').trim()
+const upper = (value: unknown) => text(value).toUpperCase()
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), {
   status,
   headers: { ...cors, ...headers, 'Content-Type': 'application/json; charset=utf-8' },
@@ -32,6 +33,51 @@ function normalizeDate(value: unknown) {
   return /^\d{4}-\d{2}-\d{2}$/.test(source) ? source : ''
 }
 
+function jwtSessionId(authorization: string) {
+  const token = authorization.slice('Bearer '.length).trim()
+  const payload = token.split('.')[1] || ''
+  if (!payload) return ''
+  try {
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const sessionId = text(JSON.parse(atob(padded))?.session_id)
+    return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)
+      ? sessionId
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+async function assertCurrentAdminLease(userId: string, authorization: string) {
+  const sessionId = jwtSessionId(authorization)
+  if (!sessionId) {
+    throw new ReportRequestError(401, 'SESSION_CLAIM_MISSING', 'session', '登录会话无效，请重新登录')
+  }
+
+  const service = createClient(
+    Deno.env.get('SUPABASE_URL') || '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  )
+  const { data: lease, error } = await service.from('app_session_leases')
+    .select('session_id,portal,lease_expires_at')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) {
+    throw new ReportRequestError(503, 'SESSION_LOOKUP_UNAVAILABLE', 'session', '会话服务暂时不可用，请稍后重试')
+  }
+  if (
+    !lease ||
+    lease.session_id !== sessionId ||
+    lease.portal !== 'admin' ||
+    !lease.lease_expires_at ||
+    new Date(lease.lease_expires_at).getTime() <= Date.now()
+  ) {
+    throw new ReportRequestError(401, 'SESSION_NOT_CURRENT', 'session', '此账号已在其他设备登录或会话已过期，请重新登录')
+  }
+}
+
 async function authorize(req: Request) {
   const auth = req.headers.get('Authorization') || ''
   if (!auth.startsWith('Bearer ')) {
@@ -51,8 +97,14 @@ async function authorize(req: Request) {
     throw new ReportRequestError(503, 'AUTH_SERVICE_UNAVAILABLE', 'authorize', '认证服务暂时不可用，请稍后重试')
   }
   if (!user) throw new ReportRequestError(401, 'AUTH_TOKEN_INVALID', 'authorize', '登录已失效，请重新登录')
-  const { data: access, error: accessError } = await client.from('user_access')
-    .select('backend_enabled,active')
+  await assertCurrentAdminLease(user.id, auth)
+  const service = createClient(
+    Deno.env.get('SUPABASE_URL') || '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  )
+  const { data: access, error: accessError } = await service.from('user_access')
+    .select('employee_id,role_id,data_scope,backend_enabled,active')
     .eq('auth_user_id', user.id)
     .maybeSingle()
   if (accessError) {
@@ -60,6 +112,168 @@ async function authorize(req: Request) {
   }
   if (!access?.active || !access?.backend_enabled) {
     throw new ReportRequestError(403, 'BACKEND_ACCESS_DENIED', 'access', '当前账号没有后台访问权限')
+  }
+  const { data: role, error: roleError } = await service.from('roles')
+    .select('code')
+    .eq('id', access.role_id)
+    .maybeSingle()
+  if (roleError) {
+    throw new ReportRequestError(503, 'ROLE_LOOKUP_UNAVAILABLE', 'access', '角色权限服务暂时不可用，请稍后重试')
+  }
+  if (role?.code !== 'founder' && !(await permissionAllowed(service, user.id, access.role_id, 'report.view'))) {
+    throw new ReportRequestError(403, 'REPORT_VIEW_DENIED', 'access', '当前账号没有统计报表查看权限')
+  }
+  const scope = await resolveReportScope(service, user.id, access, text(role?.code))
+  return { service, scope }
+}
+
+type ReportScope = { mode: 'all' | 'limited', employeeNos: string[] }
+
+async function permissionAllowed(service: any, userId: string, roleId: string, code: string) {
+  const { data: permission, error: permissionError } = await service.from('permissions')
+    .select('id').eq('code', code).maybeSingle()
+  if (permissionError) {
+    throw new ReportRequestError(503, 'PERMISSION_LOOKUP_UNAVAILABLE', 'access', '权限服务暂时不可用，请稍后重试')
+  }
+  if (!permission?.id) return false
+  const [{ data: override, error: overrideError }, { data: rolePermission, error: rolePermissionError }] = await Promise.all([
+    service.from('user_permission_overrides').select('allowed')
+      .eq('auth_user_id', userId).eq('permission_id', permission.id).maybeSingle(),
+    service.from('role_permissions').select('role_id')
+      .eq('role_id', roleId).eq('permission_id', permission.id).maybeSingle(),
+  ])
+  if (overrideError || rolePermissionError) {
+    throw new ReportRequestError(503, 'PERMISSION_LOOKUP_UNAVAILABLE', 'access', '权限服务暂时不可用，请稍后重试')
+  }
+  if (override && typeof override.allowed === 'boolean') return override.allowed
+  return Boolean(rolePermission)
+}
+
+async function employeeNosForIds(service: any, ids: string[]) {
+  const rows: any[] = []
+  for (let index = 0; index < ids.length; index += 300) {
+    const { data, error } = await service.from('employees').select('employee_no')
+      .in('id', ids.slice(index, index + 300))
+    if (error) throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
+    rows.push(...(data || []))
+  }
+  return rows.map((row: any) => upper(row.employee_no)).filter(Boolean)
+}
+
+async function employeeNosForTeams(service: any, teamIds: string[]) {
+  const rows: any[] = []
+  for (let index = 0; index < teamIds.length; index += 200) {
+    let offset = 0
+    while (offset < 50000) {
+      const { data, error } = await service.from('employees').select('employee_no')
+        .in('team_id', teamIds.slice(index, index + 200)).range(offset, offset + 999)
+      if (error) throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
+      rows.push(...(data || []))
+      if ((data || []).length < 1000) break
+      offset += 1000
+    }
+  }
+  return rows.map((row: any) => upper(row.employee_no)).filter(Boolean)
+}
+
+async function resolveReportScope(service: any, userId: string, access: any, roleCode: string): Promise<ReportScope> {
+  if (roleCode === 'founder' || access.data_scope === 'all') return { mode: 'all', employeeNos: [] }
+  if (access.data_scope === 'self') {
+    const employeeNos = access.employee_id ? await employeeNosForIds(service, [access.employee_id]) : []
+    return { mode: 'limited', employeeNos: [...new Set(employeeNos)] }
+  }
+  if (access.data_scope === 'own_team') {
+    if (!access.employee_id) return { mode: 'limited', employeeNos: [] }
+    const { data: employee, error } = await service.from('employees').select('team_id')
+      .eq('id', access.employee_id).maybeSingle()
+    if (error) throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
+    const employeeNos = employee?.team_id ? await employeeNosForTeams(service, [employee.team_id]) : []
+    return { mode: 'limited', employeeNos: [...new Set(employeeNos)] }
+  }
+  if (access.data_scope === 'assigned_teams') {
+    const [{ data: teams, error: teamError }, { data: employees, error: employeeError }] = await Promise.all([
+      service.from('user_scope_teams').select('team_id').eq('auth_user_id', userId),
+      service.from('user_scope_employees').select('employee_id').eq('auth_user_id', userId),
+    ])
+    if (teamError || employeeError) {
+      throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
+    }
+    const [teamNos, directNos] = await Promise.all([
+      employeeNosForTeams(service, (teams || []).map((row: any) => row.team_id).filter(Boolean)),
+      employeeNosForIds(service, (employees || []).map((row: any) => row.employee_id).filter(Boolean)),
+    ])
+    return { mode: 'limited', employeeNos: [...new Set([...teamNos, ...directNos])] }
+  }
+  return { mode: 'limited', employeeNos: [] }
+}
+
+function applyReportScope(query: any, scope: ReportScope, column = 'employee_id') {
+  if (scope.mode === 'all') return query
+  return scope.employeeNos.length
+    ? query.in(column, scope.employeeNos)
+    : query.eq(column, '__NO_AUTHORIZED_EMPLOYEE__')
+}
+
+async function loadScopedRows(service: any, table: string, columns: string, scope: ReportScope, scopeColumn: string) {
+  const rows: any[] = []
+  for (let offset = 0; offset < 50000; offset += 1000) {
+    let query = service.from(table).select(columns)
+    query = applyReportScope(query, scope, scopeColumn).range(offset, offset + 999)
+    const { data, error } = await query
+    if (error) throw new ReportRequestError(500, 'ERROR_SCOPE_STATS_FAILED', 'stats', `错误统计范围汇总失败：${error.message}`)
+    rows.push(...(data || []))
+    if ((data || []).length < 1000) break
+  }
+  return rows
+}
+
+const sortedValues = (values: unknown[]) => [...new Set(values.map(text).filter(value => value && value !== '-'))]
+  .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+
+async function scopedStats(service: any, scope: ReportScope, filters: Record<string, string>, from: string, to: string, basisColumn: string) {
+  const count = async (qcFrom = '', qcTo = '') => {
+    let query = service.from('report_employee_error_admin_v').select('record_key', { count: 'exact', head: true })
+    query = applyReportScope(applyFilters(query, filters, from, to, basisColumn), scope)
+    if (qcFrom) query = query.gte('qc_date', qcFrom)
+    if (qcTo) query = query.lte('qc_date', qcTo)
+    const { count, error } = await query
+    if (error) throw new ReportRequestError(500, 'ERROR_STATS_QUERY_FAILED', 'stats', `错误统计汇总失败：${error.message}`)
+    return Number(count || 0)
+  }
+  const today = new Date().toISOString().slice(0, 10)
+  const day = new Date(`${today}T12:00:00Z`)
+  const isoDaysAgo = (days: number) => {
+    const value = new Date(day)
+    value.setUTCDate(value.getUTCDate() - days)
+    return value.toISOString().slice(0, 10)
+  }
+  const monthStart = `${today.slice(0, 7)}-01`
+  const [total, month, last3d, last7d, last30d, rawRows, optionRows] = await Promise.all([
+    count(), count(monthStart, today), count(isoDaysAgo(2), today), count(isoDaysAgo(6), today), count(isoDaysAgo(29), today),
+    loadScopedRows(service, 'report_employee_error_rows', 'record_key,synced_at,qc_date,error_type,qc_person', scope, 'employee_no'),
+    loadScopedRows(service, 'report_employee_error_admin_v', 'shift,team,group_name,position,country,manager_search,platform', scope, 'employee_id'),
+  ])
+  const qcDates = rawRows.map((row: any) => text(row.qc_date).slice(0, 10)).filter(Boolean).sort()
+  const synced = rawRows.map((row: any) => text(row.synced_at)).filter(Boolean).sort()
+  return {
+    total,
+    period_counts: { month, last_3d: last3d, last_7d: last7d, last_30d: last30d, total, as_of: today },
+    source_raw_count: rawRows.length,
+    source_normalized_count: new Set(rawRows.map((row: any) => text(row.record_key)).filter(Boolean)).size,
+    source_synced_at: synced.at(-1) || null,
+    available_from: qcDates[0] || '',
+    available_to: qcDates.at(-1) || '',
+    options: {
+      error_types: sortedValues(rawRows.map((row: any) => row.error_type)),
+      qc_people: sortedValues(rawRows.map((row: any) => row.qc_person)),
+      shifts: sortedValues(optionRows.map((row: any) => row.shift)),
+      teams: sortedValues(optionRows.map((row: any) => row.team)),
+      groups: sortedValues(optionRows.map((row: any) => row.group_name)),
+      positions: sortedValues(optionRows.map((row: any) => row.position)),
+      countries: sortedValues(optionRows.map((row: any) => row.country)),
+      managers: sortedValues(optionRows.flatMap((row: any) => text(row.manager_search).split('|'))),
+      platforms: sortedValues(optionRows.map((row: any) => row.platform)),
+    },
   }
 }
 
@@ -85,16 +299,12 @@ function applyFilters(query: any, filters: Record<string, string>, from: string,
 
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
+  if (req.method !== 'POST') return json({ error: '仅支持 POST 请求' }, 405)
 
   const requestId = crypto.randomUUID()
 
   try {
-    await authorize(req)
-    const service = createClient(
-      Deno.env.get('SUPABASE_URL') || '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
-      { auth: { persistSession: false } },
-    )
+    const { service, scope } = await authorize(req)
     const body = await req.json().catch(() => ({}))
     let from = normalizeDate(body.date_from)
     let to = normalizeDate(body.date_to)
@@ -118,16 +328,22 @@ Deno.serve(async req => {
     const basis = text(body.date_basis) === 'review' ? 'review' : 'qc'
     const basisColumn = basis === 'review' ? 'review_basis_date' : 'qc_date'
 
-    const { data: stats, error: statsError } = await service.rpc('report_error_query_stats', {
-      p_filters: {
-        date_from: from,
-        date_to: to,
-        date_basis: basis,
-        ...filters,
-      },
-    })
-    if (statsError) {
-      throw new ReportRequestError(500, 'ERROR_STATS_QUERY_FAILED', 'stats', `错误统计汇总失败：${statsError.message}`)
+    let stats: any
+    if (scope.mode === 'all') {
+      const { data, error } = await service.rpc('report_error_query_stats', {
+        p_filters: {
+          date_from: from,
+          date_to: to,
+          date_basis: basis,
+          ...filters,
+        },
+      })
+      if (error) {
+        throw new ReportRequestError(500, 'ERROR_STATS_QUERY_FAILED', 'stats', `错误统计汇总失败：${error.message}`)
+      }
+      stats = data || {}
+    } else {
+      stats = await scopedStats(service, scope, filters, from, to, basisColumn)
     }
 
     const pageSizeOptions = [20, 30, 50, 100, 500]
@@ -157,7 +373,7 @@ Deno.serve(async req => {
     const start = (page - 1) * pageSize
 
     let pageQuery = service.from('report_employee_error_admin_v').select('*')
-    pageQuery = applyFilters(pageQuery, filters, from, to, basisColumn)
+    pageQuery = applyReportScope(applyFilters(pageQuery, filters, from, to, basisColumn), scope)
       .order(sortColumn, { ascending, nullsFirst: false })
       .order('source_row', { ascending: false })
       .order('record_key', { ascending: false })

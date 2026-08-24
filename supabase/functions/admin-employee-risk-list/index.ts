@@ -8,6 +8,8 @@ const cors = {
 
 const text = (value: unknown) => String(value ?? '').trim()
 const upper = (value: unknown) => text(value).toUpperCase()
+function jwtSessionId(token: string) { try { const raw = token.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/') || ''; const padded = raw + '='.repeat((4 - raw.length % 4) % 4); return text(JSON.parse(atob(padded))?.session_id) } catch { return '' } }
+async function requireCurrentAdminSession(service: any, userId: string, token: string) { const sessionId = jwtSessionId(token); if (!sessionId) throw new Error('UNAUTHORIZED'); const { data, error } = await service.from('app_session_leases').select('user_id').eq('user_id', userId).eq('session_id', sessionId).eq('portal', 'admin').gt('lease_expires_at', new Date().toISOString()).maybeSingle(); if (error || !data?.user_id) throw new Error('SESSION_NOT_CURRENT') }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' },
@@ -32,6 +34,7 @@ async function caller(req: Request, service: any) {
   if (userError || !userData?.user) throw new Error('UNAUTHORIZED')
 
   const userId = userData.user.id
+  await requireCurrentAdminSession(service, userId, token)
   const { data: access, error } = await service.from('user_access')
     .select('auth_user_id,employee_id,role_id,data_scope,active,backend_enabled')
     .eq('auth_user_id', userId)
@@ -42,11 +45,23 @@ async function caller(req: Request, service: any) {
   return { userId, access, roleCode: role?.code || '' }
 }
 
+async function permissionAllowed(service: any, current: any, code: string) {
+  if (current.roleCode === 'founder') return true
+  const { data: permission } = await service.from('permissions').select('id').eq('code', code).maybeSingle()
+  if (!permission?.id) return false
+  const { data: override } = await service.from('user_permission_overrides').select('allowed')
+    .eq('auth_user_id', current.userId).eq('permission_id', permission.id).maybeSingle()
+  if (override && typeof override.allowed === 'boolean') return override.allowed
+  const { data: rolePermission } = await service.from('role_permissions').select('role_id')
+    .eq('role_id', current.access.role_id).eq('permission_id', permission.id).maybeSingle()
+  return Boolean(rolePermission)
+}
+
 async function scopeInfo(service: any, current: any) {
   if (current.roleCode === 'founder' || current.access.data_scope === 'all') {
     return { mode: 'all', teamIds: [], employeeIds: [] }
   }
-  if (current.access.data_scope === 'assigned') {
+  if (current.access.data_scope === 'assigned_teams') {
     const [{ data: teams }, { data: employees }] = await Promise.all([
       service.from('user_scope_teams').select('team_id').eq('auth_user_id', current.userId),
       service.from('user_scope_employees').select('employee_id').eq('auth_user_id', current.userId),
@@ -57,7 +72,10 @@ async function scopeInfo(service: any, current: any) {
       employeeIds: (employees || []).map((row: any) => row.employee_id),
     }
   }
-  if (current.access.employee_id) {
+  if (current.access.data_scope === 'self') {
+    return { mode: 'self', teamIds: [], employeeIds: current.access.employee_id ? [current.access.employee_id] : [] }
+  }
+  if (current.access.data_scope === 'own_team' && current.access.employee_id) {
     const { data: employee } = await service.from('employees')
       .select('team_id')
       .eq('id', current.access.employee_id)
@@ -77,6 +95,7 @@ function applyScope(query: any, scope: any) {
       ? query.or(clauses.join(','))
       : query.eq('id', '00000000-0000-0000-0000-000000000000')
   }
+  if (scope.mode === 'self' && scope.employeeIds.length) return query.in('id', scope.employeeIds)
   if (scope.mode === 'own_team' && scope.teamIds.length) return query.in('team_id', scope.teamIds)
   return query.eq('id', '00000000-0000-0000-0000-000000000000')
 }
@@ -116,6 +135,7 @@ Deno.serve(async req => {
       { auth: { persistSession: false } },
     )
     const current = await caller(req, service)
+    if (!(await permissionAllowed(service, current, 'employee.view'))) throw new Error('没有查看员工资料的权限')
     const scope = await scopeInfo(service, current)
     const body = await req.json().catch(() => ({}))
     const filters = body.filters || {}

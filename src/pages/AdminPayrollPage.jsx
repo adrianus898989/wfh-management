@@ -362,19 +362,75 @@ export default function AdminPayrollPage(){
 }
 
 function PayrollRows({rows,currency,preview=false,onOpenEmployee}){
-  const [expandedPlatform,setExpandedPlatform]=useState('')
+  const [detailDialog,setDetailDialog]=useState(null)
   useEffect(()=>{
-    if(!expandedPlatform)return undefined
-    const close=event=>{if(event.key==='Escape')setExpandedPlatform('')}
+    if(!detailDialog)return undefined
+    const previousOverflow=document.body.style.overflow
+    const close=event=>{if(event.key==='Escape')setDetailDialog(null)}
+    document.body.style.overflow='hidden'
     window.addEventListener('keydown',close)
-    return()=>window.removeEventListener('keydown',close)
-  },[expandedPlatform])
+    return()=>{
+      document.body.style.overflow=previousOverflow
+      window.removeEventListener('keydown',close)
+    }
+  },[detailDialog])
   const stateOf=row=>row.match_state||(row.matched?'active':'unmatched')
-  const matchLabel=row=>({active:'在职员工',resigned:'离职员工',unmatched:'未匹配'}[stateOf(row)]||'未匹配')
+  const matchLabel=row=>({active:'在职',resigned:'离职',unmatched:'未匹配'}[stateOf(row)]||'未匹配')
   const matchClass=row=>({active:'ok',resigned:'resigned',unmatched:'bad'}[stateOf(row)]||'bad')
-  return <><div className="payroll-table-wrap"><table className="payroll-table payroll-table-complete"><thead><tr><th>#</th><th>员工ID</th><th>姓名</th><th>盘口</th><th>分组</th><th>岗位</th><th>入职日期</th><th>离职日期</th><th>卡号</th><th>收款姓名</th><th>银行 / GCASH</th><th>基础工资</th><th>出勤工资</th><th>休假扣款</th><th>递增</th><th>满勤</th><th>绩效</th><th>押金</th><th>额外加班</th><th>额外加扣</th><th>下次要扣除</th><th>多转扣除</th><th>其他调整</th><th>实发工资</th><th>员工匹配</th><th>备注</th></tr></thead>
-    <tbody>{rows.length?rows.map((row,index)=><tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}><td>{row.source_row||index+1}</td><td>{!preview&&onOpenEmployee&&row.employee_id&&row.employee_no?<button type="button" className="payroll-employee-link" title="打开员工档案" onClick={()=>onOpenEmployee(row)}>{row.employee_no}</button>:<strong>{row.employee_no||'—'}</strong>}</td><td>{row.full_name||'—'}</td><td className="payroll-platform-cell"><button type="button" className="payroll-platform-value" disabled={!row.platform} title={row.platform?'点击查看完整盘口 / 平台':''} onClick={()=>row.platform&&setExpandedPlatform(row.platform)}>{row.platform||'—'}</button></td><td>{row.source_group||'—'}</td><td>{row.position_name||'—'}</td><td>{row.hire_date||'—'}</td><td>{row.departure_date||'—'}</td><td>{row.card_number||'—'}</td><td>{row.payment_name||'—'}</td><td>{row.payment_method||'—'}</td><td>{money(row.base_salary,currency)}</td><td>{money(row.attendance_salary,currency)}</td><td>{money(row.leave_deduction,currency)}</td><td>{money(row.increment_adjustment,currency)}</td><td>{money(row.attendance_bonus,currency)}</td><td>{money(row.performance_adjustment,currency)}</td><td>{money(row.deposit_adjustment,currency)}</td><td>{money(row.overtime_bonus,currency)}</td><td>{money(row.extra_adjustment,currency)}</td><td>{money(row.next_deduction,currency)}</td><td>{money(row.overpayment_deduction,currency)}</td><td>{money(row.other_adjustment,currency)}</td><td className="payroll-total-cell">{money(row.total_pay,currency)}</td><td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${matchClass(row)}`}>{matchLabel(row)}</span>}</td><td className="payroll-remark-cell">{row.remark||'—'}</td></tr>):<tr><td className="payroll-table-empty" colSpan="26">暂无符合条件的工资记录</td></tr>}</tbody>
-  </table></div>{expandedPlatform&&<div className="payroll-value-modal-backdrop" role="presentation" onMouseDown={()=>setExpandedPlatform('')}><div className="payroll-value-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-platform-modal-title" onMouseDown={event=>event.stopPropagation()}><header><h3 id="payroll-platform-modal-title">完整盘口 / 平台</h3><button type="button" className="payroll-dialog-close" aria-label="关闭" onClick={()=>setExpandedPlatform('')}><span aria-hidden="true">×</span></button></header><p>{expandedPlatform}</p></div></div>}</>
+  const openText=(title,value)=>value&&setDetailDialog({title,value})
+  const openItems=(title,items,subtitle='')=>setDetailDialog({title,items,subtitle})
+  return <><div className="payroll-table-wrap"><table className="payroll-table payroll-table-complete payroll-table-compact"><thead><tr><th>#</th><th>员工</th><th>组织 / 岗位</th><th>任职日期</th><th>收款资料</th><th>基础工资</th><th>出勤工资</th><th>加扣明细</th><th>实发工资</th><th>匹配</th><th>备注</th></tr></thead>
+    <tbody>{rows.length?rows.map((row,index)=>{
+      const salaryItems=payrollSalaryItems(row,currency)
+      const adjustmentCount=salaryItems.filter(item=>item.group==='adjustment'&&Number(item.raw)!==0).length
+      const paymentItems=[['收款姓名',row.payment_name],['银行 / GCASH',row.payment_method],['卡号',row.card_number]].filter(([,value])=>clean(value))
+      return <tr key={`${row.source_row||index}-${row.employee_no||row.full_name}`}>
+        <td className="payroll-sequence-cell">{row.source_row||index+1}</td>
+        <td className="payroll-person-cell">
+          {row.full_name?<button type="button" className="payroll-compact-value payroll-name-value" title={row.full_name} aria-label={`查看完整姓名：${row.full_name}`} onClick={()=>openText('完整姓名',row.full_name)}>{row.full_name}</button>:<strong>—</strong>}
+          {!preview&&onOpenEmployee&&row.employee_id&&row.employee_no?<button type="button" className="payroll-employee-link" title="打开完整员工档案" onClick={()=>onOpenEmployee(row)}>{row.employee_no}</button>:<small>{row.employee_no||'—'}</small>}
+        </td>
+        <td className="payroll-organization-cell">
+          <strong title={row.position_name||''}>{row.position_name||'未填写岗位'}</strong>
+          {row.source_group&&<small title={row.source_group}>{row.source_group}</small>}
+          {row.platform&&<button type="button" className="payroll-compact-value payroll-platform-value" title={row.platform} aria-label={`查看完整盘口：${row.platform}`} onClick={()=>openText('完整盘口 / 平台',row.platform)}>{row.platform}</button>}
+        </td>
+        <td className="payroll-date-cell"><span><i>入</i>{row.hire_date||'—'}</span>{row.departure_date&&<span><i>离</i>{row.departure_date}</span>}</td>
+        <td className="payroll-payment-cell">{paymentItems.length?<button type="button" className="payroll-payment-summary" title="查看完整收款资料" onClick={()=>openItems('完整收款资料',paymentItems,row.full_name||row.employee_no)}><strong>{row.payment_name||row.payment_method||'收款资料'}</strong><small>{[row.payment_method,row.card_number].filter(Boolean).join(' · ')||'点击查看'}</small></button>:<span>—</span>}</td>
+        <td className="payroll-money-cell">{money(row.base_salary,currency)}</td>
+        <td className="payroll-money-cell">{money(row.attendance_salary,currency)}</td>
+        <td className="payroll-breakdown-cell"><button type="button" className="payroll-breakdown-button" onClick={()=>openItems('完整工资构成',salaryItems,`${row.employee_no||'—'} · ${row.full_name||'—'}`)}><strong>{adjustmentCount?`${adjustmentCount} 项`:'无调整'}</strong><small>查看全部明细</small></button></td>
+        <td className="payroll-total-cell">{money(row.total_pay,currency)}</td>
+        <td>{preview?<span className="payroll-match neutral">导入后匹配</span>:<span className={`payroll-match ${matchClass(row)}`}>{matchLabel(row)}</span>}</td>
+        <td className="payroll-remark-cell">{row.remark?<button type="button" className="payroll-compact-value payroll-remark-value" title={row.remark} aria-label="查看完整备注" onClick={()=>openText('完整备注',row.remark)}>{row.remark}</button>:<span>—</span>}</td>
+      </tr>
+    }):<tr><td className="payroll-table-empty" colSpan="11">暂无符合条件的工资记录</td></tr>}</tbody>
+  </table></div>{detailDialog&&<PayrollValueDialog dialog={detailDialog} onClose={()=>setDetailDialog(null)}/>}</>
+}
+
+const PAYROLL_SALARY_FIELDS=[
+  ['基础工资','base_salary','base'],['出勤工资','attendance_salary','earn'],
+  ['休假扣款','leave_deduction','deduct'],['迟到扣款','late_deduction','deduct'],['缺勤扣款','absence_deduction','deduct'],
+  ['递增','increment_adjustment','adjust'],['满勤','attendance_bonus','adjust'],['绩效','performance_adjustment','adjust'],
+  ['押金','deposit_adjustment','adjust'],['额外加班','overtime_bonus','adjust'],['额外加扣','extra_adjustment','adjust'],
+  ['下次要扣除','next_deduction','deduct'],['多转扣除','overpayment_deduction','deduct'],['其他调整','other_adjustment','adjust'],
+  ['实发工资','total_pay','total'],
+]
+
+function payrollSalaryItems(row,currency){
+  return PAYROLL_SALARY_FIELDS.map(([label,field,tone])=>({label,value:money(row[field],currency),raw:row[field],tone,group:['base_salary','attendance_salary','total_pay'].includes(field)?'primary':'adjustment'}))
+}
+
+function PayrollValueDialog({dialog,onClose}){
+  return <div className="payroll-value-modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className={`payroll-value-modal ${dialog.items?'payroll-detail-modal':''}`} role="dialog" aria-modal="true" aria-labelledby="payroll-value-modal-title" onMouseDown={event=>event.stopPropagation()}>
+      <header><div><h3 id="payroll-value-modal-title">{dialog.title}</h3>{dialog.subtitle&&<small>{dialog.subtitle}</small>}</div><button type="button" className="payroll-dialog-close" aria-label="关闭" onClick={onClose}><span aria-hidden="true">×</span></button></header>
+      {dialog.items?<dl className="payroll-detail-list">{dialog.items.map(item=>{
+        const tuple=Array.isArray(item)?{label:item[0],value:item[1]}:item
+        return <div key={tuple.label} className={tuple.tone?`is-${tuple.tone}`:''}><dt>{tuple.label}</dt><dd>{clean(tuple.value)||'—'}</dd></div>
+      })}</dl>:<p>{dialog.value}</p>}
+    </div>
+  </div>
 }
 
 const payrollDisplayValue=value=>{

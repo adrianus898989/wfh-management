@@ -34,6 +34,24 @@ function cleanString(v: unknown) {
   return String(v ?? '').trim()
 }
 
+function cleanStringList(v: unknown) {
+  if (!Array.isArray(v)) return []
+  return [...new Set(v.map(cleanString).filter(Boolean))]
+}
+
+function jwtSessionId(authorization: string) {
+  const token = authorization.replace(/^Bearer\s+/i, '').trim()
+  const payloadPart = token.split('.')[1]
+  if (!payloadPart) return ''
+  try {
+    const base64 = payloadPart.replaceAll('-', '+').replaceAll('_', '/')
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+    return cleanString(JSON.parse(atob(padded))?.session_id)
+  } catch {
+    return ''
+  }
+}
+
 async function sha256(text: string) {
   const data = new TextEncoder().encode(text)
   const hash = await crypto.subtle.digest('SHA-256', data)
@@ -71,6 +89,27 @@ Deno.serve(async (req) => {
       auth: { persistSession: false, autoRefreshToken: false },
     })
 
+    const sessionId = jwtSessionId(authorization)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+      return json(req, { error: '当前登录会话无效，请重新登录' }, 401)
+    }
+
+    const { data: sessionLease, error: sessionLeaseError } = await admin
+      .from('app_session_leases')
+      .select('session_id,portal,lease_expires_at')
+      .eq('user_id', userData.user.id)
+      .maybeSingle()
+
+    if (sessionLeaseError) return json(req, { error: '无法验证当前浏览器会话' }, 500)
+    const leaseExpiresAt = Date.parse(sessionLease?.lease_expires_at || '')
+    if (!sessionLease ||
+      cleanString(sessionLease.session_id).toLowerCase() !== sessionId.toLowerCase() ||
+      sessionLease.portal !== 'admin' ||
+      !Number.isFinite(leaseExpiresAt) ||
+      leaseExpiresAt <= Date.now()) {
+      return json(req, { error: '当前浏览器会话已失效或账号已在其他设备登录' }, 401)
+    }
+
     const { data: caller, error: callerError } = await admin
       .from('user_access')
       .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,active,roles(id,code,name)')
@@ -84,15 +123,20 @@ Deno.serve(async (req) => {
     const callerRole = Array.isArray(caller.roles) ? caller.roles[0] : caller.roles
     const isFounder = callerRole?.code === 'founder'
 
-    const { data: callerRp } = await admin
+    const { data: callerRp, error: callerRpError } = await admin
       .from('role_permissions')
       .select('permission_id,permissions(code)')
       .eq('role_id', caller.role_id)
 
-    const { data: callerOverrides } = await admin
+    const { data: callerOverrides, error: callerOverridesError } = await admin
       .from('user_permission_overrides')
       .select('allowed,permission_id,permissions(code)')
       .eq('auth_user_id', userData.user.id)
+
+    if (callerRpError || callerOverridesError) {
+      console.error('permission bootstrap failed', callerRpError || callerOverridesError)
+      return json(req, { error: '无法验证当前账号权限' }, 500)
+    }
 
     const rolePerms = new Set<string>()
     for (const row of callerRp || []) {
@@ -106,10 +150,15 @@ Deno.serve(async (req) => {
       if (p?.code) overrideMap.set(p.code, Boolean(row.allowed))
     }
 
+    const callerEffectivePermissions = new Set(rolePerms)
+    overrideMap.forEach((allowed, code) => {
+      if (allowed) callerEffectivePermissions.add(code)
+      else callerEffectivePermissions.delete(code)
+    })
+
     const can = (code: string) => {
       if (isFounder) return true
-      if (overrideMap.has(code)) return overrideMap.get(code) === true
-      return rolePerms.has(code)
+      return callerEffectivePermissions.has(code)
     }
 
     const audit = async (action: string, reason: string) => {
@@ -125,100 +174,402 @@ Deno.serve(async (req) => {
     const body = await req.json()
     const action = cleanString(body.action || 'bootstrap')
 
-    async function getScopedEmployees() {
-      const { data: allEmployees, error } = await admin
-        .from('employees')
-        .select('id,employee_no,full_name,status,team_id,position_id,teams(id,name),positions(id,name)')
-        .eq('status', 'active')
-        .order('employee_no')
-        .limit(5000)
+    const rolePermissionCache = new Map<string, Promise<Set<string>>>()
 
-      if (error) throw error
-      if (isFounder || caller.data_scope === 'all') return allEmployees || []
-
-      if (caller.data_scope === 'own_team') {
-        if (!caller.employee_id) return []
-        const me = (allEmployees || []).find((e: any) => e.id === caller.employee_id)
-        if (!me?.team_id) return []
-        return (allEmployees || []).filter((e: any) => e.team_id === me.team_id)
+    async function getRolePermissionCodes(roleId: string) {
+      if (!rolePermissionCache.has(roleId)) {
+        rolePermissionCache.set(roleId, (async () => {
+          const { data, error } = await admin.from('role_permissions')
+            .select('permissions(code)')
+            .eq('role_id', roleId)
+          if (error) throw error
+          const codes = new Set<string>()
+          for (const row of data || []) {
+            const permission = Array.isArray(row.permissions) ? row.permissions[0] : row.permissions
+            if (permission?.code) codes.add(permission.code)
+          }
+          return codes
+        })())
       }
+      return rolePermissionCache.get(roleId)!
+    }
 
-      if (caller.data_scope === 'assigned') {
-        const [{ data: st }, { data: se }] = await Promise.all([
+    async function getAccountPermissionCodes(targetAuthUserId: string, roleId: string) {
+      const roleCodes = await getRolePermissionCodes(roleId)
+      const result = new Set(roleCodes)
+      const { data: overrides, error } = await admin.from('user_permission_overrides')
+        .select('allowed,permissions(code)')
+        .eq('auth_user_id', targetAuthUserId)
+      if (error) throw error
+      for (const row of overrides || []) {
+        const permission = Array.isArray(row.permissions) ? row.permissions[0] : row.permissions
+        if (!permission?.code) continue
+        if (row.allowed) result.add(permission.code)
+        else result.delete(permission.code)
+      }
+      return result
+    }
+
+    function permissionsWithinCaller(permissionCodes: Set<string>, strict = false) {
+      if (isFounder) return true
+      for (const code of permissionCodes) {
+        if (!callerEffectivePermissions.has(code)) return false
+      }
+      return !strict || permissionCodes.size < callerEffectivePermissions.size
+    }
+
+    async function roleCanBeAssigned(roleId: string, targetAuthUserId = '') {
+      if (isFounder) return true
+      const permissionCodes = targetAuthUserId
+        ? await getAccountPermissionCodes(targetAuthUserId, roleId)
+        : await getRolePermissionCodes(roleId)
+      return permissionsWithinCaller(permissionCodes, true)
+    }
+
+    let scopeContextPromise: Promise<any> | null = null
+
+    async function getScopeContext() {
+      if (scopeContextPromise) return scopeContextPromise
+      scopeContextPromise = (async () => {
+        const [employeeRes, teamRes, scopeTeamRes, scopeEmployeeRes] = await Promise.all([
+          admin.from('employees')
+            .select('id,employee_no,full_name,status,team_id,position_id,teams(id,name),positions(id,name)')
+            .order('employee_no')
+            .limit(10000),
+          admin.from('teams').select('id,name').order('name').limit(5000),
           admin.from('user_scope_teams').select('team_id').eq('auth_user_id', userData.user.id),
           admin.from('user_scope_employees').select('employee_id').eq('auth_user_id', userData.user.id),
         ])
-        const teams = new Set((st || []).map((x: any) => x.team_id))
-        const people = new Set((se || []).map((x: any) => x.employee_id))
-        return (allEmployees || []).filter((e: any) => teams.has(e.team_id) || people.has(e.id))
+
+        if (employeeRes.error) throw employeeRes.error
+        if (teamRes.error) throw teamRes.error
+        if (scopeTeamRes.error) throw scopeTeamRes.error
+        if (scopeEmployeeRes.error) throw scopeEmployeeRes.error
+
+        const allEmployees = employeeRes.data || []
+        const allTeams = teamRes.data || []
+        const employeeMap = new Map(allEmployees.map((employee: any) => [employee.id, employee]))
+        const allTeamIds = new Set(allTeams.map((team: any) => team.id))
+        const allowedEmployeeIds = new Set<string>()
+        const delegableTeamIds = new Set<string>()
+
+        if (isFounder || caller.data_scope === 'all') {
+          allEmployees.forEach((employee: any) => allowedEmployeeIds.add(employee.id))
+          allTeams.forEach((team: any) => delegableTeamIds.add(team.id))
+        } else if (caller.data_scope === 'self') {
+          if (caller.employee_id && employeeMap.has(caller.employee_id)) {
+            allowedEmployeeIds.add(caller.employee_id)
+          }
+        } else if (caller.data_scope === 'own_team') {
+          const me: any = caller.employee_id ? employeeMap.get(caller.employee_id) : null
+          if (me?.team_id) {
+            delegableTeamIds.add(me.team_id)
+            allEmployees.forEach((employee: any) => {
+              if (employee.team_id === me.team_id) allowedEmployeeIds.add(employee.id)
+            })
+          }
+        } else if (caller.data_scope === 'assigned_teams') {
+          const assignedTeamIds = new Set((scopeTeamRes.data || []).map((row: any) => row.team_id))
+          const assignedEmployeeIds = new Set((scopeEmployeeRes.data || []).map((row: any) => row.employee_id))
+          assignedTeamIds.forEach((teamId: string) => {
+            if (allTeamIds.has(teamId)) delegableTeamIds.add(teamId)
+          })
+          allEmployees.forEach((employee: any) => {
+            if (assignedTeamIds.has(employee.team_id) || assignedEmployeeIds.has(employee.id)) {
+              allowedEmployeeIds.add(employee.id)
+            }
+          })
+        }
+
+        return { allEmployees, allTeams, employeeMap, allTeamIds, allowedEmployeeIds, delegableTeamIds }
+      })()
+      return scopeContextPromise
+    }
+
+    async function getScopedEmployees(activeOnly = true) {
+      const scope = await getScopeContext()
+      return scope.allEmployees.filter((employee: any) =>
+        scope.allowedEmployeeIds.has(employee.id) && (!activeOnly || employee.status === 'active')
+      )
+    }
+
+    async function requireEmployeeInScope(employeeId: string) {
+      const scope = await getScopeContext()
+      const employee = scope.employeeMap.get(employeeId)
+      if (!employee || !scope.allowedEmployeeIds.has(employeeId)) {
+        throw new Error('找不到员工或无操作权限')
+      }
+      return employee
+    }
+
+    async function validateDelegatedScope(
+      employeeId: string | null,
+      dataScope: string,
+      teamIds: string[],
+      employeeIds: string[],
+    ) {
+      const scope = await getScopeContext()
+
+      if (!isFounder && dataScope === 'all') {
+        throw new Error('只有 Founder 可以授予全部数据范围')
+      }
+      if (!isFounder && !employeeId) {
+        throw new Error('非 Founder 创建或编辑账号时必须关联可管理的员工档案')
+      }
+      if (employeeId) await requireEmployeeInScope(employeeId)
+
+      if (dataScope === 'self' && !employeeId) {
+        throw new Error('“仅本人”范围必须关联员工档案')
       }
 
-      return []
+      if (dataScope === 'own_team') {
+        if (!employeeId) throw new Error('“自己团队”范围必须关联员工档案')
+        const employee: any = scope.employeeMap.get(employeeId)
+        if (!employee?.team_id) throw new Error('关联员工尚未设置团队，不能授予“自己团队”范围')
+        if (!isFounder && !scope.delegableTeamIds.has(employee.team_id)) {
+          throw new Error('关联员工所在团队超出当前账号可授权范围')
+        }
+      }
+
+      if (dataScope === 'assigned_teams') {
+        if (!teamIds.length && !employeeIds.length) {
+          throw new Error('指定范围至少选择一个团队或一名员工')
+        }
+        const invalidTeam = teamIds.find(teamId =>
+          !scope.allTeamIds.has(teamId) || (!isFounder && !scope.delegableTeamIds.has(teamId))
+        )
+        if (invalidTeam) throw new Error('选择的团队超出当前账号可授权范围')
+
+        const invalidEmployee = employeeIds.find(scopedEmployeeId =>
+          !scope.employeeMap.has(scopedEmployeeId) || (!isFounder && !scope.allowedEmployeeIds.has(scopedEmployeeId))
+        )
+        if (invalidEmployee) throw new Error('选择的员工超出当前账号可授权范围')
+      }
+    }
+
+    async function readScope(targetAuthUserId: string) {
+      const [teamRes, employeeRes] = await Promise.all([
+        admin.from('user_scope_teams').select('team_id').eq('auth_user_id', targetAuthUserId),
+        admin.from('user_scope_employees').select('employee_id').eq('auth_user_id', targetAuthUserId),
+      ])
+      if (teamRes.error) throw teamRes.error
+      if (employeeRes.error) throw employeeRes.error
+      return {
+        teamIds: (teamRes.data || []).map((row: any) => row.team_id),
+        employeeIds: (employeeRes.data || []).map((row: any) => row.employee_id),
+      }
+    }
+
+    async function restoreScope(targetAuthUserId: string, previous: { teamIds: string[], employeeIds: string[] }) {
+      const current = await readScope(targetAuthUserId)
+      const previousTeams = new Set(previous.teamIds)
+      const previousEmployees = new Set(previous.employeeIds)
+      const currentTeams = new Set(current.teamIds)
+      const currentEmployees = new Set(current.employeeIds)
+      const extraTeams = current.teamIds.filter(teamId => !previousTeams.has(teamId))
+      const extraEmployees = current.employeeIds.filter(employeeId => !previousEmployees.has(employeeId))
+      const missingTeams = previous.teamIds.filter(teamId => !currentTeams.has(teamId))
+      const missingEmployees = previous.employeeIds.filter(employeeId => !currentEmployees.has(employeeId))
+
+      if (extraTeams.length) {
+        const { error } = await admin.from('user_scope_teams')
+          .delete().eq('auth_user_id', targetAuthUserId).in('team_id', extraTeams)
+        if (error) throw error
+      }
+      if (extraEmployees.length) {
+        const { error } = await admin.from('user_scope_employees')
+          .delete().eq('auth_user_id', targetAuthUserId).in('employee_id', extraEmployees)
+        if (error) throw error
+      }
+      if (missingTeams.length) {
+        const { error } = await admin.from('user_scope_teams').insert(
+          missingTeams.map(team_id => ({ auth_user_id: targetAuthUserId, team_id }))
+        )
+        if (error) throw error
+      }
+      if (missingEmployees.length) {
+        const { error } = await admin.from('user_scope_employees').insert(
+          missingEmployees.map(employee_id => ({ auth_user_id: targetAuthUserId, employee_id }))
+        )
+        if (error) throw error
+      }
     }
 
     async function saveScope(targetAuthUserId: string, teamIds: string[], employeeIds: string[]) {
-      await admin.from('user_scope_teams').delete().eq('auth_user_id', targetAuthUserId)
-      await admin.from('user_scope_employees').delete().eq('auth_user_id', targetAuthUserId)
+      const desiredTeams = cleanStringList(teamIds)
+      const desiredEmployees = cleanStringList(employeeIds)
+      const previous = await readScope(targetAuthUserId)
+      const previousTeams = new Set(previous.teamIds)
+      const previousEmployees = new Set(previous.employeeIds)
+      const desiredTeamSet = new Set(desiredTeams)
+      const desiredEmployeeSet = new Set(desiredEmployees)
+      const teamsToAdd = desiredTeams.filter(teamId => !previousTeams.has(teamId))
+      const employeesToAdd = desiredEmployees.filter(employeeId => !previousEmployees.has(employeeId))
+      const teamsToDelete = previous.teamIds.filter(teamId => !desiredTeamSet.has(teamId))
+      const employeesToDelete = previous.employeeIds.filter(employeeId => !desiredEmployeeSet.has(employeeId))
 
-      if (teamIds.length) {
-        const { error } = await admin.from('user_scope_teams').insert(
-          [...new Set(teamIds)].map(team_id => ({ auth_user_id: targetAuthUserId, team_id }))
-        )
-        if (error) throw error
+      try {
+        if (teamsToAdd.length) {
+          const { error } = await admin.from('user_scope_teams').insert(
+            teamsToAdd.map(team_id => ({ auth_user_id: targetAuthUserId, team_id }))
+          )
+          if (error) throw error
+        }
+        if (employeesToAdd.length) {
+          const { error } = await admin.from('user_scope_employees').insert(
+            employeesToAdd.map(employee_id => ({ auth_user_id: targetAuthUserId, employee_id }))
+          )
+          if (error) throw error
+        }
+
+        // Destructive removals are deliberately last. On any failure, restore the exact previous mapping.
+        if (teamsToDelete.length) {
+          const { error } = await admin.from('user_scope_teams')
+            .delete().eq('auth_user_id', targetAuthUserId).in('team_id', teamsToDelete)
+          if (error) throw error
+        }
+        if (employeesToDelete.length) {
+          const { error } = await admin.from('user_scope_employees')
+            .delete().eq('auth_user_id', targetAuthUserId).in('employee_id', employeesToDelete)
+          if (error) throw error
+        }
+      } catch (error) {
+        try {
+          await restoreScope(targetAuthUserId, previous)
+        } catch (rollbackError) {
+          console.error('scope rollback failed', rollbackError)
+          throw new Error('管理范围保存失败且自动回滚未完整完成，请立即联系 Founder 检查该账号')
+        }
+        throw error
       }
 
-      if (employeeIds.length) {
-        const { error } = await admin.from('user_scope_employees').insert(
-          [...new Set(employeeIds)].map(employee_id => ({ auth_user_id: targetAuthUserId, employee_id }))
-        )
-        if (error) throw error
+      return previous
+    }
+
+    async function getTargetAccount(targetAuthUserId: string) {
+      const { data: targetAccess, error } = await admin.from('user_access')
+        .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,employee_portal_enabled,roles(id,code,name)')
+        .eq('auth_user_id', targetAuthUserId)
+        .maybeSingle()
+      if (error) throw error
+      if (!targetAccess) throw new Error('账号不存在')
+
+      const targetRole = Array.isArray(targetAccess.roles) ? targetAccess.roles[0] : targetAccess.roles
+      if (!isFounder && targetRole?.code === 'founder') {
+        throw new Error('只有 Founder 可以管理 Founder 账号')
       }
+      if (!isFounder) {
+        if (!targetAccess.employee_id) throw new Error('该账号未关联员工档案，只有 Founder 可以管理')
+        await requireEmployeeInScope(targetAccess.employee_id)
+        const isStaffPortalAccount = !targetAccess.backend_enabled &&
+          targetAccess.employee_portal_enabled &&
+          targetRole?.code === 'employee'
+        if (!isStaffPortalAccount) {
+          const targetPermissions = await getAccountPermissionCodes(targetAuthUserId, targetAccess.role_id)
+          if (!permissionsWithinCaller(targetPermissions, true)) {
+            throw new Error('不能管理权限级别相同、较高或权限集合不同的账号')
+          }
+        }
+      }
+      return { ...targetAccess, targetRole }
     }
 
     if (action === 'bootstrap') {
       if (!can('user.view') && !can('account.create') && !can('role.manage')) {
         return json(req, { error: '无账号与权限查看权限' }, 403)
       }
-      const employees = await getScopedEmployees()
+      const mayViewAccounts = can('user.view') || can('account.create')
+      const mayManageRoles = can('role.manage')
+      const mayCreateAccounts = can('account.create')
+      const scope = await getScopeContext()
+      const employees = mayViewAccounts ? await getScopedEmployees(true) : []
+      const emptyResult = () => Promise.resolve({ data: [] as any[], error: null })
 
       const [
         accessRes,
         roleRes,
         permissionRes,
         rpRes,
-        teamRes,
         positionRes,
         scopeTeamRes,
         scopeEmployeeRes,
       ] = await Promise.all([
-        admin.from('user_access')
+        mayViewAccounts ? admin.from('user_access')
           .select('auth_user_id,employee_id,role_id,login_username,login_email,backend_enabled,employee_portal_enabled,otp_required,data_scope,active,must_change_password,roles(id,code,name,system_locked,active)')
-          .order('created_at', { ascending: true }),
-        admin.from('roles').select('id,code,name,system_locked,active').order('name'),
-        admin.from('permissions').select('id,code,name,category,sensitive').order('category').order('name'),
-        admin.from('role_permissions').select('role_id,permission_id'),
-        admin.from('teams').select('id,name').order('name'),
-        admin.from('positions').select('id,name').order('name'),
-        admin.from('user_scope_teams').select('auth_user_id,team_id'),
-        admin.from('user_scope_employees').select('auth_user_id,employee_id'),
+          .order('created_at', { ascending: true }) : emptyResult(),
+        (mayManageRoles || mayCreateAccounts)
+          ? admin.from('roles').select('id,code,name,system_locked,active').order('name')
+          : emptyResult(),
+        mayManageRoles
+          ? admin.from('permissions').select('id,code,name,category,sensitive').order('category').order('name')
+          : emptyResult(),
+        mayManageRoles
+          ? admin.from('role_permissions').select('role_id,permission_id')
+          : emptyResult(),
+        mayViewAccounts
+          ? admin.from('positions').select('id,name').order('name')
+          : emptyResult(),
+        mayViewAccounts
+          ? admin.from('user_scope_teams').select('auth_user_id,team_id')
+          : emptyResult(),
+        mayViewAccounts
+          ? admin.from('user_scope_employees').select('auth_user_id,employee_id')
+          : emptyResult(),
       ])
 
       if (accessRes.error) return json(req, { error: accessRes.error.message }, 500)
       if (roleRes.error) return json(req, { error: roleRes.error.message }, 500)
+      if (permissionRes.error) return json(req, { error: permissionRes.error.message }, 500)
+      if (rpRes.error) return json(req, { error: rpRes.error.message }, 500)
+      if (positionRes.error) return json(req, { error: positionRes.error.message }, 500)
+      if (scopeTeamRes.error) return json(req, { error: scopeTeamRes.error.message }, 500)
+      if (scopeEmployeeRes.error) return json(req, { error: scopeEmployeeRes.error.message }, 500)
 
-      const employeeMap = new Map(employees.map((e: any) => [e.id, e]))
+      const manageableAccounts: any[] = []
+      for (const account of accessRes.data || []) {
+        if (isFounder) {
+          manageableAccounts.push(account)
+          continue
+        }
+        const role = Array.isArray(account.roles) ? account.roles[0] : account.roles
+        if (role?.code === 'founder' || !account.employee_id || !scope.allowedEmployeeIds.has(account.employee_id)) {
+          continue
+        }
+        const isStaffPortalAccount = !account.backend_enabled && account.employee_portal_enabled && role?.code === 'employee'
+        if (isStaffPortalAccount) {
+          manageableAccounts.push(account)
+          continue
+        }
+        const targetPermissions = await getAccountPermissionCodes(account.auth_user_id, account.role_id)
+        if (permissionsWithinCaller(targetPermissions, true)) manageableAccounts.push(account)
+      }
+      const manageableAccountIds = new Set(manageableAccounts.map((account: any) => account.auth_user_id))
       const decorate = (x: any) => ({
         ...x,
-        employee: x.employee_id ? employeeMap.get(x.employee_id) || null : null,
+        employee: x.employee_id ? scope.employeeMap.get(x.employee_id) || null : null,
       })
 
-      const backendAccounts = (accessRes.data || [])
+      const backendAccounts = manageableAccounts
         .filter((x: any) => x.backend_enabled)
         .map(decorate)
 
-      const employeeAccounts = (accessRes.data || [])
+      const employeeAccounts = manageableAccounts
         .filter((x: any) => x.employee_portal_enabled)
         .map(decorate)
+
+      let roles = roleRes.data || []
+      if (!mayManageRoles) {
+        const assignableRoles = []
+        for (const role of roles) {
+          if (role.active === false || ['founder', 'employee'].includes(role.code)) continue
+          if (await roleCanBeAssigned(role.id)) assignableRoles.push(role)
+        }
+        roles = assignableRoles
+      }
+
+      const teams = mayViewAccounts
+        ? scope.allTeams.filter((team: any) => isFounder || scope.delegableTeamIds.has(team.id))
+        : []
 
       return json(req, {
         ok: true,
@@ -226,23 +577,23 @@ Deno.serve(async (req) => {
           auth_user_id: userData.user.id,
           role_code: callerRole?.code || null,
           is_founder: isFounder,
-          permissions: isFounder ? ['*'] : [...rolePerms],
+          permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
         },
         employees,
         backend_accounts: backendAccounts,
         employee_accounts: employeeAccounts,
-        roles: roleRes.data || [],
-        permissions: permissionRes.data || [],
-        role_permissions: rpRes.data || [],
-        teams: teamRes.data || [],
+        roles,
+        permissions: mayManageRoles ? permissionRes.data || [] : [],
+        role_permissions: mayManageRoles ? rpRes.data || [] : [],
+        teams,
         positions: positionRes.data || [],
-        scope_teams: scopeTeamRes.data || [],
-        scope_employees: scopeEmployeeRes.data || [],
+        scope_teams: (scopeTeamRes.data || []).filter((row: any) => manageableAccountIds.has(row.auth_user_id)),
+        scope_employees: (scopeEmployeeRes.data || []).filter((row: any) => manageableAccountIds.has(row.auth_user_id)),
       })
     }
 
     if (action === 'create_role') {
-      if (!can('role.manage')) return json(req, { error: '无角色管理权限' }, 403)
+      if (!isFounder) return json(req, { error: '只有 Founder 可以修改全局角色' }, 403)
       const name = cleanString(body.name)
       if (name.length < 2 || name.length > 40) return json(req, { error: '角色名称不正确' }, 400)
 
@@ -258,7 +609,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'rename_role') {
-      if (!can('role.manage')) return json(req, { error: '无角色管理权限' }, 403)
+      if (!isFounder) return json(req, { error: '只有 Founder 可以修改全局角色' }, 403)
       const roleId = cleanString(body.role_id)
       const name = cleanString(body.name)
 
@@ -276,7 +627,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'delete_role') {
-      if (!can('role.manage')) return json(req, { error: '无角色管理权限' }, 403)
+      if (!isFounder) return json(req, { error: '只有 Founder 可以修改全局角色' }, 403)
       const roleId = cleanString(body.role_id)
 
       const { data: role } = await admin.from('roles')
@@ -294,7 +645,7 @@ Deno.serve(async (req) => {
 
       if ((count || 0) > 0) return json(req, { error: '该角色仍有账号正在使用' }, 400)
 
-      await admin.from('role_permissions').delete().eq('role_id', roleId)
+      // role_permissions.role_id uses ON DELETE CASCADE, so the role delete is one database transaction.
       const { error } = await admin.from('roles').delete().eq('id', roleId)
       if (error) return json(req, { error: error.message }, 400)
       await audit('role_delete', `删除角色 ${role.name}`)
@@ -302,9 +653,9 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'save_role_permissions') {
-      if (!can('role.manage')) return json(req, { error: '无角色管理权限' }, 403)
+      if (!isFounder) return json(req, { error: '只有 Founder 可以修改全局角色权限' }, 403)
       const roleId = cleanString(body.role_id)
-      const permissionIds = Array.isArray(body.permission_ids) ? body.permission_ids.map(cleanString) : []
+      const permissionIds = cleanStringList(body.permission_ids)
 
       const { data: role } = await admin.from('roles')
         .select('id,code,system_locked')
@@ -313,13 +664,46 @@ Deno.serve(async (req) => {
       if (!role) return json(req, { error: '角色不存在' }, 404)
       if (role.code === 'founder') return json(req, { error: 'Founder 固定拥有全部权限' }, 400)
 
-      await admin.from('role_permissions').delete().eq('role_id', roleId)
-
       if (permissionIds.length) {
+        const { data: validPermissions, error: permissionError } = await admin.from('permissions')
+          .select('id').in('id', permissionIds)
+        if (permissionError) return json(req, { error: permissionError.message }, 400)
+        const validIds = new Set((validPermissions || []).map((permission: any) => permission.id))
+        if (permissionIds.some(permissionId => !validIds.has(permissionId))) {
+          return json(req, { error: '包含不存在的权限项目' }, 400)
+        }
+      }
+
+      const { data: currentRows, error: currentError } = await admin.from('role_permissions')
+        .select('permission_id').eq('role_id', roleId)
+      if (currentError) return json(req, { error: currentError.message }, 400)
+
+      const currentIds = new Set((currentRows || []).map((row: any) => row.permission_id))
+      const desiredIds = new Set(permissionIds)
+      const additions = permissionIds.filter(permissionId => !currentIds.has(permissionId))
+      const removals = [...currentIds].filter(permissionId => !desiredIds.has(permissionId)) as string[]
+
+      if (additions.length) {
         const { error } = await admin.from('role_permissions').insert(
-          [...new Set(permissionIds)].map(permission_id => ({ role_id: roleId, permission_id }))
+          additions.map(permission_id => ({ role_id: roleId, permission_id }))
         )
         if (error) return json(req, { error: error.message }, 400)
+      }
+
+      if (removals.length) {
+        const { error } = await admin.from('role_permissions')
+          .delete().eq('role_id', roleId).in('permission_id', removals)
+        if (error) {
+          if (additions.length) {
+            const { error: rollbackError } = await admin.from('role_permissions')
+              .delete().eq('role_id', roleId).in('permission_id', additions)
+            if (rollbackError) {
+              console.error('role permission rollback failed', rollbackError)
+              return json(req, { error: '角色权限保存失败且自动回滚未完整完成，请立即联系 Founder 检查该角色' }, 500)
+            }
+          }
+          return json(req, { error: error.message }, 400)
+        }
       }
 
       await audit('role_permissions_update', `更新角色权限 ${roleId}`)
@@ -335,8 +719,8 @@ Deno.serve(async (req) => {
       const employeeId = cleanString(body.employee_id) || null
       const dataScope = cleanString(body.data_scope || 'own_team')
       const otpRequired = Boolean(body.otp_required)
-      const teamIds = Array.isArray(body.team_ids) ? body.team_ids.map(cleanString) : []
-      const employeeIds = Array.isArray(body.employee_ids) ? body.employee_ids.map(cleanString) : []
+      const teamIds = cleanStringList(body.team_ids)
+      const employeeIds = cleanStringList(body.employee_ids)
 
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
         return json(req, { error: '用户名只允许3-32位字母、数字、._-' }, 400)
@@ -344,20 +728,23 @@ Deno.serve(async (req) => {
       if (!passwordOk(password)) {
         return json(req, { error: '密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
       }
-      if (!['all', 'own_team', 'assigned'].includes(dataScope)) {
+      if (!['all', 'own_team', 'assigned_teams', 'self'].includes(dataScope)) {
         return json(req, { error: '管理范围不正确' }, 400)
-      }
-      if (!employeeId && dataScope === 'own_team') {
-        return json(req, { error: '未关联员工档案时，请选择“全部数据”或“指定范围”' }, 400)
-      }
-      if (dataScope === 'assigned' && !teamIds.length && !employeeIds.length) {
-        return json(req, { error: '指定范围至少选择一个团队或一名员工' }, 400)
       }
 
       const { data: role } = await admin.from('roles').select('id,code,active').eq('id', roleId).maybeSingle()
       if (!role || !role.active) return json(req, { error: '角色不可用' }, 400)
-      if (role.code === 'founder' || role.code === 'employee') {
+      if (role.code === 'employee' || (role.code === 'founder' && !isFounder)) {
         return json(req, { error: '该角色不能用于新增后台账号' }, 400)
+      }
+      if (!await roleCanBeAssigned(role.id)) {
+        return json(req, { error: '只能授予权限严格低于当前账号的角色' }, 403)
+      }
+
+      try {
+        await validateDelegatedScope(employeeId, dataScope, teamIds, employeeIds)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '管理范围不正确' }, 403)
       }
 
       const { data: exists } = await admin.from('user_access')
@@ -395,7 +782,7 @@ Deno.serve(async (req) => {
         return json(req, { error: insertError.message }, 400)
       }
 
-      if (dataScope === 'assigned') {
+      if (dataScope === 'assigned_teams') {
         try {
           await saveScope(created.user.id, teamIds, employeeIds)
         } catch (e) {
@@ -416,34 +803,77 @@ Deno.serve(async (req) => {
       const roleId = cleanString(body.role_id)
       const employeeId = cleanString(body.employee_id) || null
       const dataScope = cleanString(body.data_scope || 'own_team')
-      const teamIds = Array.isArray(body.team_ids) ? body.team_ids.map(cleanString) : []
-      const employeeIds = Array.isArray(body.employee_ids) ? body.employee_ids.map(cleanString) : []
+      const teamIds = cleanStringList(body.team_ids)
+      const employeeIds = cleanStringList(body.employee_ids)
 
-      if (!['all', 'own_team', 'assigned'].includes(dataScope)) return json(req, { error: '管理范围不正确' }, 400)
-      if (!employeeId && dataScope === 'own_team') return json(req, { error: '未关联员工档案时，请选择“全部数据”或“指定范围”' }, 400)
-      if (dataScope === 'assigned' && !teamIds.length && !employeeIds.length) return json(req, { error: '指定范围至少选择一个团队或一名员工' }, 400)
+      if (!['all', 'own_team', 'assigned_teams', 'self'].includes(dataScope)) return json(req, { error: '管理范围不正确' }, 400)
 
-      const { data: current } = await admin.from('user_access')
-        .select('auth_user_id,role_id,roles(code)')
-        .eq('auth_user_id', target).maybeSingle()
-
-      if (!current) return json(req, { error: '账号不存在' }, 404)
-      const cr = Array.isArray(current.roles) ? current.roles[0] : current.roles
-      if (cr?.code === 'founder') return json(req, { error: 'Founder 角色不能修改' }, 400)
+      let current: any
+      try {
+        current = await getTargetAccount(target)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
+      if (!current.backend_enabled) return json(req, { error: '该账号不是后台账号' }, 400)
 
       const { data: role } = await admin.from('roles').select('id,code,active').eq('id', roleId).maybeSingle()
-      if (!role || !role.active || ['founder','employee'].includes(role.code)) {
+      if (!role || !role.active || role.code === 'employee' || (role.code === 'founder' && !isFounder)) {
         return json(req, { error: '角色不可用' }, 400)
+      }
+      if (!await roleCanBeAssigned(role.id, target)) {
+        return json(req, { error: '只能授予权限严格低于当前账号的角色' }, 403)
+      }
+
+      try {
+        await validateDelegatedScope(employeeId, dataScope, teamIds, employeeIds)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '管理范围不正确' }, 403)
+      }
+
+      let previousScope: { teamIds: string[], employeeIds: string[] }
+      try {
+        previousScope = await readScope(target)
+        if (dataScope === 'assigned_teams') {
+          await saveScope(target, teamIds, employeeIds)
+        }
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '管理范围保存失败' }, 400)
       }
 
       const { error } = await admin.from('user_access')
         .update({ employee_id: employeeId, role_id: roleId, data_scope: dataScope })
         .eq('auth_user_id', target)
 
-      if (error) return json(req, { error: error.message }, 400)
+      if (error) {
+        if (dataScope === 'assigned_teams') {
+          try {
+            await restoreScope(target, previousScope!)
+          } catch (rollbackError) {
+            console.error('account update scope rollback failed', rollbackError)
+            return json(req, { error: '账号保存失败且管理范围自动回滚未完整完成，请立即联系 Founder 检查该账号' }, 500)
+          }
+        }
+        return json(req, { error: error.message }, 400)
+      }
 
-      if (dataScope === 'assigned') await saveScope(target, teamIds, employeeIds)
-      else await saveScope(target, [], [])
+      if (dataScope !== 'assigned_teams') {
+        try {
+          await saveScope(target, [], [])
+        } catch (scopeError) {
+          const { error: rollbackError } = await admin.from('user_access')
+            .update({
+              employee_id: current.employee_id,
+              role_id: current.role_id,
+              data_scope: current.data_scope,
+            })
+            .eq('auth_user_id', target)
+          if (rollbackError) {
+            console.error('account update rollback failed', rollbackError, scopeError)
+            return json(req, { error: '账号与管理范围保存不一致，请立即联系 Founder 检查该账号' }, 500)
+          }
+          return json(req, { error: scopeError instanceof Error ? scopeError.message : '管理范围保存失败' }, 400)
+        }
+      }
 
       await audit('backend_account_update', `编辑后台账号 ${target}`)
       return json(req, { ok: true })
@@ -462,6 +892,12 @@ Deno.serve(async (req) => {
       }
       if (!passwordOk(password)) {
         return json(req, { error: '密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
+      }
+
+      try {
+        await requireEmployeeInScope(employeeId)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '无员工账号创建权限' }, 403)
       }
 
       const [{ data: employee }, { data: emailExists }, { data: linkedExists }, { data: employeeRole }] = await Promise.all([
@@ -524,8 +960,9 @@ Deno.serve(async (req) => {
 
       const code = `${crypto.randomUUID().replaceAll('-', '').slice(0, 6)}-${crypto.randomUUID().replaceAll('-', '').slice(0, 6)}`.toUpperCase()
       const expiresAt = new Date(Date.now() + hours * 3600000).toISOString()
-      await admin.from('employee_activation_codes').update({ revoked_at: new Date().toISOString() })
+      const { error: revokeError } = await admin.from('employee_activation_codes').update({ revoked_at: new Date().toISOString() })
         .eq('employee_id', employee.id).is('used_at', null).is('revoked_at', null)
+      if (revokeError) return json(req, { error: revokeError.message }, 400)
       const { error } = await admin.from('employee_activation_codes').insert({
         employee_id: employee.id,
         code_hash: await sha256(code),
@@ -542,6 +979,11 @@ Deno.serve(async (req) => {
       if (!can('account.otp_toggle')) return json(req, { error: '无OTP设置权限' }, 403)
       const target = cleanString(body.auth_user_id)
       const required = Boolean(body.otp_required)
+      try {
+        await getTargetAccount(target)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
       const { error } = await admin.from('user_access')
         .update({ otp_required: required })
         .eq('auth_user_id', target)
@@ -559,11 +1001,11 @@ Deno.serve(async (req) => {
         return json(req, { error: '不能停用当前登录账号' }, 400)
       }
 
-      const { data: targetAccess } = await admin.from('user_access')
-        .select('roles(code)')
-        .eq('auth_user_id', target).maybeSingle()
-      const tr = Array.isArray(targetAccess?.roles) ? targetAccess.roles[0] : targetAccess?.roles
-      if (tr?.code === 'founder' && !active) return json(req, { error: 'Founder 不能停用' }, 400)
+      try {
+        await getTargetAccount(target)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
 
       const { error } = await admin.from('user_access').update({ active }).eq('auth_user_id', target)
       if (error) return json(req, { error: error.message }, 400)
@@ -580,12 +1022,22 @@ Deno.serve(async (req) => {
         return json(req, { error: '新密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
       }
 
+      try {
+        await getTargetAccount(target)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
+
       const { error } = await admin.auth.admin.updateUserById(target, { password })
       if (error) return json(req, { error: error.message }, 400)
 
-      await admin.from('user_access')
+      const { error: passwordFlagError } = await admin.from('user_access')
         .update({ must_change_password: true, password_reset_at: new Date().toISOString() })
         .eq('auth_user_id', target)
+      if (passwordFlagError) {
+        await audit('password_reset_partial', `密码已重置但强制改密标记失败 ${target}`)
+        return json(req, { error: '密码已经重置，但强制改密标记保存失败，请立即联系 Founder 检查该账号' }, 500)
+      }
 
       await audit('password_reset', `重置密码 ${target}`)
       return json(req, { ok: true })
@@ -594,6 +1046,12 @@ Deno.serve(async (req) => {
     if (action === 'reset_mfa') {
       if (!can('account.mfa_reset')) return json(req, { error: '无重置OTP权限' }, 403)
       const target = cleanString(body.auth_user_id)
+
+      try {
+        await getTargetAccount(target)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
 
       const { data: factors, error: listError } = await admin.auth.admin.mfa.listFactors({ userId: target })
       if (listError) return json(req, { error: listError.message }, 400)
@@ -624,17 +1082,14 @@ Deno.serve(async (req) => {
       const target = cleanString(body.auth_user_id)
       if (target === userData.user.id) return json(req, { error: '不能删除当前登录账号' }, 400)
 
-      const { data: targetAccess } = await admin.from('user_access')
-        .select('roles(code)')
-        .eq('auth_user_id', target).maybeSingle()
-      const tr = Array.isArray(targetAccess?.roles) ? targetAccess.roles[0] : targetAccess?.roles
-      if (tr?.code === 'founder') return json(req, { error: 'Founder 不能删除' }, 400)
+      try {
+        await getTargetAccount(target)
+      } catch (error) {
+        return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
 
-      await admin.from('user_permission_overrides').delete().eq('auth_user_id', target)
-      await admin.from('user_scope_teams').delete().eq('auth_user_id', target)
-      await admin.from('user_scope_employees').delete().eq('auth_user_id', target)
-      await admin.from('user_access').delete().eq('auth_user_id', target)
-
+      // Related access/scope/override rows all have ON DELETE CASCADE from auth.users.
+      // Auth deletion is therefore the only destructive call and cannot leave a live user with partial access rows.
       const { error } = await admin.auth.admin.deleteUser(target)
       if (error) return json(req, { error: error.message }, 400)
 
@@ -649,6 +1104,15 @@ Deno.serve(async (req) => {
       const fullName = cleanString(body.full_name)
       if (!employeeNo || !fullName) return json(req, { error: '员工ID和姓名必填' }, 400)
 
+      const teamId = cleanString(body.team_id) || null
+      const scope = await getScopeContext()
+      if (teamId && !scope.allTeamIds.has(teamId)) {
+        return json(req, { error: '团队不存在' }, 400)
+      }
+      if (!isFounder && (!teamId || !scope.delegableTeamIds.has(teamId))) {
+        return json(req, { error: '只能在当前账号可管理的完整团队范围内新增员工' }, 403)
+      }
+
       const { data: exists } = await admin.from('employees')
         .select('id').eq('employee_no', employeeNo).maybeSingle()
       if (exists) return json(req, { error: '员工ID已存在' }, 409)
@@ -660,7 +1124,7 @@ Deno.serve(async (req) => {
         nationality: cleanString(body.nationality),
         employment_type: cleanString(body.employment_type),
         status: cleanString(body.status || 'active'),
-        team_id: cleanString(body.team_id) || null,
+        team_id: teamId,
         position_id: cleanString(body.position_id) || null,
       }
 

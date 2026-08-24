@@ -179,3 +179,87 @@
 .result-empty{margin:0 14px 14px}
 @media(max-width:900px){.staff-exam-selection{grid-template-columns:1fr}.staff-exam-start{width:100%}}
 @media(max-width:700px){.staff-exam-page-compact{padding:10px}.staff-exam-page-compact .staff-exam-hero{align-items:stretch;flex-direction:column}.staff-exam-hero-actions{justify-content:space-between}.staff-exam-picker-controls{grid-template-columns:1fr}.staff-exam-selection-facts{grid-template-columns:repeat(2,1fr)}.staff-exam-page-compact .staff-exam-metrics{grid-template-columns:repeat(3,1fr)}.staff-result-modal .staff-result-audit{grid-template-columns:1fr}.staff-exam-page-compact .staff-exam-metrics>div{display:flex;flex-direction:column}.staff-exam-page-compact .staff-exam-metrics strong{margin:2px 0}}
+
+/* Exam V10 — compact records and a no-horizontal-scroll question bank. */
+.exam-page .exam-compact-pagination{
+  min-height:42px;
+  margin:0;
+  padding:7px 2px 0;
+  border-top:0;
+  background:transparent;
+}
+.exam-page .exam-compact-pagination .pagination-summary{min-width:92px;font-size:9px}
+.exam-page .exam-compact-pagination .pagination-main{gap:4px}
+.exam-page .exam-compact-pagination .pagination-main>button,
+.exam-page .exam-compact-pagination .pagination-number-list button,
+.exam-page .exam-compact-pagination .pagination-jump button{height:28px;min-width:28px;padding:0 7px;font-size:9px}
+.exam-page .exam-compact-pagination .pagination-size-control select{height:28px;font-size:9px}
+.exam-page .exam-compact-pagination .pagination-jump input{width:39px;height:28px}
+
+.exam-page .exam-question-wrap{overflow-x:hidden}
+.exam-page .exam-question-table{width:100%;min-width:0!important;table-layout:fixed}
+.exam-page .exam-question-table th:nth-child(1){width:94px}
+.exam-page .exam-question-table th:nth-child(2){width:150px}
+.exam-page .exam-question-table th:nth-child(3){width:auto}
+.exam-page .exam-question-table th:nth-child(4){width:84px}
+.exam-page .exam-question-table th:nth-child(5){width:72px}
+.exam-page .exam-question-table th:nth-child(6){width:108px}
+.exam-page .exam-question-table th,
+.exam-page .exam-question-table td{padding:8px 9px}
+.exam-question-scope{min-width:0}
+.exam-question-scope strong,.exam-question-scope span,.exam-question-scope small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.exam-question-scope strong{color:#294969;font-size:11px}
+.exam-question-scope span{margin-top:2px;color:#455d78;font-size:10px}
+.exam-question-scope small{margin-top:3px;color:#8493a5;font-size:8px}
+.exam-question-summary{min-width:0}
+.exam-question-summary>button{display:grid!important;width:100%;min-width:0;gap:3px;padding:0!important;border:0!important;background:transparent!important;color:#263f5f!important;text-align:left!important}
+.exam-question-summary>button:hover em{color:#285fd6;text-decoration:underline}
+.exam-question-summary>button>span{display:grid;grid-template-columns:25px minmax(0,1fr);align-items:center;gap:5px;min-width:0}
+.exam-question-summary>button b{display:grid;place-items:center;height:18px;border-radius:5px;background:#edf3ff;color:#315fd4;font-size:8px}
+.exam-question-summary>button em{display:block;overflow:hidden;font-size:10px;font-style:normal;line-height:1.35;white-space:nowrap;text-overflow:ellipsis}
+.exam-question-spec b,.exam-question-spec span,.exam-question-spec small{display:block;white-space:nowrap}
+.exam-question-spec b{color:#24486f;font-size:11px}
+.exam-question-spec span{margin-top:2px;color:#687c94;font-size:9px}
+.exam-question-spec small{margin-top:2px;color:#7e6cbd;font-size:8px}
+.exam-page .exam-question-table .exam-row-actions{gap:4px}
+.exam-page .exam-question-table .exam-row-actions button{padding:6px 8px;font-size:9px}
+
+.exam-page .exam-session-table{width:100%;min-width:1420px!important;table-layout:fixed}
+.exam-page .exam-session-table th:nth-child(1){width:64px}
+.exam-page .exam-session-table th:nth-child(2){width:88px}
+.exam-page .exam-session-table th:nth-child(3){width:118px}
+.exam-page .exam-session-table th:nth-child(4){width:108px}
+.exam-page .exam-session-table th:nth-child(5){width:145px}
+.exam-page .exam-session-table th:nth-child(6){width:52px}
+.exam-page .exam-session-table th:nth-child(7),
+.exam-page .exam-session-table th:nth-child(8),
+.exam-page .exam-session-table th:nth-child(9){width:116px}
+.exam-page .exam-session-table th:nth-child(10){width:68px}
+.exam-page .exam-session-table th:nth-child(11){width:205px}
+.exam-page .exam-session-table th:nth-child(12){width:68px}
+.exam-page .exam-session-table th:nth-child(13){width:64px}
+.exam-page .exam-session-table th:nth-child(14){width:82px}
+.exam-page .exam-session-table th,.exam-page .exam-session-table td{padding:8px 7px;font-size:10px}
+.exam-record-name-cell{position:relative;display:grid;min-width:0;gap:3px;align-items:start}
+.exam-page .exam-record-name{display:block!important;width:100%;max-width:104px;overflow:hidden!important;color:#203b5d!important;font-size:10px!important;line-height:1.35;white-space:nowrap!important;text-overflow:ellipsis;text-decoration:none!important}
+.exam-record-name-cell.expanded .exam-record-name{overflow:visible!important;white-space:normal!important;overflow-wrap:anywhere;text-decoration:none!important}
+.exam-record-name-filter{justify-self:start;padding:2px 5px!important;border:0!important;background:#edf3ff!important;color:#285fd6!important;font-size:8px!important}
+.exam-record-title{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.exam-record-breakdown{display:inline-block;max-width:100%;overflow:hidden;line-height:1.35;white-space:normal;text-overflow:ellipsis}
+.exam-record-breakdown.summary-only{color:#6f7f93;font-size:9px}
+.exam-score-only-note{display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid #dce5f1;border-radius:9px;background:#f8faff;color:#60748e;font-size:10px}
+.exam-score-only-note b{color:#2d4d73;white-space:nowrap}
+
+@media(max-width:1000px){
+  .exam-page .exam-question-table th:nth-child(2){width:125px}
+  .exam-page .exam-question-table th:nth-child(4){width:72px}
+  .exam-page .exam-question-table th:nth-child(5){width:62px}
+  .exam-page .exam-question-table th:nth-child(6){width:96px}
+}
+@media(max-width:720px){
+  .exam-page .exam-question-wrap{overflow-x:auto}
+  .exam-page .exam-question-table{min-width:680px!important}
+  .exam-page .exam-compact-pagination{align-items:flex-start;flex-direction:column}
+  .exam-page .exam-compact-pagination .pagination-main{justify-content:flex-start;width:100%}
+  .exam-page .exam-compact-pagination .pagination-jump{display:none}
+}
