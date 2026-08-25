@@ -15,8 +15,25 @@ function withTimeout(promise, ms = 25000) {
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer))
 }
 
+const LOGIN_ERROR_MESSAGES = {
+  INVALID_REQUEST: '请求格式不正确',
+  INVALID_EMAIL: '邮箱格式不正确',
+  PASSWORD_REQUIRED: '请输入密码',
+  EMAIL_NOT_FOUND: '邮箱不存在',
+  PASSWORD_INCORRECT: '密码错误',
+  ACCOUNT_UNAVAILABLE: '账号不可用，请联系管理员',
+  TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后重试',
+  LOGIN_SERVICE_UNAVAILABLE: '登录服务暂不可用，请稍后重试',
+  SESSION_CHECK_UNAVAILABLE: '登录会话验证暂不可用，请稍后重试',
+  ACTIVE_SESSION_EXISTS: '旧会话接管未完成，请重新登录',
+  SESSION_REJECTED: '登录会话已失效，请重试',
+}
+
+const loginErrorMessage = response => LOGIN_ERROR_MESSAGES[response?.code]
+  || '登录失败，请稍后重试'
+
 export default function AdminLoginPage() {
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState(() => {
@@ -40,8 +57,9 @@ export default function AdminLoginPage() {
       const { data, error } = await withTimeout(
         supabase.functions.invoke('admin-login', {
           body: {
-            username: username.trim().toLowerCase(),
+            email: email.trim().toLowerCase(),
             password,
+            mode: 'admin',
           },
         })
       )
@@ -52,7 +70,7 @@ export default function AdminLoginPage() {
       }
 
       if (error || !responseData?.access_token || !responseData?.refresh_token) {
-        return setError(responseData?.error || '用户名或密码错误')
+        return setError(loginErrorMessage(responseData))
       }
 
       const { data: sessionData, error: sessionError } = await setAppSession({
@@ -84,24 +102,24 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <div className="login-page">
-      <div className="login-shell">
-        <div className="login-brand">
-          <div className="login-logo">W</div>
-          <span>WFH</span>
+    <div className="login-page login-page--signin admin-login-page">
+      <main className="login-shell login-shell--signin">
+        <div className="login-brand" aria-label="WFH">
+          <div className="login-logo" aria-hidden="true">W</div>
         </div>
 
-        <form className="login-card" onSubmit={submit}>
-          <div className="login-title">WFH 登录</div>
-          <div className="login-subtitle">管理后台 · 安全访问</div>
+        <form className="login-card login-card--signin" onSubmit={submit} aria-busy={loading}>
+          <h1 className="login-title">WFH 登录</h1>
 
           <label className="login-field">
-            用户名
+            邮箱
             <div className="login-input">
               <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                type="email"
+                inputMode="email"
+                autoComplete="email"
                 autoCapitalize="none"
                 spellCheck="false"
                 required
@@ -119,19 +137,19 @@ export default function AdminLoginPage() {
                 autoComplete="current-password"
                 required
               />
-              <button type="button" onClick={() => setShowPassword(v => !v)}>
+              <button type="button" aria-label={showPassword ? '隐藏密码' : '显示密码'} onClick={() => setShowPassword(v => !v)}>
                 {showPassword ? '隐藏' : '显示'}
               </button>
             </div>
           </label>
 
-          {error && <div className="login-error">{error}</div>}
+          {error && <div className="login-error" role="alert">{error}</div>}
 
-          <button className="login-submit" disabled={loading}>
+          <button type="submit" className="login-submit" disabled={loading}>
             {loading ? '登录中...' : '登录'}
           </button>
         </form>
-      </div>
+      </main>
     </div>
   )
 }
