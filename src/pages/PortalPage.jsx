@@ -5,7 +5,7 @@ import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
 import { StaffPayrollWorkspace } from './StaffPayrollPage'
 import { useStaffLocale } from '../lib/staffI18n'
 
-const inactiveStatuses = ['left', 'resigned', 'inactive', 'suspended', 'terminated', '离职', '停用']
+const activeStatuses = ['active', '在职']
 const text = v => String(v ?? '').trim()
 
 const currentStaffShift = (profile = {}, schedule = {}, fallback) => {
@@ -30,7 +30,7 @@ const staffPaymentMode = payment => {
 }
 
 function isActive(row) {
-  return !inactiveStatuses.includes(text(row?.status).toLowerCase())
+  return activeStatuses.includes(text(row?.status).toLowerCase())
 }
 
 function groupCount(rows, getter) {
@@ -92,6 +92,7 @@ export const AdminHome = () => {
     return {
       total: employees.length,
       active: active.length,
+      inactive: Math.max(0, employees.length - active.length),
       teams: groupCount(active, e => e?.teams?.name),
       positions: groupCount(active, e => e?.positions?.name),
       types: groupCount(active, e => e?.employment_type),
@@ -123,7 +124,8 @@ export const AdminHome = () => {
 
       {!loading && !data ? <DashboardLoadUnavailable /> : !loading && !view.canViewEmployees ? <DashboardAccessLimited summary={view.accountSummary} access={data.dashboard_access} /> : <>
       <div className="kpi-grid kpi-grid-pro dashboard-kpi-grid">
-        <Kpi label="在职员工" value={loading ? '—' : view.active} hint={`范围内共 ${view.total} 笔员工资料`} icon="人" />
+        <Kpi label="全部员工" value={loading ? '—' : view.total} hint="当前员工主档" icon="总" />
+        <Kpi label="在职员工" value={loading ? '—' : view.active} hint={`非在职 ${view.inactive} 人`} icon="人" tone="green" />
         <Kpi label="团队总数" value={loading ? '—' : view.teams.length} hint="按当前管理范围统计" icon="组" tone="violet" />
         <Kpi label="近 30 天入职" value={loading ? '—' : view.hires30} hint="取员工主档入职日期" icon="入" tone="green" />
         <Kpi label="近 30 天离职" value={loading ? '—' : view.resignations30} hint="取员工主档离职日期" icon="离" tone="orange" />
@@ -255,6 +257,7 @@ const dashboardMonths = today => {
 }
 
 function MovementChart({ rows }) {
+  const [hoveredIndex, setHoveredIndex] = useState(null)
   const width = 680
   const height = 205
   const padding = { top: 18, right: 18, bottom: 36, left: 30 }
@@ -264,17 +267,40 @@ function MovementChart({ rows }) {
   const points = key => rows.map((row, index) => `${x(index)},${y(row[key])}`).join(' ')
   const area = key => `${padding.left},${height - padding.bottom} ${points(key)} ${x(rows.length - 1)},${height - padding.bottom}`
 
-  return <div className="movement-chart">
+  const hovered = hoveredIndex === null ? null : rows[hoveredIndex]
+  const hoveredLeft = hoveredIndex === null || rows.length < 2
+    ? 50
+    : Math.min(89, Math.max(11, x(hoveredIndex) / width * 100))
+
+  return <div className="movement-chart" onMouseLeave={() => setHoveredIndex(null)}>
     <div className="movement-legend"><span className="hire">入职</span><span className="resign">离职</span></div>
+    {hovered && <div className="movement-tooltip" style={{ left: `${hoveredLeft}%` }} role="status">
+      <strong>{hovered.label}</strong>
+      <span><i className="hire" />入职 <b>{hovered.hires}</b> 人</span>
+      <span><i className="resign" />离职 <b>{hovered.resignations}</b> 人</span>
+    </div>}
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="最近六个月入职及离职人数趋势">
       {[0, .25, .5, .75, 1].map(ratio => <line key={ratio} x1={padding.left} x2={width - padding.right} y1={padding.top + ratio * (height - padding.top - padding.bottom)} y2={padding.top + ratio * (height - padding.top - padding.bottom)} className="chart-grid-line" />)}
       <polygon points={area('hires')} className="chart-area hire" />
       <polyline points={points('hires')} className="chart-line hire" />
       <polyline points={points('resignations')} className="chart-line resign" />
+      {hoveredIndex !== null && <line x1={x(hoveredIndex)} x2={x(hoveredIndex)} y1={padding.top} y2={height - padding.bottom} className="chart-hover-line" />}
       {rows.map((row, index) => <g key={row.key}>
         <circle cx={x(index)} cy={y(row.hires)} r="4" className="chart-dot hire"><title>{row.label}入职 {row.hires} 人</title></circle>
         <circle cx={x(index)} cy={y(row.resignations)} r="4" className="chart-dot resign"><title>{row.label}离职 {row.resignations} 人</title></circle>
         <text x={x(index)} y={height - 12} textAnchor="middle">{row.label}</text>
+        <rect
+          x={x(index) - ((width - padding.left - padding.right) / Math.max(1, rows.length - 1)) / 2}
+          y={padding.top}
+          width={(width - padding.left - padding.right) / Math.max(1, rows.length - 1)}
+          height={height - padding.top - padding.bottom}
+          className="chart-hit-area"
+          tabIndex="0"
+          aria-label={`${row.label}，入职 ${row.hires} 人，离职 ${row.resignations} 人`}
+          onMouseEnter={() => setHoveredIndex(index)}
+          onFocus={() => setHoveredIndex(index)}
+          onBlur={() => setHoveredIndex(null)}
+        />
       </g>)}
     </svg>
   </div>

@@ -275,6 +275,7 @@ export function ConnectivityRecordsPage(){
 export function EmployeeConnectivityPanel({data,loading,error,title,t}){
   const tr=typeof t==='function'?t:(_key,fallback)=>fallback
   const rows=data?.rows||[]
+  const [filters,setFilters]=useState({from:'',to:'',keyword:''})
   const translatedType=value=>value==='power_outage'?tr('connectivity.power','停电'):value==='internet_outage'?tr('connectivity.internet','断网'):value||'—'
   const translatedStatus=value=>({reported:tr('connectivity.recorded','已记录'),verified:tr('connectivity.verified','已核实'),resolved:tr('connectivity.resolved','已恢复'),rejected:tr('connectivity.rejected','不成立')}[value]||value||'—')
   const translatedDuration=value=>{
@@ -283,7 +284,24 @@ export function EmployeeConnectivityPanel({data,loading,error,title,t}){
     const hours=Math.floor(minutes/60),rest=minutes%60
     return `${hours?tr('connectivity.hours','{count}小时',{count:hours}):''}${hours&&rest?' ':''}${rest?tr('connectivity.minutes','{count}分钟',{count:rest}):''}`
   }
-  return <section className="detail-panel employee-connectivity-panel"><div className="detail-panel-head"><h3>{title||tr('connectivity.title','停电 / 断网记录')}</h3><span className="employee-exam-count">{tr('common.totalItems','共 {count} 条',{count:data?.total||0})}</span></div>{loading?<div className="connectivity-empty">{tr('connectivity.loading','正在读取记录…')}</div>:error?<div className="connectivity-empty error">{error}</div>:rows.length?<div className="employee-connectivity-list">{rows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{translatedType(row.incident_type)}</span></div><div><small>{tr('connectivity.timeDuration','时间 / 持续')}</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'} · {translatedDuration(row.duration_minutes)}</p></div><div><small>{tr('connectivity.status','状态')}</small><p>{translatedStatus(row.status)}</p></div><div className="employee-connectivity-details"><small>{tr('connectivity.details','情况说明')}</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>{tr('connectivity.evidence','证明')}</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url} t={t}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">{tr('connectivity.none','暂无停电或断网记录')}</div>}</section>
+  const visibleRows=useMemo(()=>rows.filter(row=>{
+    const date=text(row.incident_date).slice(0,10)
+    if(filters.from&&(!date||date<filters.from))return false
+    if(filters.to&&(!date||date>filters.to))return false
+    const keyword=text(filters.keyword).toLocaleLowerCase()
+    if(!keyword)return true
+    return [row.details,row.incident_type,row.status,translatedType(row.incident_type),translatedStatus(row.status),row.incident_date]
+      .some(value=>text(value).toLocaleLowerCase().includes(keyword))
+  }),[rows,filters,t])
+  const update=(key,value)=>setFilters(current=>({...current,[key]:value}))
+  const reset=()=>setFilters({from:'',to:'',keyword:''})
+  const total=(filters.from||filters.to||filters.keyword)?visibleRows.length:(data?.total||visibleRows.length)
+  return <section className="detail-panel employee-connectivity-panel"><div className="detail-panel-head"><h3>{title||tr('connectivity.title','停电 / 断网记录')}</h3><span className="employee-exam-count">{tr('common.totalItems','共 {count} 条',{count:total})}</span></div>{loading?<div className="connectivity-empty">{tr('connectivity.loading','正在读取记录…')}</div>:error?<div className="connectivity-empty error">{error}</div>:<><div className="employee-history-filters employee-connectivity-filters">
+    <label><span>{tr('filters.dateFrom','日期起')}</span><input type="date" value={filters.from} onChange={event=>update('from',event.target.value)}/></label>
+    <label><span>{tr('filters.dateTo','日期止')}</span><input type="date" value={filters.to} onChange={event=>update('to',event.target.value)}/></label>
+    <label className="employee-history-search"><span>{tr('filters.search','搜索')}</span><input value={filters.keyword} onChange={event=>update('keyword',event.target.value)} placeholder={tr('connectivity.searchPlaceholder','搜索类型、状态或情况说明')}/></label>
+    {(filters.from||filters.to||filters.keyword)&&<button type="button" onClick={reset}>{tr('filters.reset','重置')}</button>}
+  </div>{visibleRows.length?<div className="employee-connectivity-list">{visibleRows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{translatedType(row.incident_type)}</span></div><div><small>{tr('connectivity.timeDuration','时间 / 持续')}</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'} · {translatedDuration(row.duration_minutes)}</p></div><div><small>{tr('connectivity.status','状态')}</small><p>{translatedStatus(row.status)}</p></div><div className="employee-connectivity-details"><small>{tr('connectivity.details','情况说明')}</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>{tr('connectivity.evidence','证明')}</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url} t={t}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">{tr('connectivity.none','暂无停电或断网记录')}</div>}</>}</section>
 }
 
 export function EmployeePayrollHistoryPanel({data,loading,error}){

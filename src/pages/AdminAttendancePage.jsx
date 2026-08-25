@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
-import { attendanceAmount, attendanceCurrency, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
+import { attendanceAmount, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { supabase } from '../lib/supabase'
@@ -54,10 +54,18 @@ const employeeTypeLabel=row=>{
 }
 const employeeStatusLabel=value=>({active:'在职',probation:'试用',suspended:'停用',inactive:'停用',resigned:'离职',unmatched:'未匹配'}[text(value).toLowerCase()]||text(value)||'—')
 const employeeWorkMode=row=>{
-  const value=text(row?.work_mode||row?.source_group||row?.employment_type||row?.employee_type).toLowerCase()
-  return value==='onsite_to_home'||value.includes('现场转居家')?'onsite_to_home':'home'
+  const values=[row?.work_mode,row?.source_group,row?.employment_type,row?.employee_type].map(value=>text(value).toLowerCase()).filter(Boolean)
+  return values.some(value=>value==='onsite_to_home'||value.includes('现场转居家')||value.includes('onsite'))?'onsite_to_home':'home'
 }
 const employeeWorkModeLabel=row=>employeeWorkMode(row)==='onsite_to_home'?'现场转居家':'纯居家'
+const PHILIPPINES_COUNTRY=/(^|\b)(PH|PHL|PHILIPPINES?|FILIPINO)($|\b)|菲律宾|菲律賓/i
+const philippinesEmployee=row=>{
+  const country=text(row?.country||row?.nationality)
+  if(PHILIPPINES_COUNTRY.test(country))return true
+  const employmentType=text(row?.employment_type||row?.employee_type).toLowerCase()
+  return employmentType==='home_ph'||/home[_\s-]*ph\b|纯居家[^\n]*菲律宾籍|純居家[^\n]*菲律賓籍|纯居家菲律宾|純居家菲律賓/.test(employmentType)
+}
+const adjustmentCurrency=row=>employeeWorkMode(row)==='onsite_to_home'?'USD':philippinesEmployee(row)?'PHP':'USD'
 const formatNumber=value=>{
   const number=Number(value)
   return Number.isFinite(number)?number.toLocaleString('zh-CN',{maximumFractionDigits:2}):text(value)||'0'
@@ -74,7 +82,9 @@ const optionEntries=(values,labeler=value=>value)=>(values||[]).map((item,index)
 
 const normalizeAttendanceRows=rows=>(rows||[]).map(row=>{
   const normalized={...row,employment_type:row.employment_type||row.employee_type||''}
-  return {...normalized,currency:attendanceCurrency(normalized)}
+  const eventKind=text(normalized.event_kind).toLowerCase()
+  const isAdjustment=normalized.scope==='adjustment'||normalized.kind==='adjustment'||['bonus','reward','deduction','penalty'].includes(eventKind)
+  return isAdjustment?{...normalized,currency:adjustmentCurrency(normalized)}:normalized
 })
 
 const syncMeta=payload=>{
@@ -241,21 +251,23 @@ function AttendanceSummary({scope,summary,total}){
 }
 
 function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail}){
+  const adjustment=scope==='adjustment'
   return <section className={`attendance-table-card ${loading&&hasData?'is-loading':''}`}>
-    <header><div><h2>{scope==='adjustment'?'奖金 / 扣款明细':'考勤记录明细'}</h2><p>员工、组织与说明分列展示；点击原因或备注可查看完整文字。</p></div><span>{loading?'读取中…':`${rows.length} 条 / 本页`}</span></header>
-    {!hasData&&loading?<div className="attendance-table-state">正在读取记录…</div>:!rows.length?<div className="attendance-table-state">当前筛选条件下暂无记录</div>:<div className="attendance-table-scroll"><table className={scope==='adjustment'?'attendance-detail-table adjustment':'attendance-detail-table'}>
-      <thead><tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>负责人</th>{scope==='adjustment'&&<th>金额 / 币种</th>}<th>原因</th><th>备注</th></tr></thead>
+    <header><div><h2>{adjustment?'奖金 / 扣款明细':'考勤记录明细'}</h2><p>{adjustment?'备注直接展示，点击可查看完整内容。':'员工、组织与说明分列展示；点击原因或备注可查看完整文字。'}</p></div><span>{loading?'读取中…':`${rows.length} 条 / 本页`}</span></header>
+    {!hasData&&loading?<div className="attendance-table-state">正在读取记录…</div>:!rows.length?<div className="attendance-table-state">当前筛选条件下暂无记录</div>:<div className="attendance-table-scroll"><table className={adjustment?'attendance-detail-table adjustment':'attendance-detail-table'}>
+      {adjustment&&<colgroup><col className="adjustment-date-col"/><col className="adjustment-hire-col"/><col className="adjustment-employee-col"/><col className="adjustment-type-col"/><col className="adjustment-status-col"/><col className="adjustment-organization-col"/><col className="adjustment-money-col"/><col className="adjustment-note-col"/></colgroup>}
+      <thead>{adjustment?<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>奖金 / 扣款 · 金额</th><th>备注</th></tr>:<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>负责人</th><th>原因</th><th>备注</th></tr>}</thead>
       <tbody>{rows.map((row,index)=><tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
-        <td><div className="attendance-event-cell"><strong>{row.event_date||'—'}</strong><span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span>{row.is_mirror&&<em>镜像</em>}</div></td>
+        <td className={adjustment?'attendance-adjustment-date-cell':''}><div className="attendance-event-cell"><strong>{row.event_date||'—'}</strong>{!adjustment&&<span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span>}{!adjustment&&row.is_mirror&&<em>镜像</em>}</div></td>
         <td><span className="attendance-hire-date">{text(row.hire_date).slice(0,10)||'—'}</span></td>
         <td><div className="attendance-employee-cell">{row.employee_id?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||'未匹配'}</strong>}<span>{row.full_name||'—'}</span></div></td>
         <td><div className="attendance-stack"><strong>{employeeTypeLabel(row)}</strong><span>{row.country||'—'}</span></div></td>
         <td><div className="attendance-status-stack"><span className={`attendance-employee-status ${text(row.employee_status).toLowerCase()}`}>{employeeStatusLabel(row.employee_status)}</span>{row.needs_review&&<span className="attendance-review-badge" title="员工身份尚未唯一确认，需要人工核对员工ID或姓名">待核对</span>}</div></td>
         <td><div className="attendance-stack"><strong>{row.team_name||'—'}</strong><span>{row.position_name||'—'}</span></div></td>
-        <td>{row.manager||'—'}</td>
-        {scope==='adjustment'&&<td><div className={`attendance-amount ${text(row.event_kind).toLowerCase()}`}><strong>{attendanceAmount(row)}</strong><span>{row.raw_amount&&text(row.raw_amount)!==text(row.amount)?`原值 ${row.raw_amount}`:'金额已解析'}</span></div></td>}
-        <td><button type="button" className="attendance-copy-button" title="查看完整原因" onClick={()=>onDetail(row)}>{row.reason||'—'}</button></td>
-        <td><button type="button" className="attendance-copy-button note" title="查看完整备注" onClick={()=>onDetail(row)}>{row.note||'—'}</button></td>
+        {!adjustment&&<td>{row.manager||'—'}</td>}
+        {adjustment&&<td className="attendance-adjustment-money-cell"><div className="attendance-adjustment-money"><span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span><div className={`attendance-amount ${text(row.event_kind).toLowerCase()}`}><strong>{attendanceAmount(row)}</strong>{row.raw_amount&&text(row.raw_amount)!==text(row.amount)&&<span>原值 {row.raw_amount}</span>}</div></div></td>}
+        {!adjustment&&<td><button type="button" className="attendance-copy-button" title="查看完整原因" onClick={()=>onDetail(row)}>{row.reason||'—'}</button></td>}
+        <td className={adjustment?'attendance-adjustment-note-cell':''}><button type="button" className={`attendance-copy-button note${adjustment?' adjustment-note':''}`} title="点击查看完整备注" onClick={()=>onDetail(row)}>{row.note||'—'}</button></td>
       </tr>)}</tbody>
     </table></div>}
     {loading&&hasData&&<div className="attendance-loading-overlay">正在更新结果…</div>}
@@ -266,9 +278,9 @@ function AttendanceRecordModal({row,adjustment,onClose}){
   return <div className="modal-mask attendance-main-modal-mask" onMouseDown={onClose}><div className="attendance-main-modal" role="dialog" aria-modal="true" aria-labelledby="attendance-main-modal-title" onMouseDown={event=>event.stopPropagation()}>
     <header><div><small>ATTENDANCE DETAIL</small><h2 id="attendance-main-modal-title">{attendanceKindLabel(row.event_kind)} · 完整记录</h2><p>{row.event_date||'—'} · {row.employee_no||'未匹配'} · {row.full_name||'—'}</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
     <div className="attendance-modal-facts">
-      <span><small>入职日期</small><b>{text(row.hire_date).slice(0,10)||'—'}</b></span><span><small>员工类型 / 国家</small><b>{[employeeTypeLabel(row),row.country].filter(Boolean).join(' · ')||'—'}</b></span><span><small>员工状态</small><b>{employeeStatusLabel(row.employee_status)}</b></span><span><small>团队 / 岗位</small><b>{[row.team_name,row.position_name].filter(Boolean).join(' · ')||'—'}</b></span><span><small>负责人</small><b>{row.manager||'—'}</b></span>{adjustment&&<span><small>金额 / 原值</small><b>{attendanceAmount(row)}{row.raw_amount?` · ${row.raw_amount}`:''}</b></span>}
+      <span><small>入职日期</small><b>{text(row.hire_date).slice(0,10)||'—'}</b></span><span><small>员工类型 / 国家</small><b>{[employeeTypeLabel(row),row.country].filter(Boolean).join(' · ')||'—'}</b></span><span><small>员工状态</small><b>{employeeStatusLabel(row.employee_status)}</b></span><span><small>团队 / 岗位</small><b>{[row.team_name,row.position_name].filter(Boolean).join(' · ')||'—'}</b></span>{!adjustment&&<span><small>负责人</small><b>{row.manager||'—'}</b></span>}{adjustment&&<span><small>金额 / 原值</small><b>{attendanceAmount(row)}{row.raw_amount?` · ${row.raw_amount}`:''}</b></span>}
     </div>
-    <section><small>完整原因</small><p>{row.reason||'—'}</p></section>
+    {!adjustment&&<section><small>完整原因</small><p>{row.reason||'—'}</p></section>}
     <section><small>完整备注</small><p>{row.note||'—'}</p></section>
     <footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer>
   </div></div>
@@ -433,7 +445,7 @@ const monthMeta=value=>{
 }
 const matrixPersonKey=row=>text(row.employee_id)||text(row.id)||text(row.employee_no).toUpperCase()
 const matrixKindMeta=value=>({
-  public_holiday:['休','public_holiday'],home_leave:['回','home_leave'],leave:['请','leave'],half_day:['半','half_day'],absence:['缺','absence'],absent:['缺','absence'],resignation:['离','resignation'],
+  public_holiday:['公','public_holiday'],home_leave:['回','home_leave'],leave:['请','leave'],half_day:['半','half_day'],absence:['缺','absence'],absent:['缺','absence'],resignation:['离','resignation'],
 }[text(value).toLowerCase()]||null)
 
 const matrixKinds=['public_holiday','home_leave','leave','half_day','absence','resignation']
@@ -495,7 +507,7 @@ const matrixSummaryFor=(employee,bounds,month)=>{
   })
   return {...fallback,total:matrixKinds.reduce((sum,kind)=>sum+Number(fallback[kind]||0),0)}
 }
-const matrixSummaryLabels={public_holiday:'休',home_leave:'回',leave:'请',half_day:'半',absence:'缺',resignation:'离'}
+const matrixSummaryLabels={public_holiday:'公',home_leave:'回',leave:'请',half_day:'半',absence:'缺',resignation:'离'}
 const formatDayCount=value=>Number(value||0).toLocaleString('zh-CN',{maximumFractionDigits:1})
 const matrixOverviewFor=(people,bounds,month,scope='page')=>{
   const empty=()=>Object.fromEntries(matrixKinds.map(kind=>[kind,{days:0,people:new Set()}]))
@@ -652,7 +664,7 @@ function AttendanceMatrixPane(){
     </section>
     {state.error&&<div className="attendance-error"><span>月度出勤读取失败：{state.error}</span><button type="button" onClick={()=>load(true)}>重试</button></div>}
     {!state.loading&&people.length>0&&<AttendanceMatrixOverview overview={overview} month={month}/>}
-    <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；同日多种状态时，离职优先计入总计。</p></div><div className="matrix-legend"><span className="public_holiday">休 公休 / Rest day</span><span className="home_leave">回 回家 / Home leave</span><span className="leave">请 请假 / Leave</span><span className="half_day">半 半天 / Half day</span><span className="absence">缺 缺席 / Absent</span><span className="resignation">离 离职 / Resigned</span></div></header>
+    <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；同日多种状态时，离职优先计入总计。</p></div><div className="matrix-legend"><span className="public_holiday">公 公休 / Rest day</span><span className="home_leave">回 回家 / Home leave</span><span className="leave">请 请假 / Leave</span><span className="half_day">半 半天 / Half day</span><span className="absence">缺 缺席 / Absent</span><span className="resignation">离 离职 / Resigned</span></div></header>
       {state.loading&&!state.people.length?<div className="attendance-table-state">正在生成月度出勤表…</div>:!people.length?<div className="attendance-table-state">当前条件下暂无员工</div>:<div className="attendance-matrix-scroll"><table><thead><tr><th className="matrix-sticky matrix-scope">盘口 / 国家</th><th className="matrix-sticky matrix-position">岗位 / 团队</th><th className="matrix-sticky matrix-employee">员工</th><th className="matrix-sticky matrix-hire">入职</th><th className="matrix-sticky matrix-summary">本月统计</th>{bounds.days.map(day=><th className="matrix-day-head" key={day}>{day}</th>)}<th className="matrix-total-head">总计</th></tr></thead><tbody>{pagePeople.map(employee=><AttendanceMatrixRow key={matrixPersonKey(employee)} employee={employee} bounds={bounds} month={month} onDay={setDayDetail}/>)}</tbody></table></div>}
       {state.loading&&state.people.length>0&&<div className="attendance-loading-overlay">正在更新月度出勤…</div>}
     </section>

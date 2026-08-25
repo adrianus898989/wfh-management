@@ -228,25 +228,38 @@ Deno.serve(async (req) => {
 
     let scopeContextPromise: Promise<any> | null = null
 
+    async function getAllEmployeeRows() {
+      const pageSize = 1000
+      const rows: any[] = []
+
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await admin.from('employees')
+          .select('id,employee_no,full_name,status,team_id,position_id,hire_date,resign_date,country,nationality,employment_type,shift_name,source_type,profile_status,created_at,updated_at,teams(id,name),positions(id,name)')
+          .order('employee_no')
+          .order('id')
+          .range(offset, offset + pageSize - 1)
+        if (error) throw error
+
+        const page = data || []
+        rows.push(...page)
+        if (page.length < pageSize) return rows
+      }
+    }
+
     async function getScopeContext() {
       if (scopeContextPromise) return scopeContextPromise
       scopeContextPromise = (async () => {
-        const [employeeRes, teamRes, scopeTeamRes, scopeEmployeeRes] = await Promise.all([
-          admin.from('employees')
-            .select('id,employee_no,full_name,status,team_id,position_id,hire_date,resign_date,country,nationality,employment_type,shift_name,source_type,profile_status,created_at,updated_at,teams(id,name),positions(id,name)')
-            .order('employee_no')
-            .limit(10000),
+        const [allEmployees, teamRes, scopeTeamRes, scopeEmployeeRes] = await Promise.all([
+          getAllEmployeeRows(),
           admin.from('teams').select('id,name').order('name').limit(5000),
           admin.from('user_scope_teams').select('team_id').eq('auth_user_id', userData.user.id),
           admin.from('user_scope_employees').select('employee_id').eq('auth_user_id', userData.user.id),
         ])
 
-        if (employeeRes.error) throw employeeRes.error
         if (teamRes.error) throw teamRes.error
         if (scopeTeamRes.error) throw scopeTeamRes.error
         if (scopeEmployeeRes.error) throw scopeEmployeeRes.error
 
-        const allEmployees = employeeRes.data || []
         const allTeams = teamRes.data || []
         const employeeMap = new Map(allEmployees.map((employee: any) => [employee.id, employee]))
         const allTeamIds = new Set(allTeams.map((team: any) => team.id))
@@ -513,10 +526,10 @@ Deno.serve(async (req) => {
         const visibleAccounts = (accessRows || []).filter((row: any) =>
           isFounder || (row.employee_id && scope.allowedEmployeeIds.has(row.employee_id))
         )
-        const inactiveEmployeeStatuses = new Set(['left', 'resigned', 'inactive', 'suspended', 'terminated', '离职', '停用'])
+        const activeEmployeeStatuses = new Set(['active', '在职'])
         const activeScopedEmployees = scopedEmployees.filter((employee: any) => {
           const employeeNo = cleanString(employee.employee_no).toUpperCase()
-          return !inactiveEmployeeStatuses.has(cleanString(employee.status).toLowerCase()) && employeeNo &&
+          return activeEmployeeStatuses.has(cleanString(employee.status).toLowerCase()) && employeeNo &&
             !['SYSTEM', 'ADMIN'].includes(employeeNo) && !employeeNo.startsWith('TEST') &&
             cleanString(employee.source_type) !== 'google_deleted'
         })

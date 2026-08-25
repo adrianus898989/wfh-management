@@ -77,7 +77,8 @@
 .attendance-table-card>header h2{margin:0 0 3px;color:#203b5c;font-size:14px}.attendance-table-card>header p{margin:0;color:#8594a6;font-size:9px}.attendance-table-card>header>span{color:#6f8298;font-size:10px;font-weight:800}
 .attendance-table-scroll{overflow:auto}
 .attendance-table-scroll table{width:100%;min-width:1320px;border-collapse:collapse}
-.attendance-table-scroll table.adjustment{min-width:1460px}
+.attendance-table-scroll table.adjustment{min-width:1120px;table-layout:fixed}
+.attendance-detail-table.adjustment .adjustment-date-col{width:98px}.attendance-detail-table.adjustment .adjustment-hire-col{width:96px}.attendance-detail-table.adjustment .adjustment-employee-col{width:150px}.attendance-detail-table.adjustment .adjustment-type-col{width:150px}.attendance-detail-table.adjustment .adjustment-status-col{width:78px}.attendance-detail-table.adjustment .adjustment-organization-col{width:160px}.attendance-detail-table.adjustment .adjustment-money-col{width:205px}.attendance-detail-table.adjustment .adjustment-note-col{width:auto}
 .schedule-table-card .attendance-table-scroll table{min-width:1300px}
 .attendance-table-scroll th{position:sticky;top:0;z-index:1;padding:10px 11px;background:#f3f7fb;color:#60758f;font-size:9px;font-weight:850;text-align:left;white-space:nowrap}
 .attendance-table-scroll td{padding:10px 11px;border-top:1px solid #e8edf3;color:#3f536c;font-size:10px;vertical-align:top}
@@ -105,6 +106,7 @@
 .attendance-hire-date{color:#385571;font-weight:800;white-space:nowrap}
 .attendance-copy-button{display:-webkit-box;width:190px;max-width:190px;overflow:hidden;padding:0;border:0;background:transparent;color:#344b66;font-size:9px;line-height:1.5;text-align:left;white-space:normal;word-break:break-word;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .attendance-copy-button.note{color:#71839a;-webkit-line-clamp:3}.attendance-copy-button:hover{color:#245fc9}
+.attendance-adjustment-date-cell,.attendance-adjustment-date-cell .attendance-event-cell,.attendance-adjustment-date-cell strong{white-space:nowrap}.attendance-adjustment-money-cell{vertical-align:middle!important}.attendance-adjustment-money{display:flex;align-items:center;gap:10px;min-width:0}.attendance-adjustment-money>.attendance-kind{flex:0 0 auto}.attendance-adjustment-money .attendance-amount{min-width:0;gap:3px}.attendance-adjustment-money .attendance-amount strong{white-space:nowrap}.attendance-adjustment-note-cell{min-width:300px}.attendance-copy-button.adjustment-note{display:-webkit-box;width:100%;max-width:none;color:#435a73;font-size:11px;line-height:1.6;cursor:pointer;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-line-clamp:3}.attendance-copy-button.adjustment-note:hover{color:#245fc9}
 .attendance-page>.professional-pagination{margin-top:0;padding:10px 12px;border:1px solid #d9e3ef;border-top:0;border-radius:0 0 13px 13px;background:#fff}
 
 .schedule-overview{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:8px;margin-bottom:11px}
@@ -164,10 +166,13 @@
 /* Employee drawer attendance and adjustment histories. */
 .employee-attendance-panel{grid-column:1/-1;min-width:0}
 .attendance-panel-state{display:grid;min-height:170px;padding:24px;place-content:center;color:#78899d;font-size:10px}.attendance-panel-state.error{color:#b33b3b}
+.employee-history-filters{display:grid;grid-template-columns:140px 140px minmax(180px,1fr) auto;gap:8px;align-items:end;padding:10px;border-bottom:1px solid #e8edf3;background:linear-gradient(180deg,#fbfdff,#f8fbff)}
+.employee-history-filters label{display:flex;min-width:0;flex-direction:column;gap:5px;color:#70839a;font-size:8px;font-weight:850}.employee-history-filters input{width:100%;height:34px;box-sizing:border-box;padding:0 9px;border:1px solid #cfdbea;border-radius:8px;background:#fff;color:#263f5e;font-size:10px;outline:0}.employee-history-filters input:focus{border-color:#78a0e7;box-shadow:0 0 0 3px rgba(70,113,211,.1)}.employee-history-filters>button{height:34px;padding:0 11px;border:1px solid #c8d7e9;border-radius:8px;background:#fff;color:#46617e;font-size:9px;font-weight:850}
 .employee-attendance-summary,.employee-adjustment-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}
 .employee-attendance-summary>span,.employee-adjustment-summary>span{display:flex;min-width:0;flex-direction:column;gap:5px;padding:9px 10px;border:1px solid #e0e7f0;border-radius:9px;background:#f9fbfd}
 .employee-attendance-summary small,.employee-adjustment-summary small{color:#76889d;font-size:8px}.employee-attendance-summary b,.employee-adjustment-summary b{color:#223d5e;font-size:15px}
 .employee-attendance-summary .negative b,.employee-adjustment-summary .negative b{color:#ad3939}.employee-adjustment-summary .positive b{color:#14764c}.employee-adjustment-summary .warning b{color:#91600d}
+.employee-attendance-months{display:flex;gap:8px;padding:0 10px 10px;overflow-x:auto}.employee-attendance-months>article{flex:0 0 290px;padding:9px;border:1px solid #dfe8f2;border-radius:10px;background:#fbfdff}.employee-attendance-months header{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}.employee-attendance-months header strong{color:#2d4867;font-size:10px}.employee-attendance-months header span{color:#688099;font-size:8px;font-weight:800}.employee-attendance-months article>div{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}.employee-attendance-months article>div>span{display:flex;align-items:center;justify-content:center;gap:4px;min-height:26px;border-radius:7px;background:#f0f4f8;color:#577089}.employee-attendance-months small{font-size:8px;font-weight:900}.employee-attendance-months b{font-size:10px}.employee-attendance-months .public_holiday{background:#e8f4ff;color:#2465a6}.employee-attendance-months .home_leave,.employee-attendance-months .leave,.employee-attendance-months .half_day{background:#fff3dd;color:#875a0a}.employee-attendance-months .absence,.employee-attendance-months .resignation{background:#ffeded;color:#a43737}
 .employee-attendance-list,.employee-adjustment-list{display:grid;gap:8px;padding:10px;border-top:1px solid #e8edf3}
 .employee-attendance-list>article,.employee-adjustment-list>article{padding:10px;border:1px solid #dfe7f0;border-radius:10px;background:#fbfcfe}
 .employee-attendance-record-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.employee-attendance-record-head>div{display:flex;align-items:center;gap:7px}.employee-attendance-record-head strong{color:#243e5e;font-size:11px}.employee-attendance-record-head>button,.employee-adjustment-list>article>button{padding:5px 8px;border:1px solid #cbdaf0;border-radius:7px;background:#f7faff;color:#2d61bd;font-size:8px;font-weight:850}
@@ -195,14 +200,14 @@
   .attendance-filter-grid,.attendance-summary-grid,.attendance-source-grid{grid-template-columns:1fr 1fr}
   .attendance-source-panel>header{flex-direction:column}.attendance-source-panel>header>div:last-child{text-align:left}
   .attendance-modal-facts,.attendance-record-modal-meta{grid-template-columns:1fr 1fr}
-  .employee-attendance-record-body,.employee-attendance-summary,.employee-adjustment-summary{grid-template-columns:1fr}
+  .employee-history-filters{grid-template-columns:1fr 1fr}.employee-history-search{grid-column:1/-1}.employee-attendance-record-body,.employee-attendance-summary,.employee-adjustment-summary{grid-template-columns:1fr}
   .attendance-filter-foot{align-items:flex-start;flex-direction:column}.schedule-inline-filter{flex:1 1 145px}.schedule-roster-list article{grid-template-columns:1fr}.matrix-legend{justify-content:flex-start}.attendance-matrix-overview{flex-wrap:wrap}.attendance-overview-total{min-width:105px;border-right:0}.attendance-overview-monthly{width:calc(100% - 114px)}.attendance-overview-today{width:100%;min-width:0}.attendance-overview-daily{width:100%;max-width:none;padding-top:7px;padding-left:0;border-top:1px solid #e1e9f2;border-left:0}
   .attendance-matrix-scroll .matrix-scope{left:auto;width:96px;min-width:96px;max-width:96px}.attendance-matrix-scroll .matrix-position{left:auto;width:96px;min-width:96px;max-width:96px}.attendance-matrix-scroll td.matrix-scope,.attendance-matrix-scroll td.matrix-position,.attendance-matrix-scroll td.matrix-summary,.attendance-matrix-scroll th.matrix-summary{position:static}.attendance-matrix-scroll .matrix-employee{left:0;width:126px;min-width:126px;max-width:126px}.attendance-matrix-scroll .matrix-hire{left:126px;width:76px;min-width:76px;max-width:76px}.attendance-matrix-scroll .matrix-summary{left:auto;width:155px;min-width:155px;max-width:155px}.attendance-day-records article{grid-template-columns:1fr}
 }
 @media(max-width:520px){
   .content-page.attendance-page{padding:16px 11px 24px}
   .attendance-filter-grid,.attendance-summary-grid,.attendance-source-grid,.attendance-modal-facts,.attendance-record-modal-meta{grid-template-columns:1fr}
-  .employee-adjustment-list>article{grid-template-columns:1fr}.employee-adjustment-list>article>button{justify-self:start}
+  .employee-history-filters{grid-template-columns:1fr}.employee-history-search{grid-column:auto}.employee-adjustment-list>article{grid-template-columns:1fr}.employee-adjustment-list>article>button{justify-self:start}
   .employee-attendance-source{align-items:flex-start;flex-direction:column}.employee-attendance-source span{flex:auto}
   .schedule-overview{grid-template-columns:1fr 1fr}
 }
