@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
+import { StaffPaymentChangeWorkspace } from '../components/PaymentChangeWorkflow'
 import { StaffPayrollWorkspace } from './StaffPayrollPage'
 import { useStaffLocale } from '../lib/staffI18n'
+import { useAdminI18n } from '../lib/adminI18n'
 
-const activeStatuses = ['active', '在职']
+const activeStatuses = ['active', 'probation', '在职', '试用']
 const text = v => String(v ?? '').trim()
 
 const currentStaffShift = (profile = {}, schedule = {}, fallback) => {
@@ -56,6 +58,7 @@ function groupCount(rows, getter) {
 }
 
 export const AdminHome = () => {
+  const { locale: adminLocale, t: adminT } = useAdminI18n()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -77,6 +80,14 @@ export const AdminHome = () => {
   const view = useMemo(() => {
     const employees = data?.employees || []
     const active = employees.filter(isActive)
+    const inactiveRows = employees.filter(e => !isActive(e))
+    const inactiveBreakdown = inactiveRows.reduce((summary, employee) => {
+      const status = text(employee?.status).toLowerCase()
+      if (['resigned', '离职'].includes(status)) summary.resigned += 1
+      else if (['disabled', 'inactive', '停用', '禁用'].includes(status)) summary.disabled += 1
+      else summary.unverified += 1
+      return summary
+    }, { resigned:0, disabled:0, unverified:0 })
     const accountSummary = data?.account_summary || null
     const accounts = accountSummary?.can_view_staff_accounts ? accountSummary : null
     const today = dashboardToday()
@@ -104,6 +115,7 @@ export const AdminHome = () => {
       total: employees.length,
       active: active.length,
       inactive: Math.max(0, employees.length - active.length),
+      inactiveBreakdown,
       teams: groupCount(active, e => e?.teams?.name),
       positions: groupCount(active, e => e?.positions?.name),
       types: groupCount(active, e => e?.employment_type),
@@ -124,10 +136,10 @@ export const AdminHome = () => {
       <div className="dashboard-head dashboard-head-pro">
         <div>
           <div className="dashboard-kicker">MANAGEMENT OVERVIEW</div>
-          <h1>综合 Dashboard</h1>
+          <h1>{adminT('综合 Dashboard')}</h1>
         </div>
         <div className="dashboard-date">
-          {new Intl.DateTimeFormat('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date())}
+          {new Intl.DateTimeFormat(adminLocale === 'en' ? 'en-US' : 'zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date())}
         </div>
       </div>
 
@@ -135,35 +147,38 @@ export const AdminHome = () => {
 
       {!loading && !data ? <DashboardLoadUnavailable /> : !loading && !view.canViewEmployees ? <DashboardAccessLimited summary={view.accountSummary} access={data.dashboard_access} /> : <>
       <div className="kpi-grid kpi-grid-pro dashboard-kpi-grid">
-        <Kpi label="全部员工" value={loading ? '—' : view.total} hint="当前员工主档" icon="总" />
-        <Kpi label="在职员工" value={loading ? '—' : view.active} hint={`非在职 ${view.inactive} 人`} icon="人" tone="green" />
-        <Kpi label="团队总数" value={loading ? '—' : view.teams.length} hint="按当前管理范围统计" icon="组" tone="violet" />
-        <Kpi label="近 30 天入职" value={loading ? '—' : view.hires30} hint="取员工主档入职日期" icon="入" tone="green" />
-        <Kpi label="近 30 天离职" value={loading ? '—' : view.resignations30} hint="取员工主档离职日期" icon="离" tone="orange" />
-        <Kpi label="资料完整率" value={loading ? '—' : `${view.profileCompletion}%`} hint="日期、国家、类型、团队、岗位" icon="档" tone="cyan" />
+        <Kpi label={adminT('全部员工')} value={loading ? '—' : view.total} hint={adminT('当前员工主档')} icon="总" />
+        <Kpi label={adminT('在职员工')} value={loading ? '—' : view.active} hint={adminLocale === 'en'
+          ? `${view.inactive} not active: ${view.inactiveBreakdown.resigned} resigned, ${view.inactiveBreakdown.disabled} disabled, ${view.inactiveBreakdown.unverified} status to verify`
+          : `非在职 ${view.inactive}：离职 ${view.inactiveBreakdown.resigned} · 停用 ${view.inactiveBreakdown.disabled} · 状态待核 ${view.inactiveBreakdown.unverified}`}
+          icon="人" tone="green" />
+        <Kpi label={adminT('团队总数')} value={loading ? '—' : view.teams.length} hint={adminT('按当前管理范围统计')} icon="组" tone="violet" />
+        <Kpi label={adminT('近 30 天入职')} value={loading ? '—' : view.hires30} hint={adminT('取员工主档入职日期')} icon="入" tone="green" />
+        <Kpi label={adminT('近 30 天离职')} value={loading ? '—' : view.resignations30} hint={adminT('取员工主档离职日期')} icon="离" tone="orange" />
+        <Kpi label={adminT('资料完整率')} value={loading ? '—' : `${view.profileCompletion}%`} hint={adminT('日期、国家、类型、团队、岗位')} icon="档" tone="cyan" />
         {view.accounts
-          ? <Kpi label="员工账号覆盖" value={loading ? '—' : `${view.accounts.staff_accounts}/${view.accounts.active_staff_scope}`} hint={`待开通 ${view.accounts.pending_staff_accounts} 个`} icon="账" tone="indigo" />
-          : <Kpi label="岗位种类" value={loading ? '—' : view.positions.length} hint="当前员工主档岗位" icon="岗" tone="indigo" />}
+          ? <Kpi label={adminT('员工账号覆盖')} value={loading ? '—' : `${view.accounts.staff_accounts}/${view.accounts.active_staff_scope}`} hint={adminLocale === 'en' ? `${view.accounts.pending_staff_accounts} pending` : `待开通 ${view.accounts.pending_staff_accounts} 个`} icon="账" tone="indigo" />
+          : <Kpi label={adminT('岗位种类')} value={loading ? '—' : view.positions.length} hint={adminT('当前员工主档岗位')} icon="岗" tone="indigo" />}
       </div>
 
       <div className="dashboard-grid dashboard-grid-pro">
-        <DashboardCard title="近 6 个月人员变化" meta="员工主档日期" className="dashboard-span-8 dashboard-trend-card">
+        <DashboardCard title={adminT('近 6 个月人员变化')} meta={adminT('员工主档日期')} className="dashboard-span-8 dashboard-trend-card">
           <MovementChart rows={view.movement} />
         </DashboardCard>
 
-        <DashboardCard title="员工类型构成" meta="在职员工" className="dashboard-span-4">
+        <DashboardCard title={adminT('员工类型构成')} meta={adminT('在职员工')} className="dashboard-span-4">
           <DonutChart rows={view.types} total={view.active} />
         </DashboardCard>
 
-        <DashboardCard title="团队人数排名" meta="TOP 8" className="dashboard-span-6">
+        <DashboardCard title={adminT('团队人数排名')} meta="TOP 8" className="dashboard-span-6">
           <BarList rows={view.teams} total={view.active || 1} />
         </DashboardCard>
 
-        <DashboardCard title="岗位分布" meta="TOP 8" className="dashboard-span-6">
+        <DashboardCard title={adminT('岗位分布')} meta="TOP 8" className="dashboard-span-6">
           <BarList rows={view.positions} total={view.active || 1} />
         </DashboardCard>
 
-        <DashboardCard title="最近入职" meta="最新 6 人" className="dashboard-span-8">
+        <DashboardCard title={adminT('最近入职')} meta={adminT('最新 6 人')} className="dashboard-span-8">
           {view.recentHires.length ? (
             <div className="recent-list">
               {view.recentHires.map(e => (
@@ -176,9 +191,9 @@ export const AdminHome = () => {
           ) : <div className="empty-state compact">暂无日期资料</div>}
         </DashboardCard>
 
-        {view.accounts ? <DashboardCard title="账号开通情况" meta="权限范围内" className="dashboard-span-4">
+        {view.accounts ? <DashboardCard title={adminT('账号开通情况')} meta={adminT('权限范围内')} className="dashboard-span-4">
           <AccountCoverage summary={view.accounts} active={view.accounts.active_staff_scope} />
-        </DashboardCard> : <DashboardCard title="国家 / 国籍分布" meta="TOP 8" className="dashboard-span-4">
+        </DashboardCard> : <DashboardCard title={adminT('国家 / 国籍分布')} meta="TOP 8" className="dashboard-span-4">
           <BarList rows={view.countries} total={view.active || 1} />
         </DashboardCard>}
       </div>
@@ -475,7 +490,6 @@ export const StaffHome = () => {
   const fields = [
     [t('profile.employeeId', 'Employee ID'), p.employee_no],
     [t('profile.country', 'Country'), p.country || p.nationality],
-    [t('profile.employmentType', 'Employee type'), p.employment_type],
     [t('profile.status', 'Status'), p.status === 'active' ? t('profile.active', 'Active') : p.status],
     [t('profile.hireDate', 'Hire date'), staffDate(p.hire_date)],
     [t('profile.tenure', 'Tenure'), staffTenure(p.hire_date, t)],
@@ -485,7 +499,6 @@ export const StaffHome = () => {
     [t('profile.shift', 'Shift'), shiftDisplay],
     [t('profile.trainer', 'Trainer'), trainerId],
     [t('profile.platform', 'Platform'), p.platform_scope],
-    [t('profile.workContent', 'Work scope'), p.work_content],
   ]
   const examRows = data?.exam_history || []
   const openExam = async row => {
@@ -531,6 +544,7 @@ export const StaffHome = () => {
         {paymentMode === 'usdt' && <div className="staff-sensitive-row"><span>{t('payment.usdt', 'USDT address')}</span><strong>{revealed.usdt_address || pay.usdt_address_masked || '—'}</strong>{pay.usdt_address_masked && <button onClick={() => toggleSensitive('usdt_address')} disabled={revealLoading === 'usdt_address'}>{revealLoading === 'usdt_address' ? t('payment.reading', 'Loading') : revealed.usdt_address ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>}
         <div><span>{t('payment.phone', 'Phone')}</span><strong>{pay.contact_phone || '—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number || '—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook || '—'}</strong></div><div><span>{t('payment.address', 'Contact address')}</span><strong>{pay.employee_address || '—'}</strong></div>
       </div></section>
+      <StaffPaymentChangeWorkspace locale={locale} onChanged={load} />
     </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to="/staff/exams"><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link></section></div>}
     {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => setErrorPage(value => Math.max(1, value - 1))}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => setErrorPage(value => value + 1)}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
     {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
