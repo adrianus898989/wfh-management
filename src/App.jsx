@@ -30,8 +30,9 @@ import StaffPayrollPage from './pages/StaffPayrollPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 import { StaffI18nProvider, useStaffLocale } from './lib/staffI18n'
+import { AdminI18nProvider } from './lib/adminI18n'
 
-const SESSION_VERIFICATION_FAILURE_LIMIT = 3
+const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 3
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
 
 function Protected({ children, mode }) {
@@ -79,6 +80,19 @@ function Protected({ children, mode }) {
       return signOutPromise
     }
     const terminalAuthError = error => /refresh[_\s-]*token|invalid.*token|jwt|(?:auth[_\s-]*)?session.*missing|not[_\s-]*authenticated/i.test(error?.message || '')
+    const terminalLeaseReason = reason => [
+      'auth_session_missing',
+      'active_elsewhere',
+      'not_owner',
+      'staff_account_not_found',
+      'staff_account_missing',
+    ].includes(reason)
+    const terminalBootstrapReason = reason => [
+      'auth_session_missing',
+      'access_missing',
+      'staff_account_not_found',
+      'staff_account_missing',
+    ].includes(reason)
     const freshSession = async (force = false) => {
       if (isSessionIdleExpired()) {
         await localSignOut({ release:true, redirect:true })
@@ -109,10 +123,14 @@ function Protected({ children, mode }) {
       return leaseCheckPromise
     }
     const acceptLease = async (result) => {
-      if (result?.error) return false
-      if (!result?.data?.ok) {
+      if (result?.error || !result?.data || typeof result.data.ok !== 'boolean') return false
+      if (!result.data.ok) {
         const reason = result?.data?.reason
         if (reason === 'mfa_required') return false
+        // Only server-defined terminal states may destroy a valid local
+        // session. Empty, malformed, or newly introduced responses are
+        // treated as transient and retried without a login/logout loop.
+        if (!terminalLeaseReason(reason)) return false
         await localSignOut({
           release:false,
           notice:mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
@@ -144,11 +162,14 @@ function Protected({ children, mode }) {
         setState(current => ({ ...current, loading:false, error:message }))
         return
       }
-      verificationFailures.current += 1
-      if (verificationFailures.current >= SESSION_VERIFICATION_FAILURE_LIMIT) {
-        await localSignOut({ release:false, notice:'session_ended', redirect:true })
-        return
-      }
+      // A timeout or temporary Edge/RPC outage is not proof that the JWT or
+      // browser lease is invalid. Keep the authenticated session and retry;
+      // definitive lease/auth failures are handled separately by acceptLease
+      // and terminalAuthError.
+      verificationFailures.current = Math.min(
+        SESSION_VERIFICATION_FAILURE_BACKOFF_CAP,
+        verificationFailures.current + 1,
+      )
       setState(current => ({ ...current, loading:false, error:message }))
       scheduleVerificationRetry()
     }
@@ -177,12 +198,21 @@ function Protected({ children, mode }) {
           await markVerificationFailure(mode==='staff'?t('auth.accessFailed','权限验证暂时失败，请重试。登录状态仍为你保留。'):'权限验证暂时失败，请重试。登录状态仍为你保留。')
           return
         }
-        if (!accessResult?.data?.ok) {
+        if (!accessResult?.data || typeof accessResult.data.ok !== 'boolean') {
+          await markVerificationFailure(mode==='staff'?t('auth.accessFailed','权限验证暂时失败，请重试。登录状态仍为你保留。'):'权限验证暂时失败，请重试。登录状态仍为你保留。')
+          return
+        }
+        if (!accessResult.data.ok) {
+          const reason = accessResult.data.reason
+          if (!terminalBootstrapReason(reason)) {
+            await markVerificationFailure(mode==='staff'?t('auth.accessFailed','权限验证暂时失败，请重试。登录状态仍为你保留。'):'权限验证暂时失败，请重试。登录状态仍为你保留。')
+            return
+          }
           await localSignOut({
             release:false,
-            notice:mode==='staff' && (accessResult?.data?.reason==='staff_account_not_found'||accessResult?.data?.reason==='staff_account_missing')
+            notice:mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
               ? 'account_not_found'
-              : accessResult?.data?.reason === 'auth_session_missing' ? 'session_ended' : '',
+              : reason === 'auth_session_missing' ? 'session_ended' : '',
             redirect:true,
           })
           return
@@ -222,7 +252,8 @@ function Protected({ children, mode }) {
         if (!(await acceptLease(leaseResult))) {
           leaseEligible = false
           leaseOwned = false
-          if (leaseResult?.error || leaseResult?.data?.reason === 'mfa_required') {
+          const reason = leaseResult?.data?.reason
+          if (leaseResult?.error || reason === 'mfa_required' || !terminalLeaseReason(reason)) {
             await markVerificationFailure(sessionCheckMessage)
           }
           return
@@ -261,7 +292,9 @@ function Protected({ children, mode }) {
       if (!alive || !leaseEligible || !leaseOwned || !navigator.onLine) return
       const result = await checkLease('heartbeat')
       if (!leaseEligible) return
-      if (!(await acceptLease(result)) && result?.error) {
+      const accepted = await acceptLease(result)
+      const reason = result?.data?.reason
+      if (!accepted && (result?.error || !terminalLeaseReason(reason))) {
         await markVerificationFailure(sessionCheckMessage)
       }
     }
@@ -333,5 +366,5 @@ function AppRoutes() {
 }
 
 export default function App() {
-  return <StaffI18nProvider><AppRoutes /></StaffI18nProvider>
+  return <AdminI18nProvider><StaffI18nProvider><AppRoutes /></StaffI18nProvider></AdminI18nProvider>
 }
