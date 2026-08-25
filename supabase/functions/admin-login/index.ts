@@ -1,4 +1,4 @@
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.57.4'
 
 const allowedOrigin = 'https://adrianus898989.github.io'
 
@@ -13,6 +13,37 @@ const founderAccess = {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+const loginMessages: Record<string, string> = {
+  INVALID_REQUEST: '请求格式不正确',
+  INVALID_EMAIL: '邮箱格式不正确',
+  PASSWORD_REQUIRED: '请输入密码',
+  EMAIL_NOT_FOUND: '邮箱不存在',
+  PASSWORD_INCORRECT: '密码错误',
+  ACCOUNT_UNAVAILABLE: '账号不可用，请联系管理员',
+  TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后重试',
+  LOGIN_SERVICE_UNAVAILABLE: '登录服务暂不可用，请稍后重试',
+  SESSION_CHECK_UNAVAILABLE: '登录会话验证暂不可用，请稍后重试',
+  ACTIVE_SESSION_EXISTS: '旧会话接管未完成，请重新登录',
+  SESSION_REJECTED: '登录会话已失效，请重试',
+}
+
+function loginError(req: Request, code: string, status: number) {
+  return json(req, {
+    error: loginMessages[code] || '登录失败，请稍后重试',
+    code,
+  }, status)
+}
+
+function safeErrorMeta(error: any) {
+  const status = Number(error?.status)
+  return {
+    name: String(error?.name || 'Error').slice(0, 64),
+    code: String(error?.code || '').slice(0, 64) || null,
+    status: Number.isFinite(status) ? status : null,
+  }
+}
 
 function cors(origin: string | null) {
   return {
@@ -49,20 +80,29 @@ function timedFetch(timeoutMs: number) {
 
 function isInvalidCredentials(error: any) {
   const code = String(error?.code || '').toLowerCase()
-  const message = String(error?.message || '').toLowerCase()
-  return code === 'invalid_credentials' || message.includes('invalid login credentials')
+  return code === 'invalid_credentials'
 }
 
-async function findAccess(admin: any, username: string, mode: string) {
-  const isFounder = username === 'founder' && mode === 'admin'
+function isRateLimited(error: any) {
+  const code = String(error?.code || '').toLowerCase()
+  return Number(error?.status) === 429 || code === 'over_request_rate_limit'
+}
+
+function isUnavailableAccount(error: any) {
+  const code = String(error?.code || '').toLowerCase()
+  return code === 'email_not_confirmed' || code === 'user_banned'
+}
+
+async function findAccess(admin: any, email: string, mode: string) {
+  const isFounder = email === founderAccess.login_email && mode === 'admin'
 
   let lastError: any = null
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    let query = admin
+    const query = admin
       .from('user_access')
       .select('auth_user_id,login_email,backend_enabled,employee_portal_enabled,active,otp_required')
-    query = mode === 'staff' ? query.ilike('login_email', username) : query.ilike('login_username', username)
+      .eq('login_email', email)
     const { data, error } = await query.maybeSingle()
 
     if (!error) {
@@ -74,19 +114,18 @@ async function findAccess(admin: any, username: string, mode: string) {
     lastError = error
     console.error('ADMIN_LOGIN_ACCESS_RETRY', {
       attempt,
-      code: error.code || null,
-      message: error.message || null,
+      ...safeErrorMeta(error),
     })
 
     if (attempt < 3) await sleep(attempt * 500)
   }
 
   if (isFounder) {
-    console.error('ADMIN_LOGIN_FOUNDER_ACCESS_FALLBACK', lastError?.message || 'unknown')
+    console.error('ADMIN_LOGIN_FOUNDER_ACCESS_FALLBACK', safeErrorMeta(lastError))
     return { access: founderAccess, unavailable: false }
   }
 
-  console.error('ADMIN_LOGIN_ACCESS_UNAVAILABLE', lastError?.message || 'unknown')
+  console.error('ADMIN_LOGIN_ACCESS_UNAVAILABLE', safeErrorMeta(lastError))
   return { access: null, unavailable: true }
 }
 
@@ -97,14 +136,16 @@ async function authenticate(authClient: any, email: string, password: string) {
     const result = await authClient.auth.signInWithPassword({ email, password })
 
     if (!result.error) return result
-    if (isInvalidCredentials(result.error)) return result
+    if (
+      isInvalidCredentials(result.error)
+      || isRateLimited(result.error)
+      || isUnavailableAccount(result.error)
+    ) return result
 
     lastError = result.error
     console.error('ADMIN_LOGIN_AUTH_RETRY', {
       attempt,
-      status: result.error.status || null,
-      code: result.error.code || null,
-      message: result.error.message || null,
+      ...safeErrorMeta(result.error),
     })
 
     if (attempt < 3) await sleep(attempt * 750)
@@ -127,8 +168,7 @@ async function claimCandidateSession(authClient: any, mode: 'admin' | 'staff') {
 
     console.error('ADMIN_LOGIN_SESSION_CLAIM_RETRY', {
       attempt,
-      code: lastResult.error.code || null,
-      message: lastResult.error.message || null,
+      ...safeErrorMeta(lastResult.error),
     })
     if (attempt < 3) await sleep(attempt * 350)
   }
@@ -139,18 +179,18 @@ async function claimCandidateSession(authClient: any, mode: 'admin' | 'staff') {
 async function discardCandidateSession(authClient: any) {
   try {
     const { error } = await authClient.auth.signOut({ scope: 'local' })
-    if (error) console.error('ADMIN_LOGIN_CANDIDATE_SIGNOUT_ERROR', error.message)
+    if (error) console.error('ADMIN_LOGIN_CANDIDATE_SIGNOUT_ERROR', safeErrorMeta(error))
   } catch (error: any) {
-    console.error('ADMIN_LOGIN_CANDIDATE_SIGNOUT_ERROR', error?.message || error)
+    console.error('ADMIN_LOGIN_CANDIDATE_SIGNOUT_ERROR', safeErrorMeta(error))
   }
 }
 
 async function releaseCandidateLease(authClient: any) {
   try {
     const { error } = await authClient.rpc('app_session_release')
-    if (error) console.error('ADMIN_LOGIN_CANDIDATE_RELEASE_ERROR', error.message)
+    if (error) console.error('ADMIN_LOGIN_CANDIDATE_RELEASE_ERROR', safeErrorMeta(error))
   } catch (error: any) {
-    console.error('ADMIN_LOGIN_CANDIDATE_RELEASE_ERROR', error?.message || error)
+    console.error('ADMIN_LOGIN_CANDIDATE_RELEASE_ERROR', safeErrorMeta(error))
   }
 }
 
@@ -160,21 +200,28 @@ Deno.serve(async (req) => {
   }
 
   if (req.method !== 'POST') {
-    return json(req, { error: '登录失败' }, 405)
+    return json(req, { error: '请求方式不支持', code: 'METHOD_NOT_ALLOWED' }, 405)
   }
 
   try {
-    const body = await req.json()
-    const username = String(body.username || '').trim().toLowerCase()
-    const password = String(body.password || '')
-    const mode = body.mode === 'staff' ? 'staff' : 'admin'
-
-    const loginValid = mode === 'staff'
-      ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)
-      : /^[a-z0-9._-]{3,32}$/.test(username)
-    if (!loginValid || !password) {
-      return json(req, { error: '用户名或密码错误' }, 401)
+    let body: Record<string, unknown>
+    try {
+      body = await req.json()
+    } catch {
+      return loginError(req, 'INVALID_REQUEST', 400)
     }
+
+    if (!body || Array.isArray(body) || typeof body !== 'object') {
+      return loginError(req, 'INVALID_REQUEST', 400)
+    }
+
+    const email = String(body.email || '').trim().toLowerCase()
+    const password = String(body.password || '')
+    const mode = String(body.mode || 'admin').trim().toLowerCase()
+
+    if (mode !== 'admin' && mode !== 'staff') return loginError(req, 'INVALID_REQUEST', 400)
+    if (!emailPattern.test(email)) return loginError(req, 'INVALID_EMAIL', 400)
+    if (!password) return loginError(req, 'PASSWORD_REQUIRED', 400)
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const secretKeys = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') || '{}')
@@ -184,7 +231,7 @@ Deno.serve(async (req) => {
 
     if (!supabaseUrl || !secretKey || !publishableKey) {
       console.error('ADMIN_LOGIN_CONFIG_MISSING')
-      return json(req, { error: '登录服务暂不可用，请稍后重试' }, 503)
+      return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
     }
 
     const admin = createClient(supabaseUrl, secretKey, {
@@ -192,15 +239,17 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     })
 
-    const { access, unavailable } = await findAccess(admin, username, mode)
+    const { access, unavailable } = await findAccess(admin, email, mode)
 
     if (unavailable) {
-      return json(req, { error: '登录服务繁忙，请稍后重试' }, 503)
+      return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
     }
 
+    if (!access) return loginError(req, 'EMAIL_NOT_FOUND', 401)
+
     const entryEnabled = mode === 'staff' ? access?.employee_portal_enabled : access?.backend_enabled
-    if (!access || !access.active || !entryEnabled || !access.login_email) {
-      return json(req, { error: '用户名或密码错误' }, 401)
+    if (!access.active || !entryEnabled || !access.login_email) {
+      return loginError(req, 'ACCOUNT_UNAVAILABLE', 403)
     }
 
     const authClient = createClient(supabaseUrl, publishableKey, {
@@ -220,11 +269,18 @@ Deno.serve(async (req) => {
 
     if (authError) {
       if (isInvalidCredentials(authError)) {
-        return json(req, { error: '用户名或密码错误' }, 401)
+        // Supabase deliberately returns the same invalid_credentials code for
+        // an unknown Auth email and a wrong password. At this point the email
+        // has already matched our controlled access directory, so expose only
+        // the intended PASSWORD_INCORRECT business result.
+        return loginError(req, 'PASSWORD_INCORRECT', 401)
       }
 
-      console.error('ADMIN_LOGIN_AUTH_UNAVAILABLE', authError.message || authError)
-      return json(req, { error: '登录服务繁忙，请稍后重试' }, 503)
+      if (isRateLimited(authError)) return loginError(req, 'TOO_MANY_ATTEMPTS', 429)
+      if (isUnavailableAccount(authError)) return loginError(req, 'ACCOUNT_UNAVAILABLE', 403)
+
+      console.error('ADMIN_LOGIN_AUTH_UNAVAILABLE', safeErrorMeta(authError))
+      return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
     }
 
     if (
@@ -234,7 +290,7 @@ Deno.serve(async (req) => {
     ) {
       console.error('ADMIN_LOGIN_ID_MISMATCH')
       await discardCandidateSession(authClient)
-      return json(req, { error: '用户名或密码错误' }, 401)
+      return loginError(req, 'ACCOUNT_UNAVAILABLE', 403)
     }
 
     const mfaRequired = mode === 'admin' && Boolean(access.otp_required)
@@ -248,17 +304,13 @@ Deno.serve(async (req) => {
 
       if (leaseError) {
         console.error('ADMIN_LOGIN_SESSION_CLAIM_ERROR', {
-          code: leaseError.code || null,
-          message: leaseError.message || null,
+          ...safeErrorMeta(leaseError),
         })
         // The claim may have committed even if its response was interrupted.
         // Release only this candidate's session_id, then revoke that session.
         await releaseCandidateLease(authClient)
         await discardCandidateSession(authClient)
-        return json(req, {
-          error: '登录会话验证暂不可用，请稍后重试',
-          code: 'SESSION_CHECK_UNAVAILABLE',
-        }, 503)
+        return loginError(req, 'SESSION_CHECK_UNAVAILABLE', 503)
       }
 
       if (!lease?.ok) {
@@ -266,17 +318,10 @@ Deno.serve(async (req) => {
         // only the candidate session and cannot disturb the current browser.
         await discardCandidateSession(authClient)
         if (lease?.reason === 'active_elsewhere') {
-          return json(req, {
-            error: '该账号已在另一浏览器登录，请先退出原会话后重试',
-            code: 'ACTIVE_SESSION_EXISTS',
-            retry_after_seconds: lease.retry_after_seconds || 1,
-          }, 409)
+          return loginError(req, 'ACTIVE_SESSION_EXISTS', 409)
         }
         console.error('ADMIN_LOGIN_SESSION_REJECTED', lease?.reason || 'unknown')
-        return json(req, {
-          error: '登录会话已失效，请重试',
-          code: 'SESSION_REJECTED',
-        }, 401)
+        return loginError(req, 'SESSION_REJECTED', 401)
       }
     }
 
@@ -287,12 +332,12 @@ Deno.serve(async (req) => {
         employee_id: null,
         module: 'auth',
         action: mode === 'staff' ? 'staff_login' : 'admin_login',
-        reason: mode === 'staff' ? '员工前端邮箱登录成功' : '后台用户名登录成功',
+        reason: mode === 'staff' ? '员工前端邮箱登录成功' : '后台邮箱登录成功',
       }),
     ).then(({ error }: any) => {
-      if (error) console.error('ADMIN_LOGIN_AUDIT_ERROR', error.message)
+      if (error) console.error('ADMIN_LOGIN_AUDIT_ERROR', safeErrorMeta(error))
     }).catch((error: any) => {
-      console.error('ADMIN_LOGIN_AUDIT_ERROR', error?.message || error)
+      console.error('ADMIN_LOGIN_AUDIT_ERROR', safeErrorMeta(error))
     })
 
     const edgeRuntime = (globalThis as any).EdgeRuntime
@@ -306,7 +351,7 @@ Deno.serve(async (req) => {
       refresh_token: authData.session.refresh_token,
     })
   } catch (error) {
-    console.error('ADMIN_LOGIN_UNEXPECTED_ERROR', error)
-    return json(req, { error: '登录服务暂不可用，请稍后重试' }, 503)
+    console.error('ADMIN_LOGIN_UNEXPECTED_ERROR', safeErrorMeta(error))
+    return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
   }
 })
