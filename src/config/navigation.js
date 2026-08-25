@@ -3,11 +3,11 @@ import { PERMISSIONS } from './permissions'
 const enc = value => encodeURIComponent(value)
 
 export const adminNavigation = [
-  { to: '/admin', label: '首页', icon: '⌂' },
+  { to: '/admin', label: '首页', icon: '⌂', permissions: [PERMISSIONS.DASHBOARD_VIEW] },
   {
     to: '/admin/employees', label: '员工管理', icon: '人', children: [
       { label: '员工档案', to: `/admin/employees?tab=${enc('员工档案')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
-      { label: '人员分析', to: `/admin/employees?tab=${enc('人员分析')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
+      { label: '人员分析', to: `/admin/employees?tab=${enc('人员分析')}`, permissions: [PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW] },
       { label: '停电 / 断网记录', to: `/admin/employees?tab=${enc('停电 / 断网记录')}`, permissions: [PERMISSIONS.CONNECTIVITY_VIEW] },
       { label: '离职记录', to: `/admin/employees?tab=${enc('离职记录')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
       { label: '操作日志', to: `/admin/employees?tab=${enc('操作日志')}`, permissions: [PERMISSIONS.AUDIT_VIEW] },
