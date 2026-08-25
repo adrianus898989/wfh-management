@@ -488,6 +488,16 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'access') {
+      let employeeContext: Record<string, unknown> | null = null
+      if (caller.employee_id) {
+        const { data: employee, error: employeeError } = await admin
+          .from('employees')
+          .select('id,team_id,position_id')
+          .eq('id', caller.employee_id)
+          .maybeSingle()
+        if (employeeError) return json(req, { error: '无法读取当前账号的数据范围' }, 500)
+        employeeContext = employee
+      }
       return json(req, {
         ok: true,
         caller: {
@@ -495,11 +505,16 @@ Deno.serve(async (req) => {
           role_code: callerRole?.code || null,
           is_founder: isFounder,
           permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
+          employee_id: caller.employee_id || null,
+          data_scope: caller.data_scope || null,
+          team_id: employeeContext?.team_id || null,
+          position_id: employeeContext?.position_id || null,
         },
       })
     }
 
     if (action === 'dashboard') {
+      if (!can('dashboard.view')) return json(req, { error: '无后台首页权限' }, 403)
       const mayViewEmployees = can('employee.view')
       const mayViewStaffCoverage = can('user.view') || can('account.view') ||
         can('user.activation.generate') || can('user.account.create')
@@ -819,56 +834,62 @@ Deno.serve(async (req) => {
       return json(req, { ok: true })
     }
 
-    if (action === 'create_backend') {
-      if (!can('account.create')) return json(req, { error: '无创建账号权限' }, 403)
+    const createAccountError = (message: string, status = 400) => {
+      const error = new Error(message) as Error & { status?: number }
+      error.status = status
+      return error
+    }
 
-      const username = cleanString(body.username).toLowerCase()
-      const password = String(body.password || '')
-      const roleId = cleanString(body.role_id)
-      const employeeId = cleanString(body.employee_id) || null
-      const dataScope = cleanString(body.data_scope || 'own_team')
-      const otpRequired = Boolean(body.otp_required)
-      const teamIds = cleanStringList(body.team_ids)
-      const employeeIds = cleanStringList(body.employee_ids)
+    const createBackendAccount = async (input: Record<string, unknown>) => {
+      const username = cleanString(input.username).toLowerCase()
+      const password = String(input.password || '')
+      const roleId = cleanString(input.role_id)
+      const employeeId = cleanString(input.employee_id) || null
+      const dataScope = cleanString(input.data_scope || 'own_team')
+      const otpRequired = Boolean(input.otp_required)
+      const teamIds = cleanStringList(input.team_ids)
+      const employeeIds = cleanStringList(input.employee_ids)
 
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
-        return json(req, { error: '用户名只允许3-32位字母、数字、._-' }, 400)
+        throw createAccountError('用户名只允许3-32位字母、数字、._-')
       }
       if (!passwordOk(password)) {
-        return json(req, { error: '密码至少10位，并包含大小写字母、数字和特殊符号' }, 400)
+        throw createAccountError('密码至少10位，并包含大小写字母、数字和特殊符号')
       }
       if (!['all', 'own_team', 'assigned_teams', 'self'].includes(dataScope)) {
-        return json(req, { error: '管理范围不正确' }, 400)
+        throw createAccountError('管理范围不正确')
       }
 
-      const { data: role } = await admin.from('roles').select('id,code,active').eq('id', roleId).maybeSingle()
-      if (!role || !role.active) return json(req, { error: '角色不可用' }, 400)
+      const { data: role, error: roleError } = await admin.from('roles')
+        .select('id,code,active').eq('id', roleId).maybeSingle()
+      if (roleError) throw createAccountError(roleError.message)
+      if (!role || !role.active) throw createAccountError('角色不可用')
       if (role.code === 'employee' || (role.code === 'founder' && !isFounder)) {
-        return json(req, { error: '该角色不能用于新增后台账号' }, 400)
+        throw createAccountError('该角色不能用于新增后台账号')
       }
       if (!await roleCanBeAssigned(role.id)) {
-        return json(req, { error: '只能授予权限严格低于当前账号的角色' }, 403)
+        throw createAccountError('只能授予权限严格低于当前账号的角色', 403)
       }
 
       try {
         await validateDelegatedScope(employeeId, dataScope, teamIds, employeeIds)
       } catch (error) {
-        return json(req, { error: error instanceof Error ? error.message : '管理范围不正确' }, 403)
+        throw createAccountError(error instanceof Error ? error.message : '管理范围不正确', 403)
       }
 
-      const { data: exists } = await admin.from('user_access')
+      const { data: exists, error: existsError } = await admin.from('user_access')
         .select('auth_user_id').ilike('login_username', username).maybeSingle()
-      if (exists) return json(req, { error: '用户名已存在' }, 409)
+      if (existsError) throw createAccountError(existsError.message)
+      if (exists) throw createAccountError('用户名已存在', 409)
 
       const internalEmail = `${username}.${crypto.randomUUID().slice(0, 8)}@admin.wfh.invalid`
-
       const { data: created, error: createError } = await admin.auth.admin.createUser({
         email: internalEmail,
         password,
         email_confirm: true,
       })
       if (createError || !created.user) {
-        return json(req, { error: createError?.message || '创建登录账号失败' }, 400)
+        throw createAccountError(createError?.message || '创建登录账号失败')
       }
 
       const { error: insertError } = await admin.from('user_access').insert({
@@ -888,21 +909,65 @@ Deno.serve(async (req) => {
 
       if (insertError) {
         await admin.auth.admin.deleteUser(created.user.id)
-        return json(req, { error: insertError.message }, 400)
+        throw createAccountError(insertError.message)
       }
 
       if (dataScope === 'assigned_teams') {
         try {
           await saveScope(created.user.id, teamIds, employeeIds)
-        } catch (e) {
+        } catch (error) {
           await admin.from('user_access').delete().eq('auth_user_id', created.user.id)
           await admin.auth.admin.deleteUser(created.user.id)
-          throw e
+          throw createAccountError(error instanceof Error ? error.message : '指定范围保存失败')
         }
       }
 
       await audit('backend_account_create', `创建后台账号 ${username}`)
-      return json(req, { ok: true })
+      return { auth_user_id: created.user.id, username }
+    }
+
+    if (action === 'create_backend') {
+      if (!can('account.create')) return json(req, { error: '无创建账号权限' }, 403)
+      try {
+        const created = await createBackendAccount(body)
+        return json(req, { ok: true, created })
+      } catch (error) {
+        const status = Number((error as Error & { status?: number })?.status || 400)
+        return json(req, { error: error instanceof Error ? error.message : '创建后台账号失败' }, status)
+      }
+    }
+
+    if (action === 'create_backend_batch') {
+      if (!can('account.create')) return json(req, { error: '无创建账号权限' }, 403)
+      if (!Array.isArray(body.accounts) || body.accounts.length < 1 || body.accounts.length > 20) {
+        return json(req, { error: '每次必须提交 1–20 个后台账号' }, 400)
+      }
+
+      const results: Array<Record<string, unknown>> = []
+      for (let index = 0; index < body.accounts.length; index += 1) {
+        const input = body.accounts[index]
+        const username = cleanString(input?.username).toLowerCase()
+        try {
+          const created = await createBackendAccount(input || {})
+          results.push({ index, ok: true, username, auth_user_id: created.auth_user_id })
+        } catch (error) {
+          results.push({
+            index,
+            ok: false,
+            username,
+            status: Number((error as Error & { status?: number })?.status || 400),
+            error: error instanceof Error ? error.message : '创建后台账号失败',
+          })
+        }
+      }
+
+      const createdCount = results.filter(result => result.ok).length
+      return json(req, {
+        ok: createdCount === results.length,
+        created_count: createdCount,
+        failed_count: results.length - createdCount,
+        results,
+      })
     }
 
     if (action === 'update_backend') {
@@ -911,11 +976,11 @@ Deno.serve(async (req) => {
       const target = cleanString(body.auth_user_id)
       const roleId = cleanString(body.role_id)
       const employeeId = cleanString(body.employee_id) || null
-      const dataScope = cleanString(body.data_scope || 'own_team')
+      const requestedDataScope = cleanString(body.data_scope || 'own_team')
       const teamIds = cleanStringList(body.team_ids)
       const employeeIds = cleanStringList(body.employee_ids)
 
-      if (!['all', 'own_team', 'assigned_teams', 'self'].includes(dataScope)) return json(req, { error: '管理范围不正确' }, 400)
+      if (!['all', 'own_team', 'assigned_teams', 'self'].includes(requestedDataScope)) return json(req, { error: '管理范围不正确' }, 400)
 
       let current: any
       try {
@@ -924,6 +989,21 @@ Deno.serve(async (req) => {
         return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
       }
       if (!current.backend_enabled) return json(req, { error: '该账号不是后台账号' }, 400)
+
+      const { data: role } = await admin.from('roles').select('id,code,active').eq('id', roleId).maybeSingle()
+      if (!role || !role.active || role.code === 'employee' || (role.code === 'founder' && !isFounder)) {
+        return json(req, { error: '角色不可用' }, 400)
+      }
+      if (!await roleCanBeAssigned(role.id, target)) {
+        return json(req, { error: '只能授予权限严格低于当前账号的角色' }, 403)
+      }
+
+      // A linked backend account always follows its employee's current team.
+      // This avoids stale hand-maintained team lists and prevents an account
+      // linked to one employee from being granted organization-wide access.
+      const dataScope = employeeId && role.code !== 'founder'
+        ? 'own_team'
+        : requestedDataScope
 
       let previousScope: { teamIds: string[], employeeIds: string[] }
       try {
@@ -943,14 +1023,6 @@ Deno.serve(async (req) => {
         cleanString(current.data_scope) !== dataScope || assignedScopeChanged
       if (scopeChanged && !can('scope.manage')) {
         return json(req, { error: '无管理账号数据范围权限' }, 403)
-      }
-
-      const { data: role } = await admin.from('roles').select('id,code,active').eq('id', roleId).maybeSingle()
-      if (!role || !role.active || role.code === 'employee' || (role.code === 'founder' && !isFounder)) {
-        return json(req, { error: '角色不可用' }, 400)
-      }
-      if (!await roleCanBeAssigned(role.id, target)) {
-        return json(req, { error: '只能授予权限严格低于当前账号的角色' }, 403)
       }
 
       try {
