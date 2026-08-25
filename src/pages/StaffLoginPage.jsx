@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   configured,
   consumeAppSessionNotice,
@@ -9,8 +9,16 @@ import {
 } from '../lib/supabase'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 
+function withTimeout(promise, ms = 25000) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error('TIMEOUT')), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer))
+}
+
 export default function StaffLoginPage() {
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
@@ -18,6 +26,19 @@ export default function StaffLoginPage() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const { t, resetLocale } = useStaffLocale()
+  const loginErrorMessage = response => ({
+    INVALID_REQUEST: t('auth.invalidRequest','Invalid request format'),
+    INVALID_EMAIL: t('auth.invalidEmail','Invalid email format'),
+    PASSWORD_REQUIRED: t('auth.passwordRequired','Please enter your password'),
+    EMAIL_NOT_FOUND: t('auth.emailNotFound','Email does not exist'),
+    PASSWORD_INCORRECT: t('auth.passwordIncorrect','Incorrect password'),
+    ACCOUNT_UNAVAILABLE: t('auth.accountUnavailable','This account is unavailable'),
+    TOO_MANY_ATTEMPTS: t('auth.tooManyAttempts','Too many attempts. Please try again later.'),
+    LOGIN_SERVICE_UNAVAILABLE: t('auth.loginUnavailable','Sign in is temporarily unavailable'),
+    SESSION_CHECK_UNAVAILABLE: t('auth.sessionCheckFailed','Unable to verify this browser session. Please try again.'),
+    ACTIVE_SESSION_EXISTS: t('auth.sessionTakeoverFailed','Unable to replace the previous session. Please try signing in again.'),
+    SESSION_REJECTED: t('auth.sessionEnded','This sign-in session has ended. Please sign in again.'),
+  }[response?.code] || t('auth.loginFailed','Sign in failed. Please try again.'))
 
   const submit = async (e) => {
     e.preventDefault()
@@ -28,66 +49,68 @@ export default function StaffLoginPage() {
 
     setLoading(true)
 
-    const { data, error } = await supabase.functions.invoke('admin-login', {
-      body: { username: username.trim().toLowerCase(), password, mode: 'staff' },
-    })
+    try {
+      const { data, error } = await withTimeout(
+        supabase.functions.invoke('admin-login', {
+          body: { email: email.trim().toLowerCase(), password, mode: 'staff' },
+        }),
+      )
 
-    let responseData = data
-    if (error && !responseData?.error) {
-      try { responseData = await error.context?.json() } catch (_) {}
-    }
-
-    if (error || !responseData?.access_token || !responseData?.refresh_token) {
-      setLoading(false)
-      if (responseData?.code === 'ACTIVE_SESSION_EXISTS') {
-        return setError(t('auth.sessionTakeoverFailed','Unable to replace the previous session. Please try signing in again.'))
+      let responseData = data
+      if (error && !responseData?.error) {
+        try { responseData = await error.context?.json() } catch (_) {}
       }
-      if (responseData?.code === 'SESSION_CHECK_UNAVAILABLE') {
-        return setError(t('auth.sessionCheckFailed','Unable to verify this browser session. Please try again.'))
+
+      if (error || !responseData?.access_token || !responseData?.refresh_token) {
+        return setError(loginErrorMessage(responseData))
       }
-      return setError(responseData?.error || t('auth.invalidCredentials','用户名或密码错误'))
-    }
 
-    const { data: sessionData, error: sessionError } = await setAppSession({
-      access_token: responseData.access_token,
-      refresh_token: responseData.refresh_token,
-    })
-    if (sessionError || !sessionData?.user) {
+      const { data: sessionData, error: sessionError } = await setAppSession({
+        access_token: responseData.access_token,
+        refresh_token: responseData.refresh_token,
+      })
+      if (sessionError || !sessionData?.user) {
+        return setError(t('auth.loginFailed','登录失败，请重试'))
+      }
+
+      touchSessionActivity(true)
+      // admin-login already verifies active staff-portal access and atomically
+      // claims the candidate session. Protected revalidates through the narrow
+      // self-only bootstrap RPC after navigation, so no duplicate RLS read is
+      // needed here.
+      resetLocale()
+      navigate('/staff', { replace: true })
+    } catch (requestError) {
+      setError(requestError?.message === 'TIMEOUT'
+        ? t('auth.loginTimeout','Sign in timed out. Please try again.')
+        : t('auth.loginUnavailable','Sign in is temporarily unavailable'))
+    } finally {
       setLoading(false)
-      return setError(t('auth.loginFailed','登录失败，请重试'))
     }
-
-    touchSessionActivity(true)
-    setLoading(false)
-    // admin-login already verifies active staff-portal access and atomically
-    // claims the candidate session. Protected revalidates through the narrow
-    // self-only bootstrap RPC after navigation, so no duplicate RLS read is
-    // needed here.
-    resetLocale()
-    navigate('/staff', { replace: true })
   }
 
   return (
-    <div className="login-page staff-login-page">
-      <div className="login-shell">
-        <div className="login-brand">
-          <div className="login-logo">W</div>
-          <span>WFH</span>
+    <div className="login-page login-page--signin staff-login-page">
+      <main className="login-shell login-shell--signin">
+        <div className="login-brand" aria-label="WFH">
+          <div className="login-logo" aria-hidden="true">W</div>
         </div>
 
-        <form className="login-card" onSubmit={submit}>
+        <form className="login-card login-card--signin" onSubmit={submit} aria-busy={loading}>
           <div className="auth-language-row"><StaffLanguageSwitcher /></div>
-          <div className="login-title">{t('auth.staffLogin','WFH 登录')}</div>
-          <div className="login-subtitle">{t('auth.staffLoginSubtitle','安全进入个人工作台')}</div>
+          <h1 className="login-title">{t('auth.staffLogin','WFH 登录')}</h1>
 
           <label className="login-field">
             {t('auth.email','邮箱')}
             <div className="login-input">
               <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 type="email"
+                inputMode="email"
                 autoComplete="email"
+                autoCapitalize="none"
+                spellCheck="false"
                 required
               />
             </div>
@@ -103,27 +126,23 @@ export default function StaffLoginPage() {
                 autoComplete="current-password"
                 required
               />
-              <button type="button" onClick={() => setShowPassword(v => !v)}>
+              <button type="button" aria-label={showPassword ? t('common.hide','隐藏') : t('auth.show','显示')} onClick={() => setShowPassword(v => !v)}>
                 {showPassword ? t('common.hide','隐藏') : t('auth.show','显示')}
               </button>
             </div>
           </label>
 
-          {(error || sessionNotice) && <div className="login-error">{error || (
+          {(error || sessionNotice) && <div className="login-error" role="alert">{error || (
             sessionNotice === 'active_elsewhere'
               ? t('auth.sessionEndedElsewhere','Your session ended because this account is active in another browser.')
               : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.')
           )}</div>}
 
-          <button className="login-submit" disabled={loading}>
+          <button type="submit" className="login-submit" disabled={loading}>
             {loading ? t('auth.signingIn','登录中...') : t('auth.signIn','登录')}
           </button>
-
-          <div className="login-foot">
-            {t('auth.firstTime','首次使用？')} <Link to="/staff/register">{t('auth.activate','激活账号')}</Link>
-          </div>
         </form>
-      </div>
+      </main>
     </div>
   )
 }
