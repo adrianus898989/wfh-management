@@ -6,10 +6,9 @@ import {EmployeeDrawer} from './AdminEmployeesPage'
 import '../styles-online-training.css'
 
 const BUCKET='online-training'
-const REPORT_PAGE_SIZE=12
-const REPORT_FETCH_PAGE_SIZE=50
-const MAX_GROUPED_REPORT_PAGES=64
 const PEOPLE_PAGE_SIZE=20
+const TRAINER_PAGE_SIZE=12
+const RPC_PAGE_SIZE=50
 const MAX_ATTACHMENTS=6
 const MAX_IMAGE_BYTES=4*1024*1024
 const MAX_IMAGE_EDGE=1600
@@ -27,8 +26,15 @@ const inclusiveDays=(from,to)=>{
 const safeFileName=name=>text(name).replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'')||'screenshot'
 const cleanAttachment=item=>({path:text(item?.path),name:text(item?.name),size:Number(item?.size||0),type:text(item?.type)})
 const attachmentWithUrl=item=>({...cleanAttachment(item),url:text(item?.url)})
+const removeStoredPaths=async paths=>{
+  if(!paths?.length)return null
+  try{
+    const {error}=await supabase.storage.from(BUCKET).remove(paths)
+    return error||null
+  }catch(error){return error}
+}
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
-const identityKey=value=>text(value).toLocaleLowerCase().replace(/\s+/g,' ')
+const identityKey=value=>text(value).toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu,'')
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
 const defaultFilters=()=>({...EMPTY_FILTERS,from:isoMonthStart(),to:isoToday()})
@@ -64,43 +70,88 @@ const REASON_REQUIRED=new Set(['leave','absent','transferred'])
 const REASON_PLACEHOLDER={leave:'填写请假原因',absent:'填写缺席原因',transferred:'填写回家原因'}
 const REVIEW={pending:'待查看',read:'已阅',needs_changes:'需补充'}
 
-function groupReportsByTrainer(rows){
-  const groups=new Map()
-  ;(rows||[]).forEach(row=>{
-    const memberTrainer=uniq((row.members||[]).map(member=>member.trainer_name)).join(' / ')
-    const trainerName=text(row.trainer_name)||memberTrainer||text(row.author_name)||'未填写培训人员'
-    const fallbackIdentity=text(row.author_employee_no)||text(row.created_by)||trainerName
-    const key=identityKey(text(row.trainer_name)||memberTrainer||fallbackIdentity)
-    if(!groups.has(key))groups.set(key,{
-      key,trainer_name:trainerName,author_names:new Set(),author_numbers:new Set(),
-      report_dates:new Set(),employee_ids:new Set(),platforms:new Set(),teams:new Set(),
-      reports:[],status_counts:{normal:0,rest:0,leave:0,absent:0,transferred:0},
-    })
-    const group=groups.get(key)
-    group.reports.push(row)
-    if(row.author_name)group.author_names.add(text(row.author_name))
-    if(row.author_employee_no)group.author_numbers.add(text(row.author_employee_no))
-    if(row.report_date)group.report_dates.add(text(row.report_date))
-    if(row.platform)group.platforms.add(text(row.platform))
-    if(row.team_name)group.teams.add(text(row.team_name))
-    ;(row.members||[]).forEach(member=>{
-      const employeeKey=text(member.employee_id)||text(member.employee_no)||identityKey(member.employee_name)
-      if(employeeKey)group.employee_ids.add(employeeKey)
-      if(member.team_name)group.teams.add(text(member.team_name))
-      if(Object.prototype.hasOwnProperty.call(group.status_counts,member.attendance_status))group.status_counts[member.attendance_status]+=1
-    })
-  })
-  return [...groups.values()].map(group=>{
-    const reports=[...group.reports].sort((a,b)=>text(b.report_date).localeCompare(text(a.report_date))||text(b.created_at).localeCompare(text(a.created_at)))
-    return {
-      key:group.key,trainer_name:group.trainer_name,
-      author_names:[...group.author_names],author_numbers:[...group.author_numbers],
-      platforms:[...group.platforms],teams:[...group.teams],reports,
-      report_count:reports.length,recorded_days:group.report_dates.size,employee_count:group.employee_ids.size,
-      latest_report:reports[0]||null,latest_report_date:reports[0]?.report_date||'',
-      status_counts:group.status_counts,
+function groupTrainerPeople(people,reports=null){
+  const grouped=new Map()
+  ;(people||[]).forEach(person=>{
+    const trainerName=text(person.trainer_name)||'未填写线上培训'
+    const trainerKey=identityKey(trainerName)||`missing:${trainerName}`
+    const current=grouped.get(trainerKey)||{
+      trainer_key:trainerKey,trainer_name:trainerName,report_count:0,recorded_days:0,
+      employee_count:0,last_report_date:null,normal_count:0,rest_count:0,leave_count:0,
+      absent_count:0,home_count:0,team_names:[],group_names:[],position_names:[],
+      shift_names:[],platforms:[],period_from:null,period_to:null,
     }
-  }).sort((a,b)=>text(b.latest_report_date).localeCompare(text(a.latest_report_date))||a.trainer_name.localeCompare(b.trainer_name,'zh-CN'))
+    current.employee_count+=1
+    current.report_count+=Number(person.report_count||0)
+    current.recorded_days+=Number(person.recorded_days||0)
+    current.normal_count+=Number(person.normal_count||0)
+    current.rest_count+=Number(person.rest_count||0)
+    current.leave_count+=Number(person.leave_count||0)
+    current.absent_count+=Number(person.absent_count||0)
+    current.home_count+=Number(person.home_count||0)
+    if(person.last_report_date&&(!current.last_report_date||person.last_report_date>current.last_report_date))current.last_report_date=person.last_report_date
+    if(person.period_from&&(!current.period_from||person.period_from<current.period_from))current.period_from=person.period_from
+    if(person.period_to&&(!current.period_to||person.period_to>current.period_to))current.period_to=person.period_to
+    current.team_names.push(person.team_name)
+    current.group_names.push(person.group_name)
+    current.position_names.push(person.position_name)
+    current.shift_names.push(person.shift_name)
+    current.platforms.push(person.platform)
+    grouped.set(trainerKey,current)
+  })
+  // `online_training_search_people` is employee-centred: the same daily
+  // report is counted once for every member.  Trainer cards need the number
+  // of submitted reports, so replace those derived totals with distinct
+  // report rows when the report archive was supplied.  Keeping the roster
+  // map first is what preserves trainers who currently have zero reports.
+  if(Array.isArray(reports)){
+    grouped.forEach(current=>Object.assign(current,{
+      report_count:0,recorded_days:0,last_report_date:null,normal_count:0,
+      rest_count:0,leave_count:0,absent_count:0,home_count:0,
+      _report_ids:new Set(),_report_dates:new Set(),_member_ids:new Set(),
+    }))
+    ;(reports||[]).forEach(report=>{
+      const trainerName=text(report.trainer_name)||text(report.author_name)||text(report.author_employee_no)||'未填写线上培训'
+      const trainerKey=identityKey(trainerName)||`missing:${trainerName}`
+      const current=grouped.get(trainerKey)||{
+        trainer_key:trainerKey,trainer_name:trainerName,report_count:0,recorded_days:0,
+        employee_count:0,last_report_date:null,normal_count:0,rest_count:0,leave_count:0,
+        absent_count:0,home_count:0,team_names:[],group_names:[],position_names:[],
+        shift_names:[],platforms:[],period_from:null,period_to:null,
+        _report_ids:new Set(),_report_dates:new Set(),_member_ids:new Set(),
+      }
+      if(!current._report_ids)current._report_ids=new Set()
+      if(!current._report_dates)current._report_dates=new Set()
+      if(!current._member_ids)current._member_ids=new Set()
+      const reportId=text(report.id)||`${report.report_date}:${report.created_at}:${trainerKey}`
+      current._report_ids.add(reportId)
+      if(report.report_date)current._report_dates.add(report.report_date)
+      if(report.report_date&&(!current.last_report_date||report.report_date>current.last_report_date))current.last_report_date=report.report_date
+      ;(report.members||[]).forEach(member=>{
+        const memberKey=text(member.employee_id)||text(member.employee_no)||text(member.employee_name)
+        if(memberKey)current._member_ids.add(memberKey)
+        const status=member.attendance_status
+        if(status==='normal')current.normal_count+=1
+        else if(status==='rest')current.rest_count+=1
+        else if(status==='leave')current.leave_count+=1
+        else if(status==='absent')current.absent_count+=1
+        else if(status==='transferred')current.home_count+=1
+      })
+      grouped.set(trainerKey,current)
+    })
+    grouped.forEach(current=>{
+      current.report_count=current._report_ids?.size||0
+      current.recorded_days=current._report_dates?.size||0
+      if(!current.employee_count)current.employee_count=current._member_ids?.size||0
+    })
+  }
+  return [...grouped.values()].map(item=>({...item,
+    team_names:uniq(item.team_names),group_names:uniq(item.group_names),position_names:uniq(item.position_names),
+    shift_names:uniq(item.shift_names),platforms:uniq(item.platforms),
+  })).map(({_report_ids,_report_dates,_member_ids,...item})=>item).sort((a,b)=>{
+    if(a.last_report_date!==b.last_report_date)return text(b.last_report_date).localeCompare(text(a.last_report_date))
+    return a.trainer_name.localeCompare(b.trainer_name,'zh-CN')
+  })
 }
 
 function historySummary(person,rows,period){
@@ -226,18 +277,18 @@ export default function OnlineTrainingPage(){
   const [pendingFiles,setPendingFiles]=useState([])
   const [saving,setSaving]=useState(false)
   const [viewing,setViewing]=useState(null)
-  const [trainerHistory,setTrainerHistory]=useState(null)
   const [deleteTarget,setDeleteTarget]=useState(null)
   const [profile,setProfile]=useState(null)
   const [history,setHistory]=useState(null)
+  const [trainerHistory,setTrainerHistory]=useState(null)
   const [lightbox,setLightbox]=useState(null)
   const listRequestRef=useRef(0)
   const historyRequestRef=useRef(0)
+  const trainerHistoryRequestRef=useRef(0)
   const trainerRequestRef=useRef(0)
   const profileRequestRef=useRef(0)
   const viewingRequestRef=useRef(0)
   const editorRequestRef=useRef(0)
-  const groupedReportCacheRef=useRef({key:'',groups:[],reportTotal:0})
 
   const hydrateAttachments=async rows=>{
     const paths=uniq((rows||[]).flatMap(row=>(row.attachments||[]).map(item=>item.path)))
@@ -270,7 +321,6 @@ export default function OnlineTrainingPage(){
   }
 
   const loadBootstrap=async()=>{
-    groupedReportCacheRef.current={key:'',groups:[],reportTotal:0}
     setLoading(true)
     try{
       const data=await readCall('online_training_context')
@@ -281,52 +331,48 @@ export default function OnlineTrainingPage(){
     finally{setLoading(false)}
   }
 
-  const loadList=async({silent=false,nextPage=page,refresh=false}={})=>{
+  const loadList=async({silent=false,nextPage=page}={})=>{
     const requestId=++listRequestRef.current
+    const requestedMode=mode
     if(silent)setSearching(true);else setLoading(true)
     try{
-      let data
-      if(mode==='people'){
-        data=await readCall('online_training_search_people',{
-          p_filters:filters,p_page:nextPage,p_page_size:PEOPLE_PAGE_SIZE,
+      const first=await readCall('online_training_search_people',{
+        p_filters:filters,p_page:requestedMode==='reports'?1:nextPage,p_page_size:requestedMode==='reports'?RPC_PAGE_SIZE:PEOPLE_PAGE_SIZE,
+      })
+      let data=first
+      if(requestedMode==='reports'){
+        const people=[...(first?.rows||[])]
+        const pages=Math.max(1,Number(first?.pages||1))
+        const remaining=Array.from({length:Math.max(0,pages-1)},(_,index)=>index+2)
+        for(let index=0;index<remaining.length;index+=6){
+          const batch=await Promise.all(remaining.slice(index,index+6).map(next=>readCall('online_training_search_people',{
+            p_filters:filters,p_page:next,p_page_size:RPC_PAGE_SIZE,
+          })))
+          batch.forEach(next=>people.push(...(next?.rows||[])))
+        }
+        const firstReports=await readCall('online_training_search_reports',{
+          p_filters:filters,p_page:1,p_page_size:RPC_PAGE_SIZE,
         })
-      }else{
-        const cacheKey=JSON.stringify(filters)
-        let cache=groupedReportCacheRef.current
-        if(refresh||cache.key!==cacheKey){
-          const first=await readCall('online_training_search_reports',{
-            p_filters:filters,p_page:1,p_page_size:REPORT_FETCH_PAGE_SIZE,
-          })
-          if(requestId!==listRequestRef.current)return
-          const reportPages=Math.max(1,Number(first?.pages||1))
-          if(reportPages>MAX_GROUPED_REPORT_PAGES){
-            throw new Error(`当前日期范围有 ${Number(first?.total||0)} 份培训日报，请缩小日期范围后再查询`)
-          }
-          const reports=[...(first?.rows||[])]
-          for(let reportPage=2;reportPage<=reportPages;reportPage+=1){
-            if(requestId!==listRequestRef.current)return
-            const next=await readCall('online_training_search_reports',{
-              p_filters:filters,p_page:reportPage,p_page_size:REPORT_FETCH_PAGE_SIZE,
-            })
-            reports.push(...(next?.rows||[]))
-          }
-          if(requestId!==listRequestRef.current)return
-          cache={key:cacheKey,groups:groupReportsByTrainer(reports),reportTotal:Number(first?.total||reports.length)}
-          groupedReportCacheRef.current=cache
+        const reports=[...(firstReports?.rows||[])]
+        const reportPages=Math.max(1,Number(firstReports?.pages||1))
+        const remainingReportPages=Array.from({length:Math.max(0,reportPages-1)},(_,index)=>index+2)
+        for(let index=0;index<remainingReportPages.length;index+=6){
+          const batch=await Promise.all(remainingReportPages.slice(index,index+6).map(next=>readCall('online_training_search_reports',{
+            p_filters:filters,p_page:next,p_page_size:RPC_PAGE_SIZE,
+          })))
+          batch.forEach(next=>reports.push(...(next?.rows||[])))
         }
-        const total=cache.groups.length
-        const pages=Math.max(1,Math.ceil(total/REPORT_PAGE_SIZE))
-        const safePage=Math.min(Math.max(Number(nextPage)||1,1),pages)
-        const offset=(safePage-1)*REPORT_PAGE_SIZE
-        data={
-          rows:cache.groups.slice(offset,offset+REPORT_PAGE_SIZE),total,page:safePage,pages,
-          page_size:REPORT_PAGE_SIZE,report_total:cache.reportTotal,
-        }
+        const trainers=groupTrainerPeople(people,reports)
+        const trainerPages=Math.max(1,Math.ceil(trainers.length/TRAINER_PAGE_SIZE))
+        const safePage=Math.min(Math.max(1,nextPage),trainerPages)
+        const start=(safePage-1)*TRAINER_PAGE_SIZE
+        data={...first,rows:trainers.slice(start,start+TRAINER_PAGE_SIZE),total:trainers.length,
+          page:safePage,pages:trainerPages,report_total:trainers.reduce((sum,row)=>sum+row.report_count,0)}
         if(safePage!==nextPage)setPage(safePage)
       }
       const rows=data?.rows||[]
       if(requestId!==listRequestRef.current)return
-      setResult({...data,rows})
+      setResult({...data,rows,report_total:data?.report_total??rows.reduce((sum,row)=>sum+Number(row.report_count||0),0)})
       setError('')
     }catch(err){
       if(requestId===listRequestRef.current)setError(readableError(err,'线上培训记录读取失败'))
@@ -341,12 +387,11 @@ export default function OnlineTrainingPage(){
     const timer=setTimeout(()=>loadList({silent:true}),0)
     return()=>clearTimeout(timer)
   },[bootstrap,mode,page,searchVersion])
-  useEffect(()=>setPage(1),[mode])
   useEffect(()=>{
-    if(!(editor||viewing||trainerHistory||deleteTarget||profile||history||lightbox))return
+    if(!(editor||viewing||deleteTarget||profile||history||trainerHistory||lightbox))return
     const prior=document.body.style.overflow;document.body.style.overflow='hidden'
     return()=>{document.body.style.overflow=prior}
-  },[editor,viewing,trainerHistory,deleteTarget,profile,history,lightbox])
+  },[editor,viewing,deleteTarget,profile,history,trainerHistory,lightbox])
 
   const myRoster=bootstrap?.my_roster||[]
   const filterOptions=useMemo(()=>{
@@ -471,6 +516,7 @@ export default function OnlineTrainingPage(){
     }
     setSaving(true);setError('');setEditor(current=>({...current,validation:null}))
     const uploaded=[]
+    let reportSaved=false
     try{
       for(const item of pendingFiles){
         const path=`${bootstrap.access.user_id}/${editor.draft.id}/${crypto.randomUUID()}-${safeFileName(item.file.name)}`
@@ -482,23 +528,45 @@ export default function OnlineTrainingPage(){
       const report={...editor.draft,title:text(editor.draft.title)||`线上培训日报 · ${editor.draft.report_date}`,attachments:[...kept,...uploaded]}
       const members=editor.members.map((member,index)=>({...member,sort_order:index,metrics:member.metrics||{}}))
       await call('online_training_save_report',{p_report:report,p_members:members})
+      reportSaved=true
 
+      let cleanupWarning=''
       if(editor.original){
         const keptPaths=new Set(kept.map(item=>item.path))
         const removed=(editor.original.attachments||[]).map(item=>item.path).filter(path=>path&&!keptPaths.has(path))
-        if(removed.length)await supabase.storage.from(BUCKET).remove(removed)
+        if(removed.length){
+          const removeError=await removeStoredPaths(removed)
+          if(removeError)cleanupWarning='日报已保存，但旧附件未能自动清理；附件已从日报隐藏，请联系管理员清理存储文件。'
+        }
       }
-      discardEditor();await loadList({silent:true,nextPage:1,refresh:true});setPage(1)
+      discardEditor();await loadList({silent:true,nextPage:1});setPage(1)
+      if(cleanupWarning)setError(cleanupWarning)
     }catch(err){
-      if(uploaded.length)await supabase.storage.from(BUCKET).remove(uploaded.map(item=>item.path))
-      setEditor(current=>current?({...current,validation:{message:err.message||'线上培训日报保存失败',issues:[]}}):current)
+      if(reportSaved){
+        discardEditor()
+        setError(`日报已经保存，但列表刷新失败：${err.message||'请稍后刷新重试'}`)
+      }else{
+        let rollbackError=null
+        if(uploaded.length){
+          rollbackError=await removeStoredPaths(uploaded.map(item=>item.path))
+        }
+        const rollbackNotice=rollbackError?'；新上传附件未能自动回滚，请联系管理员清理存储文件':''
+        setEditor(current=>current?({...current,validation:{message:`${err.message||'线上培训日报保存失败'}${rollbackNotice}`,issues:[]}}):current)
+      }
     }finally{setSaving(false)}
   }
 
   const archiveReport=async()=>{
     if(!deleteTarget)return
+    const openTrainer=trainerHistory?.trainer
     setSaving(true)
-    try{await call('online_training_archive_report',{p_report_id:deleteTarget.id});setDeleteTarget(null);await loadList({silent:true,refresh:true})}
+    try{
+      await call('online_training_archive_report',{p_report_id:deleteTarget.id})
+      setDeleteTarget(null)
+      if(history?.person)await loadHistory(history.person,history.period,history.basePeriod)
+      if(openTrainer)await loadTrainerHistory(openTrainer)
+      await loadList({silent:true})
+    }
     catch(err){setError(err.message||'报告删除失败')}
     finally{setSaving(false)}
   }
@@ -507,7 +575,7 @@ export default function OnlineTrainingPage(){
     try{
       await call('online_training_review_report',{p_report_id:viewing.id,p_status:status,p_note:note||''})
       setViewing(current=>({...current,review_status:status,review_note:note||''}))
-      await loadList({silent:true,refresh:true})
+      await loadList({silent:true})
     }catch(err){setError(err.message||'批注保存失败')}
   }
 
@@ -545,7 +613,17 @@ export default function OnlineTrainingPage(){
         batch.forEach(next=>rows.push(...(next?.rows||[])))
       }
       if(requestId!==historyRequestRef.current)return
-      setHistory({person,period,basePeriod,loading:false,rows,total:Number(first?.total||rows.length),error:''})
+      const access=bootstrap?.access||{}
+      const currentUserId=text(access.user_id)
+      const canManage=Boolean(access.can_manage||access.is_founder)
+      const visibleRows=rows.map(row=>({
+        ...row,
+        // The filtered history RPC intentionally omits edit flags.  This only
+        // controls whether the button is shown; the archive RPC performs the
+        // authoritative permission check again before changing any data.
+        can_edit:canManage||Boolean(currentUserId&&text(row.created_by)===currentUserId),
+      }))
+      setHistory({person,period,basePeriod,loading:false,rows:visibleRows,total:Number(first?.total||visibleRows.length),error:''})
     }catch(err){
       if(requestId!==historyRequestRef.current)return
       setHistory({person,period,basePeriod,loading:false,rows:[],total:0,error:readableError(err,'员工历史记录读取失败')})
@@ -572,6 +650,45 @@ export default function OnlineTrainingPage(){
   const closeHistory=()=>{
     historyRequestRef.current+=1
     setHistory(null)
+  }
+
+  const loadTrainerHistory=async trainer=>{
+    const requestId=++trainerHistoryRequestRef.current
+    setTrainerHistory({trainer,loading:true,rows:[],error:''})
+    try{
+      const trainerFilters={...filters,trainer:trainer.trainer_name}
+      const first=await readCall('online_training_search_reports',{p_filters:trainerFilters,p_page:1,p_page_size:RPC_PAGE_SIZE})
+      const rows=[...(first?.rows||[])]
+      const pages=Math.max(1,Number(first?.pages||1))
+      const remaining=Array.from({length:Math.max(0,pages-1)},(_,index)=>index+2)
+      for(let index=0;index<remaining.length;index+=6){
+        const batch=await Promise.all(remaining.slice(index,index+6).map(nextPage=>readCall('online_training_search_reports',{
+          p_filters:trainerFilters,p_page:nextPage,p_page_size:RPC_PAGE_SIZE,
+        })))
+        batch.forEach(next=>rows.push(...(next?.rows||[])))
+      }
+      const exact=rows.filter(row=>identityKey(row.trainer_name||row.author_name)===trainer.trainer_key)
+      const hydrated=await hydrateAttachments(exact)
+      if(requestId!==trainerHistoryRequestRef.current)return
+      setTrainerHistory({trainer,loading:false,rows:hydrated,error:''})
+    }catch(err){
+      if(requestId!==trainerHistoryRequestRef.current)return
+      setTrainerHistory({trainer,loading:false,rows:[],error:readableError(err,'培训日报读取失败')})
+    }
+  }
+
+  const closeTrainerHistory=()=>{
+    trainerHistoryRequestRef.current+=1
+    setTrainerHistory(null)
+  }
+
+  const changeMode=nextMode=>{
+    if(nextMode===mode)return
+    listRequestRef.current+=1
+    historyRequestRef.current+=1
+    trainerHistoryRequestRef.current+=1
+    setHistory(null);setTrainerHistory(null);setError('')
+    setMode(nextMode);setPage(1);setResult({rows:[],total:0,pages:1,report_total:0});setSearching(true)
   }
 
   const copyTelegram=async row=>{
@@ -618,14 +735,14 @@ export default function OnlineTrainingPage(){
 
     <section className="ot-kpis">
       <div><span>我负责的培训人员</span><strong>{myRoster.length||'—'}</strong><small>{myRoster.length?'按账号档案自动匹配':'主管账号仅查看或代填'}</small></div>
-      <div><span>历史培训日报</span><strong>{mode==='reports'?(result.report_total??0):'—'}</strong><small>{mode==='reports'?`${result.total||0} 名培训人员`:'切换日报记录查看'}</small></div>
+      <div><span>培训人员日报</span><strong>{mode==='reports'?(result.total??0):'—'}</strong><small>{mode==='reports'?`共 ${result.report_total||0} 份日报（含零日报人员）`:'切换日报记录查看'}</small></div>
       <div><span>员工培训档案</span><strong>{mode==='people'?result.total:'—'}</strong><small>排班培训员工（含零日报）</small></div>
       <div><span>排班数据最近同步</span><strong className="date">{bootstrap?.roster_synced_at?timeText(bootstrap.roster_synced_at):'读取中'}</strong><small>系统每 5 分钟检查变更</small></div>
     </section>
 
     <div className="ot-view-tabs">
-      <button className={mode==='reports'?'active':''} onClick={()=>setMode('reports')}>培训日报记录</button>
-      <button className={mode==='people'?'active':''} onClick={()=>setMode('people')}>人员详细记录</button>
+      <button className={mode==='reports'?'active':''} onClick={()=>changeMode('reports')}>培训日报记录</button>
+      <button className={mode==='people'?'active':''} onClick={()=>changeMode('people')}>人员详细记录</button>
     </div>
 
     <form className="ot-filters" onSubmit={event=>{event.preventDefault();queryFilters()}}>
@@ -646,83 +763,46 @@ export default function OnlineTrainingPage(){
         <label><span>当日状态</span><select value={draftFilters.attendance} onChange={event=>setDraftFilter('attendance',event.target.value)}><option value="">全部状态</option>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>
         <div className="ot-filter-actions"><button type="submit" className="query" disabled={searching}>{searching?'查询中…':filterDirty?'查询新条件':'查询'}</button><button type="button" onClick={clearFilters} disabled={searching}>重置</button></div>
       </div>
-      <div className="ot-filter-foot"><span>首次进入显示本月至今；修改任何条件后点击“查询”</span><strong>{activeFilterCount?`已应用 ${activeFilterCount} 项条件 · `:''}{mode==='reports'?`${result.total||0} 名培训人员 · ${result.report_total||0} 份日报`:`${result.total||0} 名员工`}</strong></div>
+      <div className="ot-filter-foot"><span>首次进入显示本月至今；修改任何条件后点击“查询”</span><strong>{activeFilterCount?`已应用 ${activeFilterCount} 项条件 · `:''}{mode==='reports'?`${result.total||0} 名培训人员 · 共 ${result.report_total||0} 份日报`:`${result.total||0} 名员工`}</strong></div>
     </form>
-    {searching&&<div className="ot-searching"><i/><span>正在搜索线上培训记录…</span></div>}
-
-    {loading&&!bootstrap?<div className="ot-loading"><i/><span>正在读取排班与线上培训记录…</span></div>:
-      mode==='reports'?<ReportList rows={result.rows} onOpen={setTrainerHistory}/>
+    {(loading&&!bootstrap)||(searching&&!result.rows.length)?<ListSkeleton mode={mode}/>:
+      mode==='reports'?<ReportList rows={result.rows} onHistory={loadTrainerHistory}/>
       :<PeopleList rows={result.rows} onHistory={openHistory} onProfile={openProfile}/>
     }
 
-    {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={mode==='reports'?REPORT_PAGE_SIZE:PEOPLE_PAGE_SIZE} onPage={setPage}/>}
+    {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={mode==='reports'?TRAINER_PAGE_SIZE:PEOPLE_PAGE_SIZE} onPage={setPage}/>}
 
     {editor&&<OverlayPortal><EditorModal editor={editor} updateDraft={updateDraft} updateMember={updateMember} updateMetric={updateMetric}
       assignment={bootstrap.auto_assignment||{}} trainerOptions={bootstrap.manager_options||[]} onSelectTrainer={selectAdminTrainer}
       rosterSyncedAt={bootstrap.roster_synced_at} pendingFiles={pendingFiles} onFiles={addFiles} onRemovePending={removePending}
       onRemoveExisting={removeExisting} onOpenImage={setLightbox} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/></OverlayPortal>} 
     {viewing&&<OverlayPortal><ViewModal row={viewing} onClose={closeViewer} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{const source=viewing;closeViewer();openEdit(source)}} onDelete={()=>{const source=viewing;closeViewer();setDeleteTarget(source)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>}
-    {trainerHistory&&<OverlayPortal><TrainerHistoryModal group={trainerHistory} range={filters} onClose={()=>setTrainerHistory(null)} onOpenReport={row=>{setTrainerHistory(null);openView(row)}}/></OverlayPortal>}
     {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/></OverlayPortal>} 
     {profile&&!profile.error&&<EmployeeDrawer detail={profile.detail||{employee:{}}} loading={profile.loading} readOnly onClose={closeProfile}/>}
     {profile?.error&&<OverlayPortal><ProfileErrorDrawer state={profile} onClose={closeProfile}/></OverlayPortal>}
-    {history&&<OverlayPortal><HistoryModal state={history} onClose={closeHistory} onProfile={openProfile} onSelectDate={selectHistoryDate}/></OverlayPortal>}
+    {history&&<OverlayPortal><HistoryModal state={history} onClose={closeHistory} onProfile={openProfile} onSelectDate={selectHistoryDate} onDelete={row=>{closeHistory();setDeleteTarget(row)}}/></OverlayPortal>}
+    {trainerHistory&&<OverlayPortal><TrainerHistoryModal state={trainerHistory} onClose={closeTrainerHistory} onOpen={openView} onDelete={setDeleteTarget}/></OverlayPortal>}
     {lightbox&&<OverlayPortal><div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div></OverlayPortal>}
   </div>
 }
 
-function ReportList({rows,onOpen}){
-  if(!rows?.length)return <div className="ot-empty"><span>培</span><h3>暂时没有匹配的线上培训日报</h3><p>提交后会在这里显示，并可按员工搜索全部历史。</p></div>
-  return <section className="ot-report-grid">{rows.map(group=>{
-    const counts=group.status_counts||{}
-    const latest=group.latest_report||{}
-    return <article className="ot-report-card ot-trainer-card" key={group.key}>
-      <div className="ot-trainer-card-head">
-        <button type="button" className="ot-trainer-identity" onClick={()=>onOpen(group)}><span>{text(group.trainer_name).slice(0,1).toUpperCase()||'培'}</span><div><small>线上培训</small><strong title={group.trainer_name}>{group.trainer_name}</strong><em>{group.author_numbers[0]||group.author_names[0]||'日报提交人'}</em></div></button>
-        <div className="ot-trainer-latest"><small>最近日报</small><strong>{dateText(group.latest_report_date)}</strong></div>
-      </div>
-      <div className="ot-trainer-overview"><span><b>{group.report_count}</b>份日报</span><span><b>{group.recorded_days}</b>个记录日</span><span><b>{group.employee_count}</b>名培训员工</span></div>
-      <div className="ot-meta"><span>{group.platforms.slice(0,2).join(' / ')||'未填写平台'}</span><span>{group.teams.slice(0,2).join(' / ')||'未填写团队'}</span>{group.platforms.length>2&&<span>另 {group.platforms.length-2} 个平台</span>}</div>
-      <p>{latest.report_summary||latest.issues_summary||latest.title||'已完成逐人培训记录'}</p>
-      <div className="ot-counts"><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div>
-      <footer><div><strong>所选日期范围累计</strong><small>{dateText(group.reports[group.reports.length-1]?.report_date)} — {dateText(group.latest_report_date)}</small></div><div><button className="primary" onClick={()=>onOpen(group)}>查看全部日报</button></div></footer>
-    </article>
-  })}</section>
+function ReportList({rows,onHistory}){
+  if(!rows?.length)return <div className="ot-empty"><span>培</span><h3>没有匹配的培训人员</h3><p>可以调整员工、组织或日期条件后重新查询。</p></div>
+  return <section className="ot-report-grid">{rows.map(trainer=><article className="ot-report-card ot-trainer-card" key={trainer.trainer_key}>
+    <div className="ot-trainer-card-head">
+      <div className="ot-trainer-identity"><span>{text(trainer.trainer_name).slice(0,1).toUpperCase()||'培'}</span><div><small>线上培训</small><strong title={trainer.trainer_name}>{trainer.trainer_name}</strong><em>{trainer.position_names.join(' / ')||'未填写岗位'}</em></div></div>
+      <div className="ot-trainer-latest"><small>最近日报</small><strong>{dateText(trainer.last_report_date)}</strong></div>
+    </div>
+    <div className="ot-trainer-overview"><span><b>{trainer.report_count||0}</b>份日报</span><span><b>{trainer.recorded_days||0}</b>个记录日</span><span><b>{trainer.employee_count||0}</b>名培训员工</span></div>
+    <div className="ot-meta"><span>{trainer.team_names.join(' / ')||'未填写团队'}</span><span>{trainer.group_names.join(' / ')||'未填写组别'}</span><span>{trainer.shift_names.join(' / ')||'未填写班次'}</span><span>{trainer.platforms.join(' / ')||'未填写盘口'}</span></div>
+    <div className="ot-counts"><span>正常 {trainer.normal_count||0}</span><span>公休 {trainer.rest_count||0}</span><span>请假 {trainer.leave_count||0}</span><span className={trainer.absent_count?'danger':''}>缺席 {trainer.absent_count||0}</span><span>回家 {trainer.home_count||0}</span></div>
+    <footer><div><strong>{trainer.report_count?`${trainer.report_count} 份日报`:'尚无日报'}</strong><small>{`${dateText(trainer.period_from)} — ${dateText(trainer.period_to)}`}</small></div><div><button className="primary" onClick={()=>onHistory(trainer)}>查看全部日报</button></div></footer>
+  </article>)}</section>
 }
 
-function TrainerHistoryModal({group,range,onClose,onOpenReport}){
-  const [selectedDate,setSelectedDate]=useState('')
-  const reports=useMemo(()=>selectedDate?group.reports.filter(row=>row.report_date===selectedDate):group.reports,[group,selectedDate])
-  const counts=useMemo(()=>{
-    const next={normal:0,rest:0,leave:0,absent:0,transferred:0}
-    reports.forEach(row=>(row.members||[]).forEach(member=>{if(Object.prototype.hasOwnProperty.call(next,member.attendance_status))next[member.attendance_status]+=1}))
-    return next
-  },[reports])
-  return <div className="ot-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><div className="ot-modal ot-trainer-history">
-    <header><div><span>TRAINER REPORT HISTORY</span><h2>{group.trainer_name}</h2></div><button onClick={onClose}>×</button></header>
-    <div className="ot-modal-scroll">
-      <section className="ot-trainer-history-summary">
-        <div className="identity"><span>{text(group.trainer_name).slice(0,1).toUpperCase()||'培'}</span><div><small>线上培训日报归档</small><strong>{group.trainer_name}</strong><em>{group.author_numbers[0]||group.author_names.join(' / ')||'日报提交人'}</em></div></div>
-        <div className="metrics"><span><small>日报</small><b>{reports.length}</b></span><span><small>记录日</small><b>{new Set(reports.map(row=>row.report_date).filter(Boolean)).size}</b></span><span><small>培训员工</small><b>{new Set(reports.flatMap(row=>(row.members||[]).map(member=>member.employee_id||member.employee_no)).filter(Boolean)).size}</b></span></div>
-      </section>
-      <form className="ot-trainer-date-filter" onSubmit={event=>event.preventDefault()}>
-        <label><span>查看日期</span><input type="date" min={range.from||undefined} max={range.to||undefined} value={selectedDate} onChange={event=>setSelectedDate(event.target.value)}/></label>
-        {selectedDate&&<button type="button" onClick={()=>setSelectedDate('')}>返回全部日期</button>}
-        <small>{range.from&&range.to?`${dateText(range.from)} 至 ${dateText(range.to)}`:'当前筛选范围'}</small>
-      </form>
-      <div className="ot-counts large"><b>{selectedDate?dateText(selectedDate):'筛选区间累计'}</b><span>正常 {counts.normal}</span><span>公休 {counts.rest}</span><span>请假 {counts.leave}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent}</span><span>回家 {counts.transferred}</span></div>
-      {!reports.length?<div className="ot-empty small"><h3>该日期没有提交日报</h3><p>可以返回全部日期继续查看。</p></div>:<div className="ot-trainer-report-list">{reports.map(row=>{
-        const rowCounts=Object.fromEntries(Object.keys(ATTENDANCE).map(key=>[key,(row.members||[]).filter(member=>member.attendance_status===key).length]))
-        return <article key={row.id}>
-          <div className="day"><strong>{dateText(row.report_date)}</strong><span>{timeText(row.created_at)}</span></div>
-          <div className="report"><strong title={row.title}>{row.title}</strong><span>{row.platform||'未填写平台'} · {row.shift_name||'未填写班次'} · {row.members?.length||0} 人</span><p>{row.report_summary||row.issues_summary||'已完成逐人培训记录'}</p></div>
-          <div className="mini-counts"><span>正常 {rowCounts.normal||0}</span><span>公休 {rowCounts.rest||0}</span><span>请假 {rowCounts.leave||0}</span><span className={rowCounts.absent?'danger':''}>缺席 {rowCounts.absent||0}</span><span>回家 {rowCounts.transferred||0}</span></div>
-          <button type="button" onClick={()=>onOpenReport(row)}>查看日报</button>
-        </article>
-      })}</div>}
-    </div>
-    <footer className="ot-modal-actions"><button className="primary" onClick={onClose}>关闭</button></footer>
-  </div></div>
+function ListSkeleton({mode}){
+  const count=mode==='reports'?4:6
+  return <section className={`ot-list-skeleton ${mode}`} aria-label="正在读取"><span className="sr-only">正在读取</span>{Array.from({length:count},(_,index)=><article key={index}><i/><div><b/><em/><span/></div></article>)}</section>
 }
 
 function PeopleList({rows,onHistory,onProfile}){
@@ -828,7 +908,25 @@ function ProfileErrorDrawer({state,onClose}){
   return <div className="ot-backdrop drawer-mask" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><aside className="ot-profile-drawer"><header><div><span>!</span><div><small>EMPLOYEE PROFILE</small><h2>无法打开员工档案</h2><b>权限与负责范围已由后台核验</b></div></div><button onClick={onClose}>×</button></header><div className="ot-drawer-state error">{state.error}</div></aside></div>
 }
 
-function HistoryModal({state,onClose,onProfile,onSelectDate}){
+function TrainerHistoryModal({state,onClose,onOpen,onDelete}){
+  const trainer=state.trainer||{}
+  const [date,setDate]=useState('')
+  const visibleRows=date?state.rows.filter(row=>row.report_date===date):state.rows
+  const employeeCount=new Set(visibleRows.flatMap(row=>(row.members||[]).map(member=>member.employee_id))).size
+  return <div className="ot-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><div className="ot-modal ot-trainer-history">
+    <header><div><span>TRAINER REPORT HISTORY</span><h2>{trainer.trainer_name||'线上培训'} · 全部日报</h2></div><button onClick={onClose}>×</button></header>
+    <div className="ot-modal-scroll">
+      <section className="ot-trainer-history-summary"><div className="identity"><span>{text(trainer.trainer_name).slice(0,1).toUpperCase()||'培'}</span><div><small>线上培训</small><strong>{trainer.trainer_name||'未填写'}</strong><em>{trainer.team_names?.join(' / ')||'未填写团队'} · {trainer.position_names?.join(' / ')||'未填写岗位'}</em></div></div><div className="metrics"><span><small>日报</small><b>{state.rows.length}</b></span><span><small>记录日</small><b>{new Set(state.rows.map(row=>row.report_date)).size}</b></span><span><small>培训员工</small><b>{employeeCount}</b></span></div></section>
+      <div className="ot-trainer-date-filter"><label><span>只看某一天</span><input type="date" value={date} onChange={event=>setDate(event.target.value)}/></label><button type="button" disabled={!date} onClick={()=>setDate('')}>清除日期</button><small>{date?`${dateText(date)} · ${visibleRows.length} 份`:`全部 ${state.rows.length} 份日报`}</small></div>
+      {state.loading?<div className="ot-inline-skeleton"><i/><i/><i/></div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!visibleRows.length?<div className="ot-empty small"><h3>{date?'该日没有日报':'当前培训人员尚无日报'}</h3><p>零日报培训人员会保留在列表中。</p></div>:<div className="ot-trainer-report-list">{visibleRows.map(row=>{
+        const counts=Object.fromEntries(Object.keys(ATTENDANCE).map(key=>[key,(row.members||[]).filter(member=>member.attendance_status===key).length]))
+        return <article key={row.id}><div className="day"><strong>{dateText(row.report_date)}</strong><span>{timeText(row.created_at)}</span></div><div className="report"><strong>{row.title||`线上培训日报 · ${row.report_date}`}</strong><span>{row.author_name||row.trainer_name||'后台账号'} · {row.members?.length||0} 名员工</span><p>{row.report_summary||row.issues_summary||row.next_plan||'已保存当天培训记录'}</p></div><div className="mini-counts"><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div><div className="actions"><button type="button" onClick={()=>onOpen(row)}>查看</button>{row.can_edit&&<button type="button" className="danger" onClick={()=>onDelete(row)}>删除</button>}</div></article>
+      })}</div>}
+    </div><footer className="ot-modal-actions"><button className="primary" onClick={onClose}>关闭</button></footer>
+  </div></div>
+}
+
+function HistoryModal({state,onClose,onProfile,onSelectDate,onDelete}){
   const person=state.person||{}
   const [selectedDate,setSelectedDate]=useState(state.period?.from===state.period?.to?(state.period.from||''):'')
   const summary=historySummary(person,state.rows,state.period)
@@ -843,7 +941,7 @@ function HistoryModal({state,onClose,onProfile,onSelectDate}){
       <small>当前累计范围：{viewingSingleDay?dateText(state.period.from):baseLabel}</small>
     </form>
     <div className="ot-history-kpis"><span><small>区间天数</small><b>{summary.period_days}</b></span><span><small>有记录</small><b>{summary.recorded_days}</b></span><span className={summary.missing_days?'warn':''}><small>未记录</small><b>{summary.missing_days}</b></span><span><small>正常</small><b>{summary.normal_count}</b></span><span><small>公休</small><b>{summary.rest_count}</b></span><span><small>请假</small><b>{summary.leave_count}</b></span><span className={summary.absent_count?'danger':''}><small>缺席</small><b>{summary.absent_count}</b></span><span><small>回家</small><b>{summary.home_count}</b></span></div>
-    {state.loading?<div className="ot-drawer-state">正在读取该员工每天记录…</div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!state.rows.length?<div className="ot-empty small"><h3>所选日期内暂无该员工记录</h3></div>:<div className="ot-history-list">{state.rows.map(row=>{const member=(row.members||[])[0]||{};const status=ATTENDANCE[member.attendance_status]||ATTENDANCE.normal;const normal=member.attendance_status==='normal';const details=normal?[['当天工作 / 培训评语',member.work_details],['工作表现',member.performance],['发现问题',member.issues],['后续安排',member.follow_up],['岗位数据 / 首次响应',member.metrics?.response_time]]:[['状态说明',member.status_note]];return <article key={row.id} className="ot-history-detail-card"><div className="ot-history-card-head"><div className="day"><strong>{dateText(row.report_date)}</strong><span>{member.shift_name||row.shift_name||'未填写班次'} · {member.platform||row.platform||'未填写盘口'}</span></div><em className={status.tone}>{status.label}</em><span className="ot-history-member-only">仅该员工</span></div><div className="ot-history-scope"><span>团队 <b>{member.team_name||person.team_name||'—'}</b></span><span>岗位 <b>{member.position_name||person.position_name||'—'}</b></span><span>线上培训 <b>{member.trainer_name||row.trainer_name||row.author_name||'—'}</b></span></div><div className="ot-history-details">{details.filter(([,value])=>text(value)).map(([label,value],index)=><div className={index===0?'wide':''} key={label}><b>{label}</b><p>{value}</p></div>)}{!details.some(([,value])=>text(value))&&<div className="wide"><b>当天记录</b><p>已记录当天情况，暂无补充说明。</p></div>}</div><div className="ot-history-audit"><span>提交人：{row.author_name||'后台用户'}</span><span>提交时间：{timeText(row.created_at)}</span>{row.updated_at&&row.updated_at!==row.created_at&&<span>最后更新：{timeText(row.updated_at)}</span>}</div></article>})}</div>}
+    {state.loading?<div className="ot-drawer-state">正在读取该员工每天记录…</div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!state.rows.length?<div className="ot-empty small"><h3>所选日期内暂无该员工记录</h3></div>:<div className="ot-history-list">{state.rows.map(row=>{const member=(row.members||[])[0]||{};const status=ATTENDANCE[member.attendance_status]||ATTENDANCE.normal;const normal=member.attendance_status==='normal';const details=normal?[['当天工作 / 培训评语',member.work_details],['工作表现',member.performance],['发现问题',member.issues],['后续安排',member.follow_up],['岗位数据 / 首次响应',member.metrics?.response_time]]:[['状态说明',member.status_note]];return <article key={row.id} className="ot-history-detail-card"><div className="ot-history-card-head"><div className="day"><strong>{dateText(row.report_date)}</strong><span>{member.shift_name||row.shift_name||'未填写班次'} · {member.platform||row.platform||'未填写盘口'}</span></div><em className={status.tone}>{status.label}</em><span className="ot-history-member-only">仅该员工</span></div><div className="ot-history-scope"><span>团队 <b>{member.team_name||person.team_name||'—'}</b></span><span>岗位 <b>{member.position_name||person.position_name||'—'}</b></span><span>线上培训 <b>{member.trainer_name||row.trainer_name||row.author_name||'—'}</b></span></div><div className="ot-history-details">{details.filter(([,value])=>text(value)).map(([label,value],index)=><div className={index===0?'wide':''} key={label}><b>{label}</b><p>{value}</p></div>)}{!details.some(([,value])=>text(value))&&<div className="wide"><b>当天记录</b><p>已记录当天情况，暂无补充说明。</p></div>}</div><div className="ot-history-audit"><div><span>提交人：{row.author_name||'后台用户'}</span><span>提交时间：{timeText(row.created_at)}</span>{row.updated_at&&row.updated_at!==row.created_at&&<span>最后更新：{timeText(row.updated_at)}</span>}</div>{row.can_edit&&<button type="button" onClick={()=>onDelete(row)}>删除测试日报</button>}</div></article>})}</div>}
   </div><footer className="ot-modal-actions"><button className="primary" onClick={onClose}>关闭</button></footer></div></div>
 }
 
