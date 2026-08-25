@@ -115,9 +115,11 @@ function Protected({ children, mode }) {
         if (reason === 'mfa_required') return false
         await localSignOut({
           release:false,
-          notice:reason==='active_elsewhere'||reason==='not_owner'
-            ? 'active_elsewhere'
-            : 'session_ended',
+          notice:mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
+            ? 'account_not_found'
+            : reason==='active_elsewhere'||reason==='not_owner'
+              ? 'active_elsewhere'
+              : 'session_ended',
           redirect:true,
         })
         return false
@@ -178,12 +180,19 @@ function Protected({ children, mode }) {
         if (!accessResult?.data?.ok) {
           await localSignOut({
             release:false,
-            notice:accessResult?.data?.reason === 'auth_session_missing' ? 'session_ended' : '',
+            notice:mode==='staff' && (accessResult?.data?.reason==='staff_account_not_found'||accessResult?.data?.reason==='staff_account_missing')
+              ? 'account_not_found'
+              : accessResult?.data?.reason === 'auth_session_missing' ? 'session_ended' : '',
             redirect:true,
           })
           return
         }
         const access = accessResult.data.access || null
+
+        if (mode==='staff' && access?.staff_account_exists===false) {
+          await localSignOut({ release:false, notice:'account_not_found', redirect:true })
+          return
+        }
 
         const entryEnabled = mode==='admin'
           ? access?.backend_enabled

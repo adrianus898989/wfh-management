@@ -30,14 +30,16 @@ export default function StaffLoginPage() {
     INVALID_REQUEST: t('auth.invalidRequest','Invalid request format'),
     INVALID_EMAIL: t('auth.invalidEmail','Invalid email format'),
     PASSWORD_REQUIRED: t('auth.passwordRequired','Please enter your password'),
-    EMAIL_NOT_FOUND: t('auth.emailNotFound','Email does not exist'),
+    EMAIL_NOT_FOUND: t('auth.accountNotFound','Account does not exist'),
+    ACCOUNT_NOT_FOUND: t('auth.accountNotFound','Account does not exist'),
+    STAFF_ACCOUNT_NOT_FOUND: t('auth.accountNotFound','Account does not exist'),
     PASSWORD_INCORRECT: t('auth.passwordIncorrect','Incorrect password'),
-    ACCOUNT_UNAVAILABLE: t('auth.accountUnavailable','This account is unavailable'),
+    ACCOUNT_UNAVAILABLE: t('auth.accountNotFound','Account does not exist'),
     TOO_MANY_ATTEMPTS: t('auth.tooManyAttempts','Too many attempts. Please try again later.'),
     LOGIN_SERVICE_UNAVAILABLE: t('auth.loginUnavailable','Sign in is temporarily unavailable'),
     SESSION_CHECK_UNAVAILABLE: t('auth.sessionCheckFailed','Unable to verify this browser session. Please try again.'),
     ACTIVE_SESSION_EXISTS: t('auth.sessionTakeoverFailed','Unable to replace the previous session. Please try signing in again.'),
-    SESSION_REJECTED: t('auth.sessionEnded','This sign-in session has ended. Please sign in again.'),
+    SESSION_REJECTED: t('auth.accountNotFound','Account does not exist'),
   }[response?.code] || t('auth.loginFailed','Sign in failed. Please try again.'))
 
   const submit = async (e) => {
@@ -135,6 +137,8 @@ export default function StaffLoginPage() {
           {(error || sessionNotice) && <div className="login-error" role="alert">{error || (
             sessionNotice === 'active_elsewhere'
               ? t('auth.sessionEndedElsewhere','Your session ended because this account is active in another browser.')
+              : sessionNotice === 'account_not_found'
+                ? t('auth.accountNotFound','Account does not exist')
               : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.')
           )}</div>}
 

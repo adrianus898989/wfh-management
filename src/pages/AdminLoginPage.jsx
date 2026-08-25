@@ -17,9 +17,9 @@ function withTimeout(promise, ms = 25000) {
 
 const LOGIN_ERROR_MESSAGES = {
   INVALID_REQUEST: '请求格式不正确',
-  INVALID_EMAIL: '邮箱格式不正确',
+  INVALID_USERNAME: '账号格式不正确',
   PASSWORD_REQUIRED: '请输入密码',
-  EMAIL_NOT_FOUND: '邮箱不存在',
+  USERNAME_NOT_FOUND: '账号不存在',
   PASSWORD_INCORRECT: '密码错误',
   ACCOUNT_UNAVAILABLE: '账号不可用，请联系管理员',
   TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后重试',
@@ -33,7 +33,7 @@ const loginErrorMessage = response => LOGIN_ERROR_MESSAGES[response?.code]
   || '登录失败，请稍后重试'
 
 export default function AdminLoginPage() {
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState(() => {
@@ -57,7 +57,7 @@ export default function AdminLoginPage() {
       const { data, error } = await withTimeout(
         supabase.functions.invoke('admin-login', {
           body: {
-            email: email.trim().toLowerCase(),
+            username: username.trim().toLowerCase(),
             password,
             mode: 'admin',
           },
@@ -112,14 +112,13 @@ export default function AdminLoginPage() {
           <h1 className="login-title">WFH 登录</h1>
 
           <label className="login-field">
-            邮箱
+            账号
             <div className="login-input">
               <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                type="email"
-                inputMode="email"
-                autoComplete="email"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                inputMode="text"
+                autoComplete="username"
                 autoCapitalize="none"
                 spellCheck="false"
                 required

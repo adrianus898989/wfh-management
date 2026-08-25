@@ -1472,7 +1472,8 @@ Deno.serve(async (req) => {
         await service.from("user_access")
           .update({ active:false })
           .eq("employee_id",employeeId)
-          .eq("employee_portal_enabled",true);
+          .eq("employee_portal_enabled",true)
+          .eq("backend_enabled",false);
       }
 
       const bundle = await getEmployeeBundle(service,employee.id);
@@ -1553,7 +1554,8 @@ Deno.serve(async (req) => {
         await service.from("user_access")
           .update({active:true})
           .eq("employee_id",employeeId)
-          .eq("employee_portal_enabled",true);
+          .eq("employee_portal_enabled",true)
+          .eq("backend_enabled",false);
       }
 
       await service.from("employee_lifecycle_events").insert({

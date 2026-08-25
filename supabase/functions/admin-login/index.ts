@@ -6,6 +6,7 @@ const allowedOrigin = 'https://adrianus898989.github.io'
 // 避免数据库连接繁忙时连 Founder 都无法登录；密码仍由 Supabase Auth 校验。
 const founderAccess = {
   auth_user_id: '567e1c26-9ff7-4df2-a3bd-9b68e26d10c9',
+  login_username: 'founder',
   login_email: 'adrianus898989@gmail.com',
   backend_enabled: true,
   active: true,
@@ -14,12 +15,16 @@ const founderAccess = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const usernamePattern = /^[a-z0-9._-]{3,32}$/
 
 const loginMessages: Record<string, string> = {
   INVALID_REQUEST: '请求格式不正确',
+  INVALID_USERNAME: '账号格式不正确',
   INVALID_EMAIL: '邮箱格式不正确',
   PASSWORD_REQUIRED: '请输入密码',
+  USERNAME_NOT_FOUND: '账号不存在',
   EMAIL_NOT_FOUND: '邮箱不存在',
+  STAFF_ACCOUNT_NOT_FOUND: '账号不存在',
   PASSWORD_INCORRECT: '密码错误',
   ACCOUNT_UNAVAILABLE: '账号不可用，请联系管理员',
   TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后重试',
@@ -93,16 +98,18 @@ function isUnavailableAccount(error: any) {
   return code === 'email_not_confirmed' || code === 'user_banned'
 }
 
-async function findAccess(admin: any, email: string, mode: string) {
-  const isFounder = email === founderAccess.login_email && mode === 'admin'
+async function findAccess(admin: any, identifier: string, mode: string) {
+  const isFounder = identifier === founderAccess.login_username && mode === 'admin'
 
   let lastError: any = null
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const query = admin
+    let query = admin
       .from('user_access')
-      .select('auth_user_id,login_email,backend_enabled,employee_portal_enabled,active,otp_required')
-      .eq('login_email', email)
+      .select('auth_user_id,login_username,login_email,backend_enabled,employee_portal_enabled,active,otp_required')
+    query = mode === 'staff'
+      ? query.eq('login_email', identifier)
+      : query.eq('login_username', identifier)
     const { data, error } = await query.maybeSingle()
 
     if (!error) {
@@ -215,13 +222,21 @@ Deno.serve(async (req) => {
       return loginError(req, 'INVALID_REQUEST', 400)
     }
 
+    const mode = String(body.mode || 'admin').trim().toLowerCase()
+    const username = String(body.username || '').trim().toLowerCase()
     const email = String(body.email || '').trim().toLowerCase()
     const password = String(body.password || '')
-    const mode = String(body.mode || 'admin').trim().toLowerCase()
 
     if (mode !== 'admin' && mode !== 'staff') return loginError(req, 'INVALID_REQUEST', 400)
-    if (!emailPattern.test(email)) return loginError(req, 'INVALID_EMAIL', 400)
+    if (mode === 'admin' && !usernamePattern.test(username)) {
+      return loginError(req, 'INVALID_USERNAME', 400)
+    }
+    if (mode === 'staff' && !emailPattern.test(email)) {
+      return loginError(req, 'INVALID_EMAIL', 400)
+    }
     if (!password) return loginError(req, 'PASSWORD_REQUIRED', 400)
+
+    const identifier = mode === 'staff' ? email : username
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const secretKeys = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') || '{}')
@@ -239,17 +254,19 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     })
 
-    const { access, unavailable } = await findAccess(admin, email, mode)
+    const { access, unavailable } = await findAccess(admin, identifier, mode)
 
     if (unavailable) {
       return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
     }
 
-    if (!access) return loginError(req, 'EMAIL_NOT_FOUND', 401)
+    if (!access) {
+      return loginError(req, mode === 'staff' ? 'EMAIL_NOT_FOUND' : 'USERNAME_NOT_FOUND', 401)
+    }
 
     const entryEnabled = mode === 'staff' ? access?.employee_portal_enabled : access?.backend_enabled
     if (!access.active || !entryEnabled || !access.login_email) {
-      return loginError(req, 'ACCOUNT_UNAVAILABLE', 403)
+      return loginError(req, mode === 'staff' ? 'STAFF_ACCOUNT_NOT_FOUND' : 'ACCOUNT_UNAVAILABLE', 403)
     }
 
     const authClient = createClient(supabaseUrl, publishableKey, {
@@ -277,7 +294,9 @@ Deno.serve(async (req) => {
       }
 
       if (isRateLimited(authError)) return loginError(req, 'TOO_MANY_ATTEMPTS', 429)
-      if (isUnavailableAccount(authError)) return loginError(req, 'ACCOUNT_UNAVAILABLE', 403)
+      if (isUnavailableAccount(authError)) {
+        return loginError(req, mode === 'staff' ? 'STAFF_ACCOUNT_NOT_FOUND' : 'ACCOUNT_UNAVAILABLE', 403)
+      }
 
       console.error('ADMIN_LOGIN_AUTH_UNAVAILABLE', safeErrorMeta(authError))
       return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
@@ -290,7 +309,7 @@ Deno.serve(async (req) => {
     ) {
       console.error('ADMIN_LOGIN_ID_MISMATCH')
       await discardCandidateSession(authClient)
-      return loginError(req, 'ACCOUNT_UNAVAILABLE', 403)
+      return loginError(req, mode === 'staff' ? 'STAFF_ACCOUNT_NOT_FOUND' : 'ACCOUNT_UNAVAILABLE', 403)
     }
 
     const mfaRequired = mode === 'admin' && Boolean(access.otp_required)
@@ -320,6 +339,9 @@ Deno.serve(async (req) => {
         if (lease?.reason === 'active_elsewhere') {
           return loginError(req, 'ACTIVE_SESSION_EXISTS', 409)
         }
+        if (mode === 'staff' && lease?.reason === 'staff_account_not_found') {
+          return loginError(req, 'STAFF_ACCOUNT_NOT_FOUND', 403)
+        }
         console.error('ADMIN_LOGIN_SESSION_REJECTED', lease?.reason || 'unknown')
         return loginError(req, 'SESSION_REJECTED', 401)
       }
@@ -332,7 +354,7 @@ Deno.serve(async (req) => {
         employee_id: null,
         module: 'auth',
         action: mode === 'staff' ? 'staff_login' : 'admin_login',
-        reason: mode === 'staff' ? '员工前端邮箱登录成功' : '后台邮箱登录成功',
+        reason: mode === 'staff' ? '员工前端邮箱登录成功' : '后台账号登录成功',
       }),
     ).then(({ error }: any) => {
       if (error) console.error('ADMIN_LOGIN_AUDIT_ERROR', safeErrorMeta(error))
