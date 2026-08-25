@@ -1,11 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
+import { AdminPayoutChangeWorkspace } from '../components/PaymentChangeWorkflow'
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
+import { useAdminI18n } from '../lib/adminI18n'
 import { supabase } from '../lib/supabase'
 
-const TABS = ['工资导入','待发布','已发布','导入记录']
+const PAYOUT_CHANGE_VIEW='payroll.payout_change.view'
+const PAYOUT_CHANGE_REVIEW='payroll.payout_change.review'
+const PAYMENT_CHANGE_TABS=new Set(['收款资料审核','申请记录'])
+const TABS = ['工资导入','待发布','已发布','导入记录','收款资料审核','申请记录']
 const PAYROLL_SUMMARY_ONLY_BATCH_ID=0
 const clean = value => String(value ?? '').trim()
 const key = value => clean(value).toLowerCase().replace(/[\s_\-\/()（）.：:]+/g,'')
@@ -171,8 +176,11 @@ function normalizeRows(sheetRows){
 export default function AdminPayrollPage(){
   const [params,setParams]=useSearchParams()
   const access=useAdminAccess()
+  const {t:adminT}=useAdminI18n()
   const urlTab=params.get('tab')
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
+    if(value==='收款资料审核')return access.hasPermission(PAYOUT_CHANGE_REVIEW)
+    if(value==='申请记录')return access.hasAnyPermission([PAYOUT_CHANGE_VIEW,PAYOUT_CHANGE_REVIEW])
     if(!access.hasPermission(PERMISSIONS.PAYROLL_VIEW))return false
     if(value==='工资导入')return access.hasPermission(PERMISSIONS.PAYROLL_EDIT)
     if(value==='待发布')return access.hasAnyPermission([PERMISSIONS.PAYROLL_APPROVE,PERMISSIONS.PAYROLL_PUBLISH])
@@ -204,6 +212,10 @@ export default function AdminPayrollPage(){
 
   const load=async(selected=batchId,targetTab=tab)=>{
     const requestId=++loadRequestRef.current
+    if(PAYMENT_CHANGE_TABS.has(targetTab)){
+      setState({loading:false,error:'',data:null})
+      return
+    }
     setState(current=>({...current,loading:true,error:''}))
     try{
       let response=await supabase.rpc('admin_payroll_home',{p_batch_id:selected===null||selected===undefined?null:selected})
@@ -238,6 +250,10 @@ export default function AdminPayrollPage(){
       return undefined
     }
     setTabState(nextTab)
+    if(PAYMENT_CHANGE_TABS.has(nextTab)){
+      setState({loading:false,error:'',data:null})
+      return undefined
+    }
     const selected=nextTab==='工资导入'||nextTab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:null
     load(selected,nextTab)
     return()=>{loadRequestRef.current+=1}
@@ -370,12 +386,12 @@ export default function AdminPayrollPage(){
   }
 
   return <div className="content-page payroll-admin-page">
-    <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>工资中心</h1></div><button className="payroll-refresh" disabled={access.loading||!tab} onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>刷新资料</button></div>
+    <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>{adminT('工资中心')}</h1></div>{!PAYMENT_CHANGE_TABS.has(tab)&&<button className="payroll-refresh" disabled={access.loading||!tab} onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>{adminT('刷新资料')}</button>}</div>
     {state.error&&<div className="payroll-alert error">{state.error}</div>}
     {message&&<div className="payroll-alert">{message}</div>}
-    <div className="module-tabs payroll-tabs">{visibleTabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item}</button>)}</div>
+    <div className="module-tabs payroll-tabs">{visibleTabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{adminT(item)}</button>)}</div>
 
-    {access.loading?<div className="payroll-empty-small">正在读取页面权限…</div>:!tab?<div className="payroll-alert error">当前账号没有工资中心页面权限。</div>:tab==='工资导入'?<>
+    {access.loading?<div className="payroll-empty-small">{adminT('正在读取页面权限…')}</div>:!tab?<div className="payroll-alert error">{adminT('当前账号没有工资中心页面权限。')}</div>:PAYMENT_CHANGE_TABS.has(tab)?<AdminPayoutChangeWorkspace mode={tab==='收款资料审核'?'pending':'history'} canReview={access.hasPermission(PAYOUT_CHANGE_REVIEW)}/>:tab==='工资导入'?<>
       <section className="payroll-upload-card">
         <div className="payroll-upload-copy"><span>01</span><div><h2>上传工资表</h2><p>支持 XLSX、CSV、TSV；自动识别中文、英文、越南文和印尼文常用表头。</p></div></div>
         <div className="payroll-import-form">
