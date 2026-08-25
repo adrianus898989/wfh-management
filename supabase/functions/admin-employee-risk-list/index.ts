@@ -220,8 +220,15 @@ Deno.serve(async req => {
     return json({
       rows: rows.map((employee: any) => {
         const missing = basicMissing(employee)
+        const summary: any = summaryMap.get(upper(employee.employee_no))
+        const totalErrorCount = Number(summary?.total_error_count || 0)
         return {
           ...employee,
+          month_error_count: Number(summary?.month_error_count || 0),
+          total_error_count: totalErrorCount,
+          // Always derive the list grade from the same thresholds used by filtering.
+          // This prevents a filtered “重点” row from falling back to “优秀” in the table.
+          risk_level: riskKey(totalErrorCount),
           missing_fields: missing,
           missing_count: missing.length,
           account_opened: accountSet.has(employee.id),
