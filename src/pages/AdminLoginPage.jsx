@@ -7,6 +7,7 @@ import {
   touchSessionActivity,
 } from '../lib/supabase'
 import { readFunctionResponsePayload } from '../lib/functionErrors'
+import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 
 function withTimeout(promise, ms = 25000) {
   let timer
@@ -34,6 +35,7 @@ const loginErrorMessage = response => LOGIN_ERROR_MESSAGES[response?.code]
   || '登录失败，请稍后重试'
 
 export default function AdminLoginPage() {
+  const { t: adminT } = useAdminI18n()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -102,16 +104,17 @@ export default function AdminLoginPage() {
 
   return (
     <div className="login-page login-page--signin admin-login-page">
+      <div className="staff-auth-language"><AdminLanguageSwitcher className="staff-language-switcher" /></div>
       <main className="login-shell login-shell--signin">
         <div className="login-brand" aria-label="WFH">
           <div className="login-logo" aria-hidden="true">W</div>
         </div>
 
         <form className="login-card login-card--signin" onSubmit={submit} aria-busy={loading}>
-          <h1 className="login-title">WFH 登录</h1>
+          <h1 className="login-title">{adminT('WFH 登录')}</h1>
 
           <label className="login-field">
-            账号
+            {adminT('账号')}
             <div className="login-input">
               <input
                 value={username}
@@ -126,7 +129,7 @@ export default function AdminLoginPage() {
           </label>
 
           <label className="login-field">
-            密码
+            {adminT('密码')}
             <div className="login-input">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -135,16 +138,16 @@ export default function AdminLoginPage() {
                 autoComplete="current-password"
                 required
               />
-              <button type="button" aria-label={showPassword ? '隐藏密码' : '显示密码'} onClick={() => setShowPassword(v => !v)}>
-                {showPassword ? '隐藏' : '显示'}
+              <button type="button" aria-label={adminT(showPassword ? '隐藏密码' : '显示密码')} onClick={() => setShowPassword(v => !v)}>
+                {adminT(showPassword ? '隐藏' : '显示')}
               </button>
             </div>
           </label>
 
-          {error && <div className="login-error" role="alert">{error}</div>}
+          {error && <div className="login-error" role="alert">{adminT(error)}</div>}
 
           <button type="submit" className="login-submit" disabled={loading}>
-            {loading ? '登录中...' : '登录'}
+            {adminT(loading ? '登录中...' : '登录')}
           </button>
         </form>
       </main>

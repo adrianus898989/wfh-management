@@ -3,6 +3,33 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 const STORAGE_KEY = 'wfh_admin_locale'
 
 const english = {
+  'WFH 登录': 'WFH Sign in',
+  '账号': 'Username',
+  '密码': 'Password',
+  '显示': 'Show',
+  '隐藏': 'Hide',
+  '显示密码': 'Show password',
+  '隐藏密码': 'Hide password',
+  '登录': 'Sign in',
+  '登录中...': 'Signing in...',
+  '请求格式不正确': 'Invalid request format.',
+  '账号格式不正确': 'Invalid username format.',
+  '请输入密码': 'Enter your password.',
+  '账号不存在': 'Account not found.',
+  '密码错误': 'Incorrect password.',
+  '账号不可用，请联系管理员': 'This account is unavailable. Contact an administrator.',
+  '尝试次数过多，请稍后重试': 'Too many attempts. Try again later.',
+  '登录服务暂不可用，请稍后重试': 'Sign-in is temporarily unavailable. Try again later.',
+  '登录会话验证暂不可用，请稍后重试': 'Unable to verify this browser session. Try again later.',
+  '旧会话接管未完成，请重新登录': 'Unable to replace the previous session. Sign in again.',
+  '登录会话已失效，请重试': 'Your session has expired. Try again.',
+  '登录失败，请稍后重试': 'Sign-in failed. Try again later.',
+  '当前会话已结束：该账号正在另一浏览器使用': 'This session ended because the account is active in another browser.',
+  '登录会话已失效，请重新登录': 'Your session has expired. Sign in again.',
+  '暂时无法登录': 'Sign-in is temporarily unavailable.',
+  '登录状态设置超时，请重试': 'Setting up the session timed out. Try again.',
+  '登录失败，请重试': 'Sign-in failed. Try again.',
+  '登录服务响应超时，请稍后重试': 'The sign-in service timed out. Try again later.',
   '首页': 'Dashboard',
   '员工管理': 'Employees',
   '员工档案': 'Employee records',
@@ -1189,7 +1216,7 @@ function AdminDomI18nFallback({ locale }) {
       const current = node.nodeValue || ''
       const previous = textRecords.get(node)
       if (previous && current === previous.applied) return
-      const translated = translateAdminText(current, parent)
+      const translated = translateAdminText(current, node.parentElement)
       if (translated === current) {
         if (previous) textRecords.delete(node)
         return
