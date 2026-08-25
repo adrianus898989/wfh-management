@@ -293,6 +293,472 @@ const english = {
   '本页': 'This page',
   '尾页': 'Last',
 
+  // Common actions, states and legacy-page copy.
+  '新增': 'Add',
+  '提交': 'Submit',
+  '审批': 'Approve',
+  '批注 / 复核': 'Comment / review',
+  '批改': 'Grade',
+  '导出': 'Export',
+  '发布': 'Publish',
+  '管理': 'Manage',
+  '生成': 'Generate',
+  '开': 'On',
+  '关': 'Off',
+  '选择': 'Select',
+  '请选择': 'Select',
+  '重新选择': 'Choose again',
+  '移除': 'Remove',
+  '删除中…': 'Deleting…',
+  '导入中…': 'Importing…',
+  '发布中…': 'Publishing…',
+  '打开中…': 'Opening…',
+  '读取中': 'Loading',
+  '获取中…': 'Getting code…',
+  '已提交': 'Submitted',
+  '已编辑': 'Edited',
+  '提交于': 'Submitted',
+  '已记录': 'Recorded',
+  '已核实': 'Verified',
+  '已恢复': 'Restored',
+  '不成立': 'Invalid',
+  '尚未设置': 'Not set',
+  '尚无日报': 'No reports yet',
+  '后台用户': 'Admin user',
+  '管理账号': 'Admin account',
+  '系统数据': 'System data',
+  '完整': 'Complete',
+  '已开通': 'Enabled',
+  '未开通': 'Not enabled',
+  '已激活': 'Activated',
+  '未激活': 'Not activated',
+  '全部账号': 'All accounts',
+  '账号激活状态': 'Account activation',
+  '激活码': 'Activation code',
+  '输入工作TG': 'Enter work Telegram',
+  '输入后台账号': 'Enter admin account',
+  '更多筛选': 'More filters',
+  '全部团队 / 输入搜索': 'All teams / type to search',
+  '全部岗位 / 输入搜索': 'All positions / type to search',
+  '全部员工国家 / 输入搜索': 'All countries / type to search',
+  '全部班次 / 输入搜索': 'All shifts / type to search',
+  '全部负责人 / 输入搜索': 'All supervisors / type to search',
+  '综合搜索': 'Search',
+  '搜索标题、提交人、盘口、员工或工作内容': 'Search title, submitter, platform, employee or work content',
+  '全部提交人': 'All submitters',
+  '操作类型': 'Action type',
+  '输入操作内容关键字': 'Enter action keywords',
+
+  // Employee records and workforce analytics.
+  '新增员工': 'Add employee',
+  '编辑员工': 'Edit employee',
+  '办理离职': 'Process resignation',
+  '编辑离职': 'Edit resignation',
+  '恢复在职': 'Restore active status',
+  '撤销入职': 'Cancel hire',
+  '确认恢复': 'Confirm restoration',
+  '确认撤销入职': 'Confirm hire cancellation',
+  '岗位管理': 'Position management',
+  '入离职记录': 'Hire / resignation history',
+  '总览': 'Overview',
+  '团队分析': 'Team analysis',
+  '岗位分析': 'Position analysis',
+  '班次分析': 'Shift analysis',
+  '国家分析': 'Country analysis',
+  '员工国家分析': 'Employee country analysis',
+  '离职分析': 'Resignation analysis',
+  '分析日期区间': 'Analysis date range',
+  '离职日期区间': 'Resignation date range',
+  '离职日期起': 'Resignation date from',
+  '离职日期止': 'Resignation date to',
+  '输入离职原因': 'Enter resignation reason',
+  '输入离职原因关键字': 'Enter resignation reason keywords',
+  '全部等级': 'All levels',
+  '优秀（0错误）': 'Excellent (0 errors)',
+  '正常（1–8）': 'Normal (1–8)',
+  '注意（9–15）': 'Attention (9–15)',
+  '重点（16–30）': 'Priority (16–30)',
+  '高频（31+）': 'High frequency (31+)',
+  '累计错误': 'Total errors',
+  '待完善': 'Incomplete',
+  '团队结构分析': 'Team structure analysis',
+  '岗位结构分析': 'Position structure analysis',
+  '员工结构统计': 'Employee structure statistics',
+  '员工国家概览': 'Employee country overview',
+  '员工国家入职阶段': 'Hire stage by employee country',
+  '各员工国家人员流动': 'Workforce movement by employee country',
+  '团队人数占比': 'Team headcount share',
+  '岗位人数占比': 'Position headcount share',
+  '班次人数占比': 'Shift headcount share',
+  '当前在职': 'Currently active',
+  '累计离职': 'Total resignations',
+  '综合离职率': 'Overall resignation rate',
+  '所选区间': 'Selected period',
+  '区间离职': 'Resigned in period',
+  '区间入职': 'Hired in period',
+  '区间净增': 'Net change in period',
+  '区间离职率': 'Resignation rate in period',
+  '今日离职': 'Resigned today',
+  '昨日离职': 'Resigned yesterday',
+  '近7天离职': 'Resigned in 7 days',
+  '近30天离职': 'Resigned in 30 days',
+  '近30天离职率': '30-day resignation rate',
+  '本月离职': 'Resigned this month',
+  '各团队离职明细': 'Resignations by team',
+  '岗位离职排行': 'Resignations by position',
+  '员工国家离职排行': 'Resignations by employee country',
+  '班次离职排行': 'Resignations by shift',
+  '7天入职': 'Hired in 7 days',
+  '7天离职': 'Resigned in 7 days',
+  '30天入职': 'Hired in 30 days',
+  '30天离职': 'Resigned in 30 days',
+  '30天净增': '30-day net change',
+  '入职': 'Hired',
+  '查看当前人员 →': 'View current staff →',
+  '查看人员': 'View staff',
+  '占当前在职': 'Share of active staff',
+
+  // Reports and attendance.
+  '统计总览': 'Statistics overview',
+  '员工订单处理统计': 'Employee order processing',
+  '排班明细': 'Schedule details',
+  '员工名单': 'Employee roster',
+  '点击条目查看人员': 'Select an item to view employees',
+  '现场培训': 'Onsite training',
+  '线上组长': 'Online team lead',
+  '线上培训': 'Online training',
+  '错误类型': 'Error type',
+  '质检人': 'Reviewer',
+  '质检时间': 'Review time',
+  '复检时间': 'Recheck time',
+  '源表行号': 'Source row',
+  '错误备注': 'Error notes',
+  '正确操作方式': 'Correct procedure',
+  '集中查看员工考勤、请假与离职记录。': 'Review employee attendance, leave and resignation records in one place.',
+  '考勤记录明细': 'Attendance record details',
+  '记录类别': 'Record category',
+  '页面数据来自 Supabase；这里显示最近一次 Google 表格同步结果。': 'Page data comes from Supabase. The latest Google Sheets sync result is shown here.',
+  '正在生成月度出勤表…': 'Generating monthly attendance…',
+  '完整备注': 'Full notes',
+  '点击查看完整备注': 'View full notes',
+  '每日状态人数': 'Daily status headcount',
+  '每日暂无异常': 'No daily exceptions',
+  '岗位 / 团队': 'Position / team',
+  '盘口 / 国家': 'Platform / country',
+
+  // Power / internet records.
+  '发生日期': 'Date occurred',
+  '自动时长': 'Automatic duration',
+  '开始时间': 'Start time',
+  '恢复时间': 'Restored time',
+  '记录状态': 'Record status',
+  '情况说明（可选）': 'Description (optional)',
+  '图片 / 视频证明（可选，最多 3 个）': 'Image / video proof (optional, up to 3 files)',
+  '支持图片、MP4、MOV、WebM；每个文件不超过 50MB。': 'Images, MP4, MOV and WebM are supported; each file must be 50 MB or smaller.',
+  '待上传': 'Pending upload',
+  '正在上传并保存…': 'Uploading and saving…',
+  '保存记录': 'Save record',
+  '删除停电 / 断网记录': 'Delete power / internet record',
+  '确认删除这条记录吗？': 'Delete this record?',
+  '全部类型': 'All types',
+  '暂无每日统计': 'No daily summary yet',
+  '正在读取记录…': 'Loading records…',
+  '暂无符合条件的记录': 'No matching records',
+  '类型': 'Type',
+  '视频': 'Video',
+  '图片': 'Image',
+  '旧证明': 'Existing proof',
+  '下载文件': 'Download file',
+  '重试预览': 'Retry preview',
+
+  // Daily work and online training.
+  '负责人和组长在系统提交每日工作情况；线上培训使用独立的排班关联日报。': 'Supervisors and team leads submit daily work here. Online training uses its own schedule-linked report.',
+  '可提交报告': 'Can submit reports',
+  '＋ 提交报告': '+ Submit report',
+  '今日提交': 'Submitted today',
+  '工作报告': 'Work reports',
+  '累计记录': 'Total records',
+  '所有后台成员均可查看；提交人管理自己的记录，获授权人员可管理全部记录。': 'All admin users can view these records. Submitters manage their own records; authorized users can manage all records.',
+  '正在读取每日工作记录…': 'Loading daily work records…',
+  '提交第一份报告': 'Submit the first report',
+  '人员名单': 'Staff list',
+  '今日工作情况': 'Today\'s work',
+  '员工工作 / 培训情况': 'Employee work / training',
+  '响应时间 / 数据': 'Response time / metrics',
+  '交接内容': 'Handover details',
+  '交接概况': 'Handover summary',
+  '问题与风险': 'Issues and risks',
+  '后续计划': 'Next steps',
+  '报告截图': 'Report screenshots',
+  '编辑报告': 'Edit report',
+  '新建记录': 'New record',
+  '提交每日工作': 'Submit daily work',
+  '报告标题 *': 'Report title *',
+  '日期起 *': 'Start date *',
+  '课程类型': 'Course type',
+  '团队负责人': 'Team supervisor',
+  '交接状态': 'Handover status',
+  '交接概况 *': 'Handover summary *',
+  '今日工作情况 *': 'Today\'s work *',
+  '＋ 选择截图': '+ Select screenshots',
+  '提交报告': 'Submit report',
+  '确定删除这份记录？': 'Delete this record?',
+  '待跟进': 'Pending follow-up',
+  '跟进中': 'In progress',
+  '报告截图·': 'Report screenshots ·',
+
+  '线上培训日报': 'Online training reports',
+  '＋ 提交线上培训日报': '+ Submit training report',
+  '已关联': 'Linked',
+  '管理员代填': 'Admin entry',
+  '重新读取': 'Reload',
+  '培训人员日报': 'Trainee reports',
+  '排班培训员工（含零日报）': 'Scheduled trainees (including those with no reports)',
+  '系统每 5 分钟检查变更': 'The system checks for changes every 5 minutes',
+  '输入提交人或培训': 'Enter submitter or trainer',
+  '搜索平台、报告、评语或问题': 'Search platform, report, feedback or issues',
+  '查询新条件': 'Search with new filters',
+  '首次进入显示本月至今；修改任何条件后点击“查询”': 'The initial view shows this month to date. Select Search after changing any filter.',
+  '没有匹配的培训人员': 'No matching trainers',
+  '可以调整员工、组织或日期条件后重新查询。': 'Adjust the employee, organization or date filters and search again.',
+  '没有找到员工培训记录': 'No employee training records found',
+  '可以输入员工ID或姓名搜索。': 'Search by employee ID or name.',
+  '所选日期': 'Selected dates',
+  '最近记录': 'Latest record',
+  '查看该员工每天记录': 'View daily employee records',
+  '编辑线上培训日报': 'Edit training report',
+  '定位第一处': 'Go to first issue',
+  '1. 账号与居家排班已自动关联': '1. Account and remote schedule linked automatically',
+  '人员以「居家排班表 · 填表」的线上培训字段为准，不需要自行筛选': 'Trainees come from the Online Training field in the remote schedule; no manual filtering is needed.',
+  '报告日期 *': 'Report date *',
+  '当前提交人 / 线上培训': 'Current submitter / online trainer',
+  '排班更新': 'Schedule updated',
+  '正在编辑原日报': 'Editing the original report',
+  '名单沿用提交当天保存的排班快照，不会被当前排班覆盖。': 'The roster uses the schedule snapshot saved on the report date and is not overwritten by the current schedule.',
+  '管理员测试 / 代填线上培训': 'Admin test / report on behalf of a trainer',
+  '正在读取负责人员…': 'Loading assigned staff…',
+  '请选择一名线上培训人员': 'Select an online trainer',
+  '人员读取失败': 'Unable to load trainees',
+  '居家排班表暂时没有匹配到你的组员': 'No trainees in the remote schedule currently match your account',
+  '2. 填写组员当天工作情况': '2. Enter each trainee\'s work for the day',
+  '名单已经带入；公休无需原因，请假、缺席、回家必须填写原因': 'The roster is prefilled. Rest days need no reason; leave, absence and home leave require one.',
+  '正在从居家排班表读取该培训负责的人员…': 'Loading this trainer\'s roster from the remote schedule…',
+  '请选择一名线上培训人员，组员会立即自动出现。': 'Select an online trainer to load their trainees automatically.',
+  '当前没有可填写的线上培训人员。': 'There are no trainees available for this report.',
+  '3. 上传关键图片': '3. Upload key images',
+  '工作截图 / 培训截图': 'Work / training screenshots',
+  '选择图片': 'Select images',
+  '点击查看大图': 'View full-size image',
+  '可选：补充团队整体总结、共同问题或下一步安排': 'Optional: add a team summary, common issues or next steps',
+  '整体培训总结': 'Overall training summary',
+  '共同问题': 'Common issues',
+  '下一步安排': 'Next steps',
+  '提交日报': 'Submit report',
+  '排班自动带入': 'Prefilled from schedule',
+  '当天工作情况 / 培训评语 *': 'Work details / training feedback *',
+  '岗位数据 / 首次响应（选填）': 'Position metrics / first response (optional)',
+  '可选：分别补充工作表现、发现问题、后续安排': 'Optional: add performance, issues and follow-up separately',
+  '工作表现': 'Performance',
+  '发现问题': 'Issues found',
+  '后续安排': 'Follow-up',
+  '待查看': 'Pending review',
+  '已阅': 'Read',
+  '需补充': 'Needs changes',
+  '排班记录': 'Schedule record',
+  '组长 / 主管批注': 'Team lead / supervisor note',
+  '标记已阅': 'Mark as read',
+  '需要补充': 'Needs changes',
+  '复制 Telegram 格式': 'Copy Telegram format',
+  '只看某一天': 'View one day',
+  '清除日期': 'Clear date',
+  '该日没有日报': 'No reports on this date',
+  '当前培训人员尚无日报': 'This trainer has no reports yet',
+  '零日报培训人员会保留在列表中。': 'Trainers with no reports remain in the list.',
+  '已保存当天培训记录': 'Daily training record saved',
+  '查看某一天': 'View one day',
+  '只看该日': 'View this day only',
+  '返回筛选区间': 'Return to filter range',
+  '区间天数': 'Days in range',
+  '有记录': 'Recorded',
+  '未记录': 'Not recorded',
+  '正在读取该员工每天记录…': 'Loading daily employee records…',
+  '所选日期内暂无该员工记录': 'No employee records in the selected dates',
+  '仅该员工': 'This employee only',
+  '当天工作 / 培训评语': 'Work details / training feedback',
+  '岗位数据 / 首次响应': 'Position metrics / first response',
+  '状态说明': 'Status details',
+  '当天记录': 'Daily record',
+  '确定删除这份日报？': 'Delete this report?',
+
+  // Account administration.
+  '新增后台账号': 'Add admin account',
+  '编辑后台账号': 'Edit admin account',
+  '搜索并关联员工档案（可选）': 'Find and link an employee record (optional)',
+  '没有匹配的员工档案，请检查员工 ID 或姓名。': 'No matching employee record. Check the employee ID or name.',
+  '临时密码': 'Temporary password',
+  '管理范围': 'Management scope',
+  '仅关联员工本人': 'Linked employee only',
+  '关联员工所在团队': 'Linked employee\'s team',
+  '指定团队 / 指定员工': 'Selected teams / employees',
+  '全部数据': 'All data',
+  '当前账号没有“管理账号数据范围”权限。': 'This account cannot manage account data scopes.',
+  '登录 OTP': 'Login OTP',
+  '批量创建清单': 'Bulk creation list',
+  '逐个填写上方资料并加入清单，一次最多创建 20 个账号。': 'Complete each account above and add it to the list. Up to 20 accounts can be created at once.',
+  '＋ 加入清单': '+ Add to list',
+  '未关联员工': 'No linked employee',
+  '未选角色': 'No role selected',
+  '尚未加入清单；也可以直接点击下方“创建当前账号”创建一名账号。': 'No accounts in the list. You can also select Create current account below.',
+  '创建当前账号': 'Create current account',
+  '保存': 'Save',
+  '新增员工前端账号': 'Add staff portal account',
+  '员工账号必须关联唯一员工档案，登录后自动读取本人团队、岗位及考试。': 'A staff account must link to one employee record. Team, position and exams load automatically after sign-in.',
+  '搜索并关联在职员工（必选）': 'Find and link an active employee (required)',
+  '已开账号及离职人员不会出现在结果中，同一员工ID不能重复开户。': 'Employees with an account and resigned employees are excluded. An employee ID cannot have duplicate accounts.',
+  '没有可开户的在职员工；可能已开户、已离职或ID不存在。': 'No eligible active employee found. The account may already exist, the employee may have resigned, or the ID may not exist.',
+  '创建中…': 'Creating…',
+  '创建账号': 'Create account',
+
+  // Payroll import, review and record details.
+  '上传工资表': 'Upload payroll file',
+  '支持 XLSX、CSV、TSV；自动识别中文、英文、越南文和印尼文常用表头。': 'Supports XLSX, CSV and TSV, with common Chinese, English, Vietnamese and Indonesian headers detected automatically.',
+  '工资月份': 'Payroll month',
+  '批次名称': 'Batch name',
+  '正在读取表格…': 'Reading spreadsheet…',
+  '选择工资表文件': 'Select payroll file',
+  '文件只用于导入工资数据，不会向员工公开整张表。': 'The file is used only to import payroll data. The full spreadsheet is not shared with employees.',
+  '导入预览': 'Import preview',
+  '确认导入': 'Confirm import',
+  '暂无对应工资批次': 'No payroll batches in this view',
+  '已发布给员工': 'Published to employees',
+  '仍在后台复核，员工暂时看不到': 'Under admin review; employees cannot see it yet',
+  '发布给员工': 'Publish to employees',
+  '删除批次': 'Delete batch',
+  '在职 / 试用': 'Active / probation',
+  '在职与试用': 'Active and probation',
+  '停用员工': 'Disabled employees',
+  '停用 / inactive': 'Disabled / inactive',
+  '离职员工': 'Resigned employees',
+  '历史记录保留': 'History retained',
+  '需要核对': 'Needs review',
+  '没有数据': 'No data',
+  '合计实发': 'Total net pay',
+  '员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注': 'Employee ID / name / platform / card number / account name / notes',
+  '清除筛选': 'Clear filters',
+  '导入批次': 'Import batches',
+  '默认只显示文档摘要；点击任一批次查看该文档的全部员工明细。': 'Document summaries are shown by default. Select a batch to view all employee details.',
+  '导入文档': 'Imported document',
+  '导入时间': 'Imported',
+  '人数': 'Headcount',
+  '总金额': 'Total amount',
+  '未命名工资文档': 'Untitled payroll document',
+  '文件上传': 'File upload',
+  '系统导入': 'System import',
+  '查看记录': 'View records',
+  '暂无工资导入记录': 'No payroll import history',
+  '工资导入记录': 'Payroll import record',
+  '关闭批次记录': 'Close batch record',
+  '工资单': 'Payslips',
+  '币种 / 状态': 'Currency / status',
+  '正在读取该文档的员工工资记录…': 'Loading employee payroll records…',
+  '组织 / 岗位': 'Organization / position',
+  '任职日期': 'Employment dates',
+  '基础工资': 'Base salary',
+  '出勤工资': 'Attendance pay',
+  '加扣明细': 'Adjustments',
+  '实发工资': 'Net pay',
+  '匹配': 'Match',
+  '银行 / GCASH': 'Bank / GCASH',
+  '卡号': 'Card number',
+  '完整姓名': 'Full name',
+  '打开完整员工档案': 'Open full employee record',
+  '完整盘口 / 平台': 'Full platform',
+  '完整收款资料': 'Full payment details',
+  '点击查看': 'View details',
+  '完整工资构成': 'Full payroll breakdown',
+  '无调整': 'No adjustments',
+  '查看全部明细': 'View all details',
+  '导入后匹配': 'Matched after import',
+  '暂无符合条件的工资记录': 'No matching payroll records',
+  '休假扣款': 'Leave deduction',
+  '迟到扣款': 'Late deduction',
+  '缺勤扣款': 'Absence deduction',
+  '满勤': 'Full attendance',
+  '绩效': 'Performance',
+  '押金': 'Deposit',
+  '额外加班': 'Extra overtime',
+  '额外加扣': 'Extra adjustment',
+  '下次要扣除': 'Next deduction',
+  '多转扣除': 'Overpayment deduction',
+  '其他调整': 'Other adjustment',
+  '关闭员工档案': 'Close employee record',
+  '正在读取员工档案…': 'Loading employee record…',
+  '组织与岗位': 'Organization & position',
+
+  // Remaining high-frequency labels in employee, report and attendance views.
+  '纯居家': 'Fully remote',
+  '纯居家（越南/缅甸/印尼等）': 'Fully remote (Vietnam / Myanmar / Indonesia, etc.)',
+  '纯居家菲律宾': 'Fully remote Philippines',
+  '纯居家越南': 'Fully remote Vietnam',
+  '纯居家印尼': 'Fully remote Indonesia',
+  '纯居家缅甸': 'Fully remote Myanmar',
+  '无收款资料编辑权限': 'No permission to edit payment details',
+  '无敏感资料编辑权限': 'No permission to edit sensitive data',
+  '较昨日': 'vs yesterday',
+  '较前7天': 'vs previous 7 days',
+  '较前日': 'vs previous day',
+  '较上月同期': 'vs same period last month',
+  '当前在职员工': 'Current active employees',
+  '今日入职': 'Hired today',
+  '今日入职人员': 'Employees hired today',
+  '今日离职人员': 'Employees resigned today',
+  '昨日离职人员': 'Employees resigned yesterday',
+  '近7天入职人员': 'Employees hired in 7 days',
+  '近7天离职人员': 'Employees resigned in 7 days',
+  '近30天净增': 'Net change in 30 days',
+  '近30天人员流动': 'Workforce movement in 30 days',
+  '30天离职最多': 'Most resignations in 30 days',
+  '来源': 'Source',
+  '等级': 'Level',
+  '操作账号': 'Operator account',
+  '工资方式': 'Pay method',
+  '员工地址': 'Employee address',
+  '国家': 'Country',
+  '点击姓名再看下属': 'Select a name to view direct reports',
+  '弹窗全屏查看': 'Open full-screen view',
+  '总 ⇅': 'Total ⇅',
+  '平均每天处理 ⇅': 'Daily average ⇅',
+  '错误次数 ⇅': 'Error count ⇅',
+  '成功/驳回': 'Approved / rejected',
+  '扣分': 'Points deducted',
+  '统计数据读取失败': 'Unable to load statistics',
+  '错误统计读取失败': 'Unable to load error statistics',
+  '统计读取失败': 'Unable to load statistics',
+  '错误记录读取失败': 'Unable to load error records',
+  '员工档案读取失败': 'Unable to load employee record',
+  '员工错误统计': 'Employee error statistics',
+  '查看错误': 'View errors',
+  '小组长复审': 'Team lead review',
+  '质检人对/错': 'Reviewer decision',
+  '等待同步状态': 'Waiting for sync status',
+  '等待后端返回同步时间': 'Waiting for the server sync time',
+  '同步异常': 'Sync error',
+  '同步中': 'Syncing',
+  '未分组': 'No group',
+  '记录总数 / Records': 'Total records',
+  '公休 / Rest day': 'Rest day',
+  '回家 / Home leave': 'Home leave',
+  '请假 / Leave': 'Leave',
+  '半天 / Half day': 'Half day',
+  '缺席 / Absent': 'Absent',
+  '离职 / Resigned': 'Resigned',
+  '公 公休 / Rest day': 'R  Rest day',
+  '回 回家 / Home leave': 'H  Home leave',
+  '请 请假 / Leave': 'L  Leave',
+  '半 半天 / Half day': '½  Half day',
+  '缺 缺席 / Absent': 'A  Absent',
+  '离 离职 / Resigned': 'R  Resigned',
+
   '输入员工ID': 'Enter employee ID',
   '输入员工 ID': 'Enter employee ID',
   '输入姓名': 'Enter name',
@@ -526,6 +992,25 @@ const prefixEnglish = {
   '员工ID': 'Employee ID',
   '效率数据暂时不可用': 'Efficiency data is temporarily unavailable',
   '保存失败': 'Save failed',
+  '删除失败': 'Delete failed',
+  '导入失败': 'Import failed',
+  '发布失败': 'Publish failed',
+  '读取失败': 'Load failed',
+  '上传失败': 'Upload failed',
+  '培训': 'Trainer',
+  '课程': 'Course',
+  '人员': 'People',
+  '平台': 'Platform',
+  '状态': 'Status',
+  '原因': 'Reason',
+  '今日工作': 'Today\'s work',
+  '工作表现': 'Performance',
+  '发现问题': 'Issues found',
+  '后续安排': 'Follow-up',
+  '数据': 'Metrics',
+  '提交于': 'Submitted',
+  '当前累计范围': 'Current cumulative range',
+  'Supabase 最近同步': 'Latest Supabase sync',
   '编辑选项读取失败': 'Unable to load editor options',
 }
 
@@ -555,6 +1040,64 @@ function translateAdminCore(source) {
   if (match) return `${match[2] === '入职' ? 'Hired' : 'Resigned'} in ${match[1]} days`
   match = source.match(/^已选\s*([\d,]+)$/)
   if (match) return `${match[1]} selected`
+  match = source.match(/^([\d,]+)\s*(人|名员工|名组员|名培训员工|份日报|份报告|个记录日|条记录|条|张|行|个批次|个团队|个岗位|天|笔|次|分)$/)
+  if (match) {
+    const units = {
+      '人':'people','名员工':'employees','名组员':'trainees','名培训员工':'trainees',
+      '份日报':'reports','份报告':'reports','个记录日':'recorded days','条记录':'records',
+      '条':'records','张':'images','行':'rows','个批次':'batches','个团队':'teams','个岗位':'positions',
+      '天':'days','笔':'records','次':'times','分':'points',
+    }
+    return `${match[1]} ${units[match[2]]}`
+  }
+  match = source.match(/^筛选后\s*([\d,]+)\s*人$/)
+  if (match) return `${match[1]} people after filtering`
+  match = source.match(/^当前仅显示在职员工\s*·\s*共\s*([\d,]+)\s*人$/)
+  if (match) return `Active employees only · ${match[1]} people`
+  match = source.match(/^累计错误\s*([\d,]+)\s*笔$/)
+  if (match) return `${match[1]} total errors`
+  match = source.match(/^资料(?:待完善|待补充)\s*([\d,]+)\s*项$/)
+  if (match) return `${match[1]} profile items incomplete`
+  match = source.match(/^已关联\s*([\d,]+)\s*名组员$/)
+  if (match) return `Linked to ${match[1]} trainees`
+  match = source.match(/^共\s*([\d,]+)\s*份日报（含零日报人员）$/)
+  if (match) return `${match[1]} reports (including people with no reports)`
+  match = source.match(/^([\d,]+)\s*名培训人员\s*·\s*共\s*([\d,]+)\s*份日报$/)
+  if (match) return `${match[1]} trainers · ${match[2]} reports`
+  match = source.match(/^日报\s*([\d,]+)\s*·\s*有记录\s*([\d,]+)\s*·\s*未记录\s*([\d,]+)$/)
+  if (match) return `Reports ${match[1]} · recorded ${match[2]} · missing ${match[3]}`
+  match = source.match(/^(正常|公休|请假|缺席|回家)\s*([\d,]+)$/)
+  if (match) return `${english[match[1]] || match[1]} ${match[2]}`
+  match = source.match(/^筛选结果\s*([\d,]+)\s*\/\s*([\d,]+)\s*条\s*·\s*第\s*([\d,]+)\s*\/\s*([\d,]+)\s*页$/)
+  if (match) return `${match[1]} / ${match[2]} records · page ${match[3]} / ${match[4]}`
+  match = source.match(/^([\d,]+)\s*人\s*·\s*在职\/试用\s*([\d,]+)\s*·\s*停用\s*([\d,]+)\s*·\s*离职\s*([\d,]+)\s*·\s*未匹配\s*([\d,]+)$/)
+  if (match) return `${match[1]} people · active/probation ${match[2]} · disabled ${match[3]} · resigned ${match[4]} · unmatched ${match[5]}`
+  match = source.match(/^共\s*([\d,]+)\s*行；发布前先写入“待发布”批次。$/)
+  if (match) return `${match[1]} rows. They are saved to a Pending publication batch before publishing.`
+  match = source.match(/^(当前累计范围)：(.+)$/)
+  if (match) return `Current cumulative range: ${match[2]}`
+  match = source.match(/^最近读取\s*(.+)\s*·\s*切回页面按需刷新$/)
+  if (match) return `Last loaded ${match[1]} · refreshes when returning to the page if needed`
+  match = source.match(/^(.+)\s*员工名单$/)
+  if (match) return `${match[1]} employee roster`
+  match = source.match(/^(.+)\s*·\s*(当前在职员工|近30天离职人员)$/)
+  if (match) return `${match[1]} · ${match[2] === '当前在职员工' ? 'current active employees' : 'employees resigned in 30 days'}`
+  match = source.match(/^下属\s*([\d,]+)\s*人$/)
+  if (match) return `${match[1]} direct reports`
+  match = source.match(/^平均\s*([\d,.]+)\s*单\/天$/)
+  if (match) return `${match[1]} orders/day on average`
+  match = source.match(/^([\d,]+)年\s*([\d,]+)个月\s*([\d,]+)天\s*·\s*共\s*([\d,]+)\s*天$/)
+  if (match) return `${match[1]}y ${match[2]}m ${match[3]}d · ${match[4]} days total`
+  match = source.match(/^([\d,]+)小时(?:\s*([\d,]+)分钟)?$/)
+  if (match) return `${match[1]}h${match[2] ? ` ${match[2]}m` : ''}`
+  match = source.match(/^([\d,]+)分钟$/)
+  if (match) return `${match[1]}m`
+  match = source.match(/^([\d]{4})年([\d]{2})月出勤表$/)
+  if (match) return `Attendance · ${match[1]}-${match[2]}`
+  match = source.match(/^([\d,]+)日状态人数$/)
+  if (match) return `Status headcount · day ${match[1]}`
+  match = source.match(/^(状态|本月合计)\s*([\d,]+)\s*天$/)
+  if (match) return `${match[1] === '状态' ? 'Status' : 'Monthly total'} ${match[2]} days`
 
   // Translate only a known UI label before a delimiter. The value after it is
   // deliberately preserved so names, teams and other business data stay intact.
@@ -565,13 +1108,16 @@ function translateAdminCore(source) {
   return source
 }
 
-function translateAdminText(source) {
+function translateAdminText(source, element) {
   if (typeof source !== 'string' || !source) return source
   const leading = source.match(/^\s*/)?.[0] || ''
   const trailing = source.match(/\s*$/)?.[0] || ''
   if (leading.length + trailing.length >= source.length) return source
   const core = source.slice(leading.length, source.length - trailing.length)
-  const translated = translateAdminCore(core)
+  // “关闭” means Off in status fields, but Close on dialog/action buttons.
+  const translated = core === '关闭' && element?.matches?.('button, [role="button"]')
+    ? 'Close'
+    : translateAdminCore(core)
   return translated === core ? source : `${leading}${translated}${trailing}`
 }
 
@@ -643,7 +1189,7 @@ function AdminDomI18nFallback({ locale }) {
       const current = node.nodeValue || ''
       const previous = textRecords.get(node)
       if (previous && current === previous.applied) return
-      const translated = translateAdminText(current)
+      const translated = translateAdminText(current, parent)
       if (translated === current) {
         if (previous) textRecords.delete(node)
         return
@@ -659,7 +1205,7 @@ function AdminDomI18nFallback({ locale }) {
       let records = attributeRecords.get(element)
       const previous = records?.get(attributeName)
       if (previous && current === previous.applied) return
-      const translated = translateAdminText(current)
+      const translated = translateAdminText(current, element)
       if (translated === current) {
         if (previous) records.delete(attributeName)
         if (records?.size === 0) attributeRecords.delete(element)

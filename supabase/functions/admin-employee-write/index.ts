@@ -17,6 +17,7 @@ const errorText=(e:any)=>e instanceof Error?e.message:text(e?.message||e?.detail
 const owns=(value:unknown,key:string)=>Boolean(value&&typeof value==="object"&&Object.prototype.hasOwnProperty.call(value,key));
 const isRecord=(value:unknown):value is Record<string,unknown>=>Boolean(value&&typeof value==="object"&&!Array.isArray(value));
 const MASK_PLACEHOLDER=/(?:\*|•){3,}/;
+const GOOGLE_SYNC_TIMEOUT_MS=20_000;
 function assertNotMasked(value:unknown,label:string){
   if(typeof value==="string"&&MASK_PLACEHOLDER.test(value)){
     throw new Error(`${label} 不能提交脱敏占位符，请重新打开员工档案后再操作`);
@@ -313,34 +314,23 @@ async function assertTargetTeamAllowed(service:any,caller:any,targetTeamId:strin
   throw new Error("当前账号没有员工数据范围");
 }
 
-async function resolveTeamForWrite(service:any,caller:any,id:unknown,series:unknown,existingEmployee:any=null){
+export function teamWriteDecision(value:unknown){
+  const patch=isRecord(value)?value:{};
+  const provided=owns(patch,"team_id");
+  return {provided,teamId:provided?text(patch.team_id):""};
+}
+
+async function resolveTeamForWrite(service:any,caller:any,id:unknown,existingEmployee:any=null){
   const tid=text(id);
-  const name=text(series);
-  let team:any=null;
-  if(tid){
-    const {data,error}=await service.from("teams").select("id,name").eq("id",tid).maybeSingle();
-    if(error) throw error;
-    team=data;
+  if(!tid){
+    await assertTargetTeamAllowed(service,caller,"",existingEmployee);
+    return null;
   }
-  if(!team&&name){
-    const {data,error}=await service.from("teams").select("id,name").ilike("name",name).limit(1).maybeSingle();
-    if(error) throw error;
-    team=data;
-  }
-  if(!team&&(caller.roleCode==="founder"||caller.access.data_scope==="all")) team=await findOrCreateTeam(service,name);
+  const {data:team,error}=await service.from("teams").select("id,name").eq("id",tid).maybeSingle();
+  if(error) throw error;
   if(!team?.id) throw new Error("请选择已经存在且在负责范围内的团队");
   await assertTargetTeamAllowed(service,caller,team.id,existingEmployee);
   return team;
-}
-
-async function findOrCreateTeam(service:any,name:unknown){
-  const n=text(name);if(!n)return null;
-  const {data:found,error:fe}=await service.from("teams").select("id,name").ilike("name",n).limit(1).maybeSingle();
-  if(fe) throw fe;
-  if(found?.id) return found;
-  const {data:created,error:ce}=await service.from("teams").insert({name:n,status:"active"}).select("id,name").single();
-  if(ce) throw ce;
-  return created;
 }
 
 async function findOrCreatePosition(service:any,id:unknown,name:unknown){
@@ -357,16 +347,6 @@ async function findOrCreatePosition(service:any,id:unknown,name:unknown){
   const {data:created,error:ce}=await service.from("positions").insert({name:n,status:"active"}).select("id,name").single();
   if(ce) throw ce;
   return created;
-}
-
-async function findTeam(service:any,id:unknown,series:unknown){
-  const tid=text(id);
-  if(tid){
-    const {data:byId,error}=await service.from("teams").select("id,name").eq("id",tid).maybeSingle();
-    if(error) throw error;
-    if(byId?.id) return byId;
-  }
-  return await findOrCreateTeam(service,series);
 }
 
 const EMPLOYEE_FIELDS="id,employee_no,full_name,country,nationality,employment_type,team_id,position_id,status,market_country,market_position,shift_name,legacy_shift_name,work_tg,backend_accounts,hire_date,resign_date,last_location,return_date,home_date,source_type,source_sheet,profile_status,official_id_pending";
@@ -556,25 +536,57 @@ async function buildSheetPayload(service:any,employeeId:string,changeAction:stri
   };
 }
 
+function canonicalizeGooglePayload(value:unknown,stripEnvelope=false):unknown{
+  if(Array.isArray(value)) return value.map(item=>canonicalizeGooglePayload(item));
+  if(!isRecord(value)) return value;
+  const result:Record<string,unknown>={};
+  for(const key of Object.keys(value).sort()){
+    if((stripEnvelope&&(key==="request_id"||key==="idempotency_key"))||value[key]===undefined) continue;
+    result[key]=canonicalizeGooglePayload(value[key]);
+  }
+  return result;
+}
+
+export async function googleSyncIdempotencyKey(payload:unknown){
+  const encoded=new TextEncoder().encode(JSON.stringify(canonicalizeGooglePayload(payload,true)));
+  const digest=new Uint8Array(await crypto.subtle.digest("SHA-256",encoded));
+  const hex=Array.from(digest,byte=>byte.toString(16).padStart(2,"0")).join("");
+  return `staff-sheet-v1:${hex}`;
+}
+
+export function buildGoogleSyncEnvelope(payload:unknown,requestId:string,idempotencyKey:string){
+  const base=isRecord(payload)?canonicalizeGooglePayload(payload,true) as Record<string,unknown>:{};
+  return {...base,request_id:requestId,idempotency_key:idempotencyKey};
+}
+
 async function sendSheet(payload:any){
   const url=Deno.env.get("GOOGLE_STAFF_SYNC_URL")||"";
   const secret=Deno.env.get("STAFF_SHEET_SYNC_SECRET")||"";
   if(!url||!secret) return {ok:false,skipped:true,error:"Google staff sync is not configured"};
+  const requestId=crypto.randomUUID();
+  const idempotencyKey=await googleSyncIdempotencyKey(payload);
+  const requestBody=buildGoogleSyncEnvelope(payload,requestId,idempotencyKey);
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),GOOGLE_SYNC_TIMEOUT_MS);
   try{
     const resp=await fetch(url,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...payload,secret}),
+      body:JSON.stringify({...requestBody,secret}),
+      signal:controller.signal,
     });
     const body=await resp.json().catch(()=>({}));
     const ok=resp.ok&&body?.ok===true&&!body?.error;
-    return {ok,status:resp.status,body,error:ok?null:text(body?.error)};
+    return {ok,status:resp.status,body,error:ok?null:text(body?.error),request_id:requestId,idempotency_key:idempotencyKey};
   }catch(e){
-    return {ok:false,error:e instanceof Error?e.message:String(e)};
+    const timedOut=e instanceof Error&&e.name==="AbortError";
+    return {ok:false,error:timedOut?"google_sync_timeout":e instanceof Error?e.message:String(e),request_id:requestId,idempotency_key:idempotencyKey};
+  }finally{
+    clearTimeout(timeoutId);
   }
 }
 
-function auditBundleView(bundle:any){
+function auditBundleView(bundle:any):Record<string,unknown>{
   const e=bundle?.employee||{};
   const c=bundle?.contact||{};
   const comp=bundle?.compensation||{};
@@ -808,7 +820,7 @@ async function cancelNewHireAnyState(service:any,caller:any,body:any){
   return {ok:true,sheet};
 }
 
-Deno.serve(async(req)=>{
+export async function handleRequest(req:Request){
   if(req.method==="OPTIONS") return new Response("ok",{headers:corsHeaders});
   if(req.method!=="POST") return json({error:"Method not allowed"},405);
 
@@ -926,12 +938,17 @@ Deno.serve(async(req)=>{
       throw new Error(`姓名「${fullName}」已被员工 ${usedBy} 使用${history}，姓名必须唯一，不能保存。`);
     }
 
-    const teamProvided=create||owns(p,"team_id")||owns(p,"market_country");
+    const teamDecision=teamWriteDecision(p);
+    const teamProvided=teamDecision.provided;
     const positionProvided=create||owns(p,"position_id")||owns(p,"position_name");
     let team:any=null;
     let position:any=null;
     if(teamProvided){
-      team=await resolveTeamForWrite(service,caller,p.team_id,p.market_country,before?.employee||null);
+      team=await resolveTeamForWrite(service,caller,teamDecision.teamId,before?.employee||null);
+    }else if(create){
+      // Scoped creators still need an explicit, existing team. Global writers may
+      // leave it blank until the authoritative schedule sync assigns the team.
+      await assertTargetTeamAllowed(service,caller,"",null);
     }else if(before?.employee?.team_id){
       const {data,error}=await service.from("teams").select("id,name").eq("id",before.employee.team_id).maybeSingle();
       if(error) throw error;
@@ -957,8 +974,8 @@ Deno.serve(async(req)=>{
     }
     if(teamProvided){
       employeePatch.team_id=team?.id||null;
-      employeePatch.market_country=nullable(text(p.market_country)||team?.name);
     }
+    if(create||owns(p,"market_country")) employeePatch.market_country=nullable(p.market_country);
     if(positionProvided) employeePatch.position_id=position?.id||null;
 
     const sensitiveEmployeeFields=["work_tg","backend_accounts"];
@@ -1077,4 +1094,6 @@ Deno.serve(async(req)=>{
     console.error(e);
     return json({error:e instanceof Error?e.message:String(e)},400);
   }
-});
+}
+
+if(import.meta.main) Deno.serve(handleRequest);
