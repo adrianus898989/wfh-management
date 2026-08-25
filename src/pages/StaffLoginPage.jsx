@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   configured,
   consumeAppSessionNotice,
@@ -92,13 +92,18 @@ export default function StaffLoginPage() {
 
   return (
     <div className="login-page login-page--signin staff-login-page">
+      <div className="staff-auth-language"><StaffLanguageSwitcher /></div>
+      <div className="staff-auth-atmosphere" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </div>
       <main className="login-shell login-shell--signin">
         <div className="login-brand" aria-label="WFH">
           <div className="login-logo" aria-hidden="true">W</div>
         </div>
 
         <form className="login-card login-card--signin" onSubmit={submit} aria-busy={loading}>
-          <div className="auth-language-row"><StaffLanguageSwitcher /></div>
           <h1 className="login-title">{t('auth.staffLogin','WFH 登录')}</h1>
 
           <label className="login-field">
@@ -144,6 +149,9 @@ export default function StaffLoginPage() {
           <button type="submit" className="login-submit" disabled={loading}>
             {loading ? t('auth.signingIn','登录中...') : t('auth.signIn','登录')}
           </button>
+          <div className="login-foot">
+            {t('auth.firstTime','首次使用？')} <Link to="/staff/register">{t('auth.activate','激活账号')}</Link>
+          </div>
         </form>
       </main>
     </div>
