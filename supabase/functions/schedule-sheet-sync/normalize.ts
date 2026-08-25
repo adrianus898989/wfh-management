@@ -141,7 +141,7 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSched
   if (computedHash !== snapshotHash) throw new Error("snapshot_hash_mismatch");
 
   const rows: NormalizedScheduleRow[] = [];
-  const seenEmployeeIds = new Set<string>();
+  const seenEmployeeIds = new Map<string, number>();
   let parseWarningCount = 0;
   for (let index = 1; index < rawValues.length; index += 1) {
     const cells = rawValues[index].map(trimmed);
@@ -159,9 +159,11 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSched
     if (!employeeId) {
       parseWarningCount += 1;
     } else if (seenEmployeeIds.has(employeeId)) {
-      throw new Error(`snapshot_duplicate_employee_id_${index + 1}`);
+      throw new Error(
+        `snapshot_duplicate_employee_id_rows_${seenEmployeeIds.get(employeeId)}_${index + 1}`,
+      );
     } else {
-      seenEmployeeIds.add(employeeId);
+      seenEmployeeIds.set(employeeId, index + 1);
     }
 
     rows.push({

@@ -370,7 +370,13 @@ function buildRiskSummaries(
   })
 }
 
-async function loadSnapshotStates(service: any) {
+type SnapshotState = {
+  source: string
+  note: string | null
+  row_count: number | null
+}
+
+async function loadSnapshotStates(service: any): Promise<Map<string, SnapshotState>> {
   const { data, error } = await service
     .from('report_sheet_snapshots')
     .select('source,note,row_count')
@@ -382,7 +388,9 @@ async function loadSnapshotStates(service: any) {
       '效率表/员工错误状态',
     ])
   if (error) throw new Error(`snapshot states: ${error.message}`)
-  return new Map((data || []).map((row: any) => [row.source, row]))
+  return new Map<string, SnapshotState>((data || []).map(
+    (row: any): [string, SnapshotState] => [row.source, row],
+  ))
 }
 
 async function loadErrorStatusPayload(service: any) {
@@ -434,7 +442,9 @@ async function writeChunkedSnapshot(
     .eq('source', source)
   if (stateError) throw new Error(`chunk states: ${stateError.message}`)
 
-  const current = new Map((currentRows || []).map((row: any) => [Number(row.chunk_index), text(row.content_hash)]))
+  const current = new Map<number, string>((currentRows || []).map(
+    (row: any): [number, string] => [Number(row.chunk_index), text(row.content_hash)],
+  ))
   const chunks: unknown[][] = []
   for (let index = 0; index < payload.length; index += chunkSize) {
     chunks.push(payload.slice(index, index + chunkSize))
@@ -475,7 +485,7 @@ async function writeChunkedSnapshot(
 
 async function writeSnapshot(
   service: any,
-  states: Map<string, any>,
+  states: ReadonlyMap<string, SnapshotState>,
   source: string,
   payload: unknown[],
   note: string,
@@ -720,19 +730,33 @@ async function syncOrderSheets(service: any) {
         changes.push({ chunkIndex, hash, rows })
       }
     }
+    // If Google physically shrinks, chunks above the new end no longer appear
+    // in the CSV. Explicitly send an empty replacement once, otherwise their
+    // old report_order_rows (and account totals) would remain indefinitely.
+    for (const row of existingRows || []) {
+      if (text(row.source_sheet) !== sourceSheet) continue
+      const chunkIndex = Number(row.chunk_index)
+      if (!Number.isSafeInteger(chunkIndex) || chunkIndex < chunkCount) continue
+      const rows: any[] = []
+      const hash = payloadHash(rows)
+      if (existing.get(`${sourceSheet}|${chunkIndex}`) !== hash) {
+        changes.push({ chunkIndex, hash, rows })
+      }
+    }
+    changes.sort((left, right) => left.chunkIndex - right.chunkIndex)
 
-    for (let index = 0; index < changes.length; index += 3) {
-      const batch = changes.slice(index, index + 3)
-      await Promise.all(batch.map(async change => {
-        const { error } = await service.rpc('sync_report_order_chunk', {
-          p_source_sheet: sourceSheet,
-          p_chunk_index: change.chunkIndex,
-          p_chunk_size: ORDER_CHUNK_SIZE,
-          p_content_hash: change.hash,
-          p_rows: change.rows,
-        })
-        if (error) throw new Error(`订单同步 ${sourceSheet} #${change.chunkIndex}: ${error.message}`)
-      }))
+    // A single account can occur in several chunks. Process chunks in order so
+    // their cache refreshes cannot race each other (the RPC also takes a DB lock
+    // as a second line of defence against overlapping function invocations).
+    for (const change of changes) {
+      const { error } = await service.rpc('sync_report_order_chunk', {
+        p_source_sheet: sourceSheet,
+        p_chunk_index: change.chunkIndex,
+        p_chunk_size: ORDER_CHUNK_SIZE,
+        p_content_hash: change.hash,
+        p_rows: change.rows,
+      })
+      if (error) throw new Error(`订单同步 ${sourceSheet} #${change.chunkIndex}: ${error.message}`)
     }
     changedChunks += changes.length
     results.push({

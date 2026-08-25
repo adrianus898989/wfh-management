@@ -59,9 +59,16 @@ Deno.serve(async (request: Request) => {
 
     const client = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-      global: { headers: { "x-attendance-sync": "august-2026-v1" } },
+      global: { headers: {
+        "x-attendance-sync": normalized.sync_contract === "annual_v1"
+          ? "annual-2026-v2"
+          : "august-2026-v1",
+      } },
     });
-    const { data, error } = await client.rpc("ingest_august_attendance_snapshot", {
+    const rpcName = normalized.sync_contract === "annual_v1"
+      ? "ingest_annual_attendance_snapshot"
+      : "ingest_august_attendance_snapshot";
+    const { data, error } = await client.rpc(rpcName, {
       p_payload: normalized,
     });
     if (error) {
@@ -70,6 +77,15 @@ Deno.serve(async (request: Request) => {
         source_key: normalized.source.source_key,
         code: error.code,
       });
+      if (error.code === "57014") {
+        return jsonResponse({ ok: false, error: "database_timeout", request_id: normalized.request_id }, 503);
+      }
+      const safeDatabaseMessage = String(error.message ?? "").match(
+        /\b(source_not_configured|request_id_reuse_mismatch|stale_snapshot|empty_snapshot_requires_manual_override|large_delete_requires_manual_override)\b/,
+      )?.[1];
+      if (safeDatabaseMessage) {
+        return jsonResponse({ ok: false, error: safeDatabaseMessage, request_id: normalized.request_id }, 422);
+      }
       return jsonResponse({ ok: false, error: "database_ingest_failed", request_id: normalized.request_id }, 500);
     }
     if (!data?.ok) {
@@ -78,15 +94,31 @@ Deno.serve(async (request: Request) => {
         source_key: normalized.source.source_key,
         run_id: data?.run_id,
       });
-      return jsonResponse(data, 422);
+      const deterministicRejection = new Set([
+        "stale_snapshot",
+        "empty_snapshot_requires_manual_override",
+        "large_delete_requires_manual_override",
+      ]).has(String(data?.error ?? ""));
+      // The ingest procedure deliberately hides unexpected SQL details behind
+      // `ingest_failed`. Treat that generic result as retryable: returning 422
+      // would make Apps Script block this content hash permanently.
+      if (deterministicRejection) return jsonResponse(data, 422);
+      return jsonResponse({
+        ...(data && typeof data === "object" ? data : { ok: false, error: "database_ingest_failed" }),
+        // A failed run is itself idempotently persisted under request_id. The
+        // retry therefore needs a fresh request ID; network/timeout failures do
+        // not set this flag and safely keep reusing the original request ID.
+        retry_with_new_request_id: true,
+      }, 500);
     }
     return jsonResponse(data);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unexpected_error";
-    const clientSafe = /^(invalid_|source_not_allowlisted|sheet_|snapshot_|values_|cell_|date_|payload_|sheet_row_|sheet_column_)/.test(message)
-      ? message
-      : "sync_request_failed";
+    const isClientError = /^(invalid_|source_not_allowlisted|sheet_|snapshot_|values_|cell_|date_|payload_|adjustment_|employee_identity_|sheet_row_|sheet_column_)/.test(message);
+    const clientSafe = isClientError ? message : "sync_request_failed";
     console.error("attendance-sheet-sync request_failed", { error: message });
-    return jsonResponse({ ok: false, error: clientSafe }, 400);
+    // Configuration/runtime failures must remain retryable by Apps Script. Only
+    // deterministic payload or source-validation failures are blocked by hash.
+    return jsonResponse({ ok: false, error: clientSafe }, isClientError ? 400 : 500);
   }
 });

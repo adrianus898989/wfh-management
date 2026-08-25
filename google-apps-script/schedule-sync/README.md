@@ -44,7 +44,7 @@ Supabase 快照被外部清除后因本地 hash 未变化而无法恢复，定�
 ## 出现 HTTP 400 时
 
 最新版 `Code.gs` 会在执行日志中同时显示服务端的非敏感校验码，例如
-`snapshot_duplicate_employee_id_123`（第 123 行 ID 重复）或
+`snapshot_duplicate_employee_id_rows_74_1936`（例如第 74、1936 行 ID 重复）或
 `snapshot_hash_mismatch`（发送内容与校验摘要不一致）。请先把仓库中的
 最新版 `Code.gs` 全量覆盖到该表绑定的 Apps Script 项目并保存，再运行
 `installScheduleSync`。新版安装会先移除旧触发器，再尝试首次同步；失败时

@@ -40,7 +40,7 @@ const todayIso=()=>{
 const emptyFilters=()=>({search:'',employee_no:'',employee_name:'',date_from:'',date_to:'',source_month:'',source_group:'',work_mode:'',event_kind:'',employee_status:'',team:'',position:'',country:'',platform:'',manager:'',match_status:''})
 const tabFilters=tab=>{
   const next=emptyFilters()
-  if(['今日考勤','考勤记录','请假审批','奖金 / 扣款'].includes(tab))next.date_from=next.date_to=todayIso()
+  if(['今日考勤','考勤记录','请假审批'].includes(tab))next.date_from=next.date_to=todayIso()
   if(tab==='请假审批')next.event_kind='leave'
   return next
 }
@@ -84,8 +84,19 @@ const normalizeAttendanceRows=rows=>(rows||[]).map(row=>{
   const normalized={...row,employment_type:row.employment_type||row.employee_type||''}
   const eventKind=text(normalized.event_kind).toLowerCase()
   const isAdjustment=normalized.scope==='adjustment'||normalized.kind==='adjustment'||['bonus','reward','deduction','penalty'].includes(eventKind)
-  return isAdjustment?{...normalized,currency:adjustmentCurrency(normalized)}:normalized
+  const raw=normalized.raw_values&&typeof normalized.raw_values==='object'&&!Array.isArray(normalized.raw_values)?normalized.raw_values:{}
+  return isAdjustment?{...normalized,currency:text(normalized.currency)||text(raw.currency)||adjustmentCurrency(normalized)}:normalized
 })
+
+const adjustmentRaw=row=>row?.raw_values&&typeof row.raw_values==='object'&&!Array.isArray(row.raw_values)?row.raw_values:{}
+const managedAdjustment=row=>text(adjustmentRaw(row).sync_protocol)==='adjustment-v1'&&Boolean(adjustmentRaw(row).external_id||row?.external_id)
+const adjustmentSyncState=row=>{
+  if(!managedAdjustment(row))return {key:'readonly',label:'历史记录 · 只读'}
+  const state=text(adjustmentRaw(row).google_sync_state).toLowerCase()
+  if(state==='synced')return {key:'synced',label:'Google 已同步'}
+  if(state==='failed')return {key:'failed',label:'Google 同步失败'}
+  return {key:'pending',label:'Google 待同步'}
+}
 
 const syncMeta=payload=>{
   const nested=[payload?.sync,payload?.sync_status,payload?.source_sync,payload?.sync_state,payload?.latest_sync].find(value=>value&&typeof value==='object'&&!Array.isArray(value))||{}
@@ -123,6 +134,8 @@ export default function AdminAttendancePage(){
   const [employeeDetail,setEmployeeDetail]=useState(null)
   const [employeeDetailLoading,setEmployeeDetailLoading]=useState(false)
   const [employeeError,setEmployeeError]=useState('')
+  const [adjustmentEditor,setAdjustmentEditor]=useState(null)
+  const [adjustmentNotice,setAdjustmentNotice]=useState(null)
   const employeeRequest=useRef(0)
 
   const setTab=value=>{if(visibleTabs.includes(value))setParams(value===TABS[0]?{}:{tab:value})}
@@ -133,7 +146,7 @@ export default function AdminAttendancePage(){
   },[access.loading,access.founder,access.permissionKey,requestedTab,tab,setParams])
   useEffect(()=>{
     const next=tabFilters(tab)
-    setDraft(next);setApplied(next);setPage(1);setState({loading:false,error:'',data:null});setEmployeeError('')
+    setDraft(next);setApplied(next);setPage(1);setState({loading:false,error:'',data:null});setEmployeeError('');setAdjustmentEditor(null);setAdjustmentNotice(null)
   },[tab])
 
   useEffect(()=>{
@@ -160,6 +173,17 @@ export default function AdminAttendancePage(){
 
   const query=()=>{setApplied({...draft});setPage(1)}
   const reset=()=>{const next=tabFilters(tab);setDraft(next);setApplied(next);setPage(1)}
+  const revealSavedAdjustment=result=>{
+    const next={
+      ...tabFilters('奖金 / 扣款'),
+      employee_no:text(result?.employee_no).toUpperCase(),
+      date_from:text(result?.event_date).slice(0,10),
+      date_to:text(result?.event_date).slice(0,10),
+    }
+    setAdjustmentEditor(null)
+    setAdjustmentNotice({syncState:result?.sync_state||'pending'})
+    setDraft(next);setApplied(next);setPage(1);setRefreshKey(value=>value+1)
+  }
   const openEmployee=async row=>{
     if(!row.employee_id)return
     const sequence=++employeeRequest.current
@@ -176,11 +200,16 @@ export default function AdminAttendancePage(){
   const rows=useMemo(()=>normalizeAttendanceRows(data.rows||[]),[data.rows])
   const options=data.options||{}
   const subtitle=tab==='排班表'?'按团队和班次快速查看当前人员安排。':tab==='出勤表'?'固定员工资料，横向查看每月 1–31 日出勤记录。':tab==='奖金 / 扣款'?'奖金、扣款与币种清晰分列。':'集中查看员工考勤、请假与离职记录。'
+  const canCreateAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_CREATE)
+  const canEditAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_APPROVE)
 
   return <div className="content-page attendance-page">
     <header className="attendance-page-head">
       <div><small>ATTENDANCE OPERATIONS</small><h1>排班与考勤</h1><p>{subtitle}</p></div>
-      <div className="attendance-head-actions">{requestTab(tab)&&<button type="button" onClick={()=>setRefreshKey(value=>value+1)} disabled={state.loading}>{state.loading?'刷新中…':'刷新数据'}</button>}</div>
+      <div className="attendance-head-actions">
+        {tab==='奖金 / 扣款'&&canCreateAdjustment&&<button type="button" className="attendance-adjustment-create" onClick={()=>setAdjustmentEditor({mode:'create',row:null})}>＋ 新增奖金 / 扣款</button>}
+        {requestTab(tab)&&<button type="button" onClick={()=>setRefreshKey(value=>value+1)} disabled={state.loading}>{state.loading?'刷新中…':'刷新数据'}</button>}
+      </div>
     </header>
 
     <nav className="module-tabs attendance-tabs" aria-label="排班与考勤页面">
@@ -197,14 +226,16 @@ export default function AdminAttendancePage(){
     {requestTab(tab)&&<>
       {tab==='请假审批'&&<div className="attendance-readonly-notice"><b>当前为记录视图</b><span>页面默认筛选“请假”，也可以切换公休、回家、半天等真实类别。</span></div>}
       {tab==='今日考勤'&&<div className="attendance-context-note"><b>{todayIso()}</b><span>仅显示今天已经登记的记录；没有记录不等同于正常出勤。</span></div>}
+      {tab==='奖金 / 扣款'&&adjustmentNotice&&<div className={`attendance-adjustment-notice ${adjustmentNotice.syncState==='synced'?'synced':'pending'}`} role="status"><div><b>Supabase 已保存</b><span>{adjustmentNotice.syncState==='synced'?'Google 已同步':'Google 待同步；脚本写入并回执后，刷新即可看到“已同步”。'}</span></div><button type="button" onClick={()=>setAdjustmentNotice(null)} aria-label="关闭提示">×</button></div>}
       <AttendanceFilters tab={tab} draft={draft} setDraft={setDraft} options={options} advanced={advanced} setAdvanced={setAdvanced} loading={state.loading} sync={syncMeta(data)} onQuery={query} onReset={reset}/>
       {state.error&&<div className="attendance-error" role="alert"><span>考勤数据读取失败：{state.error}</span><button type="button" onClick={()=>setRefreshKey(value=>value+1)}>重试</button></div>}
       <AttendanceSummary scope={tabScope(tab)} summary={data.summary||{}} total={Number(data.total||0)}/>
-      <AttendanceTable rows={rows} scope={tabScope(tab)} loading={state.loading} hasData={Boolean(state.data)} onEmployee={openEmployee} onDetail={setRecordDetail}/>
+      <AttendanceTable rows={rows} scope={tabScope(tab)} loading={state.loading} hasData={Boolean(state.data)} onEmployee={openEmployee} onDetail={setRecordDetail} canEditAdjustment={canEditAdjustment} onEditAdjustment={row=>setAdjustmentEditor({mode:'edit',row})}/>
       <Pagination page={Number(data.page||page)} pages={Math.max(1,Number(data.pages||1))} total={Number(data.total||0)} pageSize={Number(data.page_size||pageSize)} loading={state.loading} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>
     </>}
 
     {recordDetail&&<AttendanceRecordModal row={recordDetail} adjustment={tabScope(tab)==='adjustment'} onClose={()=>setRecordDetail(null)}/>}
+    {adjustmentEditor&&<AdjustmentEditorModal record={adjustmentEditor.row} onClose={()=>setAdjustmentEditor(null)} onSaved={revealSavedAdjustment}/>}
     {employeeDetail&&<EmployeeDrawer detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>{employeeRequest.current+=1;setEmployeeDetail(null);setEmployeeDetailLoading(false)}}/>}
   </div>
 }
@@ -250,14 +281,14 @@ function AttendanceSummary({scope,summary,total}){
   return <section className="attendance-summary-grid">{items.map(([label,value,tone])=><div key={label} className={tone||''}><span>{label}</span><strong>{value}</strong></div>)}</section>
 }
 
-function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail}){
+function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail,canEditAdjustment,onEditAdjustment}){
   const adjustment=scope==='adjustment'
   return <section className={`attendance-table-card ${loading&&hasData?'is-loading':''}`}>
-    <header><div><h2>{adjustment?'奖金 / 扣款明细':'考勤记录明细'}</h2><p>{adjustment?'备注直接展示，点击可查看完整内容。':'员工、组织与说明分列展示；点击原因或备注可查看完整文字。'}</p></div><span>{loading?'读取中…':`${rows.length} 条 / 本页`}</span></header>
+    <header><div><h2>{adjustment?'奖金 / 扣款明细':'考勤记录明细'}</h2><p>{adjustment?'Supabase 保存与 Google 写入状态分开显示；仅协议内新增记录可以编辑。':'员工、组织与说明分列展示；点击原因或备注可查看完整文字。'}</p></div><span>{loading?'读取中…':`${rows.length} 条 / 本页`}</span></header>
     {!hasData&&loading?<div className="attendance-table-state">正在读取记录…</div>:!rows.length?<div className="attendance-table-state">当前筛选条件下暂无记录</div>:<div className="attendance-table-scroll"><table className={adjustment?'attendance-detail-table adjustment':'attendance-detail-table'}>
-      {adjustment&&<colgroup><col className="adjustment-date-col"/><col className="adjustment-hire-col"/><col className="adjustment-employee-col"/><col className="adjustment-type-col"/><col className="adjustment-status-col"/><col className="adjustment-organization-col"/><col className="adjustment-money-col"/><col className="adjustment-note-col"/></colgroup>}
-      <thead>{adjustment?<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>奖金 / 扣款 · 金额</th><th>备注</th></tr>:<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>负责人</th><th>原因</th><th>备注</th></tr>}</thead>
-      <tbody>{rows.map((row,index)=><tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
+      {adjustment&&<colgroup><col className="adjustment-date-col"/><col className="adjustment-hire-col"/><col className="adjustment-employee-col"/><col className="adjustment-type-col"/><col className="adjustment-status-col"/><col className="adjustment-organization-col"/><col className="adjustment-money-col"/><col className="adjustment-note-col"/><col className="adjustment-action-col"/></colgroup>}
+      <thead>{adjustment?<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>奖金 / 扣款 · 金额</th><th>备注</th><th>同步 / 操作</th></tr>:<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>负责人</th><th>原因</th><th>备注</th></tr>}</thead>
+      <tbody>{rows.map((row,index)=>{const sync=adjustmentSyncState(row);return <tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <td className={adjustment?'attendance-adjustment-date-cell':''}><div className="attendance-event-cell"><strong>{row.event_date||'—'}</strong>{!adjustment&&<span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span>}{!adjustment&&row.is_mirror&&<em>镜像</em>}</div></td>
         <td><span className="attendance-hire-date">{text(row.hire_date).slice(0,10)||'—'}</span></td>
         <td><div className="attendance-employee-cell">{row.employee_id?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||'未匹配'}</strong>}<span>{row.full_name||'—'}</span></div></td>
@@ -268,7 +299,8 @@ function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail}){
         {adjustment&&<td className="attendance-adjustment-money-cell"><div className="attendance-adjustment-money"><span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span><div className={`attendance-amount ${text(row.event_kind).toLowerCase()}`}><strong>{attendanceAmount(row)}</strong>{row.raw_amount&&text(row.raw_amount)!==text(row.amount)&&<span>原值 {row.raw_amount}</span>}</div></div></td>}
         {!adjustment&&<td><button type="button" className="attendance-copy-button" title="查看完整原因" onClick={()=>onDetail(row)}>{row.reason||'—'}</button></td>}
         <td className={adjustment?'attendance-adjustment-note-cell':''}><button type="button" className={`attendance-copy-button note${adjustment?' adjustment-note':''}`} title="点击查看完整备注" onClick={()=>onDetail(row)}>{row.note||'—'}</button></td>
-      </tr>)}</tbody>
+        {adjustment&&<td className="attendance-adjustment-action-cell"><span className={`attendance-adjustment-sync ${sync.key}`}>{sync.label}</span>{canEditAdjustment&&managedAdjustment(row)&&<button type="button" className="attendance-adjustment-edit" onClick={()=>onEditAdjustment(row)}>编辑</button>}</td>}
+      </tr>})}</tbody>
     </table></div>}
     {loading&&hasData&&<div className="attendance-loading-overlay">正在更新结果…</div>}
   </section>
@@ -284,6 +316,93 @@ function AttendanceRecordModal({row,adjustment,onClose}){
     <section><small>完整备注</small><p>{row.note||'—'}</p></section>
     <footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer>
   </div></div>
+}
+
+function AdjustmentEditorModal({record,onClose,onSaved}){
+  const editing=Boolean(record)
+  const raw=adjustmentRaw(record)
+  const inferredWorkbook=text(raw.workbook_key)||(
+    text(record?.source_key).includes('home_ph')?'home_ph':
+    text(record?.source_key).includes('home_vim')?'home_vim':'onsite'
+  )
+  const inferredMonth=text(raw.source_month)||text(record?.event_date).slice(0,7)||'2026-09'
+  const workbookCurrencies={onsite:'USD',home_vim:'USD',home_ph:'PHP'}
+  const [draft,setDraft]=useState(()=>({
+    workbook_key:inferredWorkbook,
+    source_month:inferredMonth,
+    employee_no:text(record?.employee_no),
+    event_date:text(record?.event_date).slice(0,10)||`${inferredMonth}-01`,
+    amount:record?.amount==null?'':String(record.amount),
+    currency:text(raw.currency||record?.currency)||workbookCurrencies[inferredWorkbook],
+    note:text(record?.note),
+  }))
+  const [state,setState]=useState({loading:true,saving:false,error:'',options:{workbooks:[],months:[],employees:[]}})
+
+  useEffect(()=>{
+    let alive=true
+    const load=async()=>{
+      const {data,error}=await supabase.rpc('admin_adjustment_editor_options',{p_search:'',p_limit:200})
+      if(!alive)return
+      if(error)setState(current=>({...current,loading:false,error:`编辑选项读取失败：${message(error)}`}))
+      else setState(current=>({...current,loading:false,options:data||current.options}))
+    }
+    load()
+    return()=>{alive=false}
+  },[])
+
+  const update=(key,value)=>setDraft(current=>{
+    if(key==='workbook_key')return {...current,workbook_key:value,currency:workbookCurrencies[value]||''}
+    if(key==='source_month')return {...current,source_month:value,event_date:`${value}-01`}
+    return {...current,[key]:value}
+  })
+  const employees=state.options.employees||[]
+  const selectedEmployee=employees.find(employee=>text(employee.employee_no).toUpperCase()===text(draft.employee_no).toUpperCase())
+  const workbooks=(state.options.workbooks||[]).length?state.options.workbooks:[
+    {key:'onsite',label:'现场转居家',currency:'USD'},
+    {key:'home_vim',label:'居家越南 / 印尼 / 缅甸',currency:'USD'},
+    {key:'home_ph',label:'居家菲律宾',currency:'PHP'},
+  ]
+  const months=(state.options.months||[]).length?state.options.months:['2026-09','2026-10','2026-11','2026-12']
+  const monthEnd=['09','11'].includes(draft.source_month.slice(5,7))?'30':'31'
+
+  const submit=async event=>{
+    event.preventDefault()
+    setState(current=>({...current,saving:true,error:''}))
+    const currentRevision=Number(record?.sync_revision)||Number(raw.revision)||0
+    const payload={
+      ...(editing?{id:record.id,expected_revision:currentRevision}:{}),
+      workbook_key:draft.workbook_key,
+      source_month:draft.source_month,
+      employee_no:text(draft.employee_no).toUpperCase(),
+      event_date:draft.event_date,
+      amount:draft.amount,
+      currency:draft.currency,
+      note:text(draft.note),
+    }
+    const {data,error}=await supabase.rpc('admin_adjustment_upsert',{p_payload:payload})
+    if(error||!data?.ok){
+      const detail=message(error||data?.error||'未知错误')
+      const explanation=detail.includes('adjustment_revision_conflict')?'这条记录已被其他操作更新，请关闭窗口、刷新后再编辑。':detail
+      setState(current=>({...current,saving:false,error:`保存失败：${explanation}`}));return
+    }
+    onSaved({...data,event_date:draft.event_date,employee_no:payload.employee_no})
+  }
+
+  return <div className="modal-mask attendance-main-modal-mask" onMouseDown={state.saving?undefined:onClose}><form className="attendance-main-modal adjustment-editor-modal" role="dialog" aria-modal="true" aria-labelledby="adjustment-editor-title" onMouseDown={event=>event.stopPropagation()} onSubmit={submit}>
+    <header><div><small>ADJUSTMENT EDITOR</small><h2 id="adjustment-editor-title">{editing?'编辑奖金 / 扣款':'新增奖金 / 扣款'}</h2><p>先保存 Supabase，再由每分钟同步任务写入指定 Google 月份区块。</p></div><button type="button" aria-label="关闭" disabled={state.saving} onClick={onClose}>×</button></header>
+    <div className="adjustment-editor-callout"><b>金额正负规则</b><span>正数 = 奖金，负数 = 扣除；币种由所选工作簿固定，不能手动混用。</span></div>
+    {state.error&&<div className="attendance-error adjustment-editor-error" role="alert"><span>{state.error}</span></div>}
+    <div className="adjustment-editor-grid">
+      <label><span>来源工作簿 / 范围 <em>必填</em></span><select value={draft.workbook_key} disabled={editing||state.loading||state.saving} onChange={event=>update('workbook_key',event.target.value)}>{workbooks.map(item=><option value={item.key} key={item.key}>{item.label}</option>)}</select>{editing&&<small>编辑时不可移动到另一份表</small>}</label>
+      <label><span>月份 <em>必填</em></span><select value={draft.source_month} disabled={editing||state.loading||state.saving} onChange={event=>update('source_month',event.target.value)}>{months.map(month=><option value={month} key={month}>{month}</option>)}</select>{editing&&<small>编辑时不可移动月份</small>}</label>
+      <label><span>员工 ID <em>必填</em></span><input list="adjustment-employee-options" value={draft.employee_no} disabled={state.saving} onChange={event=>update('employee_no',event.target.value)} placeholder="输入或选择员工 ID" required/><datalist id="adjustment-employee-options">{employees.map(employee=><option value={employee.employee_no} key={employee.id}>{employee.full_name} · {employee.team_name||'未分团队'}</option>)}</datalist><small>{selectedEmployee?`${selectedEmployee.full_name} · ${selectedEmployee.position_name||'未设岗位'}`:'保存时会再次核对员工与管理范围'}</small></label>
+      <label><span>日期 <em>必填</em></span><input type="date" min={`${draft.source_month}-01`} max={`${draft.source_month}-${monthEnd}`} value={draft.event_date} disabled={state.saving} onChange={event=>update('event_date',event.target.value)} required/></label>
+      <label><span>币种 <em>固定</em></span><input value={draft.currency} readOnly aria-readonly="true"/></label>
+      <label><span>金额 <em>必填</em></span><input type="number" step="0.01" min="-100000000" max="100000000" value={draft.amount} disabled={state.saving} onChange={event=>update('amount',event.target.value)} placeholder="例如 50 或 -20" required/><small>{Number(draft.amount)>0?'将记录为奖金':Number(draft.amount)<0?'将记录为扣除':'不能填写 0'}</small></label>
+      <label className="adjustment-editor-note"><span>备注 <em>必填</em></span><textarea rows="4" maxLength="4000" value={draft.note} disabled={state.saving} onChange={event=>update('note',event.target.value)} placeholder="说明奖金或扣除原因" required/></label>
+    </div>
+    <footer><div><b>保存结果会明确分两步显示</b><span>Supabase 已保存 → Google 待同步 / 已同步</span></div><button type="button" className="secondary-action" disabled={state.saving} onClick={onClose}>取消</button><button type="submit" className="primary-action" disabled={state.loading||state.saving}>{state.saving?'正在保存 Supabase…':editing?'保存修改':'保存并进入同步队列'}</button></footer>
+  </form></div>
 }
 
 function SchedulePane(){

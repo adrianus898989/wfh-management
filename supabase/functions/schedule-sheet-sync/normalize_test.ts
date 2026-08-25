@@ -55,7 +55,7 @@ Deno.test("rejects duplicate non-empty employee IDs", async () => {
   try {
     await normalizeSnapshot(await payloadFor(values));
   } catch (error) {
-    rejected = error instanceof Error && error.message === "snapshot_duplicate_employee_id_3";
+    rejected = error instanceof Error && error.message === "snapshot_duplicate_employee_id_rows_2_3";
   }
   assert(rejected, "duplicate employee ID was accepted");
 });

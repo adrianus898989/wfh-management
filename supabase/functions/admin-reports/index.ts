@@ -13,6 +13,7 @@ const lower=(v:any)=>text(v).toLowerCase()
 const uniq=(arr:any[])=>[...new Set((arr||[]).map(text).filter(Boolean))]
 const json=(body:any,status=200)=>new Response(JSON.stringify(body),{status,headers:{...corsHeaders,'Content-Type':'application/json; charset=utf-8'}})
 const pick=(r:any,keys:string[])=>{for(const k of keys){const v=text(r?.[k]);if(v)return v}return ''}
+function businessDateIso(){const parts:any={};new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).forEach(part=>{if(part.type!=='literal')parts[part.type]=part.value});return `${parts.year}-${parts.month}-${parts.day}`}
 function jwtSessionId(authorization:string){const token=authorization.slice('Bearer '.length).trim(),payload=token.split('.')[1]||'';if(!payload)return '';try{const normalized=payload.replace(/-/g,'+').replace(/_/g,'/'),padded=normalized.padEnd(Math.ceil(normalized.length/4)*4,'='),sessionId=text(JSON.parse(atob(padded))?.session_id);return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)?sessionId:''}catch{return ''}}
 async function assertCurrentAdminLease(userId:string,authorization:string){const sessionId=jwtSessionId(authorization);if(!sessionId)throw new Error('SESSION_NOT_CURRENT');const service=createClient(Deno.env.get('SUPABASE_URL')||'',Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||'',{auth:{persistSession:false,autoRefreshToken:false}}),{data:lease,error}=await service.from('app_session_leases').select('session_id,portal,lease_expires_at').eq('user_id',userId).maybeSingle();if(error)throw new Error('SESSION_SERVICE_UNAVAILABLE');if(!lease||lease.session_id!==sessionId||lease.portal!=='admin'||!lease.lease_expires_at||new Date(lease.lease_expires_at).getTime()<=Date.now())throw new Error('SESSION_NOT_CURRENT')}
 type ReportScope={mode:'all'|'limited',employeeNos:Set<string>}
@@ -90,16 +91,64 @@ function normalizeErrors(raw:any[]){return raw.map((r:any,i:number)=>({key:`err-
 async function loadAllErrors(service:any){const chunks=await getChunkedSnapshot(service,'效率表/员工错误');if(chunks?.length)return normalizeErrors(chunks);const snap=await getSnapshot(service,'效率表/员工错误',Number.POSITIVE_INFINITY);if(snap)return normalizeErrors(snap);throw new Error('错误统计尚未同步到 Supabase，请稍后刷新')}
 function mapOrdersToEmployees(allOrders:any[],directory:any,rosterById:Map<string,any>){const out:any[]=[];allOrders.forEach(o=>{const id=directory.accountToId.get(o.account)||'';if(id&&rosterById.has(id))out.push({...o,employee_id:id})});return out}
 function between(date:string,from:string,to:string){if(!date)return false;if(from&&date<from)return false;if(to&&date>to)return false;return true}
-async function buildContext(service:any,scope:ReportScope){const [loadedRoster,directory]=await Promise.all([loadRoster(service),loadAccountDirectory(service)]);const roster=scope.mode==='all'?loadedRoster:loadedRoster.filter((r:any)=>scope.employeeNos.has(upper(r.employee_id)));const enriched=roster.map((r:any)=>({...r,employee_id:upper(r.employee_id),hire_date:r.employee_id?(directory.byId.get(upper(r.employee_id))?.hire_date||''):''}));const rosterById=new Map(enriched.filter((r:any)=>r.employee_id).map((r:any)=>[r.employee_id,r]));return {roster:enriched,directory,rosterById}}
-async function overview(service:any,scope:ReportScope){const ctx=await buildContext(service,scope),roster=ctx.roster,states=await syncState(service);return {updated_at:new Date().toISOString(),version:'V30.1.0',sources:{roster:'Supabase 定时快照 ← 居家排班表 / 填表',account:'Supabase 定时快照 ← 居家排班表 / 账号',efficiency:['Supabase 索引明细 ← Google 效率表：工作表4 + 填表','员工错误读取 Supabase 索引明细']},sync_state:states,roster,order_summary:{},recent_order_dates:[],recent_orders:{},options:{shifts:uniq(roster.map((r:any)=>r.shift)).sort(),teams:uniq(roster.map((r:any)=>r.team)).sort(),groups:uniq(roster.map((r:any)=>r.group)).sort(),positions:uniq(roster.map((r:any)=>r.position)).sort(),countries:uniq(roster.map((r:any)=>r.country)).sort(),platforms:uniq(roster.map((r:any)=>r.platform)).sort(),supervisors:uniq(roster.flatMap((r:any)=>[r.responsible,r.onsite_trainer,r.online_leader,r.online_trainer])).sort()},stats:{people:new Set(roster.map((r:any)=>text(r.name)).filter(Boolean)).size,rows:roster.length,team_stats:groupStats(roster,(r:any)=>r.team),position_stats:groupStats(roster,(r:any)=>r.position),shift_stats:groupStats(roster,(r:any)=>r.shift),country_stats:groupStats(roster,(r:any)=>r.country)}}}
+async function buildContext(service:any,scope:ReportScope){const [loadedRoster,directory]=await Promise.all([loadRoster(service),loadAccountDirectory(service)]);const roster=scope.mode==='all'?loadedRoster:loadedRoster.filter((r:any)=>scope.employeeNos.has(upper(r.employee_id)));const enriched=roster.map((r:any)=>({...r,employee_id:upper(r.employee_id),hire_date:r.employee_id?(directory.byId.get(upper(r.employee_id))?.hire_date||''):''}));const rosterById=new Map<string,any>(enriched.filter((r:any)=>r.employee_id).map((r:any):[string,any]=>[r.employee_id,r]));return {roster:enriched,directory,rosterById}}
+async function overviewOrderMetrics(service:any,ctx:any){
+  const allowedIds=new Set<string>(ctx.rosterById.keys())
+  const accounts=uniq([...allowedIds].flatMap(id=>ctx.directory.idToAccounts.get(id)||[])).map(lower)
+  if(!accounts.length)return{status:'ok',summary:{},dates:[],daily:{}}
+  // Monthly Google templates already contain future-dated zero rows. Anchor the
+  // overview to today's Manila business date so those placeholders cannot move
+  // the seven-day window into the future and make real efficiency look like 0.
+  const source=await loadSyncedOrderSummary(service,'',businessDateIso(),accounts,7)
+  const dates:string[]=(source.dates||[]).map(text).filter(Boolean).sort()
+  const byId=new Map<string,{daily:Record<string,{total:number,direct:boolean}>}>()
+  ;(source.rows||[]).forEach((accountRow:any)=>{
+    const account=lower(accountRow.account)
+    const id=ctx.directory.accountToId.get(account)||''
+    if(!id||!allowedIds.has(id))return
+    const current=byId.get(id)||{daily:{}}
+    const directEmployeeId=account===lower(id)
+    Object.entries(accountRow.daily||{}).forEach(([date,value]:any)=>{
+      const total=Number(value?.success||0)+Number(value?.reject||0)
+      const day=current.daily[date]||{total:0,direct:false}
+      if(directEmployeeId)current.daily[date]={total,direct:true}
+      else if(!day.direct){day.total+=total;current.daily[date]=day}
+    })
+    byId.set(id,current)
+  })
+  const summary:Record<string,{total:number,working_days:number}>={}
+  const daily:Record<string,Record<string,number>>={}
+  byId.forEach((row,id)=>{
+    let total=0,workingDays=0
+    daily[id]={}
+    dates.forEach(date=>{
+      const value=Number(row.daily[date]?.total||0)
+      daily[id][date]=value
+      if(value>0){total+=value;workingDays+=1}
+    })
+    summary[id]={total,working_days:workingDays}
+  })
+  return{status:'ok',summary,dates,daily}
+}
+async function overview(service:any,scope:ReportScope){
+  const ctx=await buildContext(service,scope),roster=ctx.roster,states=await syncState(service)
+  let orderMetrics:any
+  try{orderMetrics=await overviewOrderMetrics(service,ctx)}
+  catch(error){
+    const message=error instanceof Error?error.message:String(error)
+    console.error('[admin-reports] overview order metrics',message)
+    orderMetrics={status:'error',error:message,summary:{},dates:[],daily:{}}
+  }
+  return {updated_at:new Date().toISOString(),version:'V30.2.0',sources:{roster:'Supabase 定时快照 ← 居家排班表 / 填表',account:'Supabase 定时快照 ← 居家排班表 / 账号',efficiency:['Supabase 索引明细 ← Google 效率表：工作表4 + 填表','员工错误读取 Supabase 索引明细']},sync_state:states,roster,order_metrics_status:orderMetrics.status,order_metrics_error:orderMetrics.error||'',order_summary:orderMetrics.summary,recent_order_dates:orderMetrics.dates,recent_orders:orderMetrics.daily,options:{shifts:uniq(roster.map((r:any)=>r.shift)).sort(),teams:uniq(roster.map((r:any)=>r.team)).sort(),groups:uniq(roster.map((r:any)=>r.group)).sort(),positions:uniq(roster.map((r:any)=>r.position)).sort(),countries:uniq(roster.map((r:any)=>r.country)).sort(),platforms:uniq(roster.map((r:any)=>r.platform)).sort(),supervisors:uniq(roster.flatMap((r:any)=>[r.responsible,r.onsite_trainer,r.online_leader,r.online_trainer])).sort()},stats:{people:new Set(roster.map((r:any)=>text(r.name)).filter(Boolean)).size,rows:roster.length,team_stats:groupStats(roster,(r:any)=>r.team),position_stats:groupStats(roster,(r:any)=>r.position),shift_stats:groupStats(roster,(r:any)=>r.shift),country_stats:groupStats(roster,(r:any)=>r.country)}}
+}
 async function orders(service:any,body:any,scope:ReportScope){
   const ctx=await buildContext(service,scope)
   let from=normalizeDate(body.date_from),to=normalizeDate(body.date_to)
   if(from&&to&&from>to)[from,to]=[to,from]
   const hasEmployeeFilter=Array.isArray(body.employee_ids)
-  const requestedIds=hasEmployeeFilter?body.employee_ids.map((x:any)=>upper(x)).filter(Boolean):[]
-  const visibleIds=new Set(ctx.rosterById.keys())
-  const allowedIds=new Set(hasEmployeeFilter?requestedIds.filter((id:string)=>visibleIds.has(id)):[...visibleIds])
+  const requestedIds:string[]=hasEmployeeFilter?body.employee_ids.map((x:any)=>upper(x)).filter(Boolean):[]
+  const visibleIds=new Set<string>(ctx.rosterById.keys())
+  const allowedIds=new Set<string>(hasEmployeeFilter?requestedIds.filter((id:string)=>visibleIds.has(id)):[...visibleIds])
   const accounts=uniq([...allowedIds].flatMap(id=>ctx.directory.idToAccounts.get(id)||[])).map(lower)
   if(!accounts.length)return {updated_at:new Date().toISOString(),from:from||'',to:to||'',dates:[],available_from:'',available_to:'',rows:[],options:{positions:[]},sync_state:await syncState(service)}
   const summary=await loadSyncedOrderSummary(service,from,to,accounts,body.all_history===true?0:7)

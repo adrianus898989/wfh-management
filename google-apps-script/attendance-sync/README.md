@@ -1,96 +1,101 @@
-# August attendance live sync setup
+# Attendance and adjustment live sync setup
 
-This is a change-detected push, not a service-account pull. The standalone Apps
-Script reads only the exact `休假填表!A:N` ranges in the two allowlisted August
-2026 spreadsheets. Two source-bound installable `onEdit` triggers provide
-near-immediate sync for human edits and read only the spreadsheet that emitted
-the event. A five-minute fallback hashes both sources to catch formula/API edits,
-which do not emit `onEdit`. The Edge Function is called only when a hash changes,
-plus one unchanged reconciliation per source per day.
+This is a private, change-detected Google Sheets push. It keeps the two legacy
+August `休假填表` sources and adds twelve logical September-December sources from
+the three 2026 annual workbooks:
 
-## Why this architecture
+- onsite-to-home: USD
+- home Vietnam / Indonesia / Myanmar: USD
+- home Philippines: PHP
 
-- The private spreadsheets do not need to be shared with a service account.
-- Google credentials never enter Supabase, and the Supabase service role never
-  enters Google Apps Script or a browser.
-- Human edits do not poll the other source. Unchanged five-minute fallback checks
-  consume Apps Script time but no Edge invocation.
-- The Edge Function accepts only the two exact August-source spreadsheet IDs,
-  gids, tab name, and source keys. The source window is `[2026-08-01, 2026-10-01)`
-  rather than a hard event-date cut at August 31 because the current home source
-  legitimately contains several early-September rows.
-- The database applies each complete snapshot atomically, with idempotent request
-  IDs, fixed row identities, authoritative missing-row deletes, and before/after
-  audit. A guard rejects empty snapshots and automatic deletes that exceed 50%
-  or 100 rows.
+Each annual logical source combines one monthly attendance tab with that month's
+block in `填表`. Monthly day cells produce only sparse exception events (`公`,
+`回`, `请`, `半`, `缺`/`旷工`, `离`). Blank or unknown day cells are not stored.
+Every non-zero fill-form amount is interpreted by its sign: positive is a bonus
+and negative is a deduction. The Philippines first-half and second-half amounts
+become separate records, use their paired note columns, and share the row's date.
+
+The reader also includes the hidden adjustment-v1 ownership metadata in every
+annual snapshot. A complete valid managed triplet makes the annual importer skip
+that adjustment (the Philippines halves are independent). Any non-empty partial
+or invalid triplet rejects the whole snapshot, so the annual and bidirectional
+adjustment importers cannot silently double-count or guess ownership.
+
+## Cost and retry behavior
+
+- An annual `onEdit` trigger only records which logical month changed. It reads
+  no annual ranges and sends no HTTP request.
+- A one-minute trigger waits at least 45 seconds after the latest edit, combining
+  an edit burst into one month snapshot.
+- The monthly snapshot projects only employee identity/context and day-status
+  columns, so salary or bank-detail edits do not change its hash.
+- An unchanged hash performs zero Edge Function calls and zero Supabase writes.
+- A daily low-frequency reconciliation catches formula/API changes that do not
+  emit `onEdit`; it also skips unchanged hashes.
+- HTTP 4xx/redirect responses are blocked for that exact hash and are not retried.
+  A changed sheet hash or a deliberate manual run can try again.
+- Network and HTTP 5xx failures use exponential backoff and reuse the same
+  `request_id`, so a lost success response cannot duplicate records.
+
+## Trust boundary
+
+The spreadsheets remain private and no Google credential enters Supabase. The
+Edge Function accepts only exact combinations of source key, spreadsheet ID,
+monthly tab/gid, and `填表` gid. The raw sync token stays only in Apps Script
+Properties. The committed Edge code contains only its SHA-256 digest.
+
+Annual record identity is derived from employee ID (name only when ID is blank),
+event date, event kind/adjustment slot, and logical source. It does not use the
+physical Google row number. Row insertions therefore update audit location rather
+than deleting and recreating the logical event. Employee matching in Supabase is
+also exact employee ID first, followed by unique normalized name only when needed.
+The fixed source metadata is authoritative for adjustment currency: onsite and
+Vietnam/Indonesia/Myanmar are always USD, and Philippines is always PHP, even
+before an employee can be matched or a country value is available.
 
 ## Deployment preparation
 
 Do not put the raw token in source control.
 
-1. Apply `supabase/migrations/20260824060000_attendance_august_live_sync.sql`.
-2. Use the high-entropy raw token whose SHA-256 matches the committed
-   `EXPECTED_TOKEN_SHA256` constant. That public digest is the sole authoritative
-   expected hash for this deployment; the Edge code never contains the raw token.
-3. Deploy `supabase/functions/attendance-sheet-sync` with Supabase JWT verification
+Install the bidirectional adjustment chain first. In particular, apply
+`20260825143710_admin_adjustment_bidirectional_outbox.sql`, deploy
+`supabase/functions/adjustment-sheet-sync`, and run its Apps Script installer so
+the managed hidden metadata headers exist. Do not install the annual attendance
+triggers before that step: this reader intentionally fails closed when those
+headers are missing or malformed.
+
+Then install the attendance chain in this order:
+
+1. Apply `20260825144614_annual_attendance_sep_dec_incremental_sync.sql` after
+   review.
+2. Deploy `supabase/functions/attendance-sheet-sync` with Supabase JWT verification
    disabled. Google Apps Script cannot mint a Supabase user JWT; the function
-   instead checks the high-entropy token before parsing the body. It then uses the
-   Edge runtime's server-only `SUPABASE_SERVICE_ROLE_KEY` solely for the locked RPC.
-4. Create a standalone Apps Script project and copy `Code.gs` and
-   `appsscript.json`. In Project Settings, add Script Properties:
+   validates the high-entropy shared token before parsing.
+3. Copy `Code.gs` and `appsscript.json` into the standalone Apps Script project.
+4. Set Script Properties:
    - `ATTENDANCE_SYNC_URL` =
      `https://ibvntgtydsavdiyqekrq.supabase.co/functions/v1/attendance-sheet-sync`
-   - `ATTENDANCE_SYNC_TOKEN` = the raw token from step 2.
+   - `ATTENDANCE_SYNC_TOKEN` = the raw token whose SHA-256 matches the committed
+     Edge Function digest.
+5. Run `installAttendanceSync()` once using a trusted Google account that can
+   read all five private workbooks. It replaces managed triggers, validates all
+   exact tabs/gids, installs five source-bound `onEdit` triggers, one one-minute
+   flusher, and one daily reconciliation trigger, then performs a manual initial
+   reconciliation.
 
-The script rejects any URL other than that exact production endpoint, including
-lookalike hosts, alternate paths, query strings, and redirects.
+`runAttendanceReconciliation()` is the deliberate force-retry entrypoint.
+`removeAttendanceSyncTriggers()` removes only the handlers managed here.
 
-## The one Google authorization step
+## Verification before deployment
 
-While signed in as a Google user who already has editor access to both private
-spreadsheets, run `installAttendanceSync()` once and approve Google's prompt. That
-single authorization creates two installable `onEdit` triggers and one five-minute
-fallback trigger, then immediately performs a full reconciliation of both sources.
+1. Run `deno check` on the Edge Function sources.
+2. Run `deno test supabase/functions/attendance-sheet-sync/normalize_test.ts`.
+3. Apply the migration to an isolated/local database, then run
+   `supabase/tests/annual_attendance_sep_dec_sync.sql`.
+4. Test one month in each layout: change a day status, a positive amount, a
+   negative amount, and both Philippines half-month amounts.
+5. Confirm an unchanged follow-up causes no HTTP call; simulate one 422 and one
+   503 to verify no-retry vs idempotent backoff behavior.
 
-Google requires the full `spreadsheets` OAuth scope to create an installable
-`onEdit` trigger for spreadsheets referenced by ID from a standalone project.
-The supplied code still performs reads only (`openById`, `getDisplayValues`) and
-contains no sheet write operation. Use a dedicated trusted Workspace account with
-access limited to these sheets if the broader Google consent is undesirable.
-
-There is no service-account key, OAuth refresh token, or private-sheet sharing
-step. `runAttendanceReconciliation()` is available for a deliberate manual retry.
-
-To rotate the ingest credential, generate a new high-entropy raw token, replace
-the committed `EXPECTED_TOKEN_SHA256` with its digest and deploy the Edge
-Function, then update the Apps Script `ATTENDANCE_SYNC_TOKEN` property. Never put
-the raw token in the repository or Edge source. If a future deployment migrates
-to an Edge secret, make that a separate code change whose missing-secret behavior
-fails closed; do not add an environment-variable fallback.
-
-## Update and delete behavior
-
-The stable identity is `(source_id, source_block, source_row, source_item_key)`;
-`is_mirror` is updateable and never part of that identity. Each accepted snapshot
-upserts changed rows and deletes only records from the same allowlisted August
-source that are missing from the new full snapshot. Audit runs are stored in
-`attendance_sheet_sync_runs`, while row-level before/after changes are stored in
-`attendance_sheet_sync_changes`. Both tables deny anon/authenticated direct access.
-The first live run treats the legacy 32-character source MD5 as non-comparable
-and performs a full reconciliation; successful live runs then store SHA-256.
-
-Automatic empty snapshots or snapshots deleting more than 50% or more than 100
-rows are rejected. A true bulk clear requires a direct service-role manual RPC
-with both `trigger_kind = "manual"` and `allow_large_delete = true`; the public
-Apps Script/Edge path never forwards that override.
-
-## Verification after deployment
-
-1. Run `deno test supabase/functions/attendance-sheet-sync/normalize_test.ts`.
-2. Run `installAttendanceSync()` and confirm two successful rows in
-   `attendance_sheet_sync_runs`.
-3. Change one harmless August test cell and confirm the onEdit run's update count
-   and before/after audit row. The fallback normally runs about every five
-   minutes, but Google scheduling and Apps Script quotas can delay execution.
-4. Restore the cell and confirm the reverse update. Verify no March-July source
-   IDs appear in either audit table.
+This repository change does not deploy the Edge Function, execute production SQL,
+install Apps Script triggers, or write any Google Sheet.

@@ -1,4 +1,9 @@
-import { normalizeSnapshot, sha256Hex } from "./normalize.ts";
+import {
+  ALLOWED_SOURCES,
+  type AnnualSourceConfig,
+  normalizeSnapshot,
+  sha256Hex,
+} from "./normalize.ts";
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message);
@@ -134,4 +139,273 @@ Deno.test("rejects an impossible calendar date", async () => {
     rejected = error instanceof Error && error.message.startsWith("invalid_date:");
   }
   assert(rejected, "impossible date was accepted");
+});
+
+const annualConfig = (sourceKey: string): AnnualSourceConfig => {
+  const config = ALLOWED_SOURCES.find((candidate) => candidate.sourceKey === sourceKey);
+  if (!config || config.mode !== "annual") throw new Error(`missing annual source ${sourceKey}`);
+  return config;
+};
+
+const annualSourcePayload = (config: AnnualSourceConfig) => ({
+  source_key: config.sourceKey,
+  spreadsheet_id: config.spreadsheetId,
+  sheet_gid: config.sheetGid,
+  tab_name: config.tabName,
+  adjustment_sheet_gid: config.adjustmentSheetGid,
+  adjustment_tab_name: config.adjustmentTabName,
+});
+
+function annualMatrices(
+  config: AnnualSourceConfig,
+  attendanceRows: string[][],
+  adjustmentRows: string[][],
+  metadataRows: string[][] = [],
+) {
+  const attendanceHeader = Array(config.maxColumns).fill("");
+  attendanceHeader[config.nameColumn] = "姓名";
+  attendanceHeader[config.employeeNoColumn] = "ID";
+  for (let day = 1; day < config.maxColumns - config.dayStartColumn; day += 1) {
+    attendanceHeader[config.dayStartColumn + day - 1] = String(day);
+  }
+  const adjustmentMonth = Array(config.adjustmentColumns).fill("");
+  adjustmentMonth[0] = `${Number(config.month.slice(5))}月份`;
+  const adjustmentHeader = config.layout === "home_ph"
+    ? ["姓名", "ID", "金额1-15", "金额16-末", "备注1-15", "备注16-末", "日期"]
+    : ["姓名", "ID", "奖金", "扣除", "备注", "日期"];
+  const metadataHeader = config.layout === "home_ph"
+    ? [
+      "__sync_first_half_external_id", "__sync_first_half_origin", "__sync_first_half_revision",
+      "__sync_second_half_external_id", "__sync_second_half_origin", "__sync_second_half_revision",
+    ]
+    : ["__sync_external_id", "__sync_origin", "__sync_revision"];
+  const adjustmentDataRowCount = Math.max(adjustmentRows.length, metadataRows.length);
+  const adjustmentData = Array.from({ length: adjustmentDataRowCount }, (_, index) => {
+    const row = adjustmentRows[index] ?? [];
+    return [...row, ...Array(Math.max(config.adjustmentColumns - row.length, 0)).fill("")]
+      .slice(0, config.adjustmentColumns);
+  });
+  const metadataData = Array.from({ length: adjustmentDataRowCount }, (_, index) => {
+    const row = metadataRows[index] ?? [];
+    return [...row, ...Array(Math.max(config.adjustmentMetadataColumns - row.length, 0)).fill("")]
+      .slice(0, config.adjustmentMetadataColumns);
+  });
+  return {
+    attendance: [attendanceHeader, ...attendanceRows.map((row) => [
+      ...row,
+      ...Array(Math.max(config.maxColumns - row.length, 0)).fill(""),
+    ].slice(0, config.maxColumns))],
+    adjustments: [adjustmentMonth, adjustmentHeader, ...adjustmentData],
+    adjustment_metadata: [Array(config.adjustmentMetadataColumns).fill(""), metadataHeader, ...metadataData],
+  };
+}
+
+async function normalizeAnnual(config: AnnualSourceConfig, values: ReturnType<typeof annualMatrices>, capturedAt = "2026-08-25T01:00:00.000Z") {
+  return await normalizeSnapshot({
+    request_id: "223e4567-e89b-42d3-a456-426614174000",
+    trigger_kind: "change",
+    source: annualSourcePayload(config),
+    snapshot_hash: await sha256Hex(JSON.stringify(values)),
+    captured_at: capturedAt,
+    values,
+  });
+}
+
+Deno.test("allowlists exactly twelve annual September-December logical sources", () => {
+  const annual = ALLOWED_SOURCES.filter((candidate) => candidate.mode === "annual");
+  assert(annual.length === 12, `expected 12 annual sources, got ${annual.length}`);
+  assert(new Set(annual.map((candidate) => candidate.sourceKey)).size === 12, "annual source keys are not unique");
+  assert(
+    annual.every((candidate) =>
+      candidate.currency === (candidate.workbookKey === "home_ph" ? "PHP" : "USD")
+    ),
+    "annual source allowlist contains the wrong currency",
+  );
+});
+
+Deno.test("normalizes sparse annual attendance and signed USD adjustments by employee ID", async () => {
+  const config = annualConfig("onsite_annual_2026_09");
+  const employee = Array(config.maxColumns).fill("");
+  employee[config.nameColumn] = "测试员工";
+  employee[config.employeeNoColumn] = " WD-100 ";
+  employee[config.countryColumn ?? 0] = "越南";
+  employee[config.positionColumn] = "财务";
+  employee[config.platformColumn] = "测试盘口";
+  employee[config.dayStartColumn] = "公";
+  employee[config.dayStartColumn + 1] = "旷工";
+  employee[config.dayStartColumn + 2] = "正常";
+  employee[config.dayStartColumn + 3] = "离";
+  const values = annualMatrices(config, [employee], [
+    ["测试员工", "WD-100", "100", "-25", "奖罚备注", "2026-09-05"],
+    ["零金额", "WD-101", "0", "", "不落库", "2026-09-06"],
+  ]);
+  const result = await normalizeAnnual(config, values);
+  assert(result.sync_contract === "annual_v1", "annual RPC contract was not selected");
+  assert(result.rows.length === 5, `expected 5 sparse records, got ${result.rows.length}`);
+  assert(result.parse_warning_count === 1, "unknown normal marker should be a single warning");
+  assert(result.rows.some((row) => row.event_kind === "public_holiday"), "public holiday shorthand failed");
+  assert(result.rows.some((row) => row.event_kind === "absence"), "旷工 did not map to absence");
+  assert(result.rows.some((row) => row.kind === "resignation" && row.event_kind === "resignation"), "离职 was not canonical");
+  assert(
+    result.rows.filter((row) => row.kind !== "adjustment").every((row) => row.currency === null),
+    "non-adjustment annual records received a currency",
+  );
+  const adjustments = result.rows.filter((row) => row.kind === "adjustment");
+  assert(adjustments.length === 2, "zero/blank adjustment was persisted");
+  assert(adjustments[0].employee_no_raw === "WD-100", "employee ID was not preserved for primary matching");
+  assert(adjustments.some((row) => row.amount === 100 && row.event_kind === "bonus"), "positive amount was not bonus");
+  assert(adjustments.some((row) => row.amount === -25 && row.event_kind === "deduction"), "negative amount was not deduction");
+  assert(adjustments.every((row) => row.raw_values.currency === "USD"), "onsite currency audit was not USD");
+  assert(adjustments.every((row) => row.currency === "USD"), "onsite allowlisted currency was not normalized");
+});
+
+Deno.test("Philippines half-month amounts create two stable PHP records with paired notes", async () => {
+  const config = annualConfig("home_ph_annual_2026_09");
+  const values = annualMatrices(config, [], [[
+    "PH EMPLOYEE", "PH-100", "300", "-50", "first note", "second note", "09/15/2026",
+  ]]);
+  const result = await normalizeAnnual(config, values);
+  assert(result.rows.length === 2, "PH half-month amounts did not create two records");
+  const first = result.rows.find((row) => row.raw_values.source_slot === "first_half");
+  const second = result.rows.find((row) => row.raw_values.source_slot === "second_half");
+  assert(first?.amount === 300 && first.note === "first note" && first.event_kind === "bonus", "first half mapping failed");
+  assert(second?.amount === -50 && second.note === "second note" && second.event_kind === "deduction", "second half mapping failed");
+  assert(first?.event_date === second?.event_date, "PH half-month records did not share the row date");
+  assert(first?.source_item_key !== second?.source_item_key, "PH half-month stable keys collided");
+  assert(first?.raw_values.currency === "PHP" && second?.raw_values.currency === "PHP", "PH currency audit was not PHP");
+  assert(first?.currency === "PHP" && second?.currency === "PHP", "PH allowlisted currency was not normalized");
+});
+
+Deno.test("standard managed metadata suppresses the whole adjustment row", async () => {
+  const config = annualConfig("onsite_annual_2026_09");
+  const values = annualMatrices(config, [], [
+    ["MANAGED", "WD-M", "100", "-20", "owned by adjustment-v1", "2026-09-05"],
+    ["UNMANAGED", "WD-U", "30", "", "annual-owned", "2026-09-06"],
+  ], [
+    ["7985fb59-b915-47e9-a115-feacc3ab52a1", "supabase", "2"],
+    ["", "", ""],
+  ]);
+  const result = await normalizeAnnual(config, values);
+  const adjustments = result.rows.filter((row) => row.kind === "adjustment");
+  assert(adjustments.length === 1, "managed standard row was duplicated by annual sync");
+  assert(adjustments[0].employee_no_raw === "WD-U", "unmanaged standard row was skipped");
+});
+
+Deno.test("Philippines managed metadata suppresses slots independently", async () => {
+  const config = annualConfig("home_ph_annual_2026_10");
+  const values = annualMatrices(config, [], [[
+    "PH", "PH-SLOT", "300", "-50", "managed first", "annual second", "2026-10-20",
+  ]], [[
+    "7985fb59-b915-47e9-a115-feacc3ab52a1", "google", "4", "", "", "",
+  ]]);
+  const result = await normalizeAnnual(config, values);
+  const adjustments = result.rows.filter((row) => row.kind === "adjustment");
+  assert(adjustments.length === 1, "PH managed slot did not suppress exactly one record");
+  assert(adjustments[0].raw_values.source_slot === "second_half", "wrong PH slot survived");
+  assert(adjustments[0].amount === -50, "unmanaged PH slot amount changed");
+});
+
+Deno.test("fails closed on partial or invalid managed metadata", async () => {
+  const standard = annualConfig("home_vimm_annual_2026_11");
+  const partial = annualMatrices(standard, [], [[
+    "A", "ID-A", "12", "", "n", "2026-11-03",
+  ]], [["7985fb59-b915-47e9-a115-feacc3ab52a1", "", "1"]]);
+  let partialRejected = false;
+  try {
+    await normalizeAnnual(standard, partial);
+  } catch (error) {
+    partialRejected = error instanceof Error && error.message.startsWith("adjustment_metadata_invalid:");
+  }
+  assert(partialRejected, "partial standard metadata was accepted");
+
+  const ph = annualConfig("home_ph_annual_2026_12");
+  const invalidSecondSlot = annualMatrices(ph, [], [[
+    "B", "ID-B", "10", "20", "a", "b", "2026-12-20",
+  ]], [[
+    "7985fb59-b915-47e9-a115-feacc3ab52a1", "google", "1",
+    "not-a-uuid", "supabase", "2",
+  ]]);
+  let phRejected = false;
+  try {
+    await normalizeAnnual(ph, invalidSecondSlot);
+  } catch (error) {
+    phRejected = error instanceof Error && error.message.startsWith("adjustment_metadata_invalid:");
+  }
+  assert(phRejected, "invalid PH slot metadata was accepted");
+});
+
+Deno.test("managed metadata is part of the annual snapshot hash", async () => {
+  const config = annualConfig("onsite_annual_2026_12");
+  const values = annualMatrices(config, [], [[
+    "A", "ID-A", "10", "", "n", "2026-12-03",
+  ]], [["7985fb59-b915-47e9-a115-feacc3ab52a1", "google", "1"]]);
+  const originalHash = await sha256Hex(JSON.stringify(values));
+  values.adjustment_metadata[2][2] = "2";
+  let rejected = false;
+  try {
+    await normalizeSnapshot({
+      request_id: "223e4567-e89b-42d3-a456-426614174000",
+      trigger_kind: "change",
+      source: annualSourcePayload(config),
+      snapshot_hash: originalHash,
+      captured_at: "2026-08-25T01:00:00.000Z",
+      values,
+    });
+  } catch (error) {
+    rejected = error instanceof Error && error.message === "snapshot_hash_mismatch";
+  }
+  assert(rejected, "metadata change did not invalidate the snapshot hash");
+});
+
+Deno.test("annual record identity does not depend on the physical source row", async () => {
+  const config = annualConfig("home_vimm_annual_2026_10");
+  const employee = Array(config.maxColumns).fill("");
+  employee[config.nameColumn] = "ROW SHIFT";
+  employee[config.employeeNoColumn] = "SHIFT-1";
+  employee[config.dayStartColumn] = "请";
+  const beforeValues = annualMatrices(config, [employee], []);
+  const afterValues = annualMatrices(config, [Array(config.maxColumns).fill(""), employee], []);
+  const before = await normalizeAnnual(config, beforeValues);
+  const after = await normalizeAnnual(config, afterValues);
+  assert(before.rows[0].source_item_key === after.rows[0].source_item_key, "physical row changed stable item key");
+  assert(before.rows[0].source_row === after.rows[0].source_row, "physical row changed stable synthetic row");
+});
+
+Deno.test("annual capture timestamps do not change record content hashes", async () => {
+  const config = annualConfig("home_vimm_annual_2026_11");
+  const values = annualMatrices(config, [], [["A", "ID-A", "12", "", "n", "2026-11-03"]]);
+  const first = await normalizeAnnual(config, values, "2026-08-25T01:00:00.000Z");
+  const second = await normalizeAnnual(config, values, "2026-08-25T02:00:00.000Z");
+  assert(first.rows[0].content_hash === second.rows[0].content_hash, "capture time changed annual content hash");
+});
+
+Deno.test("rejects a lookalike annual source and reports source_not_allowlisted", async () => {
+  const config = annualConfig("home_ph_annual_2026_12");
+  const values = annualMatrices(config, [], []);
+  let rejected = false;
+  try {
+    await normalizeSnapshot({
+      request_id: "223e4567-e89b-42d3-a456-426614174000",
+      trigger_kind: "change",
+      source: { ...annualSourcePayload(config), adjustment_sheet_gid: "wrong-gid" },
+      snapshot_hash: await sha256Hex(JSON.stringify(values)),
+      captured_at: "2026-08-25T01:00:00.000Z",
+      values,
+    });
+  } catch (error) {
+    rejected = error instanceof Error && error.message === "source_not_allowlisted";
+  }
+  assert(rejected, "lookalike annual source was accepted or returned an unclear error");
+});
+
+Deno.test("rejects non-zero annual adjustments without an in-month date", async () => {
+  const config = annualConfig("onsite_annual_2026_12");
+  const values = annualMatrices(config, [], [["A", "ID-A", "10", "", "missing date", ""]]);
+  let rejected = false;
+  try {
+    await normalizeAnnual(config, values);
+  } catch (error) {
+    rejected = error instanceof Error && error.message === "adjustment_date_required";
+  }
+  assert(rejected, "dated adjustment validation did not fail closed");
 });
