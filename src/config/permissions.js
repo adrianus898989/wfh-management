@@ -33,8 +33,12 @@ export const DATA_SCOPE_LABELS = {
 }
 
 export const PERMISSIONS = {
+  // 首页
+  DASHBOARD_VIEW: 'dashboard.view',
+
   // 员工资料
   EMPLOYEE_VIEW: 'employee.view',
+  EMPLOYEE_ANALYTICS_VIEW: 'employee.analytics.view',
   EMPLOYEE_CREATE: 'employee.create',
   EMPLOYEE_EDIT: 'employee.edit',
   EMPLOYEE_RESIGN: 'employee.resign',
@@ -83,6 +87,8 @@ export const PERMISSIONS = {
   PAYROLL_PUBLISH: 'payroll.publish',
   PAYROLL_EXPORT: 'payroll.export',
   PAYROLL_RULE_EDIT: 'payroll.rule.edit',
+  PAYROLL_PAYOUT_CHANGE_VIEW: 'payroll.payout_change.view',
+  PAYROLL_PAYOUT_CHANGE_REVIEW: 'payroll.payout_change.review',
 
   // 账号权限
   USER_VIEW: 'user.view',
@@ -135,9 +141,11 @@ export const ROLE_TEMPLATES = {
   supervisor: {
     backendEnabled: true,
     employeePortalEnabled: true,
-    dataScope: DATA_SCOPES.ASSIGNED_TEAMS,
+    dataScope: DATA_SCOPES.OWN_TEAM,
     permissions: [
+      PERMISSIONS.DASHBOARD_VIEW,
       PERMISSIONS.EMPLOYEE_VIEW,
+      PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW,
       PERMISSIONS.EMPLOYEE_EDIT,
       PERMISSIONS.CONNECTIVITY_VIEW,
       PERMISSIONS.CONNECTIVITY_CREATE,
@@ -170,7 +178,9 @@ export const ROLE_TEMPLATES = {
     employeePortalEnabled: true,
     dataScope: DATA_SCOPES.OWN_TEAM,
     permissions: [
+      PERMISSIONS.DASHBOARD_VIEW,
       PERMISSIONS.EMPLOYEE_VIEW,
+      PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW,
       PERMISSIONS.CONNECTIVITY_VIEW,
       PERMISSIONS.TEAM_VIEW,
       PERMISSIONS.SCHEDULE_VIEW,
@@ -193,9 +203,11 @@ export const ROLE_TEMPLATES = {
   senior_team_leader: {
     backendEnabled: true,
     employeePortalEnabled: true,
-    dataScope: DATA_SCOPES.ASSIGNED_TEAMS,
+    dataScope: DATA_SCOPES.OWN_TEAM,
     permissions: [
+      PERMISSIONS.DASHBOARD_VIEW,
       PERMISSIONS.EMPLOYEE_VIEW,
+      PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW,
       PERMISSIONS.CONNECTIVITY_VIEW,
       PERMISSIONS.TEAM_VIEW,
       PERMISSIONS.SCHEDULE_VIEW,
@@ -215,9 +227,11 @@ export const ROLE_TEMPLATES = {
   trainer: {
     backendEnabled: true,
     employeePortalEnabled: true,
-    dataScope: DATA_SCOPES.ASSIGNED_TEAMS,
+    dataScope: DATA_SCOPES.OWN_TEAM,
     permissions: [
+      PERMISSIONS.DASHBOARD_VIEW,
       PERMISSIONS.EMPLOYEE_VIEW,
+      PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW,
       PERMISSIONS.CONNECTIVITY_VIEW,
       PERMISSIONS.REPORT_VIEW,
       PERMISSIONS.REPORT_EDIT,
@@ -233,9 +247,11 @@ export const ROLE_TEMPLATES = {
   assistant: {
     backendEnabled: true,
     employeePortalEnabled: true,
-    dataScope: DATA_SCOPES.ASSIGNED_TEAMS,
+    dataScope: DATA_SCOPES.OWN_TEAM,
     permissions: [
+      PERMISSIONS.DASHBOARD_VIEW,
       PERMISSIONS.EMPLOYEE_VIEW,
+      PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW,
       PERMISSIONS.EMPLOYEE_CREATE,
       PERMISSIONS.EMPLOYEE_EDIT,
       PERMISSIONS.EMPLOYEE_RESIGN,
@@ -264,9 +280,16 @@ export const ROLE_TEMPLATES = {
 
 export const PERMISSION_GROUPS = [
   {
+    title: '首页',
+    items: [
+      [PERMISSIONS.DASHBOARD_VIEW, '查看后台首页']
+    ]
+  },
+  {
     title: '员工与团队',
     items: [
       [PERMISSIONS.EMPLOYEE_VIEW, '查看员工'],
+      [PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW, '查看人员分析'],
       [PERMISSIONS.EMPLOYEE_CREATE, '新增员工'],
       [PERMISSIONS.EMPLOYEE_EDIT, '编辑员工'],
       [PERMISSIONS.EMPLOYEE_RESIGN, '办理离职'],
@@ -324,7 +347,9 @@ export const PERMISSION_GROUPS = [
       [PERMISSIONS.PAYROLL_APPROVE, '审核工资'],
       [PERMISSIONS.PAYROLL_PUBLISH, '发布工资'],
       [PERMISSIONS.PAYROLL_EXPORT, '导出工资'],
-      [PERMISSIONS.PAYROLL_RULE_EDIT, '修改工资规则/阈值']
+      [PERMISSIONS.PAYROLL_RULE_EDIT, '修改工资规则/阈值'],
+      [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_VIEW, '查看收款资料修改申请'],
+      [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW, '审核收款资料修改申请']
     ]
   },
   {
