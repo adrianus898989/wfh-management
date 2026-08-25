@@ -5,11 +5,12 @@ import { Pagination } from '../components/DataPageControls'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
 import { useAdminAccess } from '../lib/adminAccess'
+import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
   '员工档案': 'employee.view',
-  '人员分析': 'employee.view',
+  '人员分析': 'employee.analytics.view',
   '停电 / 断网记录': 'connectivity.view',
   '离职记录': 'employee.view',
   '操作日志': 'audit.view',
@@ -66,6 +67,27 @@ const legacyType = {
   '纯居家马来西亚':'纯居家（越南/缅甸/印尼等）',
 }
 const typeName = v => legacyType[text(v)] || text(v) || '-'
+const EMPLOYEE_RISK_META = {
+  excellent:{label:'优秀',className:'excellent'},
+  normal:{label:'正常',className:'normal'},
+  attention:{label:'注意',className:'attention'},
+  watch:{label:'重点',className:'watch'},
+  high:{label:'高频',className:'high'},
+}
+const riskKeyFromCount = value => {
+  const count=Number(value||0)
+  if(count>=31) return 'high'
+  if(count>=16) return 'watch'
+  if(count>=9) return 'attention'
+  if(count>=1) return 'normal'
+  return 'excellent'
+}
+const employeeRiskMeta = row => {
+  const hasLiveCount=row?.total_error_count!==null&&row?.total_error_count!==undefined&&text(row.total_error_count)!==''
+  // A fresh aggregate count is authoritative; risk_level can be a stale cached label.
+  let key=hasLiveCount?riskKeyFromCount(row.total_error_count):text(row?.risk_level)
+  return EMPLOYEE_RISK_META[key]||null
+}
 const canonicalShiftName = v => {
   const raw=text(v).replace(/\s+/g,' ')
   if(!raw) return ''
@@ -390,6 +412,7 @@ export default function AdminEmployeesPage(){
   const lastAutoRefreshAtRef=useRef(0)
   const refreshEmployeeDataRef=useRef(null)
   const canViewEmployees=adminAccess.hasPermission('employee.view')
+  const canViewAnalytics=adminAccess.hasPermission('employee.analytics.view')
   const canViewAudit=adminAccess.hasPermission('audit.view')
   const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>adminAccess.hasPermission(EMPLOYEE_TAB_PERMISSIONS[item]))
   const requestedTab=sp.get('tab')
@@ -596,8 +619,23 @@ export default function AdminEmployeesPage(){
     try{
       const data=await fetchEmployeeListData(nextPage,nextSize,nextFilters)
       const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
-      const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))
-      setRows(visibleRows.map(r=>({...r,operator_account:operatorMap.get(text(r.id))||text(r.operator_account)})))
+      const [operatorMap,errorSummaryMap]=await Promise.all([
+        loadOperatorMap(visibleRows.map(r=>r.id)),
+        getAllErrorSummaryMap().catch(()=>new Map()),
+      ])
+      setRows(visibleRows.map(r=>{
+        const summary=errorSummaryMap.get(text(r.employee_no).toUpperCase())
+        const rawTotalErrorCount=summary?.total_error_count??r.total_error_count
+        const hasTotalErrorCount=rawTotalErrorCount!==null&&rawTotalErrorCount!==undefined&&text(rawTotalErrorCount)!==''
+        const totalErrorCount=hasTotalErrorCount?Number(rawTotalErrorCount):null
+        return {
+          ...r,
+          month_error_count:summary?.month_error_count??r.month_error_count??null,
+          total_error_count:totalErrorCount,
+          risk_level:hasTotalErrorCount?riskKeyFromCount(totalErrorCount):text(r.risk_level),
+          operator_account:operatorMap.get(text(r.id))||text(r.operator_account),
+        }
+      }))
       setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))
     }catch(e){ if(!silent) setError(e.message) }
     finally{ if(!silent) setLoading(false) }
@@ -631,9 +669,11 @@ export default function AdminEmployeesPage(){
   const refreshEmployeeData=async({silent=false}={})=>{
     if(!silent) setRefreshing(true)
     try{
-      const jobs=canViewEmployees?[loadMeta(),loadAnalytics(),loadArchiveStats(true)]:[]
+      const jobs=[]
+      if(canViewEmployees) jobs.push(loadMeta())
+      if(canViewEmployees||canViewAnalytics) jobs.push(loadAnalytics(),loadArchiveStats(true))
       if(canViewEmployees&&tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
-      if(canViewEmployees&&tab==='人员分析') jobs.push(loadPeopleAnalytics(appliedAnalysisFilters),loadResignationAnalytics(appliedResignationAnalyticsFilters))
+      if(canViewAnalytics&&tab==='人员分析') jobs.push(loadPeopleAnalytics(appliedAnalysisFilters),loadResignationAnalytics(appliedResignationAnalyticsFilters))
       if(canViewEmployees&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
       if(canViewAudit&&tab==='操作日志') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
       if(canViewEmployees&&selected?.employee?.id){
@@ -648,8 +688,11 @@ export default function AdminEmployeesPage(){
   refreshEmployeeDataRef.current=refreshEmployeeData
 
   useEffect(()=>{
-    if(adminAccess.loading||!canViewEmployees)return undefined
-    Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats()]).finally(()=>{lastAutoRefreshAtRef.current=Date.now()})
+    if(adminAccess.loading||(!canViewEmployees&&!canViewAnalytics))return undefined
+    const initialJobs=[]
+    if(canViewEmployees) initialJobs.push(loadMeta())
+    if(canViewEmployees||canViewAnalytics) initialJobs.push(loadAnalytics(),loadArchiveStats())
+    Promise.all(initialJobs).finally(()=>{lastAutoRefreshAtRef.current=Date.now()})
     const refreshIfStale=()=>{
       if(document.hidden||Date.now()-lastAutoRefreshAtRef.current<300000)return
       lastAutoRefreshAtRef.current=Date.now()
@@ -658,7 +701,7 @@ export default function AdminEmployeesPage(){
     window.addEventListener('focus',refreshIfStale)
     document.addEventListener('visibilitychange',refreshIfStale)
     return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
-  },[adminAccess.loading,canViewEmployees])
+  },[adminAccess.loading,canViewEmployees,canViewAnalytics])
   useEffect(()=>{
     if(adminAccess.loading||!canViewEmployees)return
     loadList(1,pageSize,{nextFilters:appliedFilters})
@@ -696,16 +739,16 @@ export default function AdminEmployeesPage(){
   },[tab,canViewAudit])
 
   useEffect(()=>{
-    if(!canViewEmployees||tab!=='人员分析') return
+    if(!canViewAnalytics||tab!=='人员分析') return
     const t=setTimeout(()=>loadPeopleAnalytics(appliedAnalysisFilters),80)
     return()=>clearTimeout(t)
-  },[tab,canViewEmployees])
+  },[tab,canViewAnalytics])
 
   useEffect(()=>{
-    if(!canViewEmployees||tab!=='人员分析') return
+    if(!canViewAnalytics||tab!=='人员分析') return
     const t=setTimeout(()=>loadResignationAnalytics(appliedResignationAnalyticsFilters),100)
     return()=>clearTimeout(t)
-  },[tab,canViewEmployees])
+  },[tab,canViewAnalytics])
 
   useEffect(()=>{
     const handler=e=>{
@@ -1184,13 +1227,17 @@ export default function AdminEmployeesPage(){
       <div className="data-card">
         {loading?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
-            <thead><tr><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
-            <tbody>{rows.map(r=><tr key={r.id}>
-              <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
-              <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
-              <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
-              <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&meta.actions?.can_generate_activation_code&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
-            </tr>)}</tbody>
+            <thead><tr><th>等级</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
+            <tbody>{rows.map(r=>{
+              const risk=employeeRiskMeta(r)
+              return <tr key={r.id}>
+                <td>{risk?<span className={`employee-risk-badge ${risk.className}`} title={`累计错误 ${Number(r.total_error_count||0)} 笔`}>{risk.label}</span>:'—'}</td>
+                <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
+                <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
+                <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
+                <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&meta.actions?.can_generate_activation_code&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
+              </tr>
+            })}</tbody>
           </table>
         </div>}
         <Pagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={p=>{setPage(p);loadList(p,pageSize)}} onPageSize={setPageSize}/>
@@ -1684,12 +1731,21 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     if(!e.id)return
     let alive=true
     setProfileSummaryLoading(true)
-    supabase.rpc('admin_employee_profile_summary',{p_employee_id:e.id}).then(({data,error})=>{
+    Promise.all([
+      supabase.rpc('admin_employee_profile_summary',{p_employee_id:e.id}),
+      getAllErrorSummaryMap().catch(()=>new Map()),
+    ]).then(([{data,error},errorSummaryMap])=>{
       if(!alive)return
-      if(!error)setProfileSummary(data||null)
+      if(error)return
+      const summary=errorSummaryMap.get(text(e.employee_no).toUpperCase())
+      setProfileSummary({
+        ...(data||{}),
+        month_records:Number(summary?.month_error_count??data?.month_records??0),
+        total_errors:Number(summary?.total_error_count??data?.total_errors??0),
+      })
     }).finally(()=>alive&&setProfileSummaryLoading(false))
     return()=>{alive=false}
-  },[e.id])
+  },[e.id,e.employee_no])
   useEffect(()=>{
     if(!e.id||activeSection!=='exams'){return}
     let alive=true
