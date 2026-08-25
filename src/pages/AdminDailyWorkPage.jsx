@@ -33,6 +33,15 @@ const cleanAttachment = item => ({
   type:text(item?.type),
 })
 const safeFileName = name => text(name).replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'screenshot'
+const removeStoredPaths = async paths => {
+  if (!paths?.length) return null
+  try {
+    const { error } = await supabase.storage.from(BUCKET).remove(paths)
+    return error || null
+  } catch (error) {
+    return error
+  }
+}
 
 const blankDraft = type => ({
   report_type:type,
@@ -333,17 +342,21 @@ function LegacyDailyWorkPage() {
       const { error:saveError } = await request
       if (saveError) throw saveError
 
+      let cleanupWarning = ''
       if (modal.original) {
         const keptPaths = new Set(kept.map(item=>item.path))
         const removed = (modal.original.attachments || []).map(item=>item.path).filter(path=>path && !keptPaths.has(path))
-        if (removed.length) await supabase.storage.from(BUCKET).remove(removed)
+        const removeError = await removeStoredPaths(removed)
+        if (removeError) cleanupWarning = '报告已保存，但旧截图未能自动清理；截图已从报告隐藏，请联系管理员清理存储文件。'
       }
 
       closeEditor()
       await loadRows(true)
+      if (cleanupWarning) setError(cleanupWarning)
     } catch (err) {
-      if (uploaded.length) await supabase.storage.from(BUCKET).remove(uploaded.map(item=>item.path))
-      setError(err.message || '报告保存失败')
+      const rollbackError = await removeStoredPaths(uploaded.map(item=>item.path))
+      const cleanupNotice = rollbackError ? '；新上传截图未能自动回滚，请联系管理员清理存储文件' : ''
+      setError(`${err.message || '报告保存失败'}${cleanupNotice}`)
     } finally {
       setSaving(false)
     }
@@ -356,9 +369,10 @@ function LegacyDailyWorkPage() {
       const paths = (deleteTarget.attachments || []).map(item=>item.path).filter(Boolean)
       const { error:deleteError } = await supabase.from('daily_work_reports').delete().eq('id',deleteTarget.id)
       if (deleteError) throw deleteError
-      if (paths.length) await supabase.storage.from(BUCKET).remove(paths)
+      const removeError = await removeStoredPaths(paths)
       setDeleteTarget(null)
       await loadRows(true)
+      if (removeError) setError('报告已删除，但截图未能自动清理，请联系管理员处理存储文件。')
     } catch (err) {
       setError(err.message || '报告删除失败')
     } finally {
