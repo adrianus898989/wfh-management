@@ -35,6 +35,13 @@ const evidenceMime=file=>{
   return ({jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',gif:'image/gif',heic:'image/heic',heif:'image/heif',mp4:'video/mp4',mov:'video/quicktime',webm:'video/webm'}[ext]||'')
 }
 const safeFileName=name=>text(name).replace(/[^\p{L}\p{N}._-]+/gu,'-').replace(/^-+|-+$/g,'').slice(-90)||'evidence'
+const removeEvidencePaths=async paths=>{
+  if(!paths?.length)return null
+  try{
+    const {error}=await supabase.storage.from(EVIDENCE_BUCKET).remove(paths)
+    return error||null
+  }catch(error){return error}
+}
 const safeRemoteUrl=value=>{
   try{
     const parsed=new URL(text(value),globalThis.location?.origin||'https://invalid.local')
@@ -214,16 +221,25 @@ export function ConnectivityRecordsPage(){
       const rpc=editor==='edit'?'admin_connectivity_update':'admin_connectivity_create'
       const {data,error}=await supabase.rpc(rpc,{p_record:{...record,attachments}})
       if(error)throw error
+      let cleanupWarning=''
       if(editor==='edit'){
         const kept=new Set(attachments.map(item=>item.path))
         const removed=originalFiles.map(item=>item.path).filter(path=>path&&!kept.has(path))
-        if(removed.length)try{await supabase.storage.from(EVIDENCE_BUCKET).remove(removed)}catch{/* The saved record is authoritative; orphan cleanup is best effort. */}
-        flash(`已更新 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}记录。`)
+        if(removed.length){
+          const removeError=await removeEvidencePaths(removed)
+          if(removeError)cleanupWarning='记录已更新，但旧证明文件未能自动清理；文件已从记录隐藏，请联系管理员清理存储文件。'
+        }
+        flash(cleanupWarning||`已更新 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}记录。`)
       }else flash(`已记录 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}情况。`)
       resetEditor();setPage(1);await load(1,pageSize,applied)
     }catch(error){
-      if(uploaded.length)try{await supabase.storage.from(EVIDENCE_BUCKET).remove(uploaded.map(item=>item.path))}catch{/* Keep the original save error visible. */}
-      setFormError(error.message==='employee_not_found'?'找不到这个员工ID，请核对后再保存。':`保存失败：${error.message}`)
+      let rollbackError=null
+      if(uploaded.length){
+        rollbackError=await removeEvidencePaths(uploaded.map(item=>item.path))
+      }
+      const cleanupNotice=rollbackError?'；新上传证明文件未能自动回滚，请联系管理员清理存储文件':''
+      const saveMessage=error.message==='employee_not_found'?'找不到这个员工ID，请核对后再保存。':`保存失败：${error.message}`
+      setFormError(`${saveMessage}${cleanupNotice}`)
     }finally{setSaving(false)}
   }
   const confirmDelete=async()=>{
@@ -233,8 +249,12 @@ export function ConnectivityRecordsPage(){
       const {data,error}=await supabase.rpc('admin_connectivity_delete',{p_incident_id:deleteTarget.id})
       if(error)throw error
       const paths=(data?.attachments||evidenceItems(deleteTarget)).map(item=>item.path).filter(Boolean)
-      if(paths.length)try{await supabase.storage.from(EVIDENCE_BUCKET).remove(paths)}catch{/* The audited database deletion already succeeded. */}
-      setDeleteTarget(null);flash(`已删除 ${deleteTarget.employee_no} 的 ${deleteTarget.incident_date} ${typeLabel(deleteTarget.incident_type)}记录。`)
+      let cleanupWarning=''
+      if(paths.length){
+        const removeError=await removeEvidencePaths(paths)
+        if(removeError)cleanupWarning='记录已删除，但证明文件未能自动清理，请联系管理员处理存储文件。'
+      }
+      setDeleteTarget(null);flash(cleanupWarning||`已删除 ${deleteTarget.employee_no} 的 ${deleteTarget.incident_date} ${typeLabel(deleteTarget.incident_type)}记录。`)
       const nextPage=rows.length===1&&page>1?page-1:page
       setPage(nextPage);await load(nextPage,pageSize,applied)
     }catch(error){setDeleteError(`删除失败：${error.message}`)}finally{setDeleting(false)}
@@ -321,6 +341,7 @@ export function EmployeePayrollHistoryPanel({data,loading,error}){
 
 export function EmployeeProfileMetrics({data,loading}){
   const total=Number(data?.total_errors||0)
-  const grade=total>=20?'高频':total>=10?'重点':total>=5?'注意':total===0?'优秀':'正常'
+  // Keep the drawer grade identical to the employee list/filter thresholds.
+  const grade=total>=31?'高频':total>=16?'重点':total>=9?'注意':total===0?'优秀':'正常'
   return <div className="wfh-v2722-risk-summary" data-grade={grade} data-profile-metrics="1"><div className="risk-grade"><span>等级</span><strong>{grade}</strong></div><div><span>本月记录</span><strong>{loading?'—':`${Number(data?.month_records||0)} 笔`}</strong></div><div><span>总错误</span><strong>{loading?'—':`${total} 笔`}</strong></div><div><span>考试总次数</span><strong>{loading?'—':`${Number(data?.exam_attempts||0)} 次`}</strong></div><div><span>平均考试分数</span><strong>{loading?'—':data?.exam_average==null?'—':`${Number(data.exam_average).toFixed(1)} 分`}</strong></div></div>
 }
