@@ -6,6 +6,11 @@ const emptyAccess = {
   permissions: [],
   permissionKey: '',
   error: '',
+  roleCode: '',
+  employeeId: '',
+  dataScope: '',
+  teamId: '',
+  positionId: '',
   hasPermission: () => false,
   hasAnyPermission: () => false,
   hasAllPermissions: () => false,
@@ -38,10 +43,15 @@ export function AdminAccessProvider({ access, children }) {
     permissions,
     permissionKey,
     error: access?.error || '',
+    roleCode: access?.roleCode || '',
+    employeeId: access?.employeeId || '',
+    dataScope: access?.dataScope || '',
+    teamId: access?.teamId || '',
+    positionId: access?.positionId || '',
     hasPermission,
     hasAnyPermission,
     hasAllPermissions,
-  }), [access?.loading, access?.error, founder, permissions, permissionKey, hasPermission, hasAnyPermission, hasAllPermissions])
+  }), [access?.loading, access?.error, access?.roleCode, access?.employeeId, access?.dataScope, access?.teamId, access?.positionId, founder, permissions, permissionKey, hasPermission, hasAnyPermission, hasAllPermissions])
 
   return <AdminAccessContext.Provider value={value}>{children}</AdminAccessContext.Provider>
 }
