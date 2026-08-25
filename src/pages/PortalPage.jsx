@@ -21,6 +21,17 @@ const currentStaffShift = (profile = {}, schedule = {}, fallback) => {
   return text(profile.shift_name) || fallback
 }
 
+const staffTrainerId = (profile = {}) => {
+  return [
+    profile.online_trainer_employee_no,
+    profile.trainer_employee_no,
+    profile.online_trainer_account_id,
+    profile.trainer_account_id,
+    profile.online_trainer_id,
+    profile.trainer_id,
+  ].map(text).find(Boolean)
+}
+
 const staffPaymentMode = payment => {
   const descriptor = text(`${text(payment?.payment_mode)} ${text(payment?.transfer_using)}`).toLowerCase()
   if (/(usdt|trc\s*-?20|erc\s*-?20|crypto|虚拟币|泰达币)/i.test(descriptor)) return 'usdt'
@@ -447,6 +458,7 @@ export const StaffHome = () => {
   const attendance = selfAttendance.data || {}
   const connectivity = activity.data?.connectivity || {}
   const shiftDisplay = currentStaffShift(p, data?.schedule || data?.current_schedule || {}, t('portal.shiftUnset', 'Shift not set'))
+  const trainerId = staffTrainerId(p)
   const paymentMode = staffPaymentMode(pay)
   const toggleSensitive = async field => {
     if (revealed[field]) {
@@ -471,8 +483,7 @@ export const StaffHome = () => {
     [t('profile.group', 'Group'), p.group_name],
     [t('profile.position', 'Position'), p.position_name],
     [t('profile.shift', 'Shift'), shiftDisplay],
-    [t('profile.leader', 'Manager / team leader'), p.person_in_charge || p.leader_name],
-    [t('profile.trainer', 'Trainer'), p.online_trainer || p.trainer_name],
+    [t('profile.trainer', 'Trainer'), trainerId],
     [t('profile.platform', 'Platform'), p.platform_scope],
     [t('profile.workContent', 'Work scope'), p.work_content],
   ]
