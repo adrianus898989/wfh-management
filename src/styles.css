@@ -193,8 +193,7 @@ a{color:inherit;text-decoration:none}
 @keyframes authLine{to{background-position:220% 0}}
 .auth-language-row{display:flex;justify-content:flex-end;margin:-9px 0 10px}
 .auth-language-row .staff-language-switcher{padding:4px 5px 4px 8px;border:1px solid #e0e7f0;border-radius:9px;background:#f8fafc}
-.login-title{margin-bottom:5px;color:#17263e;font-size:25px;font-weight:850;letter-spacing:-.04em}
-.login-subtitle{margin-bottom:22px;color:#8492a5;font-size:11px;font-weight:650;letter-spacing:.02em}
+.login-title{margin-bottom:24px;color:#17263e;font-size:25px;font-weight:850;letter-spacing:-.04em}
 .login-field{display:block;margin-bottom:16px;color:#66768a;font-size:11px;font-weight:750}
 .login-input{display:flex;align-items:center;height:49px;margin-top:7px;border:1px solid #d8e1eb;border-radius:11px;background:#fbfcfe;transition:.16s}
 .login-input:focus-within{border-color:#4675d9;background:#fff;box-shadow:0 0 0 4px rgba(70,117,217,.075)}
@@ -224,6 +223,75 @@ a{color:inherit;text-decoration:none}
 }
 @keyframes gridShift{to{background-position:38px 38px}}
 
+/* Sign-in only: minimal copy, premium visual surface shared by both portals. */
+.login-page--signin{
+  padding:clamp(20px,4vw,48px);
+  background:
+    radial-gradient(ellipse at 50% -12%,rgba(76,111,255,.42),transparent 42%),
+    radial-gradient(circle at 12% 86%,rgba(0,194,209,.16),transparent 30%),
+    radial-gradient(circle at 88% 82%,rgba(112,73,255,.19),transparent 31%),
+    linear-gradient(145deg,#05111f 0%,#071d34 49%,#0b2b4c 100%);
+}
+.login-page--signin.staff-login-page{
+  background:
+    radial-gradient(ellipse at 50% -12%,rgba(53,132,236,.4),transparent 42%),
+    radial-gradient(circle at 12% 86%,rgba(0,202,190,.17),transparent 30%),
+    radial-gradient(circle at 88% 82%,rgba(91,82,245,.18),transparent 31%),
+    linear-gradient(145deg,#04131f 0%,#072238 49%,#0b304c 100%);
+}
+.login-page--signin:before,.login-page--signin:after{animation:none;pointer-events:none}
+.login-page--signin:before{
+  width:680px;height:680px;left:50%;top:47%;transform:translate(-50%,-50%);
+  opacity:.4;border:1px solid rgba(131,166,255,.14);box-shadow:0 0 140px rgba(44,103,236,.16),inset 0 0 140px rgba(27,73,171,.08)
+}
+.login-page--signin:after{
+  width:460px;height:460px;right:-290px;bottom:-290px;opacity:.62;
+  border:1px solid rgba(126,205,255,.13);box-shadow:none
+}
+.login-page--signin .login-shell:before{display:none}
+.login-shell--signin{width:min(418px,100%);animation:authEnter .42s cubic-bezier(.2,.75,.25,1) both}
+.login-shell--signin:after{
+  content:"";position:absolute;z-index:-1;inset:22% -22% -12%;pointer-events:none;
+  border-radius:50%;background:radial-gradient(ellipse,rgba(52,112,255,.28),transparent 66%);filter:blur(42px)
+}
+.login-page--signin .login-brand{gap:0;margin-bottom:-25px;letter-spacing:0;position:relative;z-index:2}
+.login-page--signin .login-logo{
+  width:58px;height:58px;border:1px solid rgba(255,255,255,.34);border-radius:18px;
+  background:linear-gradient(145deg,#3b83ff 0%,#5864ef 52%,#7857e9 100%);
+  box-shadow:0 18px 44px rgba(25,70,181,.42),inset 0 1px 1px rgba(255,255,255,.32);
+  animation:none;font-size:19px
+}
+.staff-login-page.login-page--signin .login-logo{background:linear-gradient(145deg,#238fc0 0%,#3978dc 52%,#645be3 100%)}
+.login-card--signin{
+  overflow:visible;padding:52px 32px 32px;border-color:rgba(255,255,255,.82);border-radius:22px;
+  background:linear-gradient(180deg,rgba(255,255,255,.985),rgba(247,250,255,.965));
+  box-shadow:0 38px 100px rgba(0,10,26,.42),inset 0 1px 0 rgba(255,255,255,.9)
+}
+.login-card--signin:before{display:none}
+.login-card--signin .login-title{margin:0 0 27px;text-align:center;font-size:26px;line-height:1.2;letter-spacing:-.045em}
+.login-card--signin .auth-language-row{position:absolute;top:16px;right:16px;margin:0}
+.login-card--signin .auth-language-row .staff-language-switcher{border-color:#e2e8f0;background:#f8fafc}
+.login-card--signin .login-field{margin-bottom:17px;color:#5e6f84;font-size:11px;letter-spacing:.015em}
+.login-card--signin .login-input{height:52px;margin-top:8px;border-color:#d8e2ee;border-radius:13px;background:#f5f8fc}
+.login-card--signin .login-input:focus-within{border-color:#4d78e8;box-shadow:0 0 0 4px rgba(65,111,226,.09),0 8px 22px rgba(39,76,145,.07)}
+.login-card--signin .login-input input{font-size:14px}
+.login-card--signin .login-input button{flex:0 0 auto;white-space:nowrap}
+.login-card--signin .login-error{margin:0 0 15px;line-height:1.45}
+.login-card--signin .login-submit{
+  position:relative;overflow:hidden;height:51px;margin-top:2px;border-radius:13px;
+  background:linear-gradient(100deg,#2f6fe4 0%,#456fe5 52%,#655de2 100%);
+  box-shadow:0 13px 28px rgba(52,93,210,.29)
+}
+.login-card--signin .login-submit:before{
+  content:"";position:absolute;inset:0;background:linear-gradient(115deg,transparent 26%,rgba(255,255,255,.2) 48%,transparent 70%);transform:translateX(-115%);transition:transform .55s ease
+}
+.login-card--signin .login-submit:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 16px 34px rgba(52,93,210,.35)}
+.login-card--signin .login-submit:hover:not(:disabled):before{transform:translateX(115%)}
+
+@media(prefers-reduced-motion:reduce){
+  .login-shell--signin{animation:none}
+}
+
 @media(max-width:1180px){
   .filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .kpi-grid,.module-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -250,4 +318,10 @@ a{color:inherit;text-decoration:none}
   .kpi-grid,.module-summary-grid,.staff-home-grid{grid-template-columns:1fr 1fr}
   .login-page{padding:18px}
   .login-card{padding:27px 22px 24px}
+  .login-page--signin{min-height:100dvh;padding:max(18px,env(safe-area-inset-top)) 16px max(18px,env(safe-area-inset-bottom))}
+  .login-page--signin .login-brand{margin-bottom:-23px}
+  .login-page--signin .login-logo{width:54px;height:54px;border-radius:17px}
+  .login-card--signin{padding:49px 22px 25px;border-radius:19px}
+  .login-card--signin .login-title{margin-bottom:23px;font-size:22px}
+  .login-card--signin .auth-language-row{top:13px;right:13px}
 }
