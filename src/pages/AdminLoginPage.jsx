@@ -6,6 +6,7 @@ import {
   supabase,
   touchSessionActivity,
 } from '../lib/supabase'
+import { readFunctionResponsePayload } from '../lib/functionErrors'
 
 function withTimeout(promise, ms = 25000) {
   let timer
@@ -54,7 +55,7 @@ export default function AdminLoginPage() {
 
     setLoading(true)
     try {
-      const { data, error } = await withTimeout(
+      const functionResult = await withTimeout(
         supabase.functions.invoke('admin-login', {
           body: {
             username: username.trim().toLowerCase(),
@@ -64,10 +65,8 @@ export default function AdminLoginPage() {
         })
       )
 
-      let responseData = data
-      if (error && !responseData?.error) {
-        try { responseData = await error.context?.json() } catch (_) {}
-      }
+      const { error } = functionResult
+      const responseData = await readFunctionResponsePayload(functionResult)
 
       if (error || !responseData?.access_token || !responseData?.refresh_token) {
         return setError(loginErrorMessage(responseData))

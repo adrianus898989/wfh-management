@@ -38,7 +38,7 @@ function loginError(req: Request, code: string, status: number) {
   return json(req, {
     error: loginMessages[code] || '登录失败，请稍后重试',
     code,
-  }, status)
+  }, status, { 'X-Login-Error-Code': code })
 }
 
 function safeErrorMeta(error: any) {
@@ -55,17 +55,19 @@ function cors(origin: string | null) {
     'Access-Control-Allow-Origin': origin === allowedOrigin ? origin : allowedOrigin,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Expose-Headers': 'X-Login-Error-Code',
     'Vary': 'Origin',
   }
 }
 
-function json(req: Request, body: unknown, status = 200) {
+function json(req: Request, body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       ...cors(req.headers.get('origin')),
       'Content-Type': 'application/json',
       'Cache-Control': 'no-store',
+      ...extraHeaders,
     },
   })
 }
