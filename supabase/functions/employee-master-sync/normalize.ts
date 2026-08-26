@@ -495,22 +495,12 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedEmplo
   }));
   if (actualCombinedHash !== expectedCombinedHash) throw new SnapshotValidationError("snapshot_hash_mismatch", { source: "combined" });
 
-  const homeByEmployeeId = new Map(
-    home.rows
-      .filter((row) => row.employee_id)
-      .map((row) => [row.employee_id, row] as const),
-  );
-  for (const scheduleRow of schedule.rows) {
-    if (!scheduleRow.employee_id) continue;
-    const homeRow = homeByEmployeeId.get(scheduleRow.employee_id);
-    if (homeRow && homeRow.name_key !== scheduleRow.name_key) {
-      throw new SnapshotValidationError("cross_source_name_mismatch", {
-        employee_id: scheduleRow.employee_id,
-        home_row: homeRow.source_row,
-        schedule_row: scheduleRow.source_row,
-      });
-    }
-  }
+  // Employee ID is the cross-source identity key. The current-staff source
+  // owns the official name, while the schedule frequently contains aliases,
+  // shortened names, localized names, or minor spelling differences. The RPC
+  // records those name differences as reconciliation issues and still applies
+  // the ID-matched schedule assignment; rejecting here would block the entire
+  // complete snapshot because of one harmless display-name variation.
 
   return {
     request_id: requestId,

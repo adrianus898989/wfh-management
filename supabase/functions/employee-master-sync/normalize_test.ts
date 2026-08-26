@@ -179,19 +179,15 @@ Deno.test("normalizes NFKC employee IDs and removes zero-width characters", asyn
   assert(result.schedule_rows[0].employee_id === "WD009", "schedule normalized ID mismatch");
 });
 
-Deno.test("fails the complete snapshot when the same cross-source ID has different names", async () => {
+Deno.test("keeps same-ID rows when cross-source names differ", async () => {
   const home = homeValues(baseHomeRows);
   const schedule = scheduleValues([[...baseScheduleRows[0].slice(0, 6), "Different Person", ...baseScheduleRows[0].slice(7)]]);
   const dateValues = [["", ""], ["", ""], ["2026-08-01", ""]];
-  let error: unknown;
-  try {
-    await normalizeSnapshot(await payloadFor(home, schedule, dateValues));
-  } catch (caught) {
-    error = caught;
-  }
-  assert(error instanceof SnapshotValidationError && error.code === "cross_source_name_mismatch",
-    "cross-source identity disagreement did not fail closed");
-  assert((error as SnapshotValidationError).details.employee_id === "WD001", "mismatch employee ID missing");
+  const result = await normalizeSnapshot(await payloadFor(home, schedule, dateValues));
+  assert(result.home_rows[0].employee_id === "WD001", "home identity was not retained");
+  assert(result.home_rows[0].name === "Alice A", "official home name was changed");
+  assert(result.schedule_rows[0].employee_id === "WD001", "schedule identity was not retained");
+  assert(result.schedule_rows[0].name === "Different Person", "schedule source evidence was changed");
 });
 
 Deno.test("allows a historical resigned row without ID but rejects an active one", async () => {

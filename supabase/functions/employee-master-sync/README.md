@@ -8,11 +8,16 @@ Google sources:
 - `1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA`, gid `1457335551`,
   `填表!A:M`
 
-The current-staff source owns official identity and explicit status evidence.
+The current-staff source owns official identity, the official display name, and explicit status evidence.
 The schedule owns live assignment fields and can add an ID-backed schedule-only
 employee only when `工作内容` includes `现场人员`. Duplicate IDs, source/header
 drift, partial reads and large source outages fail closed before canonical rows
 change.
+
+Cross-source rows are joined by normalized employee ID. A differing schedule
+name is retained in the source snapshot and recorded as a
+`cross_source_name_mismatch` reconciliation issue, but it does not block the
+complete snapshot or replace the official current-staff name.
 
 The endpoint is intended for deployment with JWT verification disabled because
 Google Apps Script cannot mint a Supabase JWT. It authenticates the dedicated
