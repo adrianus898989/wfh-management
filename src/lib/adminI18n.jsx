@@ -35,6 +35,7 @@ const english = {
   '员工档案': 'Employee records',
   '人员分析': 'People analytics',
   '停电 / 断网记录': 'Power / internet',
+  '预警记录': 'Warning records',
   '离职记录': 'Resignations',
   '操作日志': 'Audit log',
   '统计报表': 'Reports',

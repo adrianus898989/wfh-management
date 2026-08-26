@@ -1,5 +1,6 @@
 import { supabase } from './lib/supabase'
 import { getAllErrorSummaryMap } from './lib/errorSummaryStore'
+import { legacyErrorTables } from './lib/legacyErrorTableScope'
 
 const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
@@ -17,10 +18,9 @@ const riskInfo=value=>{
   }
 }
 
-let stopped=false,scheduled=false,riskFilter=''
+let stopped=false,scheduled=false
 let summaries={at:0,retryAt:0,map:new Map()}
 let summaryRequest=null
-let employeeListCache={key:'',at:0,rows:[]}
 const originalInvoke=supabase.functions.invoke.bind(supabase.functions)
 
 function addStyles(){
@@ -48,17 +48,8 @@ function addStyles(){
   .wfh-error-history{width:min(1050px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 26px 80px rgba(7,23,46,.34)}
   .wfh-error-history header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;border-bottom:1px solid #e5ecf4}.wfh-error-history header h3{margin:0;color:#203a5b;font-size:16px;white-space:nowrap}.wfh-error-history-head-main{display:flex;align-items:center;gap:18px;min-width:0;flex:1}.wfh-error-history-stats{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}.wfh-error-history-stat{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:0 9px;border:1px solid #dce6f2;border-radius:8px;background:#f7faff;color:#71839a;font-size:9px;font-weight:750;white-space:nowrap}.wfh-error-history-stat b{color:#244a79;font-size:12px}.wfh-error-history header>button{flex:0 0 auto;width:34px;height:34px;border:0;border-radius:9px;background:#eef3f8;color:#667b95;font-size:20px;cursor:pointer}
   .wfh-error-history-body{overflow:auto;padding:12px 14px 16px}.wfh-error-history table{width:100%;border-collapse:collapse;font-size:10px}.wfh-error-history th{padding:8px;background:#f5f8fc;color:#687d98;text-align:left;white-space:nowrap}.wfh-error-history td{padding:8px;border-top:1px solid #edf1f6;color:#344d6a;vertical-align:top}.wfh-error-history .wrap{white-space:normal;word-break:break-word;min-width:180px}
-  .wfh-employee-risk-filter{min-width:0}
-  .wfh-employee-risk-filter select{width:100%;height:40px;border:1px solid #d5e0ec;border-radius:9px;background:#fff;padding:0 10px;color:#314b68;font-size:11px}
-  .employee-core-search-grid{grid-template-columns:150px repeat(4,minmax(170px,1fr))!important;align-items:end!important}
-  .employee-core-search-grid>.filter-toolbar-actions{grid-column:1/-1!important;justify-content:flex-end!important;margin-top:0!important;padding-top:1px!important}
-  .v24-advanced-filter-grid{grid-template-columns:repeat(5,minmax(0,1fr))!important}
-  .employee-master-table{width:100%!important;min-width:0!important;table-layout:auto!important}
-  .employee-master-table th,.employee-master-table td{padding-left:7px!important;padding-right:7px!important;font-size:10px!important;white-space:normal!important;line-height:1.35!important}
-  .employee-master-table th{font-size:9px!important;white-space:nowrap!important}.employee-master-table td:nth-child(2),.employee-master-table td:nth-child(10),.employee-master-table td:nth-child(11){white-space:nowrap!important}
-  .employee-master-table .operator-chip{max-width:125px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important}.employee-master-table .row-actions{white-space:nowrap}
-  @media(max-width:1450px){.employee-core-search-grid{grid-template-columns:150px repeat(2,minmax(185px,1fr))!important}.v24-advanced-filter-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}.wfh-error-primary{grid-template-columns:repeat(5,minmax(140px,1fr))}.wfh-error-advanced{grid-template-columns:repeat(4,minmax(135px,1fr))}}
-  @media(max-width:1050px){.employee-core-search-grid{grid-template-columns:1fr 1fr!important}.v24-advanced-filter-grid{grid-template-columns:1fr 1fr!important}.wfh-error-primary,.wfh-error-advanced{grid-template-columns:1fr 1fr}.wfh-error-primary>input:first-child{grid-column:1/-1}.wfh-error-unified .meta{text-align:left}.wfh-error-history-head-main{align-items:flex-start;flex-direction:column;gap:8px}.wfh-error-history header h3{white-space:normal}}
+  @media(max-width:1450px){.wfh-error-primary{grid-template-columns:repeat(5,minmax(140px,1fr))}.wfh-error-advanced{grid-template-columns:repeat(4,minmax(135px,1fr))}}
+  @media(max-width:1050px){.wfh-error-primary,.wfh-error-advanced{grid-template-columns:1fr 1fr}.wfh-error-primary>input:first-child{grid-column:1/-1}.wfh-error-unified .meta{text-align:left}.wfh-error-history-head-main{align-items:flex-start;flex-direction:column;gap:8px}.wfh-error-history header h3{white-space:normal}}
   `
   document.head.appendChild(s)
 }
@@ -92,33 +83,17 @@ function styleChip(chip,summary){
   chip.style.setProperty('--risk-color',info.color);chip.style.setProperty('--risk-bg',info.bg);chip.style.setProperty('--risk-border',info.border)
   chip.dataset.count=String(info.n);chip.dataset.key=info.key
 }
-function riskChip(id,summary,context,name){
+function riskChip(id,summary){
   const chip=document.createElement('span');chip.className='wfh-stable-risk';styleChip(chip,summary)
-  if(context==='errors'||Number(summary?.total_error_count||0)>0){chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0;const open=()=>context==='errors'?filterErrorsTo(id):openEmployeeErrorHistory(id,name||id,summary);chip.addEventListener('click',e=>{e.stopPropagation();open()});chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}})}
+  chip.classList.add('is-clickable');chip.setAttribute('role','button');chip.tabIndex=0
+  chip.addEventListener('click',e=>{e.stopPropagation();filterErrorsTo(id)})
+  chip.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();filterErrorsTo(id)}})
   return chip
 }
 
-function dedupeEmployeeRiskColumns(table){
-  if(!table?.classList.contains('employee-master-table'))return
-  const head=table.querySelector('thead tr');if(!head)return
-  const gradeIndexes=[...head.children].map((cell,index)=>text(cell.textContent)==='等级'?index:-1).filter(index=>index>=0)
-  for(const index of gradeIndexes.slice(1).sort((a,b)=>b-a)){
-    head.children[index]?.remove()
-    for(const row of table.querySelectorAll('tbody tr'))row.children[index]?.remove()
-  }
-  const kept=[...head.children].find(cell=>text(cell.textContent)==='等级')
-  if(kept){kept.classList.remove('wfh-v2722-risk-head');kept.classList.add('wfh-risk-head')}
-  for(const row of table.querySelectorAll('tbody tr')){
-    const extra=[...row.querySelectorAll(':scope > .wfh-risk-cell,:scope > .wfh-v2722-risk-cell')]
-    for(const cell of extra.slice(1))cell.remove()
-    if(extra[0]){extra[0].classList.remove('wfh-v2722-risk-cell');extra[0].classList.add('wfh-risk-cell')}
-  }
-}
 async function ensureRiskColumns(){
   const map=await getSummaryMap()
-  for(const table of document.querySelectorAll('.employee-master-table,.rp-errors-table')){
-    dedupeEmployeeRiskColumns(table)
-    const context=table.classList.contains('rp-errors-table')?'errors':'employees'
+  for(const table of legacyErrorTables(document)){
     const head=table.querySelector('thead tr')
     if(head&&!head.querySelector(':scope > .wfh-risk-head')){const th=document.createElement('th');th.className='wfh-risk-head';th.textContent='等级';th.title='累计：0 优秀 / 1–8 正常 / 9–15 注意 / 16–30 重点 / 31+ 高频';head.insertBefore(th,head.firstChild)}
     for(const tr of table.querySelectorAll('tbody tr')){
@@ -126,11 +101,10 @@ async function ensureRiskColumns(){
       if(!cell){cell=document.createElement('td');cell.className='wfh-risk-cell';tr.insertBefore(cell,tr.firstChild)}
       const idCell=cell.nextElementSibling
       const id=upper(idCell?.querySelector('button')?.textContent||idCell?.textContent)
-      const name=text(idCell?.nextElementSibling?.textContent)
       if(!id)continue
       const summary=map.get(id)||null
       const sig=`${id}|${Number(summary?.month_error_count||0)}|${Number(summary?.last_30d_error_count||0)}|${Number(summary?.total_error_count||0)}`
-      if(cell.dataset.sig!==sig){cell.dataset.sig=sig;cell.replaceChildren(riskChip(id,summary,context,name))}
+      if(cell.dataset.sig!==sig){cell.dataset.sig=sig;cell.replaceChildren(riskChip(id,summary))}
     }
   }
 }
@@ -242,24 +216,6 @@ function compactErrorTable(){
   })
 }
 
-function triggerEmployeeReload(){
-  const first=[...document.querySelectorAll('.pagination-actions button')].find(x=>text(x.textContent)==='首页'&&!x.disabled);if(first)first.click()
-  setTimeout(()=>document.querySelector('.employee-refresh-action')?.click(),60)
-}
-function ensureEmployeeRiskFilter(){
-  const grid=document.querySelector('.employee-core-search-grid');if(!grid)return
-  if(grid.querySelector('[data-native-risk-filter="1"]')){grid.querySelectorAll('.wfh-employee-risk-filter').forEach(box=>box.remove());return}
-  let box=grid.querySelector('.wfh-employee-risk-filter')
-  if(!box){box=document.createElement('label');box.className='pro-filter-field wfh-employee-risk-filter';const title=document.createElement('span');title.textContent='等级';const sel=document.createElement('select');[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']].forEach(([value,label])=>{const option=document.createElement('option');option.value=value;option.textContent=label;sel.appendChild(option)});sel.value=riskFilter;sel.addEventListener('change',()=>{riskFilter=sel.value;employeeListCache={key:'',at:0,rows:[]};triggerEmployeeReload()});box.append(title,sel);grid.insertBefore(box,grid.firstChild)}
-}
-async function riskFilteredList(body){
-  const requestedPage=Math.max(1,Number(body.page||1)),requestedSize=Number(body.page_size||20),filters={...(body.filters||{})}
-  const key=JSON.stringify({riskFilter,filters})
-  let matched=employeeListCache.key===key&&Date.now()-employeeListCache.at<15000?employeeListCache.rows:null
-  if(!matched){const map=await getSummaryMap(),all=[];let page=1,pages=1;do{const res=await originalInvoke('admin-employees',{body:{action:'list',page,page_size:500,filters}});if(res.error||res.data?.error)return res;all.push(...(res.data?.rows||[]).filter(r=>text(r.source_type)!=='google_deleted'));pages=Math.max(1,Number(res.data?.pages||1));page+=1}while(page<=pages&&page<=50);matched=all.filter(r=>riskKey(map.get(upper(r.employee_no))?.total_error_count||0)===riskFilter);employeeListCache={key,at:Date.now(),rows:matched}}
-  const start=(requestedPage-1)*requestedSize
-  return {data:{rows:matched.slice(start,start+requestedSize),total:matched.length,page:requestedPage,page_size:requestedSize,pages:Math.max(1,Math.ceil(matched.length/requestedSize))},error:null}
-}
 function patchInvoke(){
   if(supabase.functions.__wfhStableRiskPatched)return
   supabase.functions.invoke=async(name,options={})=>{
@@ -274,12 +230,11 @@ async function run(){
   if(stopped)return
   scheduled=false
   if(document.querySelector('.rp-errors-table[data-native-errors-v2723]'))return
-  const employeeTable=document.querySelector('.employee-master-table')
   const legacyErrorTable=document.querySelector('.rp-errors-table')
-  if(!employeeTable&&!legacyErrorTable)return
-  if(legacyErrorTable)buildErrorFilter()
+  if(!legacyErrorTable)return
+  buildErrorFilter()
   await ensureRiskColumns()
-  if(legacyErrorTable)compactErrorTable()
+  compactErrorTable()
 }
 function schedule(){if(stopped||scheduled)return;scheduled=true;setTimeout(run,120)}
 export function startStableErrorUiEnhancer(){

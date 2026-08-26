@@ -1,6 +1,11 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react'
 import {createPortal} from 'react-dom'
 import {supabase} from '../lib/supabase'
+import {
+  onlineTrainingIdentityKey,
+  onlineTrainingReportMatchesTrainer,
+  onlineTrainingReportTrainerName,
+} from '../lib/onlineTrainingIdentity'
 import {Pagination} from '../components/DataPageControls'
 import {EmployeeDrawer} from './AdminEmployeesPage'
 import '../styles-online-training.css'
@@ -34,7 +39,7 @@ const removeStoredPaths=async paths=>{
   }catch(error){return error}
 }
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
-const identityKey=value=>text(value).toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu,'')
+const identityKey=onlineTrainingIdentityKey
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
 const defaultFilters=()=>({...EMPTY_FILTERS,from:isoMonthStart(),to:isoToday()})
@@ -111,7 +116,7 @@ function groupTrainerPeople(people,reports=null){
       _report_ids:new Set(),_report_dates:new Set(),_member_ids:new Set(),
     }))
     ;(reports||[]).forEach(report=>{
-      const trainerName=text(report.trainer_name)||text(report.author_name)||text(report.author_employee_no)||'未填写线上培训'
+      const trainerName=onlineTrainingReportTrainerName(report)||'未填写线上培训'
       const trainerKey=identityKey(trainerName)||`missing:${trainerName}`
       const current=grouped.get(trainerKey)||{
         trainer_key:trainerKey,trainer_name:trainerName,report_count:0,recorded_days:0,
@@ -667,7 +672,7 @@ export default function OnlineTrainingPage(){
         })))
         batch.forEach(next=>rows.push(...(next?.rows||[])))
       }
-      const exact=rows.filter(row=>identityKey(row.trainer_name||row.author_name)===trainer.trainer_key)
+      const exact=rows.filter(row=>onlineTrainingReportMatchesTrainer(row,trainer.trainer_key))
       const hydrated=await hydrateAttachments(exact)
       if(requestId!==trainerHistoryRequestRef.current)return
       setTrainerHistory({trainer,loading:false,rows:hydrated,error:''})

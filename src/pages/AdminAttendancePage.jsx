@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
 import { attendanceAmount, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
 import { PERMISSIONS } from '../config/permissions'
+import { adjustmentReason } from '../lib/adjustmentPresentation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { supabase } from '../lib/supabase'
 import { EmployeeDrawer } from './AdminEmployeesPage'
@@ -250,7 +251,7 @@ function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,load
     <div className="attendance-filter-main">
       <label className="attendance-search attendance-search-id"><span>员工 ID</span><div><i>⌕</i><input value={draft.employee_no} onChange={event=>update('employee_no',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder="输入员工 ID"/></div></label>
       <label className="attendance-search attendance-search-name"><span>员工姓名</span><div><i>⌕</i><input value={draft.employee_name} onChange={event=>update('employee_name',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder="输入姓名"/></div></label>
-      <label className="attendance-search attendance-search-content"><span>原因 / 备注</span><div><i>⌕</i><input value={draft.search} onChange={event=>update('search',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder="搜索原因或备注内容"/></div></label>
+      <label className="attendance-search attendance-search-content"><span>{tab==='奖金 / 扣款'?'原因':'原因 / 备注'}</span><div><i>⌕</i><input value={draft.search} onChange={event=>update('search',event.target.value)} onKeyDown={event=>event.key==='Enter'&&onQuery()} placeholder={tab==='奖金 / 扣款'?'搜索原因内容':'搜索原因或备注内容'}/></div></label>
       <button type="button" className="primary-action" onClick={onQuery} disabled={loading}>{loading?'查询中…':'查询'}</button>
       <button type="button" className="secondary-action" onClick={onReset} disabled={loading}>重置</button>
       <button type="button" className="attendance-filter-toggle" onClick={()=>setAdvanced(value=>!value)}>{advanced?'收起筛选':'更多筛选'}</button>
@@ -287,7 +288,7 @@ function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail,canEdit
     <header><div><h2>{adjustment?'奖金 / 扣款明细':'考勤记录明细'}</h2><p>{adjustment?'Supabase 保存与 Google 写入状态分开显示；仅协议内新增记录可以编辑。':'员工、组织与说明分列展示；点击原因或备注可查看完整文字。'}</p></div><span>{loading?'读取中…':`${rows.length} 条 / 本页`}</span></header>
     {!hasData&&loading?<div className="attendance-table-state">正在读取记录…</div>:!rows.length?<div className="attendance-table-state">当前筛选条件下暂无记录</div>:<div className="attendance-table-scroll"><table className={adjustment?'attendance-detail-table adjustment':'attendance-detail-table'}>
       {adjustment&&<colgroup><col className="adjustment-date-col"/><col className="adjustment-hire-col"/><col className="adjustment-employee-col"/><col className="adjustment-type-col"/><col className="adjustment-status-col"/><col className="adjustment-organization-col"/><col className="adjustment-money-col"/><col className="adjustment-note-col"/><col className="adjustment-action-col"/></colgroup>}
-      <thead>{adjustment?<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>奖金 / 扣款 · 金额</th><th>备注</th><th>同步 / 操作</th></tr>:<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>负责人</th><th>原因</th><th>备注</th></tr>}</thead>
+      <thead>{adjustment?<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>奖金 / 扣款 · 金额</th><th>原因</th><th>同步 / 操作</th></tr>:<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>负责人</th><th>原因</th><th>备注</th></tr>}</thead>
       <tbody>{rows.map((row,index)=>{const sync=adjustmentSyncState(row);return <tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <td className={adjustment?'attendance-adjustment-date-cell':''}><div className="attendance-event-cell"><strong>{row.event_date||'—'}</strong>{!adjustment&&<span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span>}{!adjustment&&row.is_mirror&&<em>镜像</em>}</div></td>
         <td><span className="attendance-hire-date">{text(row.hire_date).slice(0,10)||'—'}</span></td>
@@ -298,7 +299,7 @@ function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail,canEdit
         {!adjustment&&<td>{row.manager||'—'}</td>}
         {adjustment&&<td className="attendance-adjustment-money-cell"><div className="attendance-adjustment-money"><span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span><div className={`attendance-amount ${text(row.event_kind).toLowerCase()}`}><strong>{attendanceAmount(row)}</strong>{row.raw_amount&&text(row.raw_amount)!==text(row.amount)&&<span>原值 {row.raw_amount}</span>}</div></div></td>}
         {!adjustment&&<td><button type="button" className="attendance-copy-button" title="查看完整原因" onClick={()=>onDetail(row)}>{row.reason||'—'}</button></td>}
-        <td className={adjustment?'attendance-adjustment-note-cell':''}><button type="button" className={`attendance-copy-button note${adjustment?' adjustment-note':''}`} title="点击查看完整备注" onClick={()=>onDetail(row)}>{row.note||'—'}</button></td>
+        <td className={adjustment?'attendance-adjustment-note-cell':''}><button type="button" className={`attendance-copy-button note${adjustment?' adjustment-note':''}`} title={adjustment?'点击查看完整原因':'点击查看完整备注'} onClick={()=>onDetail(row)}>{adjustment?adjustmentReason(row):(row.note||'—')}</button></td>
         {adjustment&&<td className="attendance-adjustment-action-cell"><span className={`attendance-adjustment-sync ${sync.key}`}>{sync.label}</span>{canEditAdjustment&&managedAdjustment(row)&&<button type="button" className="attendance-adjustment-edit" onClick={()=>onEditAdjustment(row)}>编辑</button>}</td>}
       </tr>})}</tbody>
     </table></div>}
@@ -312,8 +313,10 @@ function AttendanceRecordModal({row,adjustment,onClose}){
     <div className="attendance-modal-facts">
       <span><small>入职日期</small><b>{text(row.hire_date).slice(0,10)||'—'}</b></span><span><small>员工类型 / 国家</small><b>{[employeeTypeLabel(row),row.country].filter(Boolean).join(' · ')||'—'}</b></span><span><small>员工状态</small><b>{employeeStatusLabel(row.employee_status)}</b></span><span><small>团队 / 岗位</small><b>{[row.team_name,row.position_name].filter(Boolean).join(' · ')||'—'}</b></span>{!adjustment&&<span><small>负责人</small><b>{row.manager||'—'}</b></span>}{adjustment&&<span><small>金额 / 原值</small><b>{attendanceAmount(row)}{row.raw_amount?` · ${row.raw_amount}`:''}</b></span>}
     </div>
-    {!adjustment&&<section><small>完整原因</small><p>{row.reason||'—'}</p></section>}
-    <section><small>完整备注</small><p>{row.note||'—'}</p></section>
+    {adjustment?<section><small>完整原因</small><p>{adjustmentReason(row)}</p></section>:<>
+      <section><small>完整原因</small><p>{row.reason||'—'}</p></section>
+      <section><small>完整备注</small><p>{row.note||'—'}</p></section>
+    </>}
     <footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer>
   </div></div>
 }
@@ -399,7 +402,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
       <label><span>日期 <em>必填</em></span><input type="date" min={`${draft.source_month}-01`} max={`${draft.source_month}-${monthEnd}`} value={draft.event_date} disabled={state.saving} onChange={event=>update('event_date',event.target.value)} required/></label>
       <label><span>币种 <em>固定</em></span><input value={draft.currency} readOnly aria-readonly="true"/></label>
       <label><span>金额 <em>必填</em></span><input type="number" step="0.01" min="-100000000" max="100000000" value={draft.amount} disabled={state.saving} onChange={event=>update('amount',event.target.value)} placeholder="例如 50 或 -20" required/><small>{Number(draft.amount)>0?'将记录为奖金':Number(draft.amount)<0?'将记录为扣除':'不能填写 0'}</small></label>
-      <label className="adjustment-editor-note"><span>备注 <em>必填</em></span><textarea rows="4" maxLength="4000" value={draft.note} disabled={state.saving} onChange={event=>update('note',event.target.value)} placeholder="说明奖金或扣除原因" required/></label>
+      <label className="adjustment-editor-note"><span>原因 <em>必填</em></span><textarea rows="4" maxLength="4000" value={draft.note} disabled={state.saving} onChange={event=>update('note',event.target.value)} placeholder="说明奖金或扣除原因" required/><small>保存到 Google 表格的“备注”列</small></label>
     </div>
     <footer><div><b>保存结果会明确分两步显示</b><span>Supabase 已保存 → Google 待同步 / 已同步</span></div><button type="button" className="secondary-action" disabled={state.saving} onClick={onClose}>取消</button><button type="submit" className="primary-action" disabled={state.loading||state.saving}>{state.saving?'正在保存 Supabase…':editing?'保存修改':'保存并进入同步队列'}</button></footer>
   </form></div>

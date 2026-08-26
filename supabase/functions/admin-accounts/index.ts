@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { decideBackendDataScope, delegatedBackendDataScopeError } from './scope.ts'
 
 const allowedOrigin = 'https://adrianus898989.github.io'
 
@@ -84,6 +85,7 @@ Deno.serve(async (req) => {
 
     const { data: userData, error: userError } = await userClient.auth.getUser()
     if (userError || !userData.user) return json(req, { error: '登录已失效' }, 401)
+    const authenticatedUser = userData.user
 
     const admin = createClient(supabaseUrl, secretKey, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -119,6 +121,7 @@ Deno.serve(async (req) => {
     if (callerError || !caller || !caller.active || !caller.backend_enabled) {
       return json(req, { error: '无后台权限' }, 403)
     }
+    const activeCaller = caller
 
     const callerRole = Array.isArray(caller.roles) ? caller.roles[0] : caller.roles
     const isFounder = callerRole?.code === 'founder'
@@ -252,8 +255,8 @@ Deno.serve(async (req) => {
         const [allEmployees, teamRes, scopeTeamRes, scopeEmployeeRes] = await Promise.all([
           getAllEmployeeRows(),
           admin.from('teams').select('id,name').order('name').limit(5000),
-          admin.from('user_scope_teams').select('team_id').eq('auth_user_id', userData.user.id),
-          admin.from('user_scope_employees').select('employee_id').eq('auth_user_id', userData.user.id),
+          admin.from('user_scope_teams').select('team_id').eq('auth_user_id', authenticatedUser.id),
+          admin.from('user_scope_employees').select('employee_id').eq('auth_user_id', authenticatedUser.id),
         ])
 
         if (teamRes.error) throw teamRes.error
@@ -266,22 +269,22 @@ Deno.serve(async (req) => {
         const allowedEmployeeIds = new Set<string>()
         const delegableTeamIds = new Set<string>()
 
-        if (isFounder || caller.data_scope === 'all') {
+        if (isFounder || activeCaller.data_scope === 'all') {
           allEmployees.forEach((employee: any) => allowedEmployeeIds.add(employee.id))
           allTeams.forEach((team: any) => delegableTeamIds.add(team.id))
-        } else if (caller.data_scope === 'self') {
-          if (caller.employee_id && employeeMap.has(caller.employee_id)) {
-            allowedEmployeeIds.add(caller.employee_id)
+        } else if (activeCaller.data_scope === 'self') {
+          if (activeCaller.employee_id && employeeMap.has(activeCaller.employee_id)) {
+            allowedEmployeeIds.add(activeCaller.employee_id)
           }
-        } else if (caller.data_scope === 'own_team') {
-          const me: any = caller.employee_id ? employeeMap.get(caller.employee_id) : null
+        } else if (activeCaller.data_scope === 'own_team') {
+          const me: any = activeCaller.employee_id ? employeeMap.get(activeCaller.employee_id) : null
           if (me?.team_id) {
             delegableTeamIds.add(me.team_id)
             allEmployees.forEach((employee: any) => {
               if (employee.team_id === me.team_id) allowedEmployeeIds.add(employee.id)
             })
           }
-        } else if (caller.data_scope === 'assigned_teams') {
+        } else if (activeCaller.data_scope === 'assigned_teams') {
           const assignedTeamIds = new Set((scopeTeamRes.data || []).map((row: any) => row.team_id))
           const assignedEmployeeIds = new Set((scopeEmployeeRes.data || []).map((row: any) => row.employee_id))
           assignedTeamIds.forEach((teamId: string) => {
@@ -323,10 +326,11 @@ Deno.serve(async (req) => {
     ) {
       const scope = await getScopeContext()
 
-      if (!isFounder && dataScope === 'all') {
+      const delegationError = delegatedBackendDataScopeError(isFounder, dataScope, employeeId)
+      if (delegationError === 'founder_required') {
         throw new Error('只有 Founder 可以授予全部数据范围')
       }
-      if (!isFounder && !employeeId) {
+      if (delegationError === 'employee_required') {
         throw new Error('非 Founder 创建或编辑账号时必须关联可管理的员工档案')
       }
       if (employeeId) await requireEmployeeInScope(employeeId)
@@ -845,7 +849,7 @@ Deno.serve(async (req) => {
       const password = String(input.password || '')
       const roleId = cleanString(input.role_id)
       const employeeId = cleanString(input.employee_id) || null
-      const dataScope = cleanString(input.data_scope || 'own_team')
+      const scopeDecision = decideBackendDataScope(input.data_scope, employeeId)
       const otpRequired = Boolean(input.otp_required)
       const teamIds = cleanStringList(input.team_ids)
       const employeeIds = cleanStringList(input.employee_ids)
@@ -856,9 +860,12 @@ Deno.serve(async (req) => {
       if (!passwordOk(password)) {
         throw createAccountError('密码至少10位，并包含大小写字母、数字和特殊符号')
       }
-      if (!['all', 'own_team', 'assigned_teams', 'self'].includes(dataScope)) {
-        throw createAccountError('管理范围不正确')
+      if (!scopeDecision.ok) {
+        throw createAccountError(scopeDecision.reason === 'employee_required'
+          ? '“仅本人”或“自己团队”范围必须关联员工档案'
+          : '管理范围不正确')
       }
+      const dataScope = scopeDecision.dataScope
 
       const { data: role, error: roleError } = await admin.from('roles')
         .select('id,code,active').eq('id', roleId).maybeSingle()
@@ -976,11 +983,18 @@ Deno.serve(async (req) => {
       const target = cleanString(body.auth_user_id)
       const roleId = cleanString(body.role_id)
       const employeeId = cleanString(body.employee_id) || null
-      const requestedDataScope = cleanString(body.data_scope || 'own_team')
+      const scopeDecision = decideBackendDataScope(body.data_scope, employeeId)
       const teamIds = cleanStringList(body.team_ids)
       const employeeIds = cleanStringList(body.employee_ids)
 
-      if (!['all', 'own_team', 'assigned_teams', 'self'].includes(requestedDataScope)) return json(req, { error: '管理范围不正确' }, 400)
+      if (!scopeDecision.ok) {
+        return json(req, {
+          error: scopeDecision.reason === 'employee_required'
+            ? '“仅本人”或“自己团队”范围必须关联员工档案'
+            : '管理范围不正确',
+        }, 400)
+      }
+      const dataScope = scopeDecision.dataScope
 
       let current: any
       try {
@@ -997,13 +1011,6 @@ Deno.serve(async (req) => {
       if (!await roleCanBeAssigned(role.id, target)) {
         return json(req, { error: '只能授予权限严格低于当前账号的角色' }, 403)
       }
-
-      // A linked backend account always follows its employee's current team.
-      // This avoids stale hand-maintained team lists and prevents an account
-      // linked to one employee from being granted organization-wide access.
-      const dataScope = employeeId && role.code !== 'founder'
-        ? 'own_team'
-        : requestedDataScope
 
       let previousScope: { teamIds: string[], employeeIds: string[] }
       try {

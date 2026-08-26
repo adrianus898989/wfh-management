@@ -9,6 +9,7 @@ export const adminNavigation = [
       { label: '员工档案', to: `/admin/employees?tab=${enc('员工档案')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
       { label: '人员分析', to: `/admin/employees?tab=${enc('人员分析')}`, permissions: [PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW] },
       { label: '停电 / 断网记录', to: `/admin/employees?tab=${enc('停电 / 断网记录')}`, permissions: [PERMISSIONS.CONNECTIVITY_VIEW] },
+      { label: '预警记录', to: `/admin/employees?tab=${enc('预警记录')}`, permissions: [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW, PERMISSIONS.REPORT_VIEW, PERMISSIONS.ADJUSTMENT_VIEW, PERMISSIONS.ATTENDANCE_VIEW] },
       { label: '离职记录', to: `/admin/employees?tab=${enc('离职记录')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
       { label: '操作日志', to: `/admin/employees?tab=${enc('操作日志')}`, permissions: [PERMISSIONS.AUDIT_VIEW] },
     ],
@@ -52,6 +53,8 @@ export const adminNavigation = [
       { label: '待发布', to: `/admin/payroll?tab=${enc('待发布')}`, allPermissions: [PERMISSIONS.PAYROLL_VIEW], permissions: [PERMISSIONS.PAYROLL_APPROVE, PERMISSIONS.PAYROLL_PUBLISH] },
       { label: '已发布', to: `/admin/payroll?tab=${enc('已发布')}`, permissions: [PERMISSIONS.PAYROLL_VIEW] },
       { label: '导入记录', to: `/admin/payroll?tab=${enc('导入记录')}`, permissions: [PERMISSIONS.PAYROLL_VIEW] },
+      { label: '收款资料审核', to: `/admin/payroll?tab=${enc('收款资料审核')}`, permissions: [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
+      { label: '申请记录', to: `/admin/payroll?tab=${enc('申请记录')}`, permissions: [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_VIEW, PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
     ],
   },
   {

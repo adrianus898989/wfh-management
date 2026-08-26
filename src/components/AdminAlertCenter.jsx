@@ -1,0 +1,303 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Pagination } from './DataPageControls'
+import { useAdminAccess } from '../lib/adminAccess'
+import { useAdminI18n } from '../lib/adminI18n'
+import { adminAlertEmployeeTarget, adminAlertTarget } from '../lib/adminAlertRoutes'
+import { supabase } from '../lib/supabase'
+import '../styles-admin-alerts.css'
+
+const ALERT_PERMISSIONS = [
+  'payroll.payout_change.review',
+  'report.view',
+  'adjustment.view',
+  'attendance.view',
+]
+
+const TYPE_META = {
+  payout_change: { zh:'收款资料修改', en:'Payment change', icon:'款', tone:'blue' },
+  error_spike: { zh:'错误频率', en:'Error frequency', icon:'错', tone:'red' },
+  deduction_frequency: { zh:'扣款频率', en:'Deduction frequency', icon:'扣', tone:'orange' },
+  late_timeout_frequency: { zh:'迟到 / 超时', en:'Late / timeout', icon:'迟', tone:'orange' },
+  consecutive_rest: { zh:'连续公休', en:'Consecutive rest', icon:'休', tone:'violet' },
+  weekly_absence: { zh:'一周缺席', en:'Weekly absence', icon:'缺', tone:'red' },
+  monthly_leave: { zh:'月休假超限', en:'Monthly leave limit', icon:'假', tone:'violet' },
+}
+
+const SEVERITY_META = {
+  info: { zh:'通知', en:'Notice' },
+  warning: { zh:'预警', en:'Warning' },
+  critical: { zh:'重点预警', en:'Critical' },
+}
+
+const clean = value => String(value ?? '').trim()
+const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0
+const countText = value => numeric(value).toLocaleString(undefined, { maximumFractionDigits:1 })
+const eventName = (row, locale) => TYPE_META[row?.alert_type]?.[locale] || clean(row?.alert_type) || '—'
+const severityName = (row, locale) => SEVERITY_META[row?.severity]?.[locale] || clean(row?.severity) || '—'
+const formatTime = (value, locale) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return clean(value)
+  return new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'zh-CN', {
+    year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false,
+  }).format(date)
+}
+
+const alertErrorMessage = (error, locale, fallback) => {
+  const raw = clean(error?.message)
+  const messages = {
+    not_authenticated: { zh:'请重新登录后再试。', en:'Please sign in again.' },
+    session_not_current: { zh:'当前登录会话已失效，请重新登录。', en:'Your session has expired. Please sign in again.' },
+    permission_denied: { zh:'当前账号没有查看这些预警的权限。', en:'This account cannot view these warnings.' },
+    alert_not_found_or_out_of_scope: { zh:'预警不存在或已不在当前管理范围内。', en:'The warning is unavailable or outside your scope.' },
+  }
+  return messages[raw]?.[locale] || raw || fallback
+}
+
+function alertCopy(row, locale) {
+  const name = clean(row?.employee_name) || clean(row?.employee_no) || (locale === 'en' ? 'Employee' : '员工')
+  const count = countText(row?.occurrence_count)
+  if (locale !== 'en') return { title:clean(row?.title) || eventName(row, locale), message:clean(row?.message) || '—' }
+  switch (row?.alert_type) {
+    case 'payout_change': return { title:'Payment details awaiting review', message:`${name} submitted a payment-details change.` }
+    case 'error_spike': return { title:'Three-day error warning', message:`${name} has ${count} error records in the last 3 days.` }
+    case 'deduction_frequency': return { title:'Seven-day deduction warning', message:`${name} received ${count} deductions in the last 7 days.` }
+    case 'late_timeout_frequency': return { title:'Late / timeout frequency warning', message:`${name} has ${count} late or timeout-related deductions in the last 7 days.` }
+    case 'consecutive_rest': return { title:'Consecutive rest-day warning', message:`${name} is marked for ${count} consecutive public rest days.` }
+    case 'weekly_absence': return { title:'Weekly absence warning', message:`${name} was absent ${count} days in the last 7 days.` }
+    case 'monthly_leave': return { title:'Monthly leave warning', message:`${name} has ${count} leave days this month (home leave excluded).` }
+    default: return { title:clean(row?.title) || eventName(row, locale), message:clean(row?.message) || '—' }
+  }
+}
+
+async function loadAlertPage(filters, page, pageSize) {
+  const { data, error } = await supabase.rpc('admin_alert_center', {
+    p_filters: filters,
+    p_page: page,
+    p_page_size: pageSize,
+  })
+  if (error) throw error
+  return data || { rows:[], total:0, pages:1, unread_total:0, active_total:0, type_counts:{} }
+}
+
+async function markAlertsRead(alertId = null) {
+  const { data, error } = await supabase.rpc('admin_alert_mark_read', { p_alert_id:alertId })
+  if (error) throw error
+  window.dispatchEvent(new CustomEvent('wfh-admin-alerts-changed'))
+  return data
+}
+
+export function AdminAlertBell({ access }) {
+  const { locale } = useAdminI18n()
+  const navigate = useNavigate()
+  const rootRef = useRef(null)
+  const requestRef = useRef(0)
+  const [open, setOpen] = useState(false)
+  const [state, setState] = useState({ loading:false, error:'', rows:[], unread:0, active:0 })
+  const enabled = Boolean(access && !access.loading && !access.error && (
+    access.founder || access.permissions?.includes('*') || ALERT_PERMISSIONS.some(code => access.permissions?.includes(code))
+  ))
+
+  const load = async ({ quiet=false } = {}) => {
+    if (!enabled) return
+    const requestId = ++requestRef.current
+    if (!quiet) setState(current => ({ ...current, loading:true, error:'' }))
+    try {
+      const data = await loadAlertPage({ status:'active' }, 1, 8)
+      if (requestId !== requestRef.current) return
+      setState({ loading:false, error:'', rows:Array.isArray(data.rows) ? data.rows : [], unread:numeric(data.unread_total), active:numeric(data.active_total) })
+    } catch (error) {
+      if (requestId !== requestRef.current) return
+      setState(current => ({ ...current, loading:false, error:alertErrorMessage(error, locale, locale === 'en' ? 'Unable to load notifications.' : '通知读取失败') }))
+    }
+  }
+
+  useEffect(() => {
+    if (!enabled) return undefined
+    load()
+    const timer = window.setInterval(() => load({ quiet:true }), 60000)
+    const refresh = () => load({ quiet:true })
+    window.addEventListener('focus', refresh)
+    window.addEventListener('wfh-admin-alerts-changed', refresh)
+    return () => {
+      requestRef.current += 1
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('wfh-admin-alerts-changed', refresh)
+    }
+  }, [enabled, locale])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const close = event => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false)
+    }
+    const closeOnEscape = event => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      rootRef.current?.querySelector('.admin-alert-bell-button')?.focus()
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  if (!enabled) return null
+  const openAlert = async row => {
+    try { if (row.unread) await markAlertsRead(row.id) } catch { /* navigation remains available */ }
+    setOpen(false)
+    navigate(adminAlertTarget(row.alert_type))
+  }
+  const markAll = async () => {
+    try { await markAlertsRead() } catch (error) {
+      setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') }))
+    }
+  }
+
+  return <div className="admin-alert-bell" ref={rootRef}>
+    <button type="button" className="admin-alert-bell-button" aria-label={locale === 'en' ? `Notifications, ${state.unread} unread` : `消息通知，${state.unread} 条未读`} aria-expanded={open} aria-controls="admin-alert-popover" onClick={() => { setOpen(value => !value); if (!open) load({ quiet:true }) }}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 10.2c0-3.2 1.8-5.4 5.2-5.4s5.2 2.2 5.2 5.4v3.2l1.6 2.4H5.2l1.6-2.4z"/><path d="M10 18.1c.4.7 1.1 1.1 2 1.1s1.6-.4 2-1.1"/></svg>
+      {state.unread > 0 && <b aria-live="polite">{state.unread > 99 ? '99+' : state.unread}</b>}
+    </button>
+    {open && <section id="admin-alert-popover" className="admin-alert-popover" role="dialog" aria-modal="false" aria-label={locale === 'en' ? 'Notifications' : '消息通知'}>
+      <header><div><strong>{locale === 'en' ? 'Notifications' : '消息通知'}</strong><small>{locale === 'en' ? `${state.active} active warnings` : `${state.active} 条进行中预警`}</small></div>{state.unread > 0 && <button type="button" onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部已读'}</button>}</header>
+      {state.error && <div className="admin-alert-popover-error">{state.error}</div>}
+      {state.loading && !state.rows.length ? <div className="admin-alert-popover-empty">{locale === 'en' ? 'Loading…' : '读取中…'}</div>
+        : !state.rows.length ? <div className="admin-alert-popover-empty">{locale === 'en' ? 'No active warnings' : '暂无进行中的预警'}</div>
+          : <div className="admin-alert-popover-list">{state.rows.map(row => {
+            const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
+            const copy = alertCopy(row, locale)
+            return <button type="button" key={row.id} className={row.unread ? 'unread' : ''} onClick={() => openAlert(row)}>
+              <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
+              <span data-admin-i18n-skip><strong>{copy.title}</strong><small>{copy.message}</small><em>{formatTime(row.last_seen_at, locale)}</em></span>
+              {row.unread && <i aria-hidden="true" />}
+            </button>
+          })}</div>}
+      <footer><button type="button" onClick={() => { setOpen(false); navigate(adminAlertTarget('warning')) }}>{locale === 'en' ? 'View all warnings' : '查看全部预警记录'} <span>→</span></button></footer>
+    </section>}
+  </div>
+}
+
+export function AdminAlertRecordsPage() {
+  const access = useAdminAccess()
+  const { locale } = useAdminI18n()
+  const navigate = useNavigate()
+  const requestRef = useRef(0)
+  const latestRef = useRef(null)
+  const canViewEmployees = access.hasPermission('employee.view')
+  const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', severity:'', unread_only:false })
+  const [filters, setFilters] = useState(draft)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(30)
+  const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, pages:1, active:0, unread:0, typeCounts:{} })
+  latestRef.current = { page, pageSize, filters }
+
+  const typeOptions = useMemo(() => Object.entries(TYPE_META).filter(([type]) => {
+    if (type === 'payout_change') return access.hasPermission('payroll.payout_change.review')
+    if (type === 'error_spike') return access.hasPermission('report.view')
+    if (['deduction_frequency','late_timeout_frequency'].includes(type)) return access.hasPermission('adjustment.view')
+    return access.hasPermission('attendance.view')
+  }), [access.permissionKey, access.founder])
+
+  const load = async (nextPage=page, nextSize=pageSize, nextFilters=filters) => {
+    const requestId = ++requestRef.current
+    setState(current => ({ ...current, loading:true, error:'' }))
+    try {
+      const data = await loadAlertPage(nextFilters, nextPage, nextSize)
+      if (requestId !== requestRef.current) return
+      const serverPages = Math.max(1, numeric(data.pages))
+      if (nextPage > serverPages) {
+        setPage(serverPages)
+        await load(serverPages, nextSize, nextFilters)
+        return
+      }
+      setState({ loading:false, error:'', rows:Array.isArray(data.rows) ? data.rows : [], total:numeric(data.total), pages:serverPages, active:numeric(data.active_total), unread:numeric(data.unread_total), typeCounts:data.type_counts || {} })
+    } catch (error) {
+      if (requestId !== requestRef.current) return
+      setState(current => ({ ...current, loading:false, error:alertErrorMessage(error, locale, locale === 'en' ? 'Unable to load warning records.' : '预警记录读取失败') }))
+    }
+  }
+
+  useEffect(() => {
+    const initial = latestRef.current
+    load(initial.page, initial.pageSize, initial.filters)
+    const refresh = () => {
+      const latest = latestRef.current
+      load(latest.page, latest.pageSize, latest.filters)
+    }
+    window.addEventListener('wfh-admin-alerts-changed', refresh)
+    return () => {
+      requestRef.current += 1
+      window.removeEventListener('wfh-admin-alerts-changed', refresh)
+    }
+  }, [access.permissionKey, locale])
+
+  const apply = () => { setFilters({ ...draft }); setPage(1); load(1, pageSize, draft) }
+  const reset = () => {
+    const next = { search:'', status:'active', alert_type:'', severity:'', unread_only:false }
+    setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
+  }
+  const markOne = async row => {
+    try { await markAlertsRead(row.id) }
+    catch (error) { setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') })) }
+  }
+  const markAll = async () => {
+    try { await markAlertsRead() }
+    catch (error) { setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') })) }
+  }
+
+  return <section className="admin-alert-records-page">
+    <header className="admin-alert-records-head">
+      <div><small>RISK &amp; NOTIFICATION CENTER</small><h2>{locale === 'en' ? 'Warning records' : '预警记录'}</h2><p>{locale === 'en' ? 'Warnings are generated from synchronized Supabase records and filtered by your permission and data scope.' : '预警根据已同步到 Supabase 的记录生成，并按当前账号权限及管理范围过滤。'}</p></div>
+      <div><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every visible active warning as read, regardless of the current filters.' : '会把当前账号权限范围内所有进行中预警标为已读，不只限当前筛选结果。'} onClick={markAll}>{locale === 'en' ? 'Mark all visible read' : '全部可见已读'}</button>}</div>
+    </header>
+
+    <div className="admin-alert-summary">
+      <article><span>{locale === 'en' ? 'Active warnings' : '进行中预警'}</span><strong>{state.active}</strong><small>{locale === 'en' ? 'Current rules matched' : '当前仍符合规则'}</small></article>
+      <article className="unread"><span>{locale === 'en' ? 'Unread' : '未读消息'}</span><strong>{state.unread}</strong><small>{locale === 'en' ? 'For this account' : '仅统计当前账号'}</small></article>
+      {typeOptions.slice(0, 5).map(([type, meta]) => <article key={type}><span>{meta[locale]}</span><strong>{numeric(state.typeCounts[type])}</strong><small>{locale === 'en' ? 'Active' : '进行中'}</small></article>)}
+    </div>
+
+    <div className="admin-alert-filter-card">
+      <label><span>{locale === 'en' ? 'Employee / warning' : '员工 / 预警内容'}</span><input value={draft.search} onChange={event => setDraft(current => ({ ...current, search:event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} placeholder={locale === 'en' ? 'Employee ID, name or warning' : '员工ID、姓名或预警内容'} /></label>
+      <label><span>{locale === 'en' ? 'Status' : '状态'}</span><select value={draft.status} onChange={event => setDraft(current => ({ ...current, status:event.target.value }))}><option value="active">{locale === 'en' ? 'Active' : '进行中'}</option><option value="resolved">{locale === 'en' ? 'Resolved' : '已解除'}</option><option value="all">{locale === 'en' ? 'All' : '全部'}</option></select></label>
+      <label><span>{locale === 'en' ? 'Type' : '预警类型'}</span><select value={draft.alert_type} onChange={event => setDraft(current => ({ ...current, alert_type:event.target.value }))}><option value="">{locale === 'en' ? 'All types' : '全部类型'}</option>{typeOptions.map(([type, meta]) => <option key={type} value={type}>{meta[locale]}</option>)}</select></label>
+      <label><span>{locale === 'en' ? 'Severity' : '级别'}</span><select value={draft.severity} onChange={event => setDraft(current => ({ ...current, severity:event.target.value }))}><option value="">{locale === 'en' ? 'All levels' : '全部级别'}</option>{Object.entries(SEVERITY_META).map(([value, meta]) => <option value={value} key={value}>{meta[locale]}</option>)}</select></label>
+      <label className="admin-alert-unread-toggle"><input type="checkbox" checked={draft.unread_only} onChange={event => setDraft(current => ({ ...current, unread_only:event.target.checked }))}/><span>{locale === 'en' ? 'Unread only' : '只看未读'}</span></label>
+      <div className="admin-alert-filter-actions"><button type="button" className="primary-action" onClick={apply}>{locale === 'en' ? 'Search' : '查询'}</button><button type="button" className="secondary-action" onClick={reset}>{locale === 'en' ? 'Reset' : '重置'}</button></div>
+    </div>
+
+    <details className="admin-alert-rule-guide">
+      <summary>{locale === 'en' ? 'Warning rules' : '预警规则说明'}</summary>
+      <div>{locale === 'en' ? <>
+        <span>Payment changes: immediate</span><span>Errors: ≥6 / 3 days</span><span>Deductions: ≥4 / 7 days</span><span>Late or timeout: ≥3 / 7 days</span><span>Public rest: ≥2 consecutive days</span><span>Absence: ≥2 / 7 days</span><span>Monthly leave: &gt;5 days; half day = 0.5, home leave excluded</span>
+      </> : <>
+        <span>收款资料修改：即时</span><span>错误：3天内 ≥6笔</span><span>扣款：7天内 ≥4次</span><span>迟到 / 超时：7天内 ≥3次</span><span>公休：连续 ≥2天</span><span>缺席：7天内 ≥2天</span><span>月休假：&gt;5天；半天算0.5，回家不计</span>
+      </>}</div>
+    </details>
+
+    {state.error && <div className="page-error employee-notice">{state.error}</div>}
+    <div className="admin-alert-record-list">
+      {state.loading && !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'Loading warning records…' : '正在读取预警记录…'}</div>
+        : !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'No matching warnings.' : '暂无符合条件的预警记录。'}</div>
+          : state.rows.map(row => {
+            const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
+            const copy = alertCopy(row, locale)
+            return <article className={`admin-alert-record ${row.unread ? 'unread' : ''} ${row.is_active ? 'active' : 'resolved'}`} key={row.id}>
+              <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
+              <div className="admin-alert-record-main">
+                <div className="admin-alert-record-title"><strong data-admin-i18n-skip>{copy.title}</strong><span className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</span>{!row.is_active && <span className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</span>}{row.unread && <i>{locale === 'en' ? 'Unread' : '未读'}</i>}</div>
+                <p data-admin-i18n-skip>{copy.message}</p>
+                <div className="admin-alert-record-meta"><b data-admin-i18n-skip>{row.employee_no}</b><span data-admin-i18n-skip>{row.employee_name}</span>{row.window_start && <span data-admin-i18n-skip>{row.window_start}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</span>}<span>{row.is_active ? (locale === 'en' ? 'Updated' : '更新于') : (locale === 'en' ? 'Resolved' : '解除于')} <span data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</span></span></div>
+              </div>
+              <div className="admin-alert-record-actions">{row.unread && <button type="button" onClick={() => markOne(row)}>{locale === 'en' ? 'Mark read' : '标为已读'}</button>}{row.alert_type === 'payout_change' && row.is_active && <button type="button" className="primary" onClick={() => navigate(adminAlertTarget(row.alert_type))}>{locale === 'en' ? 'Review' : '去审核'}</button>}{canViewEmployees && row.employee_id && <button type="button" onClick={() => navigate(adminAlertEmployeeTarget(row.employee_id))}>{locale === 'en' ? 'Employee' : '员工档案'}</button>}</div>
+            </article>
+          })}
+    </div>
+    <Pagination page={page} pages={state.pages} total={state.total} pageSize={pageSize} loading={state.loading} onPage={next => { setPage(next); load(next, pageSize, filters) }} onPageSize={next => { setPageSize(next); setPage(1); load(1, next, filters) }}/>
+  </section>
+}

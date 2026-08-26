@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import { adjustmentReason } from '../lib/adjustmentPresentation'
 
 const text = value => String(value ?? '').trim()
 
@@ -124,8 +125,10 @@ function RecordDetailsModal({row,onClose,adjustment=false}){
         <button type="button" aria-label="关闭" onClick={onClose}>×</button>
       </header>
       {adjustment&&<div className="attendance-record-modal-meta"><span><small>金额 / 币种</small><b className={kindTone(row.event_kind)}>{attendanceAmount(row)}</b></span></div>}
-      <section><small>原因</small><p>{row.reason||'—'}</p></section>
-      <section><small>完整备注</small><p>{row.note||'—'}</p></section>
+      {adjustment?<section><small>原因</small><p>{adjustmentReason(row)}</p></section>:<>
+        <section><small>原因</small><p>{row.reason||'—'}</p></section>
+        <section><small>完整备注</small><p>{row.note||'—'}</p></section>
+      </>}
       <footer><button type="button" className="secondary-action" onClick={onClose}>关闭</button></footer>
     </div>
   </div>
@@ -167,13 +170,13 @@ export function EmployeeAdjustmentPanel({data,loading,error}){
   return <section className="detail-panel employee-attendance-panel employee-adjustment-panel">
     <div className="detail-panel-head"><div><h3>奖金 / 扣款记录</h3></div><span className="employee-exam-count">{visibleRows.length} 条</span></div>
     {loading?<div className="attendance-panel-state">正在读取奖金 / 扣款记录…</div>:error?<div className="attendance-panel-state error">{error}</div>:<>
-      <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索金额、奖金、扣款或备注"/>
+      <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索金额、奖金、扣款或原因"/>
       <div className="employee-adjustment-summary">
         <SummaryItem label="USD 奖金" value={`${currencyCount('USD','bonus_count')} · ${currencyValue('USD','bonus_total')}`} tone="positive"/><SummaryItem label="USD 扣款" value={`${currencyCount('USD','deduction_count')} · ${currencyValue('USD','deduction_total')}`} tone="negative"/><SummaryItem label="USD 净额" value={currencyValue('USD','net_amount')}/><SummaryItem label="PHP 奖金" value={`${currencyCount('PHP','bonus_count')} · ${currencyValue('PHP','bonus_total')}`} tone="positive"/><SummaryItem label="PHP 扣款" value={`${currencyCount('PHP','deduction_count')} · ${currencyValue('PHP','deduction_total')}`} tone="negative"/><SummaryItem label="PHP 净额" value={currencyValue('PHP','net_amount')}/><SummaryItem label="币种待核对" value={summary.currency_review_count||0} tone="warning"/><SummaryItem label="金额未解析" value={summary.incomplete||0} tone="warning"/>
       </div>
       {visibleRows.length?<div className="employee-adjustment-list">{visibleRows.map((row,index)=><article key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <div className="employee-adjustment-amount"><span className={`attendance-kind ${kindTone(row.event_kind)}`}>{attendanceKindLabel(row.event_kind)}</span><b className={kindTone(row.event_kind)}>{attendanceAmount(row)}</b><small>{row.event_date||'—'}</small></div>
-        <div className="employee-adjustment-copy"><strong>{row.reason||'未填写原因'}</strong><p>{row.note||'—'}</p></div>
+        <div className="employee-adjustment-copy"><small>原因</small><p>{adjustmentReason(row)}</p></div>
         <button type="button" onClick={()=>setSelected(row)}>详情</button>
       </article>)}</div>:<div className="attendance-panel-state">暂无奖金 / 扣款记录</div>}
     </>}

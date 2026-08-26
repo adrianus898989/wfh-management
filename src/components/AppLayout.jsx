@@ -5,6 +5,7 @@ import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 import { adminNavigation, staffNavigation } from '../config/navigation'
 import { AdminAccessProvider } from '../lib/adminAccess'
+import { AdminAlertBell } from './AdminAlertCenter'
 
 const navUrl = to => new URL(to, 'https://wfh.local')
 const childPath = to => navUrl(to).pathname
@@ -129,6 +130,7 @@ export default function AppLayout({ mode, children }) {
         <div className="sidebar-brand">
           <div className="sidebar-logo">W</div>
           <div className="sidebar-brand-copy"><strong>WFH</strong><small>{mode==='admin'?'MANAGEMENT':'STAFF'}</small></div>
+          {mode==='admin'&&<AdminAlertBell access={adminAccess}/>}
         </div>
 
         {mode==='admin' ? <nav className="sidebar-nav sidebar-nav-pro">

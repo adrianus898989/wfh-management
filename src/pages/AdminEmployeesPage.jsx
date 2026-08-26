@@ -4,14 +4,17 @@ import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
+import { AdminAlertRecordsPage } from '../components/AdminAlertCenter'
 import { useAdminAccess } from '../lib/adminAccess'
+import { useAdminI18n } from '../lib/adminI18n'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 
-const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','离职记录','操作日志']
+const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
   '员工档案': 'employee.view',
   '人员分析': 'employee.analytics.view',
   '停电 / 断网记录': 'connectivity.view',
+  '预警记录': ['payroll.payout_change.review','report.view','adjustment.view','attendance.view'],
   '离职记录': 'employee.view',
   '操作日志': 'audit.view',
 }
@@ -68,11 +71,11 @@ const legacyType = {
 }
 const typeName = v => legacyType[text(v)] || text(v) || '-'
 const EMPLOYEE_RISK_META = {
-  excellent:{label:'优秀',className:'excellent'},
-  normal:{label:'正常',className:'normal'},
-  attention:{label:'注意',className:'attention'},
-  watch:{label:'重点',className:'watch'},
-  high:{label:'高频',className:'high'},
+  excellent:{zh:'优秀',en:'Excellent',className:'excellent'},
+  normal:{zh:'正常',en:'Normal',className:'normal'},
+  attention:{zh:'注意',en:'Attention',className:'attention'},
+  watch:{zh:'重点',en:'Priority',className:'watch'},
+  high:{zh:'高频',en:'High frequency',className:'high'},
 }
 const riskKeyFromCount = value => {
   const count=Number(value||0)
@@ -406,6 +409,7 @@ function bundleToForm(detail,capabilities){
 
 export default function AdminEmployeesPage(){
   const adminAccess=useAdminAccess()
+  const {locale}=useAdminI18n()
   const [sp,setSp]=useSearchParams()
   const requestedEmployeeId=sp.get('employee')||''
   const requestedEmployeeRef=useRef('')
@@ -414,7 +418,10 @@ export default function AdminEmployeesPage(){
   const canViewEmployees=adminAccess.hasPermission('employee.view')
   const canViewAnalytics=adminAccess.hasPermission('employee.analytics.view')
   const canViewAudit=adminAccess.hasPermission('audit.view')
-  const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>adminAccess.hasPermission(EMPLOYEE_TAB_PERMISSIONS[item]))
+  const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>{
+    const permissions=EMPLOYEE_TAB_PERMISSIONS[item]
+    return Array.isArray(permissions)?adminAccess.hasAnyPermission(permissions):adminAccess.hasPermission(permissions)
+  })
   const requestedTab=sp.get('tab')
   const initialTab=requestedTab==='入离职记录'?'离职记录':['团队管理','岗位管理'].includes(requestedTab)?'人员分析':requestedTab
   const [tab,setTabState]=useState(EMPLOYEE_TABS.includes(initialTab)?initialTab:'员工档案')
@@ -1178,7 +1185,7 @@ export default function AdminEmployeesPage(){
         <h1>员工管理</h1>
       </div>
       <div className="employee-title-actions">
-        {visibleTab&&visibleTab!=='停电 / 断网记录'&&<button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>}
+        {visibleTab&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>}
         {visibleTab==='员工档案'&&meta.actions?.can_create&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
       </div>
     </div>
@@ -1231,7 +1238,7 @@ export default function AdminEmployeesPage(){
             <tbody>{rows.map(r=>{
               const risk=employeeRiskMeta(r)
               return <tr key={r.id}>
-                <td>{risk?<span className={`employee-risk-badge ${risk.className}`} title={`累计错误 ${Number(r.total_error_count||0)} 笔`}>{risk.label}</span>:'—'}</td>
+                <td>{risk?<span className={`employee-risk-badge ${risk.className}`} data-admin-i18n-skip title={locale==='en'?`Total errors: ${Number(r.total_error_count||0)}`:`累计错误 ${Number(r.total_error_count||0)} 笔`}>{risk[locale]||risk.zh}</span>:'—'}</td>
                 <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
                 <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
                 <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
@@ -1246,6 +1253,8 @@ export default function AdminEmployeesPage(){
     </>}
 
     {visibleTab==='停电 / 断网记录'&&<ConnectivityRecordsPage/>}
+
+    {visibleTab==='预警记录'&&<AdminAlertRecordsPage/>}
 
     {visibleTab==='人员分析'&&<>
       <div className="analysis-head-row people-analysis-title">
