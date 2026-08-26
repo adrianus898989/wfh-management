@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Pagination } from './DataPageControls'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
@@ -11,7 +11,11 @@ import {
   visibleAdminAlertTypes,
 } from '../lib/adminAlertCatalog'
 import { adminAlertEmployeeTarget, adminAlertTarget } from '../lib/adminAlertRoutes'
-import { adminAlertAttendanceDetails } from '../lib/adminAlertDetails'
+import {
+  adminAlertAttendanceDetails,
+  adminAlertEmployeeHireDate,
+  adminAlertKeyAttendanceEvidence,
+} from '../lib/adminAlertDetails'
 import { supabase } from '../lib/supabase'
 import '../styles-admin-alerts.css'
 
@@ -50,6 +54,12 @@ const formatTime = (value, locale) => {
   }).format(date)
 }
 
+const alertDetailsTarget = row => {
+  const target = adminAlertTarget(row?.alert_type)
+  if (!row?.id || row?.alert_type === 'payout_change') return target
+  return `${target}${target.includes('?') ? '&' : '?'}alert=${encodeURIComponent(row.id)}`
+}
+
 const alertErrorMessage = (error, locale, fallback) => {
   const raw = clean(error?.message)
   const messages = {
@@ -66,7 +76,9 @@ function alertCopy(row, locale) {
   const count = countText(row?.occurrence_count)
   if (locale !== 'en') return { title:clean(row?.title) || eventName(row, locale), message:clean(row?.message) || '—' }
   switch (row?.alert_type) {
-    case 'payout_change': return { title:'Payment details awaiting review', message:`${name} submitted a payment-details change.` }
+    case 'payout_change': return row?.payload?.fulfillment_status === 'mismatch'
+      ? { title:'Approved payment details do not match', message:`${name}'s saved payment details differ from the approved request.` }
+      : { title:'Payment details awaiting review', message:`${name} submitted a payment-details change.` }
     case 'error_spike': return { title:'Three-day error warning', message:`${name} has ${count} error records in the last 3 days.` }
     case 'deduction_frequency': return { title:'Seven-day deduction warning', message:`${name} received ${count} deductions in the last 7 days.` }
     case 'late_timeout_frequency': return { title:'Late / timeout frequency warning', message:`${name} has ${count} late or timeout-related deductions in the last 7 days.` }
@@ -83,18 +95,26 @@ function AlertAttendanceDetails({ row, locale }) {
   const detail = adminAlertAttendanceDetails(row, locale)
   if (!detail) return null
   return <section className={`admin-alert-attendance-detail ${detail.kind}`} data-admin-i18n-skip>
+    <div className="admin-alert-attendance-title">
+      <h4>{detail.title}</h4>
+      {detail.homeLeaveExcluded && <strong>{locale === 'en' ? 'Home leave is excluded from the total' : '回家不计入休假总数'}</strong>}
+    </div>
     {detail.breakdown.length > 0 && <div className="admin-alert-attendance-breakdown">
       {detail.breakdown.map(item => <span key={item.kind}><b>{item.label}</b> {countText(item.count)} {item.unit}{item.kind === 'half_day' && (locale === 'en' ? ` (${countText(item.count * 0.5)} days counted)` : `（计 ${countText(item.count * 0.5)} 天）`)}</span>)}
-      {detail.homeLeaveExcluded && <span className="excluded">{locale === 'en' ? 'Home leave excluded' : '回家休假不计入'}</span>}
     </div>}
-    <h4>{detail.title}</h4>
     {detail.missingDetails
       ? <p className="admin-alert-attendance-missing">{locale === 'en' ? 'The dated detail is waiting for the next warning-data refresh.' : '具体日期和原因将在下一次预警数据刷新后补齐。'}</p>
-      : <ul>{detail.events.map((event, index) => <li key={`${event.date}:${event.eventKind}:${index}`}>
-        <time>{event.date}</time>
-        <strong className={event.eventKind}>{event.kindLabel}</strong>
-        <span>{event.description}</span>
-      </li>)}</ul>}
+      : <div className="admin-alert-attendance-events">
+        <div className="admin-alert-attendance-events-head" aria-hidden="true">
+          <span>{locale === 'en' ? 'Date' : '异常日期'}</span><span>{locale === 'en' ? 'Type' : '类型'}</span><span>{locale === 'en' ? 'Reason' : '原因'}</span><span>{locale === 'en' ? 'Note' : '备注'}</span>
+        </div>
+        <ul>{detail.events.map((event, index) => <li key={`${event.date}:${event.eventKind}:${index}`}>
+          <time data-label={locale === 'en' ? 'Date' : '异常日期'}>{event.date}</time>
+          <strong data-label={locale === 'en' ? 'Type' : '类型'} className={event.eventKind}>{event.kindLabel}</strong>
+          <span data-label={locale === 'en' ? 'Reason' : '原因'}>{event.reason || (locale === 'en' ? 'Not entered' : '未填写')}</span>
+          <span data-label={locale === 'en' ? 'Note' : '备注'}>{event.note || (locale === 'en' ? 'Not entered' : '未填写')}</span>
+        </li>)}</ul>
+      </div>}
   </section>
 }
 
@@ -177,7 +197,7 @@ export function AdminAlertBell({ access }) {
   const openAlert = async row => {
     try { if (row.unread) await markAlertsRead(row.id) } catch { /* navigation remains available */ }
     setOpen(false)
-    navigate(adminAlertTarget(row.alert_type))
+    navigate(alertDetailsTarget(row))
   }
   const markAll = async () => {
     try { await markAlertsRead() } catch (error) {
@@ -198,9 +218,10 @@ export function AdminAlertBell({ access }) {
           : <div className="admin-alert-popover-list">{state.rows.map(row => {
             const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
             const copy = alertCopy(row, locale)
+            const evidence = adminAlertKeyAttendanceEvidence(row, locale)
             return <button type="button" key={row.id} className={row.unread ? 'unread' : ''} onClick={() => openAlert(row)}>
               <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
-              <span data-admin-i18n-skip><strong>{copy.title}</strong><small>{copy.message}</small><em>{formatTime(row.last_seen_at, locale)}</em></span>
+              <span data-admin-i18n-skip><strong>{copy.title}</strong><small>{evidence || copy.message}</small><em>{formatTime(row.last_seen_at, locale)} · {locale === 'en' ? 'Open details' : '打开详情'}</em></span>
               {row.unread && <i aria-hidden="true" />}
             </button>
           })}</div>}
@@ -212,10 +233,12 @@ export function AdminAlertBell({ access }) {
 export function AdminAlertRecordsPage() {
   const access = useAdminAccess()
   const { locale } = useAdminI18n()
+  const location = useLocation()
   const navigate = useNavigate()
   const requestRef = useRef(0)
   const latestRef = useRef(null)
   const recordsRef = useRef(null)
+  const requestedAlertRef = useRef('')
   const canViewEmployees = access.hasPermission('employee.view')
   const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false })
   const [filters, setFilters] = useState(draft)
@@ -223,7 +246,10 @@ export function AdminAlertRecordsPage() {
   const [pageSize, setPageSize] = useState(30)
   const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, pages:1, active:0, unread:0, typeCounts:{} })
   const [ruleDialog, setRuleDialog] = useState(null)
+  const [expandedId, setExpandedId] = useState(() => new URLSearchParams(location.search).get('alert') || '')
   latestRef.current = { page, pageSize, filters }
+
+  const requestedAlertId = useMemo(() => new URLSearchParams(location.search).get('alert') || '', [location.search])
 
   const typeOptions = useMemo(() => visibleAdminAlertTypes(access, {
     readyOnly:true,
@@ -269,6 +295,13 @@ export function AdminAlertRecordsPage() {
     }
   }, [access.permissionKey, locale])
 
+  useEffect(() => {
+    if (!requestedAlertId || requestedAlertRef.current === requestedAlertId || !state.rows.some(row => String(row.id) === requestedAlertId)) return
+    requestedAlertRef.current = requestedAlertId
+    setExpandedId(requestedAlertId)
+    window.requestAnimationFrame(() => recordsRef.current?.scrollIntoView({ behavior:'smooth', block:'start' }))
+  }, [requestedAlertId, state.rows])
+
   const apply = () => { setFilters({ ...draft }); setPage(1); load(1, pageSize, draft) }
   const reset = () => {
     const next = { search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false }
@@ -300,18 +333,21 @@ export function AdminAlertRecordsPage() {
     try { await markAlertsRead() }
     catch (error) { setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') })) }
   }
+  const toggleRow = row => {
+    setExpandedId(current => String(current) === String(row.id) ? '' : String(row.id))
+    if (row.unread) markOne(row)
+  }
 
   return <section className="admin-alert-records-page">
     <header className="admin-alert-records-head">
-      <div><h2>{locale === 'en' ? 'Warning records' : '预警记录'}</h2></div>
-      <div><button type="button" className="secondary-action" onClick={() => setRuleDialog({ kind:'all', entries:visibleAdminAlertTypes(access) })}>{locale === 'en' ? 'Rules' : '规则说明'}</button><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every visible active warning as read, regardless of the current filters.' : '会把当前账号权限范围内所有进行中预警标为已读，不只限当前筛选结果。'} onClick={markAll}>{locale === 'en' ? 'Mark all visible read' : '全部可见已读'}</button>}</div>
+      <div><small>{locale === 'en' ? 'WARNING RECORDS' : '预警记录 · 新列表'}</small><h2>{locale === 'en' ? 'Employee warning records' : '员工预警记录表'}</h2><p>{locale === 'en' ? 'Hire date, employee ID and name come first. Open any row to view the full evidence.' : '先看入职日期、员工 ID、姓名；点击任意一行，原地展开完整预警详情。'}</p></div>
+      <div><button type="button" className="secondary-action" onClick={() => setRuleDialog({ kind:'all', entries:visibleAdminAlertTypes(access) })}>{locale === 'en' ? 'Rules' : '规则说明'}</button><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every active warning in the current account scope as read.' : '把当前账号权限范围内所有进行中预警标为已读。'} onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部标为已读'}</button>}</div>
     </header>
 
-    <div className="admin-alert-summary">
-      <button type="button" onClick={() => showActive()}><span>{locale === 'en' ? 'Active warnings' : '进行中预警'}</span><strong>{state.active}</strong></button>
-      <button type="button" className="unread" onClick={() => showActive({ unreadOnly:true })}><span>{locale === 'en' ? 'Unread' : '未读消息'}</span><strong>{state.unread}</strong></button>
+    <div className="admin-alert-summary-strip" aria-label={locale === 'en' ? 'Warning summary' : '预警汇总'}>
+      <button type="button" onClick={() => showActive()}><span>{locale === 'en' ? 'Active' : '进行中'}</span><strong>{state.active}</strong></button>
+      <button type="button" className="unread" onClick={() => showActive({ unreadOnly:true })}><span>{locale === 'en' ? 'Unread' : '未读'}</span><strong>{state.unread}</strong></button>
       <button type="button" onClick={() => setRuleDialog({ kind:'ready', entries:visibleAdminAlertTypes(access, { readyOnly:true }) })}><span>{locale === 'en' ? 'Enabled rules' : '已启用规则'}</span><strong>{visibleAdminAlertTypes(access, { readyOnly:true }).length}</strong></button>
-      <button type="button" onClick={() => setRuleDialog({ kind:'pending', entries:visibleAdminAlertTypes(access).filter(([, meta]) => !meta.ready) })}><span>{locale === 'en' ? 'Rules to complete' : '待完善规则'}</span><strong>{visibleAdminAlertTypes(access).filter(([, meta]) => !meta.ready).length}</strong></button>
     </div>
 
     <section className="admin-alert-category-panel" aria-label={locale === 'en' ? 'Warning categories' : '预警子分类'}>
@@ -322,8 +358,8 @@ export function AdminAlertRecordsPage() {
         {categoryOptions.map(([type, meta]) => {
           const pendingReason = adminAlertPendingReason(meta, locale)
           return <button type="button" key={type} className={`${draft.alert_type === type ? 'active' : ''} ${meta.ready ? 'ready' : 'pending'}`} title={pendingReason || ''} onClick={() => selectCategory(type, meta)}>
-            <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
-            <span><b>{meta[locale]}</b>{!meta.ready && <small>{locale === 'en' ? 'To complete' : '待完善'}</small>}</span>
+            <span className={`admin-alert-category-dot ${meta.tone}`} aria-hidden="true" />
+            <b>{meta[locale]}</b>
             <strong>{meta.ready ? numeric(state.typeCounts[type]) : '—'}</strong>
           </button>
         })}
@@ -340,21 +376,32 @@ export function AdminAlertRecordsPage() {
     </div>
 
     {state.error && <div className="page-error employee-notice">{state.error}</div>}
-    <div className="admin-alert-record-list" ref={recordsRef}>
-      {state.loading && !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'Loading warning records…' : '正在读取预警记录…'}</div>
+    <div className="admin-alert-record-table" ref={recordsRef}>
+      <div className="admin-alert-table-head" aria-hidden="true">
+        <span>{locale === 'en' ? 'Hire date' : '入职日期'}</span><span>{locale === 'en' ? 'Employee ID' : '员工 ID'}</span><span>{locale === 'en' ? 'Name' : '姓名'}</span><span>{locale === 'en' ? 'Warning type' : '预警类型'}</span><span>{locale === 'en' ? 'Level' : '级别'}</span><span>{locale === 'en' ? 'Updated' : '更新时间'}</span><span>{locale === 'en' ? 'Summary' : '预警摘要'}</span><span>{locale === 'en' ? 'Details' : '详情'}</span>
+      </div>
+      {state.loading && !state.rows.length ? <div className="admin-alert-table-loading" aria-label={locale === 'en' ? 'Loading warning records' : '正在读取预警记录'}>{[0,1,2,3].map(item => <span key={item} />)}</div>
         : !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'No matching warnings.' : '暂无符合条件的预警记录。'}</div>
           : state.rows.map(row => {
             const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
             const copy = alertCopy(row, locale)
-            return <article className={`admin-alert-record ${row.unread ? 'unread' : ''} ${row.is_active ? 'active' : 'resolved'}`} key={row.id}>
-              <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
-              <div className="admin-alert-record-main">
-                <div className="admin-alert-record-title"><strong data-admin-i18n-skip>{copy.title}</strong><span className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</span>{!row.is_active && <span className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</span>}{row.unread && <i>{locale === 'en' ? 'Unread' : '未读'}</i>}</div>
-                <p data-admin-i18n-skip>{copy.message}</p>
+            const expanded = String(expandedId) === String(row.id)
+            return <article className={`admin-alert-table-item ${row.unread ? 'unread' : ''} ${row.is_active ? 'active' : 'resolved'} ${expanded ? 'expanded' : ''}`} key={row.id} data-alert-id={row.id}>
+              <button type="button" className="admin-alert-table-row" aria-expanded={expanded} onClick={() => toggleRow(row)}>
+                <span data-label={locale === 'en' ? 'Hire date' : '入职日期'} data-admin-i18n-skip>{adminAlertEmployeeHireDate(row)}</span>
+                <strong data-label={locale === 'en' ? 'Employee ID' : '员工 ID'} data-admin-i18n-skip>{row.employee_no || '—'}</strong>
+                <span data-label={locale === 'en' ? 'Name' : '姓名'} data-admin-i18n-skip>{row.employee_name || '—'}</span>
+                <span data-label={locale === 'en' ? 'Warning type' : '预警类型'} className="admin-alert-table-type"><i className={`admin-alert-category-dot ${meta.tone}`} />{meta[locale] || eventName(row, locale)}{row.unread && <b>{locale === 'en' ? 'New' : '未读'}</b>}</span>
+                <span data-label={locale === 'en' ? 'Level' : '级别'}><i className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</i>{!row.is_active && <i className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</i>}</span>
+                <time data-label={locale === 'en' ? 'Updated' : '更新时间'} data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</time>
+                <span data-label={locale === 'en' ? 'Summary' : '预警摘要'} className="admin-alert-table-summary" data-admin-i18n-skip>{copy.message}</span>
+                <span className="admin-alert-table-expand">{expanded ? (locale === 'en' ? 'Collapse' : '收起') : (locale === 'en' ? 'Open' : '展开')}<i aria-hidden="true">⌄</i></span>
+              </button>
+              {expanded && <div className="admin-alert-expanded-panel">
+                <div className="admin-alert-expanded-head"><div><span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span><div><strong data-admin-i18n-skip>{copy.title}</strong><p data-admin-i18n-skip>{copy.message}</p></div></div><div className="admin-alert-record-actions">{row.alert_type === 'payout_change' && row.is_active && <button type="button" className="primary" onClick={() => navigate(adminAlertTarget(row.alert_type))}>{locale === 'en' ? 'Review' : '去审核'}</button>}{canViewEmployees && row.employee_id && <button type="button" onClick={() => navigate(adminAlertEmployeeTarget(row.employee_id))}>{locale === 'en' ? 'Employee file' : '员工档案'}</button>}</div></div>
                 <AlertAttendanceDetails row={row} locale={locale}/>
-                <div className="admin-alert-record-meta"><b data-admin-i18n-skip>{row.employee_no}</b><span data-admin-i18n-skip>{row.employee_name}</span>{row.window_start && <span data-admin-i18n-skip>{row.window_start}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</span>}<span>{row.is_active ? (locale === 'en' ? 'Updated' : '更新于') : (locale === 'en' ? 'Resolved' : '解除于')} <span data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</span></span></div>
-              </div>
-              <div className="admin-alert-record-actions">{row.unread && <button type="button" onClick={() => markOne(row)}>{locale === 'en' ? 'Mark read' : '标为已读'}</button>}{row.alert_type === 'payout_change' && row.is_active && <button type="button" className="primary" onClick={() => navigate(adminAlertTarget(row.alert_type))}>{locale === 'en' ? 'Review' : '去审核'}</button>}{canViewEmployees && row.employee_id && <button type="button" onClick={() => navigate(adminAlertEmployeeTarget(row.employee_id))}>{locale === 'en' ? 'Employee' : '员工档案'}</button>}</div>
+                <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{row.is_active ? (locale === 'en' ? 'Last updated' : '最后更新') : (locale === 'en' ? 'Resolved' : '解除时间')} <b data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</b></span></div>
+              </div>}
             </article>
           })}
     </div>

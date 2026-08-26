@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Pagination } from '../components/DataPageControls'
+import AdminModuleNav from '../components/AdminModuleNav'
 import { supabase } from '../lib/supabase'
 import { useAdminI18n } from '../lib/adminI18n'
 import {
@@ -126,9 +127,7 @@ export default function AdminCompanyAssetsPage() {
       <button className="secondary-action" onClick={load} disabled={loading}>{loading ? t('刷新中…') : <><span aria-hidden="true">↻</span> {t('刷新资料')}</>}</button>
     </div>
 
-    <div className="module-tabs company-assets-module-tab" aria-label={t('后台账号使用情况')}>
-      <button className="active" type="button">{t('公司提供资产')}</button>
-    </div>
+    <AdminModuleNav />
 
     <section className="company-asset-overview">
       <article><span>{t('当前在职员工')}</span><strong>{loading && !rows.length ? '—' : rows.length}</strong><small>{t('按当前账号管理范围读取')}</small></article>

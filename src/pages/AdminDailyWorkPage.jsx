@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
+import AdminModuleNav from '../components/AdminModuleNav'
 import OnlineTrainingPage from './OnlineTrainingPage'
 import '../styles-daily-work.css'
 
@@ -395,6 +396,8 @@ function LegacyDailyWorkPage() {
         {access.canSubmit && <button className="dw-primary" onClick={openCreate}>＋ 提交报告</button>}
       </div>
     </header>
+
+    <AdminModuleNav />
 
     {error && <div className="dw-error"><span>{error}</span><button onClick={()=>setError('')}>×</button></div>}
 

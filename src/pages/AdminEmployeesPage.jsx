@@ -5,6 +5,8 @@ import { Pagination } from '../components/DataPageControls'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
 import { AdminAlertRecordsPage } from '../components/AdminAlertCenter'
+import AdminDataEntryLogs from '../components/AdminDataEntryLogs'
+import AdminModuleNav from '../components/AdminModuleNav'
 import { adminLocalPageTabs } from '../config/navigation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
@@ -420,6 +422,8 @@ export default function AdminEmployeesPage(){
   const canViewEmployees=adminAccess.hasPermission('employee.view')
   const canViewAnalytics=adminAccess.hasPermission('employee.analytics.view')
   const canViewAudit=adminAccess.hasPermission('audit.view')
+  const canViewAdjustmentLogs=canViewAudit&&adminAccess.hasPermission('adjustment.view')
+  const canViewAttendanceLogs=canViewAudit&&adminAccess.hasPermission('attendance.view')
   const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>{
     const permissions=EMPLOYEE_TAB_PERMISSIONS[item]
     return Array.isArray(permissions)?adminAccess.hasAnyPermission(permissions):adminAccess.hasPermission(permissions)
@@ -427,6 +431,13 @@ export default function AdminEmployeesPage(){
   const requestedTab=sp.get('tab')
   const initialTab=requestedTab==='入离职记录'?'离职记录':['团队管理','岗位管理'].includes(requestedTab)?'人员分析':requestedTab
   const [tab,setTabState]=useState(EMPLOYEE_TABS.includes(initialTab)?initialTab:'员工档案')
+  const auditLogViews=[
+    {key:'employment',label:'在职离职操作日志',allowed:canViewAudit},
+    {key:'adjustment',label:'奖金扣款录入日志',allowed:canViewAdjustmentLogs},
+    {key:'attendance',label:'出勤录入日志',allowed:canViewAttendanceLogs},
+  ].filter(item=>item.allowed)
+  const requestedAuditView=text(sp.get('log'))
+  const auditSubview=auditLogViews.some(item=>item.key===requestedAuditView)?requestedAuditView:(auditLogViews[0]?.key||'employment')
 
   const [meta,setMeta]=useState({
     teams:[],positions:[],position_options:[],total:0,active:0,no_team:0,official_id_pending:0,
@@ -680,7 +691,7 @@ export default function AdminEmployeesPage(){
       if(canViewEmployees&&tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
       if(canViewAnalytics&&tab==='人员分析') jobs.push(loadPeopleAnalytics(appliedAnalysisFilters),loadResignationAnalytics(appliedResignationAnalyticsFilters))
       if(canViewEmployees&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
-      if(canViewAudit&&tab==='操作日志') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
+      if(canViewAudit&&tab==='操作日志'&&auditSubview==='employment') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
       if(canViewEmployees&&selected?.employee?.id){
         jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(d=>setSelected(prev=>({...d,resignation_reason:text(prev?.resignation_reason||d?.resignation_reason)}))).catch(()=>{}))
       }
@@ -738,10 +749,10 @@ export default function AdminEmployeesPage(){
   },[tab,canViewEmployees])
 
   useEffect(()=>{
-    if(!canViewAudit||tab!=='操作日志') return
+    if(!canViewAudit||tab!=='操作日志'||auditSubview!=='employment') return
     const t=setTimeout(()=>{ setAuditPage(1); loadAudit(1,auditPageSize,auditFilters) },80)
     return()=>clearTimeout(t)
-  },[tab,canViewAudit])
+  },[tab,canViewAudit,auditSubview])
 
   useEffect(()=>{
     if(!canViewAnalytics||tab!=='人员分析') return
@@ -768,6 +779,14 @@ export default function AdminEmployeesPage(){
     if(!tabs.includes(v))return
     setTabState(v)
     setSp(v==='员工档案'?{}:{tab:v})
+  }
+  const setAuditSubview=key=>{
+    if(!auditLogViews.some(item=>item.key===key))return
+    const next=new URLSearchParams(sp)
+    next.set('tab','操作日志')
+    if(key==='employment') next.delete('log')
+    else next.set('log',key)
+    setSp(next)
   }
 
   const setPageSize=n=>{
@@ -1191,9 +1210,7 @@ export default function AdminEmployeesPage(){
       </div>
     </div>
 
-    {pageChrome.tabs.length>1&&<div className="module-tabs">
-      {pageChrome.tabs.map(item=><button key={item.tabValue} className={visibleTab===item.tabValue?'active':''} onClick={()=>setTab(item.tabValue)}>{item.itemLabel}</button>)}
-    </div>}
+    <AdminModuleNav />
 
     {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
     {visibleTab==='员工档案'&&<>
@@ -1417,9 +1434,13 @@ export default function AdminEmployeesPage(){
       <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize,historyFilters)}} onPageSize={setHistoryPageSize}/>
     </div>}
 
-    {visibleTab==='操作日志'&&<div className="data-card">
+    {visibleTab==='操作日志'&&<>
+      <div className="employee-analysis-subtabs" role="tablist" aria-label="档案变更记录子目录">
+        {auditLogViews.map(item=><button type="button" role="tab" aria-selected={auditSubview===item.key} key={item.key} className={auditSubview===item.key?'active':''} onClick={()=>setAuditSubview(item.key)}>{item.label}</button>)}
+      </div>
+      {auditSubview==='employment'&&<div className="data-card">
       <div className="section-head">
-        <div><h2>操作日志</h2></div>
+        <div><h2>在职离职操作日志</h2></div>
         <span>{auditTotal} 条</span>
       </div>
       <div className="resignation-filter-panel v25-resignation-filter-panel audit-search-panel">
@@ -1437,7 +1458,10 @@ export default function AdminEmployeesPage(){
         </tr>)}</tbody>
       </table></div>}
       <Pagination page={auditPage} pages={auditPages} total={auditTotal} pageSize={auditPageSize} loading={auditLoading} onPage={p=>{setAuditPage(p);loadAudit(p,auditPageSize,auditFilters)}} onPageSize={changeAuditPageSize}/>
-    </div>}
+      </div>}
+      {auditSubview==='adjustment'&&<AdminDataEntryLogs category="adjustment"/>}
+      {auditSubview==='attendance'&&<AdminDataEntryLogs category="attendance"/>}
+    </>}
 
     {reasonPreview&&<div className="modal-mask employee-action-modal-mask" onMouseDown={()=>setReasonPreview(null)}><div className="modal-card" style={{width:'min(720px,calc(100vw - 40px))',maxWidth:720}} onMouseDown={e=>e.stopPropagation()}>
       <div className="modal-head"><div><span className="modal-kicker">RESIGNATION REASON</span><h2>完整离职原因</h2><p>{reasonPreview.employee_no||'—'} · {reasonPreview.full_name||'—'} · {reasonPreview.resign_date||'—'}</p></div><button onClick={()=>setReasonPreview(null)}>×</button></div>

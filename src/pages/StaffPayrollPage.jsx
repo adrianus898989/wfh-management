@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { StaffPaymentChangeWorkspace } from '../components/PaymentChangeWorkflow'
 import { useStaffLocale } from '../lib/staffI18n'
 import { supabase } from '../lib/supabase'
 
@@ -62,7 +64,12 @@ export function StaffPayrollWorkspace({embedded=false}){
   </div>
 }
 
-export default function StaffPayrollPage(){return <StaffPayrollWorkspace/>}
+export default function StaffPayrollPage(){
+  const { locale } = useStaffLocale()
+  const [params] = useSearchParams()
+  if (params.get('tab') === 'payment-change') return <div className="content-page staff-payroll-page staff-payment-change-page"><StaffPaymentChangeWorkspace locale={locale}/></div>
+  return <StaffPayrollWorkspace/>
+}
 function Payslip({detail,locale,t}){
   const employee=detail.employee||{}
   const currency=detail.currency||'USD'

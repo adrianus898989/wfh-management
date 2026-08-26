@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import AdminModuleNav from '../components/AdminModuleNav'
 import { adminLocalPageTabs } from '../config/navigation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
@@ -587,9 +588,7 @@ export default function AdminUsersPage() {
         <h1>{adminT(sectionTitle)}</h1>
       </div>
 
-      <div className="access-tabs">
-        {pageChrome.tabs.map(item => <button key={item.tabValue} className={visibleTab === item.tabValue ? 'active' : ''} onClick={() => setTab(item.tabValue)}>{adminT(item.itemLabel)}</button>)}
-      </div>
+      <AdminModuleNav />
 
       {error && <div className="page-error">{error}</div>}
 

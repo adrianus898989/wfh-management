@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
-import { StaffPaymentChangeWorkspace } from '../components/PaymentChangeWorkflow'
-import { StaffPayrollWorkspace } from './StaffPayrollPage'
 import { useStaffLocale } from '../lib/staffI18n'
 import { useAdminI18n } from '../lib/adminI18n'
 
@@ -402,19 +400,23 @@ const staffExamBreakdown = (row, t) => {
   })}`
 }
 
-export const StaffHome = () => {
+export const StaffHome = ({ mode = 'profile' }) => {
   const { locale, t, adoptCountry } = useStaffLocale()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [activity, setActivity] = useState({ loading: true, error: '', data: null })
   const [selfAttendance, setSelfAttendance] = useState({ loading: true, error: '', data: null })
+  const [adjustmentHistory, setAdjustmentHistory] = useState({ loading: false, error: '', data: null })
   const [errorHistory, setErrorHistory] = useState({ rows: [], total: 0, page: 1, pages: 1 })
   const [errorPage, setErrorPage] = useState(1)
   const [errorsLoading, setErrorsLoading] = useState(false)
   const [revealed, setRevealed] = useState({})
   const [revealLoading, setRevealLoading] = useState('')
-  const [activeSection, setActiveSection] = useState('info')
+  const requestedRewardSection = searchParams.get('tab') || 'errors'
+  const rewardSections = new Set(['errors', 'adjustments', 'exams', 'attendance', 'connectivity'])
+  const activeSection = mode === 'rewards' && rewardSections.has(requestedRewardSection) ? requestedRewardSection : 'info'
   const [examDetail, setExamDetail] = useState(null)
   const [examDetailLoading, setExamDetailLoading] = useState(false)
   const [examDetailError, setExamDetailError] = useState('')
@@ -462,6 +464,19 @@ export const StaffHome = () => {
     })()
     return () => { alive = false }
   }, [errorPage, activeSection, t])
+  useEffect(() => {
+    if (activeSection !== 'adjustments') return undefined
+    let alive = true
+    ;(async () => {
+      setAdjustmentHistory(current => ({ ...current, loading:true, error:'' }))
+      const { data: result, error: loadError } = await supabase.rpc('staff_own_adjustment_history', { p_page:1, p_page_size:100 })
+      if (!alive) return
+      setAdjustmentHistory(loadError
+        ? { loading:false, error:loadError.message || t('adjustments.loadFailed', 'Failed to load reward and deduction records.'), data:null }
+        : { loading:false, error:'', data:result || { rows:[], total:0, page:1, pages:1 } })
+    })()
+    return () => { alive = false }
+  }, [activeSection, t])
 
   if (loading) return <div className="staff-portal-page"><div className="staff-portal-loading">{t('portal.loadingProfile', 'Loading profile…')}</div></div>
 
@@ -511,14 +526,14 @@ export const StaffHome = () => {
     setExamDetailLoading(false)
   }
 
-  const tabs = [
-    ['info', t('tab.info', 'Personal information')],
-    ['errors', t('tab.errors', 'Error records')],
-    ['exams', t('tab.exams', 'Exam results')],
-    ['attendance', t('tab.attendance', 'Attendance')],
-    ['connectivity', t('tab.connectivity', 'Power / internet records')],
-    ['payroll', t('tab.payroll', 'Payslips')],
-  ]
+  const tabs = mode === 'rewards' ? [
+    ['errors', t('nav.errorRecords', 'Error records')],
+    ['adjustments', t('nav.adjustmentRecords', 'Reward / deduction records')],
+    ['exams', t('nav.examRecords', 'Exam records')],
+    ['attendance', t('nav.attendanceLeave', 'Attendance / leave records')],
+    ['connectivity', t('nav.connectivityRecords', 'Power / internet records')],
+  ] : []
+  const selectSection = key => setSearchParams(key === 'errors' ? {} : { tab:key })
 
   return <div className="staff-portal-page">
     <header className="staff-portal-hero">
@@ -535,7 +550,7 @@ export const StaffHome = () => {
       <div><span>{t('portal.monthLeave', 'Leave this month')}</span><strong>{selfAttendance.loading ? '—' : attendance.summary?.month_leave || 0}</strong><small>{t('portal.leaveDays', 'Leave / rest days')}</small></div>
       <div><span>{t('portal.connectivity', 'Power / internet')}</span><strong>{activity.loading ? '—' : connectivity.total || 0}</strong><small>{t('portal.powerInternetCounts', 'Power {power} · Internet {internet}', { power: connectivity.power || 0, internet: connectivity.internet || 0 })}</small></div>
     </section>
-    <nav className="staff-profile-tabs">{tabs.map(([key, label]) => <button key={key} className={activeSection === key ? 'active' : ''} onClick={() => setActiveSection(key)}>{label}</button>)}</nav>
+    {!!tabs.length && <nav className="staff-profile-tabs">{tabs.map(([key, label]) => <button key={key} className={activeSection === key ? 'active' : ''} onClick={() => selectSection(key)}>{label}</button>)}</nav>}
     {activeSection === 'info' && <div className="staff-portal-columns"><div className="staff-profile-stack">
       <section className="staff-profile-panel"><header><div><small>{t('decor.profile', 'PERSONAL PROFILE')}</small><h2>{t('profile.title', 'Personal information')}</h2></div><span>{t('profile.private', 'Only you can view')}</span></header><div className="staff-profile-fields">{fields.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value || '—'}</strong></div>)}</div></section>
       <section className="staff-payment-panel"><header><div><small>{t('decor.payment', 'PAYMENT & CONTACT')}</small><h2>{t('payment.title', 'Payment & contact')}</h2></div><span>🔒 {t('payment.protected', 'Safely hidden')}</span></header><div className="staff-payment-grid">
@@ -544,15 +559,35 @@ export const StaffHome = () => {
         {paymentMode === 'usdt' && <div className="staff-sensitive-row"><span>{t('payment.usdt', 'USDT address')}</span><strong>{revealed.usdt_address || pay.usdt_address_masked || '—'}</strong>{pay.usdt_address_masked && <button onClick={() => toggleSensitive('usdt_address')} disabled={revealLoading === 'usdt_address'}>{revealLoading === 'usdt_address' ? t('payment.reading', 'Loading') : revealed.usdt_address ? t('common.hide', 'Hide') : t('common.view', 'View')}</button>}</div>}
         <div><span>{t('payment.phone', 'Phone')}</span><strong>{pay.contact_phone || '—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number || '—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook || '—'}</strong></div><div><span>{t('payment.address', 'Contact address')}</span><strong>{pay.employee_address || '—'}</strong></div>
       </div></section>
-      <StaffPaymentChangeWorkspace locale={locale} onChanged={load} />
     </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to="/staff/exams"><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link></section></div>}
     {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => setErrorPage(value => Math.max(1, value - 1))}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => setErrorPage(value => value + 1)}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
+    {activeSection === 'adjustments' && <StaffAdjustmentPanel state={adjustmentHistory} t={t} locale={locale} />}
     {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
     {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={selfAttendance.loading} error={selfAttendance.error} profile={p} t={t} locale={locale} />}
     {activeSection === 'connectivity' && <EmployeeConnectivityPanel data={connectivity} loading={activity.loading} error={activity.error} t={t} />}
-    {activeSection === 'payroll' && <StaffPayrollWorkspace embedded />}
     {examDetail && <StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={() => setExamDetail(null)} t={t} locale={locale} />}
   </div>
+}
+
+function StaffAdjustmentPanel({ state, t, locale }) {
+  const data = state?.data
+  const rows = Array.isArray(data?.rows) ? data.rows : []
+  return <section className="staff-own-adjustments">
+    <header><div><small>{t('decor.adjustments', 'REWARD / DEDUCTION RECORDS')}</small><h2>{t('adjustments.title', 'Reward / deduction records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count:data?.total ?? rows.length })}</span></header>
+    {state?.loading ? <div className="staff-history-empty">{t('adjustments.loading', 'Loading reward and deduction records…')}</div>
+      : state?.error ? <div className="staff-history-empty error">{state.error}</div>
+      : rows.length ? <div className="staff-adjustment-list">{rows.map((row, index) => {
+      const amount = Number(row.amount || 0)
+      const kind = String(row.event_kind || row.kind || (amount < 0 ? 'deduction' : 'bonus')).toLowerCase()
+      const deduction = ['deduction', 'penalty'].includes(kind) || amount < 0
+      const currency = String(row.currency || '').trim()
+      return <article key={row.id || `${row.event_date || row.date}-${index}`}>
+        <div><time>{staffDate(row.event_date || row.date)}</time><span className={deduction ? 'deduction' : 'bonus'}>{deduction ? t('adjustments.deduction', 'Deduction') : t('adjustments.bonus', 'Reward')}</span></div>
+        <strong className={deduction ? 'deduction' : 'bonus'}>{currency ? `${currency} ` : ''}{amount > 0 ? '+' : ''}{amount.toLocaleString(localeCode(locale), { maximumFractionDigits:2 })}</strong>
+        <p>{row.note || row.reason || '—'}</p>
+      </article>
+    })}</div> : <div className="staff-history-empty">{t('adjustments.none', 'No reward or deduction records are linked to your employee ID.')}</div>}
+  </section>
 }
 
 const staffAttendanceKinds = [

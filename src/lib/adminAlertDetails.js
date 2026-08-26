@@ -67,3 +67,25 @@ export function adminAlertAttendanceDetails(row, locale='zh') {
   }
 }
 
+export function adminAlertEmployeeHireDate(row) {
+  const payload = isRecord(row?.payload) ? row.payload : {}
+  const value = clean(
+    row?.hire_date
+    || row?.employee_hire_date
+    || payload.hire_date
+    || payload.employee_hire_date,
+  )
+  return value ? value.slice(0, 10) : '—'
+}
+
+export function adminAlertKeyAttendanceEvidence(row, locale='zh') {
+  const detail = adminAlertAttendanceDetails(row, locale)
+  if (!detail || detail.events.length === 0) return ''
+  const first = detail.events[0]
+  const remainder = detail.events.length - 1
+  const primary = `${first.date} · ${first.kindLabel} · ${first.description}`
+  if (remainder === 0) return primary
+  return locale === 'en'
+    ? `${primary}; ${remainder} more dated ${remainder === 1 ? 'record' : 'records'}`
+    : `${primary}；另有 ${remainder} 个异常日期`
+}

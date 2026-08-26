@@ -1,6 +1,7 @@
 import React from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAdminI18n } from '../lib/adminI18n'
+import AdminModuleNav from '../components/AdminModuleNav'
 import AdminCompanyAssetsPage from './AdminCompanyAssetsPage'
 
 const WORK_PAGES = {
@@ -29,11 +30,12 @@ export default function AdminPlanningPage({ section }) {
     <div className="module-title-row">
       <div>
         <div className="module-kicker">PLANNED MODULE</div>
-        <h1>{t(page.title)}</h1>
-        <p className="page-subtitle">{t('菜单入口已建立，现有功能和数据不会受到影响。')}</p>
+        <h1>{t('工作执行与负责人管理统计')}</h1>
+        <p className="page-subtitle">{t(page.title)}</p>
       </div>
       <span className="module-stage-badge">{t('规划中')}</span>
     </div>
+    <AdminModuleNav />
     <section className="admin-planning-card">
       <div className="admin-planning-icon" aria-hidden="true">规</div>
       <div>

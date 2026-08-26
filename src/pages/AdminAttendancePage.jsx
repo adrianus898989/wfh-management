@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
+import AdminModuleNav from '../components/AdminModuleNav'
 import { attendanceAmount, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
 import { adminLocalPageTabs } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
@@ -217,9 +218,7 @@ export default function AdminAttendancePage(){
       </div>
     </header>
 
-    {!!pageChrome.tabs.length&&<nav className="module-tabs attendance-tabs" aria-label={`${sectionTitle}子页面`}>
-      {pageChrome.tabs.map(item=><button type="button" key={item.tabValue} className={tab===item.tabValue?'active':''} onClick={()=>setTab(item.tabValue)}>{item.itemLabel}</button>)}
-    </nav>}
+    <AdminModuleNav />
 
     {access.loading&&<div className="attendance-table-state">正在读取页面权限…</div>}
     {!access.loading&&!tab&&<div className="attendance-error" role="alert"><span>当前账号没有排班与考勤页面权限。</span></div>}

@@ -2,6 +2,7 @@ import React,{useEffect,useMemo,useRef,useState} from 'react'
 import {useSearchParams} from 'react-router-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
+import AdminModuleNav from '../components/AdminModuleNav'
 import {adminLocalPageTabs} from '../config/navigation'
 import {useAdminI18n} from '../lib/adminI18n'
 import {rosterPersonKey,uniqueRosterCount} from '../lib/rosterIdentity'
@@ -193,7 +194,7 @@ export default function AdminReportsPage(){
       <div className="rp-live"><i/><div><small>{overview?.updated_at?`最近读取 ${new Date(overview.updated_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · 切回页面按需刷新`:'正在读取…'}</small></div><button onClick={()=>load()}>刷新</button></div>
     </div>
     {error&&<div className="rp-error">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {!!pageChrome.tabs.length&&<div className="rp-tabs">{pageChrome.tabs.map(item=><button key={item.tabValue} className={tab===item.tabValue?'active':''} onClick={()=>setTab(item.tabValue)}>{item.itemLabel}</button>)}</div>}
+    <AdminModuleNav />
     {!['错误统计','统计'].includes(tab)&&<GlobalFilters tab={tab} value={draftFilters} onChange={setDraftFilters} onQuery={applyFilters} onReset={resetFilters} options={overview?.options||{}} meta={`筛选后 ${uniqueCount(roster)} 人`}/>}
     {loading&&!overview?<Loading/>:<>
       {tab==='总汇'&&<Overview data={overview} rows={roster}/>} 

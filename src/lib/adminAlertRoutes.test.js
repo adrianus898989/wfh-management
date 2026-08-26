@@ -4,7 +4,7 @@ import { adminAlertEmployeeTarget, adminAlertTarget } from './adminAlertRoutes.j
 
 test('warning links include the tab required by the admin route guard', () => {
   assert.equal(new URL(adminAlertTarget('weekly_absence'), 'https://wfh.local').searchParams.get('tab'), '预警记录')
-  assert.equal(new URL(adminAlertTarget('payout_change'), 'https://wfh.local').searchParams.get('tab'), '收款资料审核')
+  assert.equal(new URL(adminAlertTarget('payout_change'), 'https://wfh.local').searchParams.get('tab'), '申请记录')
 })
 
 test('employee links keep the warning tab visible and open the selected employee drawer', () => {

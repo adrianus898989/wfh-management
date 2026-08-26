@@ -8,6 +8,7 @@ import {
   onlineTrainingReportTrainerName,
 } from '../lib/onlineTrainingIdentity'
 import {Pagination} from '../components/DataPageControls'
+import AdminModuleNav from '../components/AdminModuleNav'
 import {EmployeeDrawer} from './AdminEmployeesPage'
 import '../styles-online-training.css'
 
@@ -737,6 +738,8 @@ export default function OnlineTrainingPage(){
         {canOpenSubmit&&<button className="primary" onClick={openCreate}>＋ 提交线上培训日报</button>}
       </div>
     </header>
+
+    <AdminModuleNav />
 
     {error&&<div className="ot-error"><span>{error}</span><div>{error.includes('重新读取')&&<button className="retry" onClick={loadBootstrap}>重新读取</button>}<button className="close" onClick={()=>setError('')}>×</button></div></div>}
 

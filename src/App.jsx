@@ -359,6 +359,7 @@ function AppRoutes() {
     <Route path="/admin/work-execution" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="work-execution" /></AppLayout></Protected>} />
     <Route path="/admin/account-usage" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="account-usage" /></AppLayout></Protected>} />
     <Route path="/staff" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome /></AppLayout></Protected>} />
+    <Route path="/staff/rewards" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome mode="rewards" /></AppLayout></Protected>} />
     <Route path="/staff/schedule" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.schedule','我的排班')} /></AppLayout></Protected>} />
     <Route path="/staff/attendance" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.attendance','我的出勤')} /></AppLayout></Protected>} />
     <Route path="/staff/payroll" element={<Protected mode="staff"><AppLayout mode="staff"><StaffPayrollPage /></AppLayout></Protected>} />

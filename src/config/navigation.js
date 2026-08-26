@@ -86,6 +86,7 @@ export const adminNavigation = [
       item('待发布工资表', tab('/admin/payroll', '待发布'), ACCESS.payrollPending),
       item('已发布工资表', tab('/admin/payroll', '已发布'), ACCESS.payroll),
       item('导入记录', tab('/admin/payroll', '导入记录'), ACCESS.payroll),
+      item('修改工资信息记录', tab('/admin/payroll', '申请记录'), ACCESS.payoutHistory),
     ],
   },
   {
@@ -188,6 +189,15 @@ export function requestedAdminRoute(pathname, search = '') {
   }) || null
 }
 
+export function adminSectionItems(pathname, search = '') {
+  const routeEntry = requestedAdminRoute(pathname, search)
+  const section = adminNavigation.find(entry => entry.id === routeEntry?.groupId)
+  return {
+    section: section || null,
+    items: section?.children || [],
+  }
+}
+
 // Page components keep using their original tab values because those values are
 // also used by data branches, permissions and old bookmarks.  This helper is the
 // presentation bridge: it resolves a canonical page/tab to the new sidebar name
@@ -218,6 +228,41 @@ export function adminLocalPageTabs(pathname, canonicalTabs = [], activeTab = '')
 }
 
 export const staffNavigation = [
-  { to: '/staff', key: 'nav.home', label: '首页' },
-  { to: '/staff/exams', key: 'nav.exams', label: '我的考试' },
+  { id:'profile', to:'/staff', key:'nav.profilePanel', label:'个人档案面板' },
+  { id:'exams', to:'/staff/exams', key:'nav.exams', label:'我的考试' },
+  {
+    id:'rewards', key:'nav.rewards', label:'奖惩', children:[
+      { to:'/staff/rewards', key:'nav.errorRecords', label:'出错记录' },
+      { to:'/staff/rewards?tab=adjustments', key:'nav.adjustmentRecords', label:'奖惩记录' },
+      { to:'/staff/rewards?tab=exams', key:'nav.examRecords', label:'考试记录' },
+      { to:'/staff/rewards?tab=attendance', key:'nav.attendanceLeave', label:'考勤请假记录' },
+      { to:'/staff/rewards?tab=connectivity', key:'nav.connectivityRecords', label:'停电 / 断网记录' },
+    ],
+  },
+  {
+    id:'payroll', key:'nav.payroll', label:'工资', children:[
+      { to:'/staff/payroll', key:'nav.payrollRecords', label:'工资记录' },
+      { to:'/staff/payroll?tab=payment-change', key:'nav.paymentChange', label:'工资卡修改申请' },
+    ],
+  },
 ]
+
+const STAFF_DEFAULT_TABS = {
+  '/staff/rewards':'errors',
+  '/staff/payroll':'records',
+}
+
+export function staffTargetMatches(to, pathname, search = '') {
+  const target = targetUrl(to)
+  if (target.pathname !== pathname) return false
+  const requestedTab = new URLSearchParams(search).get('tab') ?? STAFF_DEFAULT_TABS[pathname] ?? null
+  const targetTab = target.searchParams.get('tab') ?? STAFF_DEFAULT_TABS[target.pathname] ?? null
+  return targetTab === requestedTab
+}
+
+export function requestedStaffGroup(pathname, search = '') {
+  return staffNavigation.find(entry => {
+    const candidates = entry.children || [entry]
+    return candidates.some(candidate => staffTargetMatches(candidate.to, pathname, search))
+  }) || null
+}

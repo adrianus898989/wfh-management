@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { adminAlertAttendanceDetails } from './adminAlertDetails.js'
+import {
+  adminAlertAttendanceDetails,
+  adminAlertEmployeeHireDate,
+  adminAlertKeyAttendanceEvidence,
+} from './adminAlertDetails.js'
 
 test('monthly leave exposes the existing category totals and dated evidence', () => {
   const detail = adminAlertAttendanceDetails({
@@ -54,3 +58,24 @@ test('legacy payloads remain renderable until the enriched refresh runs', () => 
   assert.equal(adminAlertAttendanceDetails({ alert_type:'exam_failed', payload:{} }), null)
 })
 
+test('alert table resolves the employee hire date from current and compatible payload fields', () => {
+  assert.equal(adminAlertEmployeeHireDate({ hire_date:'2026-03-04T00:00:00Z' }), '2026-03-04')
+  assert.equal(adminAlertEmployeeHireDate({ payload:{ employee_hire_date:'2025-12-18' } }), '2025-12-18')
+  assert.equal(adminAlertEmployeeHireDate({ payload:{} }), '—')
+})
+
+test('bell evidence includes the first abnormal date, reason and remaining dated records', () => {
+  const row = {
+    alert_type:'weekly_absence',
+    payload:{ events:[
+      { date:'2026-08-20', event_kind:'absence', reason:'生病', note:'已通知组长' },
+      { date:'2026-08-24', event_kind:'absence', reason:'临时缺席' },
+    ] },
+  }
+
+  assert.equal(
+    adminAlertKeyAttendanceEvidence(row, 'zh'),
+    '2026-08-20 · 缺席 · 原因：生病 · 备注：已通知组长；另有 1 个异常日期',
+  )
+  assert.equal(adminAlertKeyAttendanceEvidence({ alert_type:'exam_failed', payload:{} }, 'zh'), '')
+})
