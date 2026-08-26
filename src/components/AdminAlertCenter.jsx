@@ -23,6 +23,18 @@ const SEVERITY_META = {
   critical: { zh:'重点预警', en:'Critical' },
 }
 
+const ALERT_RULE_COPY = {
+  payout_change: { zh:'提交收款资料修改后即时提醒。', en:'Alerts immediately after a payment-details change is submitted.' },
+  resigned_account_active: { zh:'离职员工仍存在启用中的登录账号。', en:'A resigned employee still has an enabled login.' },
+  late_timeout_frequency: { zh:'7 天内迟到或超时相关扣款达到 3 次。', en:'At least 3 late or timeout deductions within 7 days.' },
+  consecutive_rest: { zh:'连续公休达到 2 天。', en:'At least 2 consecutive public rest days.' },
+  weekly_absence: { zh:'7 天内缺席达到 2 天。', en:'At least 2 absence days within 7 days.' },
+  monthly_leave: { zh:'本月休假超过 5 天；半天按 0.5 天，回家不计。', en:'More than 5 leave days this month; half days count as 0.5 and home leave is excluded.' },
+  error_spike: { zh:'3 天内错误记录达到 6 笔。', en:'At least 6 error records within 3 days.' },
+  deduction_frequency: { zh:'7 天内扣款达到 4 次。', en:'At least 4 deductions within 7 days.' },
+  exam_failed: { zh:'最近一次已评分考试未达到及格线。', en:'The latest graded exam did not reach the pass score.' },
+}
+
 const clean = value => String(value ?? '').trim()
 const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0
 const countText = value => numeric(value).toLocaleString(undefined, { maximumFractionDigits:1 })
@@ -183,12 +195,14 @@ export function AdminAlertRecordsPage() {
   const navigate = useNavigate()
   const requestRef = useRef(0)
   const latestRef = useRef(null)
+  const recordsRef = useRef(null)
   const canViewEmployees = access.hasPermission('employee.view')
   const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false })
   const [filters, setFilters] = useState(draft)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
   const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, pages:1, active:0, unread:0, typeCounts:{} })
+  const [ruleDialog, setRuleDialog] = useState(null)
   latestRef.current = { page, pageSize, filters }
 
   const typeOptions = useMemo(() => visibleAdminAlertTypes(access, {
@@ -245,9 +259,18 @@ export function AdminAlertRecordsPage() {
     setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
   }
   const selectCategory = (type, meta) => {
-    if (!meta.ready) return
+    if (!meta.ready) {
+      setRuleDialog({ kind:'pending', entries:[[type, meta]] })
+      return
+    }
     const next = { ...draft, group:meta.group, alert_type:type }
     setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
+    window.requestAnimationFrame(() => recordsRef.current?.scrollIntoView({ behavior:'smooth', block:'start' }))
+  }
+  const showActive = ({ unreadOnly=false } = {}) => {
+    const next = { search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:unreadOnly }
+    setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
+    window.requestAnimationFrame(() => recordsRef.current?.scrollIntoView({ behavior:'smooth', block:'start' }))
   }
   const markOne = async row => {
     try { await markAlertsRead(row.id) }
@@ -260,15 +283,15 @@ export function AdminAlertRecordsPage() {
 
   return <section className="admin-alert-records-page">
     <header className="admin-alert-records-head">
-      <div><small>RISK &amp; NOTIFICATION CENTER</small><h2>{locale === 'en' ? 'Warning records' : '预警记录'}</h2><p>{locale === 'en' ? 'Warnings are generated from synchronized Supabase records and filtered by your permission and data scope.' : '预警根据已同步到 Supabase 的记录生成，并按当前账号权限及管理范围过滤。'}</p></div>
-      <div><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every visible active warning as read, regardless of the current filters.' : '会把当前账号权限范围内所有进行中预警标为已读，不只限当前筛选结果。'} onClick={markAll}>{locale === 'en' ? 'Mark all visible read' : '全部可见已读'}</button>}</div>
+      <div><h2>{locale === 'en' ? 'Warning records' : '预警记录'}</h2></div>
+      <div><button type="button" className="secondary-action" onClick={() => setRuleDialog({ kind:'all', entries:visibleAdminAlertTypes(access) })}>{locale === 'en' ? 'Rules' : '规则说明'}</button><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every visible active warning as read, regardless of the current filters.' : '会把当前账号权限范围内所有进行中预警标为已读，不只限当前筛选结果。'} onClick={markAll}>{locale === 'en' ? 'Mark all visible read' : '全部可见已读'}</button>}</div>
     </header>
 
     <div className="admin-alert-summary">
-      <article><span>{locale === 'en' ? 'Active warnings' : '进行中预警'}</span><strong>{state.active}</strong><small>{locale === 'en' ? 'Current rules matched' : '当前仍符合规则'}</small></article>
-      <article className="unread"><span>{locale === 'en' ? 'Unread' : '未读消息'}</span><strong>{state.unread}</strong><small>{locale === 'en' ? 'For this account' : '仅统计当前账号'}</small></article>
-      <article><span>{locale === 'en' ? 'Live rules' : '已接入规则'}</span><strong>{visibleAdminAlertTypes(access, { readyOnly:true }).length}</strong><small>{locale === 'en' ? 'Permission-visible' : '当前权限可见'}</small></article>
-      <article><span>{locale === 'en' ? 'Pending sources' : '待接入数据源'}</span><strong>{visibleAdminAlertTypes(access).filter(([, meta]) => !meta.ready).length}</strong><small>{locale === 'en' ? 'Shown as zero, no false positives' : '固定显示 0，不制造误报'}</small></article>
+      <button type="button" onClick={() => showActive()}><span>{locale === 'en' ? 'Active warnings' : '进行中预警'}</span><strong>{state.active}</strong></button>
+      <button type="button" className="unread" onClick={() => showActive({ unreadOnly:true })}><span>{locale === 'en' ? 'Unread' : '未读消息'}</span><strong>{state.unread}</strong></button>
+      <button type="button" onClick={() => setRuleDialog({ kind:'ready', entries:visibleAdminAlertTypes(access, { readyOnly:true }) })}><span>{locale === 'en' ? 'Enabled rules' : '已启用规则'}</span><strong>{visibleAdminAlertTypes(access, { readyOnly:true }).length}</strong></button>
+      <button type="button" onClick={() => setRuleDialog({ kind:'pending', entries:visibleAdminAlertTypes(access).filter(([, meta]) => !meta.ready) })}><span>{locale === 'en' ? 'Rules to complete' : '待完善规则'}</span><strong>{visibleAdminAlertTypes(access).filter(([, meta]) => !meta.ready).length}</strong></button>
     </div>
 
     <section className="admin-alert-category-panel" aria-label={locale === 'en' ? 'Warning categories' : '预警子分类'}>
@@ -278,11 +301,10 @@ export function AdminAlertRecordsPage() {
       <div className="admin-alert-category-grid">
         {categoryOptions.map(([type, meta]) => {
           const pendingReason = adminAlertPendingReason(meta, locale)
-          return <button type="button" key={type} className={`${draft.alert_type === type ? 'active' : ''} ${meta.ready ? 'ready' : 'pending'}`} disabled={!meta.ready} title={pendingReason || ''} onClick={() => selectCategory(type, meta)}>
+          return <button type="button" key={type} className={`${draft.alert_type === type ? 'active' : ''} ${meta.ready ? 'ready' : 'pending'}`} title={pendingReason || ''} onClick={() => selectCategory(type, meta)}>
             <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
-            <span><b>{meta[locale]}</b><small>{meta.ready ? (locale === 'en' ? 'Live rule' : '已接入') : (locale === 'en' ? 'Pending source' : '待接入')}</small></span>
-            <strong>{meta.ready ? numeric(state.typeCounts[type]) : 0}</strong>
-            {!meta.ready && <em>{pendingReason}</em>}
+            <span><b>{meta[locale]}</b>{!meta.ready && <small>{locale === 'en' ? 'To complete' : '待完善'}</small>}</span>
+            <strong>{meta.ready ? numeric(state.typeCounts[type]) : '—'}</strong>
           </button>
         })}
       </div>
@@ -297,17 +319,8 @@ export function AdminAlertRecordsPage() {
       <div className="admin-alert-filter-actions"><button type="button" className="primary-action" onClick={apply}>{locale === 'en' ? 'Search' : '查询'}</button><button type="button" className="secondary-action" onClick={reset}>{locale === 'en' ? 'Reset' : '重置'}</button></div>
     </div>
 
-    <details className="admin-alert-rule-guide">
-      <summary>{locale === 'en' ? 'Warning rules' : '预警规则说明'}</summary>
-      <div>{locale === 'en' ? <>
-        <span>Payment changes: immediate</span><span>Errors: ≥6 / 3 days</span><span>Deductions: ≥4 / 7 days</span><span>Late or timeout: ≥3 / 7 days</span><span>Public rest: ≥2 consecutive days</span><span>Absence: ≥2 / 7 days</span><span>Monthly leave: &gt;5 days; half day = 0.5, home leave excluded</span><span>Exam: latest graded attempt failed</span><span>Resigned account: any enabled linked access</span><span>Pending cards remain 0 until the source contract is confirmed</span>
-      </> : <>
-        <span>收款资料修改：即时</span><span>错误：3天内 ≥6笔</span><span>扣款：7天内 ≥4次</span><span>迟到 / 超时：7天内 ≥3次</span><span>公休：连续 ≥2天</span><span>缺席：7天内 ≥2天</span><span>月休假：&gt;5天；半天算0.5，回家不计</span><span>考试：最近一次已评分结果不及格</span><span>离职账号：仍有任一启用登录映射</span><span>待接入卡片在规则确认前固定为 0</span>
-      </>}</div>
-    </details>
-
     {state.error && <div className="page-error employee-notice">{state.error}</div>}
-    <div className="admin-alert-record-list">
+    <div className="admin-alert-record-list" ref={recordsRef}>
       {state.loading && !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'Loading warning records…' : '正在读取预警记录…'}</div>
         : !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'No matching warnings.' : '暂无符合条件的预警记录。'}</div>
           : state.rows.map(row => {
@@ -325,5 +338,55 @@ export function AdminAlertRecordsPage() {
           })}
     </div>
     <Pagination page={page} pages={state.pages} total={state.total} pageSize={pageSize} loading={state.loading} onPage={next => { setPage(next); load(next, pageSize, filters) }} onPageSize={next => { setPageSize(next); setPage(1); load(1, next, filters) }}/>
+    {ruleDialog && <AlertRuleDialog locale={locale} value={ruleDialog} typeCounts={state.typeCounts} onClose={() => setRuleDialog(null)}/>}
   </section>
+}
+
+function AlertRuleDialog({ locale, value, typeCounts, onClose }) {
+  const dialogRef = useRef(null)
+  useEffect(() => {
+    const previousFocus = document.activeElement
+    const focusable = () => Array.from(dialogRef.current?.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') || [])
+    focusable()[0]?.focus()
+    const handleKey = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) return
+      const first = items[0]
+      const last = items.at(-1)
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('keydown', handleKey)
+      previousFocus?.focus?.()
+    }
+  }, [onClose])
+  const title = value.kind === 'pending'
+    ? (locale === 'en' ? 'Rules to complete' : '待完善规则')
+    : value.kind === 'ready'
+      ? (locale === 'en' ? 'Enabled rules' : '已启用规则')
+      : (locale === 'en' ? 'Warning rules' : '预警规则说明')
+  return <div className="admin-alert-rule-mask" role="presentation" onMouseDown={onClose}>
+    <section ref={dialogRef} className="admin-alert-rule-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={event => event.stopPropagation()}>
+      <header><div><h3>{title}</h3>{value.kind === 'pending' && <p>{locale === 'en' ? 'These are planned warnings, not failed synchronizations.' : '这些是尚未完善定义的预警，不是同步失败。'}</p>}</div><button type="button" onClick={onClose} aria-label={locale === 'en' ? 'Close' : '关闭'}>×</button></header>
+      <div className="admin-alert-rule-list">{value.entries.map(([type, meta]) => {
+        const pending = !meta.ready
+        return <article key={type}>
+          <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
+          <div><strong>{meta[locale]}</strong><p>{pending ? adminAlertPendingReason(meta, locale) : (ALERT_RULE_COPY[type]?.[locale] || (locale === 'en' ? 'Enabled warning rule.' : '已启用预警规则。'))}</p></div>
+          <em className={pending ? 'pending' : 'ready'}>{pending ? (locale === 'en' ? 'To complete' : '待完善') : `${numeric(typeCounts[type])} ${locale === 'en' ? 'active' : '条'}`}</em>
+        </article>
+      })}</div>
+    </section>
+  </div>
 }

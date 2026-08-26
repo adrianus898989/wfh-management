@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
 import { AdminPayoutChangeWorkspace } from '../components/PaymentChangeWorkflow'
+import { adminLocalPageTabs } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
@@ -385,11 +386,14 @@ export default function AdminPayrollPage(){
     }
   }
 
+  const pageChrome=adminLocalPageTabs('/admin/payroll',visibleTabs,tab)
+  const sectionTitle=pageChrome.active.sectionLabel||'工资统计'
+
   return <div className="content-page payroll-admin-page">
-    <div className="payroll-page-head"><div><small>PAYROLL MANAGEMENT</small><h1>{adminT('工资中心')}</h1></div>{!PAYMENT_CHANGE_TABS.has(tab)&&<button className="payroll-refresh" disabled={access.loading||!tab} onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>{adminT('刷新资料')}</button>}</div>
+    <div className="payroll-page-head"><div><small>PAYROLL REPORTS</small><h1>{adminT(sectionTitle)}</h1>{pageChrome.active.itemLabel&&<p>{adminT(pageChrome.active.itemLabel)}</p>}</div>{!PAYMENT_CHANGE_TABS.has(tab)&&<button className="payroll-refresh" disabled={access.loading||!tab} onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>{adminT('刷新资料')}</button>}</div>
     {state.error&&<div className="payroll-alert error">{state.error}</div>}
     {message&&<div className="payroll-alert">{message}</div>}
-    <div className="module-tabs payroll-tabs">{visibleTabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{adminT(item)}</button>)}</div>
+    {!!pageChrome.tabs.length&&<div className="module-tabs payroll-tabs">{pageChrome.tabs.map(item=><button key={item.tabValue} className={tab===item.tabValue?'active':''} onClick={()=>setTab(item.tabValue)}>{adminT(item.itemLabel)}</button>)}</div>}
 
     {access.loading?<div className="payroll-empty-small">{adminT('正在读取页面权限…')}</div>:!tab?<div className="payroll-alert error">{adminT('当前账号没有工资中心页面权限。')}</div>:PAYMENT_CHANGE_TABS.has(tab)?<AdminPayoutChangeWorkspace mode={tab==='收款资料审核'?'pending':'history'} canReview={access.hasPermission(PAYOUT_CHANGE_REVIEW)}/>:tab==='工资导入'?<>
       <section className="payroll-upload-card">

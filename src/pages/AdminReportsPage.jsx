@@ -2,6 +2,7 @@ import React,{useEffect,useMemo,useRef,useState} from 'react'
 import {useSearchParams} from 'react-router-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
+import {adminLocalPageTabs} from '../config/navigation'
 import {useAdminI18n} from '../lib/adminI18n'
 import {rosterPersonKey,uniqueRosterCount} from '../lib/rosterIdentity'
 
@@ -182,14 +183,17 @@ export default function AdminReportsPage(){
   const roster=useMemo(()=>filterRoster(overview?.roster||[],filters),[overview,filters])
   const applyFilters=()=>setFilters({...draftFilters})
   const resetFilters=()=>{const next=blankFilters();setDraftFilters(next);setFilters(next)}
+  const pageChrome=adminLocalPageTabs('/admin/reports',VISIBLE_OPS,tab)
+  const sectionTitle=pageChrome.active.sectionLabel||'统计报表'
+  const sectionKicker=pageChrome.active.groupId==='attendance_exams'?'ATTENDANCE · EXAMS · REWARDS':'WORKFORCE & REPORTS'
 
   return <div className="content-page reports-page rp-page">
     <div className="rp-head">
-      <div><div className="module-kicker">REPORTS & OPERATIONS</div><h1>统计报表</h1></div>
+      <div><div className="module-kicker">{sectionKicker}</div><h1>{sectionTitle}</h1>{pageChrome.active.itemLabel&&<p>{pageChrome.active.itemLabel}</p>}</div>
       <div className="rp-live"><i/><div><small>{overview?.updated_at?`最近读取 ${new Date(overview.updated_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · 切回页面按需刷新`:'正在读取…'}</small></div><button onClick={()=>load()}>刷新</button></div>
     </div>
     {error&&<div className="rp-error">{error}<button onClick={()=>setError('')}>×</button></div>}
-    <div className="rp-tabs">{VISIBLE_OPS.map(x=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}</div>
+    {!!pageChrome.tabs.length&&<div className="rp-tabs">{pageChrome.tabs.map(item=><button key={item.tabValue} className={tab===item.tabValue?'active':''} onClick={()=>setTab(item.tabValue)}>{item.itemLabel}</button>)}</div>}
     {!['错误统计','统计'].includes(tab)&&<GlobalFilters tab={tab} value={draftFilters} onChange={setDraftFilters} onQuery={applyFilters} onReset={resetFilters} options={overview?.options||{}} meta={`筛选后 ${uniqueCount(roster)} 人`}/>}
     {loading&&!overview?<Loading/>:<>
       {tab==='总汇'&&<Overview data={overview} rows={roster}/>} 

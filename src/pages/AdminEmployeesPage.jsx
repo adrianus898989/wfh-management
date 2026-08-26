@@ -5,6 +5,7 @@ import { Pagination } from '../components/DataPageControls'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
 import { AdminAlertRecordsPage } from '../components/AdminAlertCenter'
+import { adminLocalPageTabs } from '../config/navigation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
@@ -1174,12 +1175,15 @@ export default function AdminEmployeesPage(){
   const positionPages=Math.max(1,Math.ceil(filteredPositions.length/positionPageSize))
   const positionSlice=filteredPositions.slice((positionPage-1)*positionPageSize,positionPage*positionPageSize)
   const visibleTab=tabs.includes(tab)?tab:''
+  const pageChrome=adminLocalPageTabs('/admin/employees',tabs,visibleTab)
+  const sectionTitle=pageChrome.active.sectionLabel||'员工管理'
+  const sectionKicker={alerts:'RISK & NOTIFICATION CENTER',workforce:'WORKFORCE & SCHEDULING',attendance_exams:'ATTENDANCE · EXAMS · REWARDS'}[pageChrome.active.groupId]||'PEOPLE & ORGANIZATION'
 
   return <div className="content-page employee-page pro-employee-page">
     <div className="module-title-row">
       <div>
-        <div className="module-kicker">PEOPLE & ORGANIZATION</div>
-        <h1>员工管理</h1>
+        <div className="module-kicker">{sectionKicker}</div>
+        <h1>{sectionTitle}</h1>
       </div>
       <div className="employee-title-actions">
         {visibleTab&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>}
@@ -1187,9 +1191,9 @@ export default function AdminEmployeesPage(){
       </div>
     </div>
 
-    <div className="module-tabs">
-      {tabs.map(x=><button key={x} className={visibleTab===x?'active':''} onClick={()=>setTab(x)}>{x}</button>)}
-    </div>
+    {pageChrome.tabs.length>1&&<div className="module-tabs">
+      {pageChrome.tabs.map(item=><button key={item.tabValue} className={visibleTab===item.tabValue?'active':''} onClick={()=>setTab(item.tabValue)}>{item.itemLabel}</button>)}
+    </div>}
 
     {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
     {visibleTab==='员工档案'&&<>

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
 import { attendanceAmount, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
+import { adminLocalPageTabs } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
 import { adjustmentReason } from '../lib/adjustmentPresentation'
 import { useAdminAccess } from '../lib/adminAccess'
@@ -201,21 +202,24 @@ export default function AdminAttendancePage(){
   const rows=useMemo(()=>normalizeAttendanceRows(data.rows||[]),[data.rows])
   const options=data.options||{}
   const subtitle=tab==='排班表'?'按团队和班次快速查看当前人员安排。':tab==='出勤表'?'固定员工资料，横向查看每月 1–31 日出勤记录。':tab==='奖金 / 扣款'?'奖金、扣款与币种清晰分列。':'集中查看员工考勤、请假与离职记录。'
+  const pageChrome=adminLocalPageTabs('/admin/schedule',visibleTabs,tab)
+  const sectionTitle=pageChrome.active.sectionLabel||'排班与考勤'
+  const pageTitle=pageChrome.active.itemLabel||tab
   const canCreateAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_CREATE)
   const canEditAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_APPROVE)
 
   return <div className="content-page attendance-page">
     <header className="attendance-page-head">
-      <div><small>ATTENDANCE OPERATIONS</small><h1>排班与考勤</h1><p>{subtitle}</p></div>
+      <div><small>ATTENDANCE OPERATIONS</small><h1>{sectionTitle}</h1><p>{pageTitle}{subtitle?` · ${subtitle}`:''}</p></div>
       <div className="attendance-head-actions">
         {tab==='奖金 / 扣款'&&canCreateAdjustment&&<button type="button" className="attendance-adjustment-create" onClick={()=>setAdjustmentEditor({mode:'create',row:null})}>＋ 新增奖金 / 扣款</button>}
         {requestTab(tab)&&<button type="button" onClick={()=>setRefreshKey(value=>value+1)} disabled={state.loading}>{state.loading?'刷新中…':'刷新数据'}</button>}
       </div>
     </header>
 
-    <nav className="module-tabs attendance-tabs" aria-label="排班与考勤页面">
-      {visibleTabs.map(value=><button type="button" key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{value}</button>)}
-    </nav>
+    {!!pageChrome.tabs.length&&<nav className="module-tabs attendance-tabs" aria-label={`${sectionTitle}子页面`}>
+      {pageChrome.tabs.map(item=><button type="button" key={item.tabValue} className={tab===item.tabValue?'active':''} onClick={()=>setTab(item.tabValue)}>{item.itemLabel}</button>)}
+    </nav>}
 
     {access.loading&&<div className="attendance-table-state">正在读取页面权限…</div>}
     {!access.loading&&!tab&&<div className="attendance-error" role="alert"><span>当前账号没有排班与考勤页面权限。</span></div>}

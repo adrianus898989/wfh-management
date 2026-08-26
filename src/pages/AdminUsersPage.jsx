@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { adminLocalPageTabs } from '../config/navigation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 
@@ -225,6 +226,8 @@ export default function AdminUsersPage() {
   const visibleStaff = staff.filter(a => matchesSearch(a.login_email, a.employee?.employee_no, a.employee?.full_name, a.employee?.teams?.name, a.employee?.positions?.name))
   const visibleRoles = roles.filter(r => r.code !== 'employee' && matchesSearch(r.name, r.code))
   const visibleTab = visibleTabs.includes(tab) ? tab : ''
+  const pageChrome = adminLocalPageTabs('/admin/users', visibleTabs, visibleTab)
+  const sectionTitle = pageChrome.active.sectionLabel || '后台账号使用情况'
 
   const rolePermissionMap = useMemo(() => {
     const map = new Map()
@@ -581,13 +584,11 @@ export default function AdminUsersPage() {
       `}</style>
 
       <div className="page-toolbar">
-        <h1>{adminT('用户与权限')}</h1>
+        <h1>{adminT(sectionTitle)}</h1>
       </div>
 
       <div className="access-tabs">
-        {visibleTabs.includes('backend') && <button className={visibleTab === 'backend' ? 'active' : ''} onClick={() => setTab('backend')}>{adminT('后台账号')}</button>}
-        {visibleTabs.includes('staff') && <button className={visibleTab === 'staff' ? 'active' : ''} onClick={() => setTab('staff')}>{adminT('员工账号')}</button>}
-        {visibleTabs.includes('roles') && <button className={visibleTab === 'roles' ? 'active' : ''} onClick={() => setTab('roles')}>{adminT('角色与权限')}</button>}
+        {pageChrome.tabs.map(item => <button key={item.tabValue} className={visibleTab === item.tabValue ? 'active' : ''} onClick={() => setTab(item.tabValue)}>{adminT(item.itemLabel)}</button>)}
       </div>
 
       {error && <div className="page-error">{error}</div>}

@@ -188,6 +188,35 @@ export function requestedAdminRoute(pathname, search = '') {
   }) || null
 }
 
+// Page components keep using their original tab values because those values are
+// also used by data branches, permissions and old bookmarks.  This helper is the
+// presentation bridge: it resolves a canonical page/tab to the new sidebar name
+// without changing the underlying URL or feature key.
+export function adminPagePresentation(pathname, canonicalTab = '') {
+  const search = canonicalTab ? `?tab=${enc(canonicalTab)}` : ''
+  const routeEntry = requestedAdminRoute(pathname, search)
+  const section = adminNavigation.find(entry => entry.id === routeEntry?.groupId)
+  const candidates = section?.children || (section ? [section] : [])
+  const item = candidates.find(entry => adminTargetMatches(entry.to, pathname, search))
+  return {
+    groupId: routeEntry?.groupId || '',
+    sectionLabel: section?.label || '',
+    itemLabel: item?.label || canonicalTab || section?.label || '',
+    listed: Boolean(item),
+  }
+}
+
+export function adminLocalPageTabs(pathname, canonicalTabs = [], activeTab = '') {
+  const active = adminPagePresentation(pathname, activeTab)
+  const section = adminNavigation.find(entry => entry.id === active.groupId)
+  const menuOrder = new Map((section?.children || (section ? [section] : [])).map((entry, index) => [entry.label, index]))
+  const tabs = canonicalTabs
+    .map(tabValue => ({ tabValue, ...adminPagePresentation(pathname, tabValue) }))
+    .filter(entry => entry.listed && entry.groupId === active.groupId)
+    .sort((left, right) => (menuOrder.get(left.itemLabel) ?? Number.MAX_SAFE_INTEGER) - (menuOrder.get(right.itemLabel) ?? Number.MAX_SAFE_INTEGER))
+  return { active, tabs }
+}
+
 export const staffNavigation = [
   { to: '/staff', key: 'nav.home', label: '首页' },
   { to: '/staff/exams', key: 'nav.exams', label: '我的考试' },

@@ -1,6 +1,7 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react'
 import {createPortal} from 'react-dom'
 import {supabase} from '../lib/supabase'
+import {adminPagePresentation} from '../config/navigation'
 import {
   onlineTrainingIdentityKey,
   onlineTrainingReportMatchesTrainer,
@@ -725,10 +726,11 @@ export default function OnlineTrainingPage(){
   const clearFilters=()=>{const next=defaultFilters();setDraftFilters(next);setFilters(next);setPage(1);setSearchVersion(version=>version+1)}
   const filterDirty=JSON.stringify(draftFilters)!==JSON.stringify(filters)
   const activeFilterCount=Object.values(filters).filter(Boolean).length
+  const pagePresentation=adminPagePresentation('/admin/daily','线上培训报告')
 
   return <div className="content-page ot-page">
     <header className="ot-header">
-      <div><div className="module-kicker">ONLINE TRAINING</div><h1>线上培训日报</h1></div>
+      <div><div className="module-kicker">ATTENDANCE · EXAMS · REWARDS</div><h1>{pagePresentation.sectionLabel||'考勤考试奖惩统计'}</h1><p>{pagePresentation.itemLabel||'线上培训日报记录表'}</p></div>
       <div className="ot-header-actions">
         <span className={`ot-access ${canOpenSubmit?'ok':'read'}`}>{myRoster.length?`已关联 ${myRoster.length} 名组员`:canAdminSelect?'管理员代填':'仅查看'}</span>
         <button onClick={loadBootstrap} disabled={loading||searching}>{loading?'读取中…':'刷新'}</button>

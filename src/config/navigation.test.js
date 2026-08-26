@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { adminNavigation, adminTargetMatches, requestedAdminRoute } from './navigation.js'
+import { adminLocalPageTabs, adminNavigation, adminPagePresentation, adminTargetMatches, requestedAdminRoute } from './navigation.js'
 
 const visibleItems = adminNavigation.flatMap(entry => entry.children || [entry])
 const group = id => adminNavigation.find(entry => entry.id === id)
@@ -52,4 +52,27 @@ test('planning routes use existing permissions and are part of the guarded route
   const chatRoute = requestedAdminRoute('/admin/account-usage', '')
   assert.ok(eventRoute?.permissions?.includes('report.view'))
   assert.deepEqual(chatRoute?.permissions, ['user.view'])
+})
+
+test('page chrome uses the new menu labels without changing canonical route tabs', () => {
+  assert.deepEqual(
+    adminPagePresentation('/admin/schedule', '出勤表'),
+    { groupId:'attendance_exams', sectionLabel:'考勤考试奖惩统计', itemLabel:'月考勤休假记录表', listed:true },
+  )
+  assert.equal(adminPagePresentation('/admin/training', '题库').itemLabel, '题库表')
+  assert.equal(adminPagePresentation('/admin/employees', '预警记录').sectionLabel, '预警中心')
+
+  const attendance = adminLocalPageTabs(
+    '/admin/schedule',
+    ['排班表','出勤表','今日考勤','考勤记录','请假审批','奖金 / 扣款'],
+    '出勤表',
+  )
+  assert.deepEqual(attendance.tabs.map(entry => entry.tabValue), ['出勤表','考勤记录','请假审批','奖金 / 扣款'])
+  assert.deepEqual(attendance.tabs.map(entry => entry.itemLabel), ['月考勤休假记录表','日考勤打卡记录表','请假审批记录表','奖惩表'])
+
+  const exams = adminLocalPageTabs('/admin/training', ['考试概览','考试记录','题库','人工批改'], '考试概览')
+  assert.deepEqual(exams.tabs.map(entry => entry.itemLabel), ['考试汇总表','人工批改','考试记录表','题库表'])
+
+  const accounts = adminLocalPageTabs('/admin/users', ['backend','staff','roles'], 'backend')
+  assert.deepEqual(accounts.tabs.map(entry => entry.itemLabel), ['员工前端账号','后台账号','后台角色权限'])
 })
