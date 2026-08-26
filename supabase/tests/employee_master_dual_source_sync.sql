@@ -265,17 +265,25 @@ begin
     select 1
     from public.report_sheet_snapshots snapshot
     where snapshot.source = '居家排班表/填表'
-      and snapshot.row_count = 2
+      and snapshot.row_count = 3
       and exists (
         select 1 from jsonb_array_elements(snapshot.payload) row
         where row->>'employee_id' = 'WD-SYNC-ONSITE'
       )
-      and not exists (
+      and exists (
         select 1 from jsonb_array_elements(snapshot.payload) row
         where row->>'employee_id' = 'WD-SYNC-NONONSITE'
       )
   ) then
-    raise exception 'report snapshot did not reuse the onsite-gated schedule set';
+    raise exception 'report snapshot did not retain the complete normalized schedule set';
+  end if;
+  if not exists (
+    select 1 from public.report_employee_directory_cache directory
+    where directory.employee_no = 'WD-SYNC-NONONSITE'
+      and directory.source_kind = 'roster'
+      and directory.shift_name = 'DAY SHIFT'
+  ) then
+    raise exception 'schedule display cache omitted a non-onsite-marked roster row';
   end if;
   if exists (
     select 1 from public.user_access access

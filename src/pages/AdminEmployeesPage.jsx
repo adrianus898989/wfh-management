@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
-import { AdminAlertRecordsPage } from '../components/AdminAlertCenter'
+import { AdminAlertRecordsPage, EmployeeAlertHistoryPanel } from '../components/AdminAlertCenter'
 import AdminDataEntryLogs from '../components/AdminDataEntryLogs'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { adminLocalPageTabs } from '../config/navigation'
@@ -1752,6 +1752,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const paymentTitle=paymentMode==='usdt'?'USDT 收款资料':'银行卡 / 钱包收款资料'
   const drawerTabs=useMemo(()=>[
     ['info','员工信息',true],
+    ['alerts','预警记录',adminAccess.hasAnyPermission(ADMIN_ALERT_PERMISSIONS)],
     ['errors','员工出错记录',adminAccess.hasPermission('employee.view')||adminAccess.hasPermission('report.view')],
     ['exams','员工考试记录',adminAccess.hasPermission('employee.view')||adminAccess.hasPermission('exam.view')],
     ['connectivity','停电 / 断网记录',adminAccess.hasPermission('connectivity.view')],
@@ -1863,6 +1864,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
         {drawerTabs.map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
       </nav>
       <div className="detail-sections detail-sections-v11">
+        {activeSection==='alerts'&&<EmployeeAlertHistoryPanel employeeId={e.id}/>}
         {activeSection==='exams'&&<EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>}
         {activeSection==='errors'&&<EmployeeErrorPanel data={employeeErrors} loading={employeeErrorsLoading} error={employeeErrorsError}/>}
         {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivityData} loading={connectivityLoading} error={connectivityError}/>}

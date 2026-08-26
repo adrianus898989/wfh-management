@@ -13,8 +13,10 @@ import {
 import { adminAlertEmployeeTarget, adminAlertTarget } from '../lib/adminAlertRoutes'
 import {
   adminAlertAttendanceDetails,
+  adminAlertEmployeeHistoryFilters,
   adminAlertEmployeeHireDate,
   adminAlertKeyAttendanceEvidence,
+  adminAlertReadState,
 } from '../lib/adminAlertDetails'
 import { supabase } from '../lib/supabase'
 import '../styles-admin-alerts.css'
@@ -230,6 +232,115 @@ export function AdminAlertBell({ access }) {
   </div>
 }
 
+export function EmployeeAlertHistoryPanel({ employeeId }) {
+  const { locale } = useAdminI18n()
+  const requestRef = useRef(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [expandedId, setExpandedId] = useState('')
+  const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, pages:1 })
+  const filters = useMemo(() => adminAlertEmployeeHistoryFilters(employeeId), [employeeId])
+
+  const load = async (nextPage=page, nextSize=pageSize) => {
+    if (!filters) {
+      setState({ loading:false, error:'', rows:[], total:0, pages:1 })
+      return
+    }
+    const requestId = ++requestRef.current
+    setState(current => ({ ...current, loading:true, error:'' }))
+    try {
+      const data = await loadAlertPage(filters, nextPage, nextSize)
+      if (requestId !== requestRef.current) return
+      setState({
+        loading:false,
+        error:'',
+        rows:Array.isArray(data.rows) ? data.rows : [],
+        total:numeric(data.total),
+        pages:Math.max(1, numeric(data.pages)),
+      })
+    } catch (error) {
+      if (requestId !== requestRef.current) return
+      setState(current => ({
+        ...current,
+        loading:false,
+        error:alertErrorMessage(error, locale, locale === 'en' ? 'Unable to load employee warning history.' : '员工预警历史读取失败'),
+      }))
+    }
+  }
+
+  useEffect(() => {
+    setPage(1)
+    setExpandedId('')
+    setState({ loading:true, error:'', rows:[], total:0, pages:1 })
+    load(1, pageSize)
+    return () => { requestRef.current += 1 }
+  }, [employeeId, locale])
+
+  const toggleRow = async row => {
+    setExpandedId(current => String(current) === String(row.id) ? '' : String(row.id))
+    if (!row.unread) return
+    try {
+      await markAlertsRead(row.id)
+      setState(current => ({
+        ...current,
+        rows:current.rows.map(item => String(item.id) === String(row.id) ? { ...item, unread:false } : item),
+      }))
+    } catch (error) {
+      setState(current => ({
+        ...current,
+        error:alertErrorMessage(error, locale, locale === 'en' ? 'Unable to mark this warning as read.' : '预警已读状态更新失败'),
+      }))
+    }
+  }
+
+  return <section className="detail-panel employee-alert-history-panel">
+    <div className="detail-panel-head">
+      <div><h3>{locale === 'en' ? 'Warning history' : '员工预警记录'}</h3><p>{locale === 'en' ? 'Only warnings visible within your current permissions and employee scope are shown.' : '仅显示当前账号权限与员工范围内可查看的历史预警。'}</p></div>
+      <span className="employee-exam-count">{state.total} {locale === 'en' ? 'records' : '条'}</span>
+    </div>
+    {state.error && <div className="employee-alert-history-error">{state.error}</div>}
+    {state.loading && !state.rows.length
+      ? <div className="employee-exam-empty">{locale === 'en' ? 'Loading warning history…' : '正在读取预警历史…'}</div>
+      : !state.rows.length
+        ? <div className="employee-exam-empty">{locale === 'en' ? 'No warning history.' : '暂无预警记录'}</div>
+        : <div className="employee-alert-history-table">
+          <div className="employee-alert-history-head" aria-hidden="true">
+            <span>{locale === 'en' ? 'Time' : '时间'}</span><span>{locale === 'en' ? 'Type' : '类型'}</span><span>{locale === 'en' ? 'Summary / reason' : '摘要 / 原因'}</span><span>{locale === 'en' ? 'Level' : '级别'}</span><span>{locale === 'en' ? 'Read' : '已读状态'}</span>
+          </div>
+          {state.rows.map(row => {
+            const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
+            const copy = alertCopy(row, locale)
+            const evidence = adminAlertKeyAttendanceEvidence(row, locale)
+            const readState = adminAlertReadState(row, locale)
+            const expanded = String(expandedId) === String(row.id)
+            return <article className={`employee-alert-history-item ${readState.unread ? 'unread' : ''} ${expanded ? 'expanded' : ''}`} key={row.id}>
+              <button type="button" className="employee-alert-history-row" aria-expanded={expanded} onClick={() => toggleRow(row)}>
+                <time data-label={locale === 'en' ? 'Time' : '时间'} data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</time>
+                <span data-label={locale === 'en' ? 'Type' : '类型'} className="employee-alert-history-type"><i className={`admin-alert-category-dot ${meta.tone}`} />{meta[locale] || eventName(row, locale)}</span>
+                <span data-label={locale === 'en' ? 'Summary / reason' : '摘要 / 原因'} className="employee-alert-history-summary" data-admin-i18n-skip><strong>{copy.title}</strong><small>{evidence || copy.message}</small></span>
+                <span data-label={locale === 'en' ? 'Level' : '级别'}><i className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</i>{!row.is_active && <i className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</i>}</span>
+                <span data-label={locale === 'en' ? 'Read' : '已读状态'}><b className={`admin-alert-read-state ${readState.unread ? 'unread' : 'read'}`}>{readState.label}</b><i className="employee-alert-history-chevron" aria-hidden="true">⌄</i></span>
+              </button>
+              {expanded && <div className="employee-alert-history-expanded">
+                <p data-admin-i18n-skip>{copy.message}</p>
+                <AlertAttendanceDetails row={row} locale={locale}/>
+                <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{locale === 'en' ? 'Last updated' : '最后更新'} <b data-admin-i18n-skip>{formatTime(row.last_seen_at, locale)}</b></span></div>
+              </div>}
+            </article>
+          })}
+        </div>}
+    {state.total > 0 && <Pagination
+      page={page}
+      pages={state.pages}
+      total={state.total}
+      pageSize={pageSize}
+      loading={state.loading}
+      onPage={next => { setPage(next); load(next, pageSize) }}
+      onPageSize={next => { setPageSize(next); setPage(1); load(1, next) }}
+    />}
+  </section>
+}
+
 export function AdminAlertRecordsPage() {
   const access = useAdminAccess()
   const { locale } = useAdminI18n()
@@ -385,16 +496,17 @@ export function AdminAlertRecordsPage() {
           : state.rows.map(row => {
             const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
             const copy = alertCopy(row, locale)
+            const readState = adminAlertReadState(row, locale)
             const expanded = String(expandedId) === String(row.id)
             return <article className={`admin-alert-table-item ${row.unread ? 'unread' : ''} ${row.is_active ? 'active' : 'resolved'} ${expanded ? 'expanded' : ''}`} key={row.id} data-alert-id={row.id}>
               <button type="button" className="admin-alert-table-row" aria-expanded={expanded} onClick={() => toggleRow(row)}>
                 <span data-label={locale === 'en' ? 'Hire date' : '入职日期'} data-admin-i18n-skip>{adminAlertEmployeeHireDate(row)}</span>
                 <strong data-label={locale === 'en' ? 'Employee ID' : '员工 ID'} data-admin-i18n-skip>{row.employee_no || '—'}</strong>
                 <span data-label={locale === 'en' ? 'Name' : '姓名'} data-admin-i18n-skip>{row.employee_name || '—'}</span>
-                <span data-label={locale === 'en' ? 'Warning type' : '预警类型'} className="admin-alert-table-type"><i className={`admin-alert-category-dot ${meta.tone}`} />{meta[locale] || eventName(row, locale)}{row.unread && <b>{locale === 'en' ? 'New' : '未读'}</b>}</span>
+                <span data-label={locale === 'en' ? 'Warning type' : '预警类型'} className="admin-alert-table-type"><i className={`admin-alert-category-dot ${meta.tone}`} />{meta[locale] || eventName(row, locale)}</span>
                 <span data-label={locale === 'en' ? 'Level' : '级别'}><i className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</i>{!row.is_active && <i className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</i>}</span>
                 <time data-label={locale === 'en' ? 'Updated' : '更新时间'} data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</time>
-                <span data-label={locale === 'en' ? 'Summary' : '预警摘要'} className="admin-alert-table-summary" data-admin-i18n-skip>{copy.message}</span>
+                <span data-label={locale === 'en' ? 'Summary' : '预警摘要'} className="admin-alert-table-summary"><span data-admin-i18n-skip>{copy.message}</span><b className={`admin-alert-read-state ${readState.unread ? 'unread' : 'read'}`}>{readState.label}</b></span>
                 <span className="admin-alert-table-expand">{expanded ? (locale === 'en' ? 'Collapse' : '收起') : (locale === 'en' ? 'Open' : '展开')}<i aria-hidden="true">⌄</i></span>
               </button>
               {expanded && <div className="admin-alert-expanded-panel">

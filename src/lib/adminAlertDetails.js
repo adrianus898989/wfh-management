@@ -89,3 +89,20 @@ export function adminAlertKeyAttendanceEvidence(row, locale='zh') {
     ? `${primary}; ${remainder} more dated ${remainder === 1 ? 'record' : 'records'}`
     : `${primary}；另有 ${remainder} 个异常日期`
 }
+
+export function adminAlertEmployeeHistoryFilters(employeeId) {
+  const normalizedEmployeeId = clean(employeeId)
+  return normalizedEmployeeId
+    ? { status:'all', employee_id:normalizedEmployeeId }
+    : null
+}
+
+export function adminAlertReadState(row, locale='zh') {
+  const unread = Boolean(row?.unread)
+  return {
+    unread,
+    label:locale === 'en'
+      ? (unread ? 'Unread' : 'Read')
+      : (unread ? '未读' : '已读'),
+  }
+}

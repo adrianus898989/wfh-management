@@ -301,6 +301,7 @@ revoke all on function public.online_training_identity_key(text) from public;
 revoke all on function public.online_training_is_assigned_member(uuid) from public;
 revoke all on function public.online_training_bootstrap() from public;
 
-grant execute on function public.online_training_identity_key(text) to authenticated;
+grant execute on function public.online_training_identity_key(text)
+  to authenticated, service_role;
 grant execute on function public.online_training_is_assigned_member(uuid) to authenticated;
 grant execute on function public.online_training_bootstrap() to authenticated;

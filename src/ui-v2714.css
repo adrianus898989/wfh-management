@@ -2,13 +2,14 @@
 
 /* Report team matrix: fit the whole table into the card, use the page scrollbar only. */
 .wfh-team-fit-card .rp-table-scroll{max-height:none!important;height:auto!important;overflow:visible!important}
+.wfh-team-fit-card .rp-team-table-scroll{max-height:none!important;height:auto!important;overflow-x:auto!important;overflow-y:visible!important}
 .wfh-team-fit-card .rp-team-table{width:100%!important;min-width:0!important;table-layout:fixed!important}
 .wfh-team-fit-card .rp-team-table th{position:static!important;background:#101827!important;color:#f8fafc!important;padding:9px 4px!important;font-size:10px!important;font-weight:850!important;line-height:1.15!important;white-space:normal!important;word-break:keep-all!important}
-.wfh-team-fit-card .rp-team-table td{height:48px!important;padding:7px 4px!important;font-size:10.5px!important;font-weight:620!important;line-height:1.2!important;white-space:normal!important;overflow:hidden!important;text-overflow:ellipsis!important}
+.wfh-team-fit-card .rp-team-table td{height:38px!important;padding:4px 4px!important;font-size:10.5px!important;font-weight:620!important;line-height:1.15!important;white-space:normal!important;overflow:hidden!important;text-overflow:ellipsis!important}
 .wfh-team-fit-card .rp-team-table th:first-child,.wfh-team-fit-card .rp-team-table td:first-child{position:static!important;width:78px!important;min-width:78px!important;max-width:78px!important;box-shadow:none!important}
 .wfh-team-fit-card .rp-team-table th:nth-child(2),.wfh-team-fit-card .rp-team-table td:nth-child(2){width:55px!important}
 .wfh-team-fit-card .rp-team-table .rp-link,.wfh-team-fit-card .rp-team-table .rp-special-count{font-weight:850!important;font-size:10.5px!important}
-.wfh-team-fit-card .rp-team-table .rp-avg{margin-top:3px!important;min-width:0!important;width:100%!important;max-width:68px!important;padding:3px 3px!important;font-size:8px!important;font-weight:800!important}
+.wfh-team-fit-card .rp-team-table .rp-avg{margin-top:1px!important;min-width:0!important;width:100%!important;max-width:68px!important;padding:2px 3px!important;font-size:8px!important;font-weight:800!important;line-height:1.1!important}
 .wfh-team-fit-card .rp-table-scroll::-webkit-scrollbar{display:none!important}
 
 /* Replace the improvised lower cards with the original-site visual language. */
@@ -84,5 +85,5 @@ label[data-native-risk-filter="1"] select:focus{outline:none!important;border-co
   .rp-grid2{grid-template-columns:1fr!important}
   .wfh-error-primary,.wfh-error-advanced{grid-template-columns:repeat(2,minmax(0,1fr))!important}
   .employee-core-search-grid,.v24-advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
-  .wfh-team-fit-card .rp-table-scroll{overflow-x:auto!important}.wfh-team-fit-card .rp-team-table{min-width:1180px!important}
+  .wfh-team-fit-card .rp-team-table-scroll{overflow-x:auto!important;overflow-y:visible!important}.wfh-team-fit-card .rp-team-table{min-width:1180px!important}
 }

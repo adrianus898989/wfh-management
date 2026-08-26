@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
   adminAlertAttendanceDetails,
+  adminAlertEmployeeHistoryFilters,
   adminAlertEmployeeHireDate,
   adminAlertKeyAttendanceEvidence,
+  adminAlertReadState,
 } from './adminAlertDetails.js'
+
+const employeeHistoryMigration = readFileSync(new URL(
+  '../../supabase/migrations/20260826152500_admin_alert_employee_history_filter.sql',
+  import.meta.url,
+), 'utf8')
+const alertCenterComponent = readFileSync(new URL('../components/AdminAlertCenter.jsx', import.meta.url), 'utf8')
 
 test('monthly leave exposes the existing category totals and dated evidence', () => {
   const detail = adminAlertAttendanceDetails({
@@ -78,4 +87,27 @@ test('bell evidence includes the first abnormal date, reason and remaining dated
     '2026-08-20 · 缺席 · 原因：生病 · 备注：已通知组长；另有 1 个异常日期',
   )
   assert.equal(adminAlertKeyAttendanceEvidence({ alert_type:'exam_failed', payload:{} }, 'zh'), '')
+})
+
+test('employee warning history uses an exact employee filter and includes resolved incidents', () => {
+  assert.deepEqual(adminAlertEmployeeHistoryFilters('  employee-42  '), {
+    status:'all',
+    employee_id:'employee-42',
+  })
+  assert.equal(adminAlertEmployeeHistoryFilters(''), null)
+})
+
+test('warning read state has explicit localized labels for the summary cell', () => {
+  assert.deepEqual(adminAlertReadState({ unread:true }, 'zh'), { unread:true, label:'未读' })
+  assert.deepEqual(adminAlertReadState({ unread:false }, 'en'), { unread:false, label:'Read' })
+  assert.match(alertCenterComponent, /className="admin-alert-table-summary"[\s\S]{0,300}admin-alert-read-state/)
+})
+
+test('employee warning history keeps the existing session, type permission, and employee scope guards', () => {
+  assert.match(employeeHistoryMigration, /current_app_session_is_valid\('admin'\)/)
+  assert.match(employeeHistoryMigration, /caller_can_view_alert_type\(event\.alert_type\)/)
+  assert.match(employeeHistoryMigration, /backend_employee_in_scope\(event\.employee_id\)/)
+  assert.match(employeeHistoryMigration, /alert\.employee_id = v_employee_id/)
+  assert.match(employeeHistoryMigration, /from public, anon;/)
+  assert.match(employeeHistoryMigration, /to authenticated, service_role;/)
 })
