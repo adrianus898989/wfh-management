@@ -4,7 +4,31 @@
 @media(max-width:600px){.payroll-import-form{grid-template-columns:1fr}.payroll-import-form label.wide{grid-column:auto}.payroll-summary-grid,.payslip-info-grid{grid-template-columns:1fr}.payslip-info-grid>div,.payslip-info-grid>div:nth-child(odd){border-right:0;border-bottom:1px solid #e5ebf3}.payslip-breakdown-head,.payslip-breakdown>div{grid-template-columns:minmax(0,1fr) 70px 120px}.payslip-title{align-items:flex-start;gap:12px}.payslip-title button{padding:8px}.payslip-total strong{font-size:21px}}
 
 .payroll-section-actions{display:flex;gap:8px;align-items:center}.payroll-section-head .payroll-section-actions .danger{background:#fff5f4;color:#bb332d;border-color:#efaaa7}.payroll-summary-grid>button{appearance:none;text-align:left;cursor:pointer;color:inherit}.payroll-summary-grid>button.active{border-color:#3c70e8;background:#eef4ff;box-shadow:0 0 0 1px #3c70e8 inset}.payroll-summary-grid>button.has-warning{border-color:#f3b5a8;background:#fff9f6}.payroll-summary-grid small{display:block;margin-top:4px;color:#8794a8;font-size:10px}.payroll-unmatched-note{margin:-2px 0 11px;padding:10px 12px;border:1px solid #f2c2b6;border-radius:9px;background:#fff8f5;color:#a14934;font-size:12px;font-weight:700}.payroll-table-complete{min-width:2500px}.payroll-table-complete td{white-space:nowrap}.payroll-table-complete .payroll-remark-cell{min-width:270px;max-width:420px;white-space:pre-wrap;overflow-wrap:anywhere}
-@media print{.sidebar,.staff-payroll-head,.staff-payroll-history,.payslip-title button{display:none!important}.app-shell,.staff-payroll-layout{display:block!important}.main-content{margin:0!important}.payslip-paper{border:0!important}.payslip-content{padding:0}.payslip-total{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+.payslip-print-sheet{display:none;page:payslip}
+@page payslip{size:A4 portrait;margin:0}
+@media print{
+  html,body{margin:0!important;padding:0!important;background:#fff!important}
+  body.payslip-print-active> :not(.payslip-print-sheet){display:none!important}
+  body.payslip-print-active>.payslip-print-sheet{display:block!important;width:210mm;min-height:297mm;box-sizing:border-box;padding:12mm 14mm 10mm;background:#fff;color:#152b49;font-family:Arial,"Noto Sans",sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .payslip-print-sheet .payslip-content{box-sizing:border-box;width:100%;padding:0;font-size:10pt}
+  .payslip-print-sheet .payslip-title{margin-bottom:7mm;padding-bottom:4mm}
+  .payslip-print-sheet .payslip-title h2{margin:1.5mm 0 .5mm;font-size:20pt}
+  .payslip-print-sheet .payslip-title span,.payslip-print-sheet .payslip-title small{font-size:8pt}
+  .payslip-print-sheet .payslip-content section{break-inside:avoid;margin-bottom:6mm}
+  .payslip-print-sheet .payslip-content h3{margin-bottom:2.5mm;font-size:10pt}
+  .payslip-print-sheet .payslip-info-grid{border-radius:2.5mm}
+  .payslip-print-sheet .payslip-info-grid>div{padding:3mm}
+  .payslip-print-sheet .payslip-info-grid span{font-size:7pt}
+  .payslip-print-sheet .payslip-info-grid strong{margin-top:1mm;font-size:9.5pt}
+  .payslip-print-sheet .payslip-breakdown-head,.payslip-print-sheet .payslip-breakdown>div{grid-template-columns:minmax(0,1fr) 28mm 42mm;gap:3mm;padding:2.6mm}
+  .payslip-print-sheet .payslip-breakdown-head{font-size:8pt}
+  .payslip-print-sheet .payslip-breakdown b{font-size:7.5pt}
+  .payslip-print-sheet .payslip-breakdown strong{font-size:9pt}
+  .payslip-print-sheet .payslip-remark{padding:3mm}
+  .payslip-print-sheet .payslip-remark p{font-size:9pt}
+  .payslip-print-sheet .payslip-total{break-inside:avoid;padding:4mm}
+  .payslip-print-sheet .payslip-total strong{font-size:20pt}
+}
 
 /* V27.24 — compact batch review, readable long values and embedded staff payslips. */
 .payroll-admin-page .payroll-batch-strip{gap:6px;padding:6px;margin-bottom:8px}

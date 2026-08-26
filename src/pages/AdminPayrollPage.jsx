@@ -7,6 +7,7 @@ import { adminLocalPageTabs } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
+import { PAYROLL_CURRENCY_OPTIONS, payrollCurrencyLabel } from '../lib/payrollCurrency'
 import { supabase } from '../lib/supabase'
 
 const PAYOUT_CHANGE_VIEW='payroll.payout_change.view'
@@ -389,6 +390,15 @@ export default function AdminPayrollPage(){
 
   const pageChrome=adminLocalPageTabs('/admin/payroll',visibleTabs,tab)
   const sectionTitle=pageChrome.active.sectionLabel||'工资统计'
+  const uploadWorkspace=access.hasPermission(PERMISSIONS.PAYROLL_EDIT)?<PayrollUploadWorkspace
+    fileRef={fileRef}
+    fileState={fileState}
+    form={form}
+    saving={saving}
+    setForm={setForm}
+    onFile={onFile}
+    onImport={importRows}
+  />:null
 
   return <div className="content-page payroll-admin-page">
     <div className="payroll-page-head"><div><small>PAYROLL REPORTS</small><h1>{adminT(sectionTitle)}</h1>{pageChrome.active.itemLabel&&<p>{adminT(pageChrome.active.itemLabel)}</p>}</div>{!PAYMENT_CHANGE_TABS.has(tab)&&<button className="payroll-refresh" disabled={access.loading||!tab} onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>{adminT('刷新资料')}</button>}</div>
@@ -396,27 +406,10 @@ export default function AdminPayrollPage(){
     {message&&<div className="payroll-alert">{message}</div>}
     <AdminModuleNav />
 
-    {access.loading?<div className="payroll-empty-small">{adminT('正在读取页面权限…')}</div>:!tab?<div className="payroll-alert error">{adminT('当前账号没有工资中心页面权限。')}</div>:PAYMENT_CHANGE_TABS.has(tab)?<AdminPayoutChangeWorkspace mode={tab==='收款资料审核'?'pending':'history'} canReview={access.hasPermission(PAYOUT_CHANGE_REVIEW)}/>:tab==='工资导入'?<>
-      <section className="payroll-upload-card">
-        <div className="payroll-upload-copy"><span>01</span><div><h2>上传工资表</h2><p>支持 XLSX、CSV、TSV；自动识别中文、英文、越南文和印尼文常用表头。</p></div></div>
-        <div className="payroll-import-form">
-          <label>工资月份<input type="month" value={form.period} onChange={event=>setForm({...form,period:event.target.value})}/></label>
-          <label>批次名称<input value={form.title} onChange={event=>setForm({...form,title:event.target.value})} placeholder={`${form.period} 工资`}/></label>
-          <label>币种<select value={form.currency} onChange={event=>setForm({...form,currency:event.target.value})}><option value="PHP">PHP · 菲律宾披索</option><option value="USD">USD · 美金</option></select></label>
-          <label className="wide">备注<input value={form.notes} onChange={event=>setForm({...form,notes:event.target.value})} placeholder="例如：2026年7月正式工资"/></label>
-        </div>
-        <div className="payroll-drop-zone" onClick={()=>fileRef.current?.click()}>
-          <input ref={fileRef} type="file" accept=".xlsx,.csv,.tsv,.txt" onChange={event=>onFile(event.target.files?.[0])}/>
-          <strong>{fileState.loading?'正在读取表格…':fileState.file?fileState.file.name:'选择工资表文件'}</strong>
-          <span>文件只用于导入工资数据，不会向员工公开整张表。</span>
-        </div>
-        {fileState.error&&<div className="payroll-file-error">{fileState.error}</div>}
-      </section>
-      {fileState.rows.length>0&&<section className="payroll-preview-card">
-        <div className="payroll-section-head"><div><h2>导入预览</h2><p>共 {fileState.rows.length} 行；发布前先写入“待发布”批次。</p></div><button disabled={saving} onClick={importRows}>{saving?'导入中…':'确认导入'}</button></div>
-        <PayrollRows rows={fileState.rows.slice(0,60)} currency={form.currency} preview/>
-      </section>}
-    </>:tab==='导入记录'?<PayrollImportHistory batches={batches} onOpenEmployee={openEmployee}/>:<>
+    {access.loading?<div className="payroll-empty-small">{adminT('正在读取页面权限…')}</div>:!tab?<div className="payroll-alert error">{adminT('当前账号没有工资中心页面权限。')}</div>:PAYMENT_CHANGE_TABS.has(tab)?<AdminPayoutChangeWorkspace mode={tab==='收款资料审核'?'pending':'history'} canReview={access.hasPermission(PAYOUT_CHANGE_REVIEW)}/>:tab==='工资导入'?uploadWorkspace:tab==='导入记录'?<>
+      {uploadWorkspace}
+      <PayrollImportHistory batches={batches} onOpenEmployee={openEmployee}/>
+    </>:<>
       <section className="payroll-batch-strip">
         {visibleBatches.length?visibleBatches.map(batch=><button key={batch.id} className={Number(batchId)===Number(batch.id)?'active':''} onClick={()=>{clearRowFilters();setBatchId(batch.id);load(batch.id)}}>
           <span>{String(batch.period_start).slice(0,7)}</span><strong>{batch.title}</strong><small>{batch.row_count} 人 · 在职/试用 {batch.active_count??batch.matched_count??0} · 停用 {batch.suspended_count??0} · 离职 {batch.resigned_count??0} · 未匹配 {batch.unresolved_count??batch.unmatched_count??0}</small>
@@ -424,7 +417,7 @@ export default function AdminPayrollPage(){
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
         <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&(visibleSelected.status!=='published'||state.data?.permissions?.publish)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
-        <div className="payroll-summary-grid"><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职 / 试用</span><strong>{visibleSelected.active_count??rows.filter(row=>payrollMatchState(row)==='active').length}</strong><small>在职与试用</small></button><button type="button" className={rowFilter==='suspended'?'active':''} onClick={()=>setRowFilter('suspended')}><span>停用员工</span><strong>{visibleSelected.suspended_count??rows.filter(row=>payrollMatchState(row)==='suspended').length}</strong><small>停用 / inactive</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>payrollMatchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.row_count} 人 · {visibleSelected.currency==='PHP'?'菲律宾披索':'美金'}</small></div></div>
+        <div className="payroll-summary-grid"><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职 / 试用</span><strong>{visibleSelected.active_count??rows.filter(row=>payrollMatchState(row)==='active').length}</strong><small>在职与试用</small></button><button type="button" className={rowFilter==='suspended'?'active':''} onClick={()=>setRowFilter('suspended')}><span>停用员工</span><strong>{visibleSelected.suspended_count??rows.filter(row=>payrollMatchState(row)==='suspended').length}</strong><small>停用 / inactive</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{visibleSelected.resigned_count??rows.filter(row=>payrollMatchState(row)==='resigned').length}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{visibleSelected.row_count} 人 · {payrollCurrencyLabel(visibleSelected.currency)}</small></div></div>
         <div className="payroll-record-filters">
           <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
           <label><span>员工状态</span><select value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">全部状态</option><option value="active">在职 / 试用</option><option value="suspended">停用员工</option><option value="resigned">离职员工</option><option value="unmatched" disabled={unmatchedCount===0}>未匹配{unmatchedCount===0?'（没有数据）':''}</option></select></label>
@@ -440,6 +433,30 @@ export default function AdminPayrollPage(){
     </>}
     {employeePanel&&<PayrollEmployeeDrawer panel={employeePanel} onClose={closeEmployee}/>}
   </div>
+}
+
+function PayrollUploadWorkspace({fileRef,fileState,form,saving,setForm,onFile,onImport}){
+  return <>
+    <section className="payroll-upload-card payroll-import-record-upload">
+      <div className="payroll-upload-copy"><span>↑</span><div><h2>上传工资表</h2><p>选择工资月份和币种后上传 XLSX、CSV 或 TSV；导入成功后会先进入“待发布工资表”。</p></div></div>
+      <div className="payroll-import-form">
+        <label>工资月份<input type="month" value={form.period} onChange={event=>setForm({...form,period:event.target.value})}/></label>
+        <label>批次名称<input value={form.title} onChange={event=>setForm({...form,title:event.target.value})} placeholder={`${form.period} 工资`}/></label>
+        <label>对应币种<select value={form.currency} onChange={event=>setForm({...form,currency:event.target.value})}>{PAYROLL_CURRENCY_OPTIONS.map(option=><option key={option.code} value={option.code}>{option.code} · {option.label}</option>)}</select></label>
+        <label className="wide">备注<input value={form.notes} onChange={event=>setForm({...form,notes:event.target.value})} placeholder="例如：2026年8月正式工资"/></label>
+      </div>
+      <div className="payroll-drop-zone" onClick={()=>fileRef.current?.click()}>
+        <input ref={fileRef} type="file" accept=".xlsx,.csv,.tsv,.txt" onChange={event=>onFile(event.target.files?.[0])}/>
+        <strong>{fileState.loading?'正在读取表格…':fileState.file?fileState.file.name:'选择工资表文件'}</strong>
+        <span>支持中文、英文、越南文和印尼文常用表头；整张原始表不会公开给员工。</span>
+      </div>
+      {fileState.error&&<div className="payroll-file-error">{fileState.error}</div>}
+    </section>
+    {fileState.rows.length>0&&<section className="payroll-preview-card">
+      <div className="payroll-section-head"><div><h2>导入预览</h2><p>共 {fileState.rows.length} 行 · 币种 {form.currency}；发布前先写入“待发布工资表”。</p></div><button disabled={saving} onClick={onImport}>{saving?'导入中…':'确认导入'}</button></div>
+      <PayrollRows rows={fileState.rows.slice(0,60)} currency={form.currency} preview/>
+    </section>}
+  </>
 }
 
 function PayrollImportHistory({batches,onOpenEmployee}){

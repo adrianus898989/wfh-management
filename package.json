@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:frontend-regressions": "node --test src/lib/legacyErrorTableScope.test.mjs src/lib/adjustmentPresentation.test.mjs src/lib/onlineTrainingIdentity.test.js src/lib/adminAlertRoutes.test.js src/lib/adminAlertCatalog.test.mjs src/lib/adminAlertDetails.test.mjs src/lib/rosterIdentity.test.js src/lib/companyAssets.test.js src/lib/payoutManualWorkflow.test.mjs src/config/navigation.test.js"
+    "test:frontend-regressions": "node --test src/lib/legacyErrorTableScope.test.mjs src/lib/adjustmentPresentation.test.mjs src/lib/onlineTrainingIdentity.test.js src/lib/adminAlertRoutes.test.js src/lib/adminAlertCatalog.test.mjs src/lib/adminAlertDetails.test.mjs src/lib/rosterIdentity.test.js src/lib/companyAssets.test.js src/lib/payoutManualWorkflow.test.mjs src/lib/sessionFailure.test.js src/lib/payrollCurrency.test.js src/config/navigation.test.js src/config/rolePermissionCatalog.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

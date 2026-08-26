@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { classifySessionFailure } from './sessionFailure.js'
 const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
@@ -59,11 +60,9 @@ const authenticatedFetch=async(input,init)=>{
   if([400,401,403].includes(response.status)&&typeof window!=='undefined'){
     let body=''
     try{body=await response.clone().text()}catch(_){body=''}
-    const leaseEnded=/(?:app[_\s-]*)?session[_\s-]*not[_\s-]*current|auth[_\s-]*session[_\s-]*missing|not[_\s-]*owner|active[_\s-]*elsewhere/i.test(body)
-    const invalidAuth=/invalid[_\s-]*(jwt|token)|jwt[_\s-]*(expired|malformed)|refresh[_\s-]*token|(?:auth[_\s-]*)?session[_\s-]*(missing|expired)|not[_\s-]*authenticated|no[_\s-]*authorization/i.test(body)
-    const terminal=leaseEnded||invalidAuth
-    if(terminal||response.status===401){
-      window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail:{terminal}}))
+    const failure=classifySessionFailure(response.status,body)
+    if(failure.shouldCheck){
+      window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail:{terminal:failure.terminal,reason:failure.reason}}))
     }
   }
   return response

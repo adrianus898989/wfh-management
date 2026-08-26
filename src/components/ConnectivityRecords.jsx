@@ -302,7 +302,10 @@ export function ConnectivityRecordsPage(){
 }
 
 export function EmployeeConnectivityPanel({data,loading,error,title,t}){
-  const tr=typeof t==='function'?t:(_key,fallback)=>fallback
+  const tr=typeof t==='function'?t:(_key,fallback,values={})=>Object.entries(values).reduce(
+    (result,[key,value])=>result.replaceAll(`{${key}}`,String(value)),
+    fallback,
+  )
   const rows=data?.rows||[]
   const [filters,setFilters]=useState({from:'',to:'',keyword:''})
   const translatedType=value=>value==='power_outage'?tr('connectivity.power','停电'):value==='internet_outage'?tr('connectivity.internet','断网'):value||'—'

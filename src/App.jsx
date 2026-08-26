@@ -84,7 +84,6 @@ function Protected({ children, mode }) {
     const terminalLeaseReason = reason => [
       'auth_session_missing',
       'active_elsewhere',
-      'not_owner',
       'staff_account_not_found',
       'staff_account_missing',
     ].includes(reason)

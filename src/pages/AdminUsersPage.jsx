@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { adminLocalPageTabs } from '../config/navigation'
+import { buildRolePermissionSections, uniquePermissionIds } from '../config/rolePermissionCatalog'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 
@@ -52,58 +53,16 @@ const actionLabels = {
   publish: '发布',
   manage: '管理',
   disable: '停用',
+  disable_employee: '停用员工账号',
   generate: '生成',
+  change: '变更',
+  reactivate: '恢复在职',
   reset_password: '重置密码',
   otp_toggle: 'OTP开关',
   mfa_reset: '重置OTP',
   resign: '办理离职',
   general: '通用导出',
 }
-
-const permissionSectionDefinitions = [
-  { key: 'employee', label: '员工管理', description: '员工档案、薪资资料、团队与人员状态' },
-  { key: 'attendance', label: '排班与考勤', description: '排班、考勤、请假及离岗审批' },
-  { key: 'work', label: '每日工作', description: '工作日报、线上培训与出错奖惩' },
-  { key: 'exam', label: '考试管理', description: '考试查看、分配、题库与批改' },
-  { key: 'payroll', label: '工资中心', description: '工资资料、规则、审核、发布与导出' },
-  { key: 'report', label: '统计报表', description: '经营统计、报表查看与数据导出' },
-  { key: 'access', label: '用户与权限', description: '账号安全、角色权限与登录控制' },
-  { key: 'system', label: '系统与审计', description: '敏感资料、操作日志及系统功能' },
-  { key: 'other', label: '其他功能', description: '尚未归类的系统权限' },
-]
-
-const permissionModuleMeta = {
-  account: { section: 'access', label: '后台账号', description: '创建、停用、删除账号及登录安全设置' },
-  user: { section: 'access', label: '用户与权限', description: '查看账号并管理角色权限' },
-  'user.account': { section: 'access', label: '员工登录账号', description: '创建、启停及删除员工前端登录账号' },
-  'user.activation': { section: 'access', label: '员工激活码', description: '生成或重置员工前端账号激活码' },
-  'user.email': { section: 'access', label: '员工登录邮箱', description: '修改员工前端账号登录邮箱' },
-  'user.password': { section: 'access', label: '员工登录密码', description: '重置员工前端账号登录密码' },
-  role: { section: 'access', label: '角色管理', description: '创建、编辑及分配系统角色' },
-  employee: { section: 'employee', label: '员工档案', description: '员工资料的查看、新增、编辑与离职操作' },
-  'employee.compensation': { section: 'employee', label: '员工薪资资料', description: '员工固定薪资及补贴等资料' },
-  connectivity: { section: 'employee', label: '停电 / 断网记录', description: '按负责范围查看与录入员工停电、断网记录' },
-  team: { section: 'employee', label: '团队管理', description: '团队资料、组织关系及成员归属' },
-  schedule: { section: 'attendance', label: '排班管理', description: '排班表与轮班规则' },
-  attendance: { section: 'attendance', label: '考勤管理', description: '员工考勤记录的查看与维护' },
-  leave: { section: 'attendance', label: '请假与离岗', description: '请假、公休、回家及换班审批' },
-  daily_work: { section: 'work', label: '每日工作报告', description: '每日工作记录的提交与管理' },
-  online_training: { section: 'work', label: '线上培训报告', description: '培训日报的提交、批注及管理' },
-  adjustment: { section: 'work', label: '出错 / 扣款 / 奖金', description: '奖惩记录的录入与审核' },
-  exam: { section: 'exam', label: '考试管理', description: '考试、题库、分配及成绩批改' },
-  payroll: { section: 'payroll', label: '工资管理', description: '工资批次的查看、编辑、审核与发布' },
-  'payroll.rule': { section: 'payroll', label: '工资规则', description: '工资计算规则及阈值配置' },
-  'sensitive.payment': { section: 'payroll', label: '敏感收款资料', description: '完整收款资料的查看、修改与审核' },
-  'sensitive.payout': { section: 'payroll', label: '敏感收款资料', description: '完整收款资料的查看、修改与审核' },
-  report: { section: 'report', label: '统计报表', description: '统计页面与范围内报表数据' },
-  export: { section: 'report', label: '数据导出', description: '通用数据导出能力' },
-  'sensitive.employee': { section: 'system', label: '员工敏感资料', description: '受保护的员工个人资料' },
-  sensitive: { section: 'system', label: '敏感资料', description: '系统内受保护的敏感数据' },
-  audit: { section: 'system', label: '操作日志', description: '后台操作与安全审计记录' },
-}
-
-const permissionModuleOrder = Object.keys(permissionModuleMeta)
-const permissionActionOrder = ['view', 'create', 'generate', 'submit', 'edit', 'review', 'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable', 'resign', 'reset_password', 'otp_toggle', 'mfa_reset', 'general']
 
 function getRole(a) {
   return Array.isArray(a?.roles) ? a.roles[0] : a?.roles
@@ -114,14 +73,6 @@ function scopeLabel(scope) {
   if (scope === 'assigned_teams') return '指定范围'
   if (scope === 'self') return '仅本人'
   return '自己团队'
-}
-
-function permissionShape(code) {
-  const parts = String(code || '').split('.')
-  return {
-    module: parts.slice(0, -1).join('.') || 'other',
-    action: parts.at(-1) || 'other',
-  }
 }
 
 export default function AdminUsersPage() {
@@ -239,51 +190,10 @@ export default function AdminUsersPage() {
     return map
   }, [rolePermissions])
 
-  const groupedPermissionSections = useMemo(() => {
-    const sections = new Map(permissionSectionDefinitions.map(section => [section.key, {
-      ...section,
-      pages: new Map(),
-    }]))
-
-    for (const permission of permissions) {
-      const shape = permissionShape(permission.code)
-      const moduleMeta = permissionModuleMeta[shape.module] || {
-        section: 'other',
-        label: permission.category || shape.module,
-        description: '系统扩展功能',
-      }
-      const section = sections.get(moduleMeta.section) || sections.get('other')
-      if (!section.pages.has(shape.module)) {
-        section.pages.set(shape.module, {
-          key: shape.module,
-          label: moduleMeta.label,
-          description: moduleMeta.description,
-          items: [],
-        })
-      }
-      section.pages.get(shape.module).items.push({ ...permission, actionKey: shape.action })
-    }
-
-    return [...sections.values()]
-      .map(section => ({
-        ...section,
-        pages: [...section.pages.values()]
-          .sort((a, b) => {
-            const aIndex = permissionModuleOrder.indexOf(a.key)
-            const bIndex = permissionModuleOrder.indexOf(b.key)
-            return (aIndex < 0 ? 999 : aIndex) - (bIndex < 0 ? 999 : bIndex)
-          })
-          .map(page => ({
-            ...page,
-            items: [...page.items].sort((a, b) => {
-              const aIndex = permissionActionOrder.indexOf(a.actionKey)
-              const bIndex = permissionActionOrder.indexOf(b.actionKey)
-              return (aIndex < 0 ? 999 : aIndex) - (bIndex < 0 ? 999 : bIndex)
-            }),
-          })),
-      }))
-      .filter(section => section.pages.length > 0)
-  }, [permissions])
+  const groupedPermissionSections = useMemo(
+    () => buildRolePermissionSections(permissions),
+    [permissions],
+  )
 
   const visiblePermissionSections = useMemo(() => {
     const query = String(roleModal?.permission_search || '').trim().toLowerCase()
@@ -569,6 +479,7 @@ export default function AdminUsersPage() {
         .role-card-actions{display:flex;gap:7px;margin-top:auto;padding-top:14px}.role-card-actions button{height:34px;border:1px solid #d5dfeb;background:#fff;border-radius:8px;padding:0 11px;color:#486078;font-size:11px;font-weight:800;cursor:pointer}.role-card-actions button.primary{border-color:#d3dfff;background:#f1f5ff;color:#2d61d3}.role-card-actions button.danger{margin-left:auto;color:#b85050}
         .access-searchbar{display:grid;grid-template-columns:minmax(300px,1fr) auto auto auto;align-items:center;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
         .account-modal{width:min(760px,94vw);max-height:min(760px,88vh);display:flex;flex-direction:column;overflow:hidden}.account-modal .modal-head{flex:0 0 auto}.account-modal .account-modal-body{overflow:auto;padding:2px 3px 8px}.account-modal .modal-actions{flex:0 0 auto;position:sticky;bottom:0;background:#fff;border-top:1px solid #edf1f5;padding-top:12px;margin-top:6px;z-index:2}
+        .account-session-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.account-session-note strong{flex:0 0 auto;color:#3564c8}.account-session-note span{min-width:0}
         .scope-panel{grid-column:1/-1;border:1px solid #e3e9f1;border-radius:11px;padding:12px;background:#fafbfd}
         .scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.scope-column-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}.scope-column-head span{font-size:10px;color:#5873a1}.scope-search{width:100%;height:36px!important;margin-bottom:7px}.check-list{max-height:180px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px;background:#fff;padding:8px}
         .check-list label{display:flex;gap:8px;align-items:center;padding:7px 5px;font-size:12px;color:#46566d}
@@ -576,7 +487,7 @@ export default function AdminUsersPage() {
         .role-modal-body{min-height:0;overflow:auto;padding:16px 18px 24px;overscroll-behavior:contain;scrollbar-gutter:stable}.role-modal .page-error{margin-bottom:12px}.role-identity-panel{display:grid;grid-template-columns:minmax(260px,1fr) auto;align-items:end;gap:18px;margin-bottom:12px;padding:14px 15px;border:1px solid #dfe6ef;border-radius:12px;background:#fff}.role-name-field{display:flex;flex-direction:column;gap:6px;color:#5e718a;font-size:11px;font-weight:850}.role-name-field input{width:100%;height:39px;border:1px solid #d3deea;border-radius:9px;padding:0 11px;color:#2e4561;outline:none}.role-name-field input:focus{border-color:#4b76dc;box-shadow:0 0 0 3px rgba(75,118,220,.09)}.role-name-field input:disabled{background:#f3f5f8;color:#728196}.role-selection-summary{display:flex;gap:8px}.role-selection-summary div{min-width:108px;padding:9px 11px;border-radius:9px;background:#f4f7fb}.role-selection-summary strong,.role-selection-summary small{display:block}.role-selection-summary strong{color:#2d5fce;font-size:17px}.role-selection-summary small{margin-top:2px;color:#8391a4;font-size:10px}
         .permission-guidance{display:flex;align-items:flex-start;gap:8px;margin:-2px 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.permission-guidance strong{flex:0 0 auto;color:#3564c8}.permission-toolbar{position:sticky;top:-16px;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding:11px 12px;border:1px solid #dce5ef;border-radius:11px;background:rgba(255,255,255,.96);box-shadow:0 5px 16px rgba(31,51,79,.05);backdrop-filter:blur(8px)}.permission-search{display:flex;align-items:center;min-width:260px;max-width:520px;flex:1;height:39px;border:1px solid #d3deea;border-radius:9px;background:#fff;padding:0 10px}.permission-search span{margin-right:7px;color:#91a0b3}.permission-search input{min-width:0;flex:1;height:35px;border:0;background:transparent;color:#344b67;outline:none}.permission-toolbar-actions{display:flex;gap:7px}.permission-toolbar-actions button{height:35px;border:1px solid #d3deea;border-radius:8px;background:#fff;padding:0 10px;color:#51677f;font-size:11px;font-weight:800;cursor:pointer}.permission-toolbar-actions button:hover{border-color:#b9cae2;background:#f7f9fc}.permission-toolbar-actions button:disabled{opacity:.5;cursor:not-allowed}.founder-permission-note{display:flex;align-items:flex-start;gap:9px;margin-bottom:12px;padding:11px 13px;border:1px solid #cce7d9;border-radius:10px;background:#f1fbf6;color:#34775b;font-size:11px;line-height:1.55}.founder-permission-note strong{flex:0 0 auto}
         .permission-sections{display:flex;flex-direction:column;gap:11px}.permission-section{overflow:hidden;border:1px solid #dce4ee;border-radius:13px;background:#fff}.permission-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;border-bottom:1px solid #e7ecf3;background:#f9fbfd}.permission-section-head-main{display:flex;align-items:center;gap:10px;min-width:0}.permission-section-head-main>input,.permission-page-title>input,.permission-option>input{width:17px;height:17px;flex:0 0 auto;margin:0;accent-color:#3568da;cursor:pointer}.permission-section-head-main>input:disabled,.permission-page-title>input:disabled,.permission-option>input:disabled{cursor:not-allowed}.permission-section-head h3{margin:0;color:#263e5b;font-size:14px}.permission-section-head p{margin:3px 0 0;color:#8290a3;font-size:10px}.permission-section-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}.permission-count{padding:4px 7px;border-radius:999px;background:#edf3ff;color:#3d65c3;font-size:10px;font-weight:850}.permission-section-actions button{width:29px;height:29px;border:0;border-radius:7px;background:#eef2f6;color:#667991;cursor:pointer}.permission-section.collapsed .permission-section-head{border-bottom:0}
-        .permission-page-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px}.permission-page{overflow:hidden;border:1px solid #e1e7ef;border-radius:11px;background:#fbfcfe}.permission-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #e8edf3;background:#fff}.permission-page-title{display:flex;align-items:flex-start;gap:9px;min-width:0}.permission-page-title>input{margin-top:2px}.permission-page-title strong,.permission-page-title small{display:block}.permission-page-title strong{color:#334b67;font-size:12px}.permission-page-title small{margin-top:3px;color:#8996a7;font-size:10px;line-height:1.45}.permission-page-head>span{flex:0 0 auto;color:#7c8ca0;font-size:10px}.permission-options{display:grid;grid-template-columns:1fr;gap:6px;padding:9px}.permission-option{display:flex;align-items:flex-start;gap:9px;min-width:0;padding:9px 10px;border:1px solid #e4e9f0;border-radius:8px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.permission-option:hover{border-color:#c8d6e9;background:#f9fbff}.permission-option.selected{border-color:#bfd0f4;background:#f2f6ff}.permission-option.locked{cursor:default}.permission-option>input{margin-top:2px}.permission-option-copy{min-width:0;flex:1}.permission-option-copy strong,.permission-option-copy small{display:block}.permission-option-copy strong{color:#3c5069;font-size:12px;line-height:1.4}.permission-option-copy small{overflow:hidden;margin-top:3px;color:#96a1b0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;white-space:nowrap;text-overflow:ellipsis}.sensitive-badge{flex:0 0 auto;padding:3px 5px;border-radius:5px;background:#fff0db;color:#a76520;font-size:9px;font-style:normal;font-weight:850}.permission-empty-state{padding:35px 18px;border:1px dashed #ccd7e5;border-radius:12px;background:#fff;color:#7d8da2;text-align:center}.permission-empty-state strong,.permission-empty-state span{display:block}.permission-empty-state strong{margin-bottom:5px;color:#465d78;font-size:13px}.permission-empty-state span{font-size:11px}
+        .permission-page-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px}.permission-page{overflow:hidden;border:1px solid #e1e7ef;border-radius:11px;background:#fbfcfe}.permission-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #e8edf3;background:#fff}.permission-page-title{display:flex;align-items:flex-start;gap:9px;min-width:0}.permission-page-title>input{margin-top:2px}.permission-page-title strong,.permission-page-title small{display:block}.permission-page-title strong{color:#334b67;font-size:12px}.permission-page-title small{margin-top:3px;color:#8996a7;font-size:10px;line-height:1.45}.permission-page-head>span{flex:0 0 auto;color:#7c8ca0;font-size:10px}.permission-options{display:grid;grid-template-columns:1fr;gap:6px;padding:9px}.permission-option{display:flex;align-items:flex-start;gap:9px;min-width:0;padding:9px 10px;border:1px solid #e4e9f0;border-radius:8px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.permission-option:hover{border-color:#c8d6e9;background:#f9fbff}.permission-option.selected{border-color:#bfd0f4;background:#f2f6ff}.permission-option.locked{cursor:default}.permission-option>input{margin-top:2px}.permission-option-copy{min-width:0;flex:1}.permission-option-copy strong,.permission-option-copy small{display:block}.permission-option-copy strong{color:#3c5069;font-size:12px;line-height:1.4}.permission-option-copy small{overflow:hidden;margin-top:3px;color:#96a1b0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;white-space:nowrap;text-overflow:ellipsis}.permission-option-badges{display:flex;flex:0 0 auto;gap:4px}.permission-action-badge,.sensitive-badge{flex:0 0 auto;padding:3px 5px;border-radius:5px;font-size:9px;font-style:normal;font-weight:850}.permission-action-badge{background:#eaf1ff;color:#3564c8}.sensitive-badge{background:#fff0db;color:#a76520}.permission-empty-state{padding:35px 18px;border:1px dashed #ccd7e5;border-radius:12px;background:#fff;color:#7d8da2;text-align:center}.permission-empty-state strong,.permission-empty-state span{display:block}.permission-empty-state strong{margin-bottom:5px;color:#465d78;font-size:13px}.permission-empty-state span{font-size:11px}
         .role-modal>.modal-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;margin:0;padding:12px 18px;border-top:1px solid #dde5ef;background:#fff}.role-modal-actions-note{color:#8291a4;font-size:11px}.role-modal-actions-buttons{display:flex;gap:8px}.role-modal>.modal-actions button{height:39px}.role-modal>.modal-actions button:disabled{opacity:.55;cursor:not-allowed}
         .employee-search-results{grid-column:1/-1;max-height:235px;overflow:auto;border:1px solid #dce5ef;border-radius:10px;background:#fff;padding:5px}.employee-search-option{width:100%;display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;border:0;border-bottom:1px solid #edf1f5;background:#fff;padding:10px;text-align:left;cursor:pointer}.employee-search-option:hover{background:#f3f7ff}.employee-search-option:last-child{border-bottom:0}.employee-search-option strong{color:#24415f}.employee-search-option small{color:#738198}.employee-search-option span{font-size:11px;color:#376ac5}.linked-employee{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #bfe6d0;background:#f0fbf5;border-radius:9px;color:#18784a;font-size:12px}.linked-employee button{border:0;background:transparent;color:#b34b4b;cursor:pointer}
         .account-batch-builder{margin:13px 0 3px;padding:12px;border:1px solid #dce5f0;border-radius:12px;background:#f7f9fc}.account-batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.account-batch-toolbar strong,.account-batch-toolbar small{display:block}.account-batch-toolbar strong{color:#29425f;font-size:13px}.account-batch-toolbar small{margin-top:3px;color:#7f8da0;font-size:10px}.account-batch-toolbar button{height:36px;white-space:nowrap}.account-batch-empty{margin-top:10px;padding:12px;border:1px dashed #d5dfeb;border-radius:9px;background:#fff;color:#8a97a9;font-size:11px;text-align:center}.account-batch-list{display:flex;max-height:210px;flex-direction:column;gap:6px;margin-top:10px;overflow:auto}.account-batch-row{display:grid;grid-template-columns:25px minmax(0,1fr) auto;align-items:center;gap:9px;padding:9px 10px;border:1px solid #e0e7f0;border-radius:9px;background:#fff}.account-batch-row>span{display:grid;width:23px;height:23px;place-items:center;border-radius:7px;background:#edf3ff;color:#3567d1;font-size:10px;font-weight:900}.account-batch-row strong,.account-batch-row small,.account-batch-row em{display:block}.account-batch-row strong{color:#2e4561;font-size:12px}.account-batch-row small{overflow:hidden;margin-top:3px;color:#7e8b9d;font-size:10px;white-space:nowrap;text-overflow:ellipsis}.account-batch-row em{margin-top:3px;color:#bd4343;font-size:10px;font-style:normal}.account-batch-row>button{border:0;background:transparent;color:#b64a4a;font-size:10px;cursor:pointer}.account-batch-row.failed{border-color:#efc4c4;background:#fff8f8}
@@ -742,6 +653,7 @@ export default function AdminUsersPage() {
             </div>
 
             {accountModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{accountModal.error}</div>}
+            <div className="account-session-note"><strong>范围与登录</strong><span>关联员工只提供身份与团队上下文；管理范围选择“全部数据”时不会自动降级为“自己团队”。同一个后台账号同时只保留一个浏览器会话，新设备登录会结束旧设备会话。</span></div>
             <div className="account-modal-body"><div className="form-grid">
               <label className="form-span">搜索并关联员工档案（可选）
                 <input
@@ -894,7 +806,7 @@ export default function AdminUsersPage() {
                 <span className="role-modal-icon">权</span>
                 <div>
                   <h2 id="role-permission-title">{adminT(roleReadOnly?'查看':'配置')}「{roleModal.role.name}」{adminT('的权限')}</h2>
-                  <p>{adminT(roleReadOnly?'当前账号仅可查看角色权限，修改操作仅限 Founder。':'按业务模块与对应页面逐项授权；带“敏感”标记的权限请谨慎开放。')}</p>
+                  <p>{adminT(roleReadOnly?'当前账号仅可查看角色权限，修改操作仅限 Founder。':'按最新左侧菜单、子页面和具体操作逐项授权；带“敏感”标记的权限请谨慎开放。')}</p>
                 </div>
               </div>
               <button aria-label="关闭" disabled={roleModal.saving} onClick={() => setRoleModal(null)}>×</button>
@@ -914,6 +826,8 @@ export default function AdminUsersPage() {
                 </div>
               </div>
 
+              <div className="permission-guidance"><strong>授权说明</strong><span>模块和子页面与当前左侧菜单保持一致。查看、新增、编辑、删除等操作按页面实际能力显示；同一底层权限被多个页面共用时，勾选状态会自动同步。</span></div>
+
               <div className="permission-toolbar">
                 <label className="permission-search"><span>⌕</span>
                   <input value={roleModal.permission_search} placeholder={adminT('搜索模块、页面、功能或权限代码')}
@@ -932,7 +846,7 @@ export default function AdminUsersPage() {
               {visiblePermissionSections.length > 0 ? <div className="permission-sections">
                 {visiblePermissionSections.map(section => {
                   const sourceSection = groupedPermissionSections.find(item => item.key === section.key) || section
-                  const sectionPermissionIds = sourceSection.pages.flatMap(page => page.items.map(permission => permission.id))
+                  const sectionPermissionIds = uniquePermissionIds(sourceSection.pages.flatMap(page => page.items))
                   const sectionSelectedCount = roleIsLocked
                     ? sectionPermissionIds.length
                     : sectionPermissionIds.filter(id => selectedPermissionIds.has(id)).length
@@ -962,7 +876,7 @@ export default function AdminUsersPage() {
                     {!sectionCollapsed && <div className="permission-page-grid">
                       {section.pages.map(page => {
                         const sourcePage = sourceSection.pages.find(item => item.key === page.key) || page
-                        const pagePermissionIds = sourcePage.items.map(permission => permission.id)
+                        const pagePermissionIds = uniquePermissionIds(sourcePage.items)
                         const pageSelectedCount = roleIsLocked
                           ? pagePermissionIds.length
                           : pagePermissionIds.filter(id => selectedPermissionIds.has(id)).length
@@ -985,7 +899,7 @@ export default function AdminUsersPage() {
                                 <input type="checkbox" disabled={roleReadOnly} checked={checked}
                                   onChange={e => updatePermissionSelection([permission.id], e.target.checked)} />
                                 <span className="permission-option-copy"><strong>{displayPermissionName(permission)}</strong><small>{permission.code}</small></span>
-                                {permission.sensitive && <em className="sensitive-badge">{adminT('敏感')}</em>}
+                                <span className="permission-option-badges"><em className="permission-action-badge">{adminT(actionLabels[permission.actionKey] || permission.actionKey)}</em>{permission.sensitive && <em className="sensitive-badge">{adminT('敏感')}</em>}</span>
                               </label>
                             })}
                           </div>

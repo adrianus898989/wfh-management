@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { StaffPaymentChangeWorkspace } from '../components/PaymentChangeWorkflow'
 import { useStaffLocale } from '../lib/staffI18n'
@@ -22,12 +23,24 @@ const monthLabel=(value,locale)=>{
   return new Intl.DateTimeFormat({zh:'zh-CN',en:'en-US',vi:'vi-VN',id:'id-ID'}[locale],{year:'numeric',month:'long'}).format(date)
 }
 
+const printPayslip=()=>{
+  if(typeof document==='undefined'||typeof window==='undefined')return
+  const clear=()=>{
+    document.body.classList.remove('payslip-print-active')
+    window.removeEventListener('afterprint',clear)
+  }
+  document.body.classList.add('payslip-print-active')
+  window.addEventListener('afterprint',clear,{once:true})
+  try{window.print()}catch(error){clear();throw error}
+}
+
 export function StaffPayrollWorkspace({embedded=false}){
   const {locale,setLocale,adoptCountry,t:translate}=useStaffLocale()
   const [state,setState]=useState({loading:true,error:'',data:null})
   const [selectedId,setSelectedId]=useState(null)
   const [detail,setDetail]=useState(null)
   const [detailLoading,setDetailLoading]=useState(false)
+  useEffect(()=>()=>document.body.classList.remove('payslip-print-active'),[])
   const t=COPY[locale]||COPY.en
 
   useEffect(()=>{let alive=true;(async()=>{
@@ -61,6 +74,7 @@ export function StaffPayrollWorkspace({embedded=false}){
       <aside className="staff-payroll-history"><h2>{t.history}</h2>{history.map(item=><button key={item.id} className={Number(selectedId)===Number(item.id)?'active':''} onClick={()=>setSelectedId(item.id)}><span>{monthLabel(item.period_start,locale)}</span><strong>{money(item.total_pay,item.currency,locale)}</strong><small>{item.title}</small></button>)}</aside>
       <main className="payslip-paper">{detailLoading&&!detail?<div className="payroll-state">{t.loading}</div>:detail&&<Payslip detail={detail} locale={locale} t={t}/>}</main>
     </div>}
+    {detail&&typeof document!=='undefined'&&createPortal(<div className="payslip-print-sheet" aria-hidden="true"><Payslip detail={detail} locale={locale} t={t} printOnly/></div>,document.body)}
   </div>
 }
 
@@ -70,7 +84,7 @@ export default function StaffPayrollPage(){
   if (params.get('tab') === 'payment-change') return <div className="content-page staff-payroll-page staff-payment-change-page"><StaffPaymentChangeWorkspace locale={locale}/></div>
   return <StaffPayrollWorkspace/>
 }
-function Payslip({detail,locale,t}){
+function Payslip({detail,locale,t,printOnly=false}){
   const employee=detail.employee||{}
   const currency=detail.currency||'USD'
   const standard=useMemo(()=>[
@@ -80,7 +94,7 @@ function Payslip({detail,locale,t}){
   ].filter(([code])=>Number(detail[code]||0)!==0).map(([code,type])=>({code,label:t[code],type,amount:Number(detail[code]||0)})),[detail,locale])
   const rows=Array.isArray(detail.line_items)&&detail.line_items.length?detail.line_items.map(item=>({...item,label:t[item.code]||item.label||item.code})):standard
   return <article className="payslip-content">
-    <div className="payslip-title"><div><span>{t.period}</span><h2>{monthLabel(detail.period_start,locale)}</h2><small>{detail.title}</small></div><button onClick={()=>window.print()}>{t.print}</button></div>
+    <div className="payslip-title"><div><span>{t.period}</span><h2>{monthLabel(detail.period_start,locale)}</h2><small>{detail.title}</small></div>{!printOnly&&<button onClick={printPayslip}>{t.print}</button>}</div>
     <section><h3>{t.employee}</h3><div className="payslip-info-grid">
       <Info label={t.employeeNo} value={employee.employee_no}/><Info label={t.name} value={employee.full_name}/>
       <Info label={t.platform} value={employee.platform}/><Info label={t.position} value={employee.position_name}/>
