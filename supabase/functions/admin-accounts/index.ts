@@ -237,7 +237,7 @@ Deno.serve(async (req) => {
 
       for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await admin.from('employees')
-          .select('id,employee_no,full_name,status,team_id,position_id,hire_date,resign_date,country,nationality,employment_type,shift_name,source_type,profile_status,created_at,updated_at,teams(id,name),positions(id,name)')
+          .select('id,employee_no,full_name,status,team_id,position_id,hire_date,resign_date,country,nationality,employment_type,shift_name,work_tg,source_type,profile_status,created_at,updated_at,teams(id,name),positions(id,name)')
           .order('employee_no')
           .order('id')
           .range(offset, offset + pageSize - 1)
@@ -587,6 +587,27 @@ Deno.serve(async (req) => {
           backend_account_metrics: mayViewBackendAccounts,
         },
       })
+    }
+
+    if (action === 'company_assets') {
+      if (!can('user.view')) return json(req, { error: '无公司资产查看权限' }, 403)
+      const employees = (await getScopedEmployees(true))
+        .filter((employee: any) => {
+          const employeeNo = cleanString(employee.employee_no).toUpperCase()
+          return employeeNo && !['SYSTEM', 'ADMIN'].includes(employeeNo) &&
+            !employeeNo.startsWith('TEST') && cleanString(employee.source_type) !== 'google_deleted'
+        })
+        .map((employee: any) => ({
+          id: employee.id,
+          employee_no: cleanString(employee.employee_no),
+          full_name: cleanString(employee.full_name),
+          hire_date: cleanString(employee.hire_date).slice(0, 10) || null,
+          country: cleanString(employee.country || employee.nationality) || null,
+          work_tg: cleanString(employee.work_tg) || null,
+          status: employee.status,
+          source_type: employee.source_type,
+        }))
+      return json(req, { ok:true, employees, asset_source_connected:false })
     }
 
     if (action === 'bootstrap') {

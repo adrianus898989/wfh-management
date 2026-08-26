@@ -11,6 +11,7 @@ import {
   visibleAdminAlertTypes,
 } from '../lib/adminAlertCatalog'
 import { adminAlertEmployeeTarget, adminAlertTarget } from '../lib/adminAlertRoutes'
+import { adminAlertAttendanceDetails } from '../lib/adminAlertDetails'
 import { supabase } from '../lib/supabase'
 import '../styles-admin-alerts.css'
 
@@ -76,6 +77,25 @@ function alertCopy(row, locale) {
     case 'resigned_account_active': return { title:'Resigned account not recovered', message:`${name} is resigned but still has ${count} enabled login mapping(s).` }
     default: return { title:clean(row?.title) || eventName(row, locale), message:clean(row?.message) || '—' }
   }
+}
+
+function AlertAttendanceDetails({ row, locale }) {
+  const detail = adminAlertAttendanceDetails(row, locale)
+  if (!detail) return null
+  return <section className={`admin-alert-attendance-detail ${detail.kind}`} data-admin-i18n-skip>
+    {detail.breakdown.length > 0 && <div className="admin-alert-attendance-breakdown">
+      {detail.breakdown.map(item => <span key={item.kind}><b>{item.label}</b> {countText(item.count)} {item.unit}{item.kind === 'half_day' && (locale === 'en' ? ` (${countText(item.count * 0.5)} days counted)` : `（计 ${countText(item.count * 0.5)} 天）`)}</span>)}
+      {detail.homeLeaveExcluded && <span className="excluded">{locale === 'en' ? 'Home leave excluded' : '回家休假不计入'}</span>}
+    </div>}
+    <h4>{detail.title}</h4>
+    {detail.missingDetails
+      ? <p className="admin-alert-attendance-missing">{locale === 'en' ? 'The dated detail is waiting for the next warning-data refresh.' : '具体日期和原因将在下一次预警数据刷新后补齐。'}</p>
+      : <ul>{detail.events.map((event, index) => <li key={`${event.date}:${event.eventKind}:${index}`}>
+        <time>{event.date}</time>
+        <strong className={event.eventKind}>{event.kindLabel}</strong>
+        <span>{event.description}</span>
+      </li>)}</ul>}
+  </section>
 }
 
 async function loadAlertPage(filters, page, pageSize) {
@@ -331,6 +351,7 @@ export function AdminAlertRecordsPage() {
               <div className="admin-alert-record-main">
                 <div className="admin-alert-record-title"><strong data-admin-i18n-skip>{copy.title}</strong><span className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</span>{!row.is_active && <span className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</span>}{row.unread && <i>{locale === 'en' ? 'Unread' : '未读'}</i>}</div>
                 <p data-admin-i18n-skip>{copy.message}</p>
+                <AlertAttendanceDetails row={row} locale={locale}/>
                 <div className="admin-alert-record-meta"><b data-admin-i18n-skip>{row.employee_no}</b><span data-admin-i18n-skip>{row.employee_name}</span>{row.window_start && <span data-admin-i18n-skip>{row.window_start}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</span>}<span>{row.is_active ? (locale === 'en' ? 'Updated' : '更新于') : (locale === 'en' ? 'Resolved' : '解除于')} <span data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</span></span></div>
               </div>
               <div className="admin-alert-record-actions">{row.unread && <button type="button" onClick={() => markOne(row)}>{locale === 'en' ? 'Mark read' : '标为已读'}</button>}{row.alert_type === 'payout_change' && row.is_active && <button type="button" className="primary" onClick={() => navigate(adminAlertTarget(row.alert_type))}>{locale === 'en' ? 'Review' : '去审核'}</button>}{canViewEmployees && row.employee_id && <button type="button" onClick={() => navigate(adminAlertEmployeeTarget(row.employee_id))}>{locale === 'en' ? 'Employee' : '员工档案'}</button>}</div>

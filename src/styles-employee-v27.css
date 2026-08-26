@@ -173,6 +173,91 @@
 
 .archive-sync-badge.has-error i{background:#f59e0b;box-shadow:0 0 0 3px #fef3c7}.archive-sync-badge.has-error{color:#a16207}
 
+/* V28.5 — analytics filters keep their geometry while a query is running. */
+.employee-page .v24-analytics-filter-panel .people-filter-grid{
+  display:flex!important;
+  flex-wrap:wrap!important;
+  align-items:flex-end!important;
+  gap:8px 10px!important;
+}
+.employee-page .v24-analytics-filter-panel .people-filter-grid>.pro-filter-field:not(.people-date-range-field){
+  flex:1 1 145px!important;
+  min-width:130px!important;
+  max-width:200px!important;
+}
+.employee-page .v24-analytics-filter-panel .people-date-range-field{
+  flex:1 1 280px!important;
+  width:auto!important;
+  min-width:min(260px,100%)!important;
+  max-width:360px!important;
+}
+.employee-page .v24-analytics-filter-panel .people-filter-actions{
+  display:grid!important;
+  grid-template-columns:88px 68px!important;
+  flex:0 0 164px!important;
+  width:164px!important;
+  min-width:164px!important;
+  height:36px!important;
+  gap:8px!important;
+  justify-content:stretch!important;
+  align-self:flex-end!important;
+  overflow:visible!important;
+}
+.employee-page .people-filter-actions button{
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  width:100%!important;
+  min-width:0!important;
+  margin:0!important;
+  white-space:nowrap!important;
+}
+.employee-page .people-query-action{
+  gap:6px!important;
+}
+.employee-action-spinner{
+  width:12px;
+  height:12px;
+  flex:0 0 12px;
+  border:2px solid rgba(255,255,255,.48);
+  border-top-color:#fff;
+  border-radius:50%;
+  animation:employee-action-spin .72s linear infinite;
+}
+@keyframes employee-action-spin{to{transform:rotate(360deg)}}
+.employee-analysis-loading{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:9px;
+  min-height:112px;
+  margin-top:10px;
+  border:1px solid #dce5f0;
+  border-radius:13px;
+  background:#fff;
+  color:#657a94;
+  font-size:11px;
+  font-weight:750;
+}
+.employee-analysis-loading>i{
+  width:15px;
+  height:15px;
+  border:2px solid #d8e2ef;
+  border-top-color:#3569e5;
+  border-radius:50%;
+  animation:employee-action-spin .72s linear infinite;
+}
+@media(max-width:640px){
+  .employee-page .v24-analytics-filter-panel .people-filter-grid>.pro-filter-field:not(.people-date-range-field),
+  .employee-page .v24-analytics-filter-panel .people-date-range-field{
+    flex:1 1 100%!important;
+    max-width:none!important;
+  }
+  .employee-page .v24-analytics-filter-panel .people-filter-actions{
+    flex-basis:164px!important;
+  }
+}
+
 /* V28 — employee archive opened from analytics must sit above the analytics modal. */
 .detail-mask{z-index:10050!important;}
 .detail-mask .employee-detail-drawer{z-index:10051!important;}

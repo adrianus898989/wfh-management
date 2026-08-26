@@ -19,6 +19,10 @@ test('admin sidebar uses the requested top-level order and names', () => {
     '员工档案查询表', '人员分析表', '离职记录表', '档案变更记录',
     '汇总表', '人员分布总表', '站点人数报表', '排班表',
   ])
+  assert.deepEqual(
+    group('account_usage').children[0],
+    { label:'公司提供资产', to:'/admin/account-usage', permissions:['user.view'] },
+  )
   assert.equal(visibleItems.filter(entry => entry.label === '排班表').length, 1)
 })
 
@@ -49,9 +53,10 @@ test('same-path items activate only their own tab while default-tab aliases rema
 
 test('planning routes use existing permissions and are part of the guarded route registry', () => {
   const eventRoute = requestedAdminRoute('/admin/work-execution', '')
-  const chatRoute = requestedAdminRoute('/admin/account-usage', '')
+  const assetRoute = requestedAdminRoute('/admin/account-usage', '')
   assert.ok(eventRoute?.permissions?.includes('report.view'))
-  assert.deepEqual(chatRoute?.permissions, ['user.view'])
+  assert.equal(assetRoute?.groupId, 'account_usage')
+  assert.deepEqual(assetRoute?.permissions, ['user.view'])
 })
 
 test('page chrome uses the new menu labels without changing canonical route tabs', () => {

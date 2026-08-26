@@ -7,7 +7,9 @@ do $$
 declare
   v_refresh_definition text;
   v_wrapper_definition text;
+  v_pre_detail_definition text;
   v_extended_definition text;
+  v_detail_definition text;
 begin
   if not exists (
     select 1 from pg_catalog.pg_class relation
@@ -45,14 +47,34 @@ begin
     'alerts_private.refresh_alerts()'::regprocedure
   ) into v_wrapper_definition;
   select pg_catalog.pg_get_functiondef(
+    'alerts_private.refresh_alerts_without_attendance_details()'::regprocedure
+  ) into v_pre_detail_definition;
+  select pg_catalog.pg_get_functiondef(
     'alerts_private.refresh_extended_alerts()'::regprocedure
   ) into v_extended_definition;
-  if strpos(v_wrapper_definition, 'refresh_core_alerts') = 0
-     or strpos(v_wrapper_definition, 'refresh_extended_alerts') = 0
+  select pg_catalog.pg_get_functiondef(
+    'alerts_private.enrich_attendance_alert_details()'::regprocedure
+  ) into v_detail_definition;
+  if strpos(v_wrapper_definition, 'refresh_alerts_without_attendance_details') = 0
+     or strpos(v_wrapper_definition, 'enrich_attendance_alert_details') = 0
+     or strpos(v_pre_detail_definition, 'refresh_core_alerts') = 0
+     or strpos(v_pre_detail_definition, 'refresh_extended_alerts') = 0
      or strpos(v_extended_definition, 'latest_graded_attempt_failed') = 0
-     or strpos(v_extended_definition, 'resigned_account_active') = 0 then
+     or strpos(v_extended_definition, 'resigned_account_active') = 0
+     or strpos(v_detail_definition, '''events''') = 0
+     or strpos(v_detail_definition, 'record.reason') = 0
+     or strpos(v_detail_definition, 'record.note') = 0
+     or strpos(v_detail_definition, '''home_leave''') = 0
+     or strpos(v_detail_definition, 'ranked.event_kind = ''home_leave''') = 0
+     or strpos(v_detail_definition, 'pg_try_advisory_xact_lock') = 0 then
     raise exception 'extended alert refresh composition is missing';
   end if;
+
+  if pg_catalog.has_function_privilege(
+    'authenticated', 'alerts_private.enrich_attendance_alert_details()', 'execute'
+  ) or pg_catalog.has_function_privilege(
+    'authenticated', 'alerts_private.refresh_alerts_without_attendance_details()', 'execute'
+  ) then raise exception 'authenticated role can execute private alert refresh helpers'; end if;
 
   if not exists (
     select 1

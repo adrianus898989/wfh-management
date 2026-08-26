@@ -1,6 +1,7 @@
 import React from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAdminI18n } from '../lib/adminI18n'
+import AdminCompanyAssetsPage from './AdminCompanyAssetsPage'
 
 const WORK_PAGES = {
   '': {
@@ -17,17 +18,11 @@ const WORK_PAGES = {
   },
 }
 
-const ACCOUNT_PAGES = {
-  '': {
-    title:'员工使用聊天工具',
-    description:'模块入口已经建立；聊天工具范围、使用状态及统计字段确认后再接入真实数据。',
-  },
-}
-
 export default function AdminPlanningPage({ section }) {
   const { t } = useAdminI18n()
   const [params] = useSearchParams()
-  const pages = section === 'account-usage' ? ACCOUNT_PAGES : WORK_PAGES
+  if (section === 'account-usage') return <AdminCompanyAssetsPage/>
+  const pages = WORK_PAGES
   const page = pages[params.get('tab') || ''] || pages['']
 
   return <div className="content-page admin-planning-page">

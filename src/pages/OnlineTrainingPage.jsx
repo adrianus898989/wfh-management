@@ -809,7 +809,7 @@ function ReportList({rows,onHistory}){
 
 function ListSkeleton({mode}){
   const count=mode==='reports'?4:6
-  return <section className={`ot-list-skeleton ${mode}`} aria-label="正在读取"><span className="sr-only">正在读取</span>{Array.from({length:count},(_,index)=><article key={index}><i/><div><b/><em/><span/></div></article>)}</section>
+  return <section className={`ot-list-skeleton ${mode}`} aria-label="正在读取" aria-busy="true">{Array.from({length:count},(_,index)=><article key={index} aria-hidden="true"><i/><div><b/><em/><span/></div></article>)}</section>
 }
 
 function PeopleList({rows,onHistory,onProfile}){

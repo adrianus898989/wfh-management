@@ -1275,7 +1275,7 @@ export default function AdminEmployeesPage(){
           {['总览','国家分析'].includes(analysisView)&&<label className="pro-filter-field"><span>员工国家</span><FilterCombo value={analysisFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="analysis-country"/></label>}
           {['总览','班次分析'].includes(analysisView)&&<label className="pro-filter-field"><span>班次</span><FilterCombo value={analysisFilters.shift_name} options={cleanShiftOptions((analytics.shifts||[]).map(x=>x.name))} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/></label>}
           <label className="pro-filter-field people-date-range-field"><span>分析日期区间</span><div className="pro-date-range"><input type="date" value={analysisFilters.date_from} onChange={e=>setAnalysisFilters({...analysisFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={analysisFilters.date_to} onChange={e=>setAnalysisFilters({...analysisFilters,date_to:e.target.value})}/></div></label>
-          <div className="filter-toolbar-actions people-filter-actions"><button className="primary-action" onClick={applyAnalysisFilters} disabled={peopleAnalytics.loading}>{peopleAnalytics.loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetAnalysisFilters} disabled={peopleAnalytics.loading}>重置</button></div>
+          <div className="filter-toolbar-actions people-filter-actions"><button className="primary-action people-query-action" onClick={applyAnalysisFilters} disabled={peopleAnalytics.loading} aria-busy={peopleAnalytics.loading}>{peopleAnalytics.loading&&<i className="employee-action-spinner" aria-hidden="true"/>}<span>{peopleAnalytics.loading?'查询中':'查询'}</span></button><button className="secondary-action people-reset-action" onClick={resetAnalysisFilters} disabled={peopleAnalytics.loading}>重置</button></div>
         </div>
       </div>}
 
@@ -1313,14 +1313,14 @@ export default function AdminEmployeesPage(){
         />
       </>}
 
-      {analysisView==='国家分析'&&<>
+      {analysisView==='国家分析'&&(peopleAnalytics.loading?<AnalysisLoadingState label="正在读取国家分析"/>:<>
         <CountryTenurePanel analytics={peopleAnalytics} filters={appliedAnalysisFilters} onOpen={args=>openAnalysisDetail(args)}/>
         <CountryPeopleAnalytics
           analytics={peopleAnalytics}
           onOpen={args=>openAnalysisDetail(args)}
           onCountry={name=>openAnalysisDetail({title:`${name} · 当前在职员工`,event_type:'active',dimension:'country',value:name,filters:appliedAnalysisFilters})}
         />
-      </>}
+      </>)}
 
       {analysisView==='班次分析'&&<DimensionAnalysisDirectory
         title="班次分析" subtitle="按当前排班班次查看人数、占比和人员流动。"
@@ -2081,7 +2081,7 @@ function TrendBars({rows=[],onSelectDay}){
   </div>
 }
 function EmployeeAnalyticsOverview({analytics,onTeam,onPosition,onCountry,onShift,onResign,onDay}){
-  if(analytics.loading) return <div className="analysis-overview-card"><div className="empty-state compact-empty">正在计算人员结构...</div></div>
+  if(analytics.loading) return <AnalysisLoadingState label="正在读取人员结构"/>
   const countries=(analytics.countries||[]).slice(0,7)
   const teams=(analytics.teams||[]).slice(0,7)
   const positions=(analytics.positions||[]).slice(0,7)
@@ -2119,7 +2119,7 @@ function EmployeeAnalyticsOverview({analytics,onTeam,onPosition,onCountry,onShif
 
 
 function DimensionAnalysisDirectory({title,subtitle,rows=[],loading,onPeople,onResign}){
-  if(loading) return <div className="analysis-overview-card"><div className="empty-state compact-empty">正在计算{title}...</div></div>
+  if(loading) return <AnalysisLoadingState label={`正在读取${title}`}/>
   const ordered=[...rows].sort((a,b)=>(b.count||0)-(a.count||0)||text(a.name).localeCompare(text(b.name),'zh-CN'))
   const active=ordered.reduce((sum,x)=>sum+(Number(x.count)||0),0)
   const join7=ordered.reduce((sum,x)=>sum+(Number(x.join_7d)||0),0)
@@ -2144,6 +2144,10 @@ function DimensionAnalysisDirectory({title,subtitle,rows=[],loading,onPeople,onR
     </article>)}</div>
     {!ordered.length&&<div className="empty-state">暂无{title}数据</div>}
   </section>
+}
+
+function AnalysisLoadingState({label}){
+  return <div className="employee-analysis-loading" role="status" aria-live="polite" aria-busy="true"><i aria-hidden="true"/><span>{label}</span></div>
 }
 
 

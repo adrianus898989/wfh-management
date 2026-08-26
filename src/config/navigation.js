@@ -90,7 +90,7 @@ export const adminNavigation = [
   },
   {
     id:'account_usage', label:'后台账号使用情况', icon:'权', children:[
-      item('员工使用聊天工具', '/admin/account-usage', ACCESS.accountUsage),
+      item('公司提供资产', '/admin/account-usage', ACCESS.accountUsage),
       item('员工前端账号', tab('/admin/users', 'staff'), ACCESS.staffAccounts),
       item('后台账号', '/admin/users', ACCESS.backendAccounts),
       item('后台角色权限', tab('/admin/users', 'roles'), ACCESS.roles),
