@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
 import { useStaffLocale } from '../lib/staffI18n'
 import { useAdminI18n } from '../lib/adminI18n'
+import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentation'
+import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
 
 const activeStatuses = ['active', 'probation', '在职', '试用']
 const text = v => String(v ?? '').trim()
@@ -68,8 +70,11 @@ export const AdminHome = () => {
         body: { action: 'dashboard' },
       })
       if (!alive) return
-      if (error || data?.error) setError(data?.error || error?.message || '读取失败')
-      else setData(data)
+      if (error || data?.error) {
+        const errorMessage = await edgeFunctionErrorMessage({ data, error, fallback:'Dashboard 读取失败，请重试' })
+        if (!alive) return
+        setError(errorMessage)
+      } else setData(data)
       setLoading(false)
     })()
     return () => { alive = false }
@@ -584,7 +589,7 @@ function StaffAdjustmentPanel({ state, t, locale }) {
       return <article key={row.id || `${row.event_date || row.date}-${index}`}>
         <div><time>{staffDate(row.event_date || row.date)}</time><span className={deduction ? 'deduction' : 'bonus'}>{deduction ? t('adjustments.deduction', 'Deduction') : t('adjustments.bonus', 'Reward')}</span></div>
         <strong className={deduction ? 'deduction' : 'bonus'}>{currency ? `${currency} ` : ''}{amount > 0 ? '+' : ''}{amount.toLocaleString(localeCode(locale), { maximumFractionDigits:2 })}</strong>
-        <p>{row.note || row.reason || '—'}</p>
+        <p><b className="staff-adjustment-category">{t('adjustments.category', 'Type')}: {adjustmentCategory(row)}</b>{adjustmentReason(row)}</p>
       </article>
     })}</div> : <div className="staff-history-empty">{t('adjustments.none', 'No reward or deduction records are linked to your employee ID.')}</div>}
   </section>

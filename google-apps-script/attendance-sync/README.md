@@ -9,11 +9,29 @@ the three 2026 annual workbooks:
 - home Philippines: PHP
 
 Each annual logical source combines one monthly attendance tab with that month's
-block in `填表`. Monthly day cells produce only sparse exception events (`公`,
+block in `奖惩填表`. Monthly day cells produce only sparse exception events (`公`,
 `回`, `请`, `半`, `缺`/`旷工`, `离`). Blank or unknown day cells are not stored.
 Every non-zero fill-form amount is interpreted by its sign: positive is a bonus
-and negative is a deduction. The Philippines first-half and second-half amounts
-become separate records, use their paired note columns, and share the row's date.
+and negative is a deduction.
+
+The two standard USD workbooks keep dynamic compatibility with both their
+current seven-column layout (`姓名 / ID / 奖金 / 扣除 / 类型 / 备注 / 日期`) and
+the earlier six-column layout without `类型`. The Philippines workbook is a
+separate exact nine-column protocol:
+
+`姓名 / ID / 金额1-15 / 类型 / 金额16-末 / 类型 / 备注1-15 / 备注16-末 / 日期`
+
+Its live September–December business blocks start at `A / K / U / AE`; the
+paired six-column metadata blocks start at `AO / AU / BA / BG`. The resolver
+accepts a Philippines block only when its row-1 month title and all nine row-2
+headers match, then derives the installed metadata region from all four exact
+six-column headers. Missing, partial, reordered, or conflicting headers stop the
+read before any business row is sent. The Apps Script is read-only and does not
+alter business structure or access March–August blocks.
+
+The Philippines first-half and second-half amounts become separate records,
+carry their own type and paired note, and share the row's date. The outbound
+payload declares `adjustment_schema: philippines` and preserves all nine cells.
 
 The reader also includes the hidden adjustment-v1 ownership metadata in every
 annual snapshot. A complete valid managed triplet makes the annual importer skip

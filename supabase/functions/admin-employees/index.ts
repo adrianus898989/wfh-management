@@ -596,6 +596,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers:corsHeaders });
   if (req.method !== "POST") return json({ error:"Method not allowed" }, 405);
 
+  let requestAction = "unknown";
   try {
     const service = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -607,6 +608,7 @@ Deno.serve(async (req) => {
     const scope = await scopeInfo(service, caller);
     const body = await req.json().catch(() => ({}));
     const action = text(body.action || "list");
+    requestAction = action;
     await requirePermission(service,caller,"employee.view");
 
     // Employee mutations are transactional and Google-Sheet-backed in admin-employee-write.
@@ -1621,7 +1623,8 @@ Deno.serve(async (req) => {
 
     return json({ error:"未知 action" },400);
   } catch (e) {
-    console.error(e);
-    return json({ error:e instanceof Error ? e.message : String(e) },400);
+    const message=e instanceof Error ? e.message : String(e);
+    console.error(JSON.stringify({ function:"admin-employees", action:requestAction, message }));
+    return json({ error:message, action:requestAction },400);
   }
 });

@@ -3,9 +3,10 @@ import {useSearchParams} from 'react-router-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
-import {adminLocalPageTabs} from '../config/navigation'
+import {adminLocalPageTabs,adminTabParams,adminTabSlug,canonicalAdminTab} from '../config/navigation'
 import {useAdminI18n} from '../lib/adminI18n'
 import {rosterPersonKey,uniqueRosterCount} from '../lib/rosterIdentity'
+import {edgeFunctionErrorMessage} from '../lib/edgeFunctionError'
 
 const text=v=>String(v??'').trim()
 const OPS=['总汇','人员','排班表','盘口人数','统计','错误统计']
@@ -76,6 +77,7 @@ const fmtPct=(n,d)=>d?`${((Number(n)||0)/(Number(d)||1)*100).toFixed(2)}%`:'0.00
 const MANILA_DATE_FORMATTER=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'})
 const isoToday=()=>{const parts={};MANILA_DATE_FORMATTER.formatToParts(new Date()).forEach(part=>{if(part.type!=='literal')parts[part.type]=part.value});return `${parts.year}-${parts.month}-${parts.day}`}
 const isoAdd=(base,days)=>{const d=new Date(`${base}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10)}
+const currentDayRange=()=>{const today=isoToday();return{from:today,to:today}}
 const currentMonthRange=()=>{const today=isoToday();return{from:`${today.slice(0,7)}-01`,to:today}}
 async function functionErrorDetail(error,fallback='请求失败'){
   const context=error?.context
@@ -87,7 +89,7 @@ async function functionErrorDetail(error,fallback='请求失败'){
   const status=Number(context?.status||error?.status||0)
   const code=text(payload?.code||context?.headers?.get?.('sb-error-code'))
   const requestId=text(payload?.request_id||context?.headers?.get?.('x-request-id'))
-  const base=text(payload?.error||payload?.message)||(status===401?'登录已失效，请重新登录':status===403?'当前账号没有后台访问权限':status>=500?'服务暂时不可用，请稍后重试':text(error?.message)||fallback)
+  const base=text(payload?.error||payload?.message)||(status===401?'登录已失效，请重新登录':status===403?'当前账号没有后台访问权限':status>=500?'服务暂时不可用，请稍后重试':await edgeFunctionErrorMessage({error,fallback}))
   const diagnostic=[status?`HTTP ${status}`:'',code,requestId?`请求 ${requestId}`:''].filter(Boolean).join(' · ')
   return{message:diagnostic?`${base}（${diagnostic}）`:base,status,code,requestId}
 }
@@ -130,7 +132,8 @@ function filterRoster(rows,f){
 
 export default function AdminReportsPage(){
   const [sp,setSp]=useSearchParams()
-  const requestedTab=sp.get('tab')
+  const requestedRouteTab=sp.get('tab')
+  const requestedTab=canonicalAdminTab('/admin/reports',requestedRouteTab)
   const [tab,setTabState]=useState(OPS.includes(requestedTab)?requestedTab:'总汇')
   const [overview,setOverview]=useState(null)
   const [loading,setLoading]=useState(true)
@@ -143,16 +146,7 @@ export default function AdminReportsPage(){
 
   const invoke=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-reports',{body})
-    if(error){
-      let detail=''
-      try{
-        const response=error.context?.clone?error.context.clone():error.context
-        const payload=await response?.json?.()
-        detail=text(payload?.error||payload?.message)
-      }catch{}
-      throw new Error(detail||error.message||'统计数据读取失败')
-    }
-    if(data?.error)throw new Error(data.error)
+    if(error||data?.error)throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'统计数据读取失败'}))
     return data
   }
   const load=async(silent=false)=>{
@@ -177,9 +171,14 @@ export default function AdminReportsPage(){
     document.addEventListener('visibilitychange',refreshIfStale)
     return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale);overviewRequestRef.current+=1;overviewPendingRef.current=false}
   },[])
-  useEffect(()=>{const next=OPS.includes(requestedTab)?requestedTab:'总汇';setTabState(current=>current===next?current:next)},[requestedTab])
+  useEffect(()=>{
+    const next=OPS.includes(requestedTab)?requestedTab:'总汇'
+    setTabState(current=>current===next?current:next)
+    const desiredRouteTab=next==='总汇'?null:adminTabSlug('/admin/reports',next)
+    if(requestedRouteTab!==desiredRouteTab)setSp(desiredRouteTab?{tab:desiredRouteTab}:{},{replace:true})
+  },[requestedTab,requestedRouteTab,setSp])
 
-  const setTab=next=>{setTabState(next);setSp(next==='总汇'?{}:{tab:next},{replace:true})}
+  const setTab=next=>{setTabState(next);setSp(next==='总汇'?{}:adminTabParams('/admin/reports',next),{replace:true})}
 
   const roster=useMemo(()=>filterRoster(overview?.roster||[],filters),[overview,filters])
   const applyFilters=()=>setFilters({...draftFilters})
@@ -318,7 +317,7 @@ const blankErrorFilters=()=>({employee_id:'',employee_name:'',employee_status:''
 
 function Errors({onError}){
   const {locale}=useAdminI18n()
-  const [range,setRange]=useState({from:'',to:''}),[appliedRange,setAppliedRange]=useState({from:'',to:''}),[filters,setFilters]=useState(blankErrorFilters()),[appliedFilters,setAppliedFilters]=useState(blankErrorFilters()),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null),[employeeNo,setEmployeeNo]=useState('')
+  const [range,setRange]=useState(currentDayRange),[appliedRange,setAppliedRange]=useState(currentDayRange),[filters,setFilters]=useState(blankErrorFilters()),[appliedFilters,setAppliedFilters]=useState(blankErrorFilters()),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'qc_date',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[detail,setDetail]=useState(null),[employeeNo,setEmployeeNo]=useState('')
   const loadedAtRef=useRef(0)
   const requestRef=useRef(0)
   const requestPendingRef=useRef(false)
@@ -333,7 +332,7 @@ function Errors({onError}){
     }catch(e){if(requestId===requestRef.current)onError(e.message||'错误统计读取失败')}
     finally{if(requestId===requestRef.current){requestPendingRef.current=false;setLoading(false)}}
   }
-  useEffect(()=>{load({nextRange:{from:'',to:''},nextFilters:blankErrorFilters(),nextPage:1});return()=>{requestRef.current+=1;requestPendingRef.current=false}},[])
+  useEffect(()=>{load({nextRange:currentDayRange(),nextFilters:blankErrorFilters(),nextPage:1});return()=>{requestRef.current+=1;requestPendingRef.current=false}},[])
   useEffect(()=>{
     const refreshIfStale=()=>{
       if(document.hidden||requestPendingRef.current||Date.now()-loadedAtRef.current<STALE_REFRESH_MS)return
@@ -346,7 +345,7 @@ function Errors({onError}){
   const updateFilter=(key,value)=>setFilters(current=>({...current,[key]:value}))
   const query=()=>{const nextRange={...range},nextFilters={...filters};setAppliedRange(nextRange);setAppliedFilters(nextFilters);setPage(1);load({nextRange,nextFilters,nextPage:1})}
   const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);setAppliedRange(next);setAppliedFilters({...filters});setPage(1);load({nextRange:next,nextFilters:{...filters},nextPage:1})}
-  const reset=()=>{const nextFilters=blankErrorFilters(),nextRange={from:'',to:''},nextSort={key:'qc_date',asc:false};setFilters(nextFilters);setAppliedFilters(nextFilters);setRange(nextRange);setAppliedRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1})}
+  const reset=()=>{const nextFilters=blankErrorFilters(),nextRange=currentDayRange(),nextSort={key:'qc_date',asc:false};setFilters(nextFilters);setAppliedFilters(nextFilters);setRange(nextRange);setAppliedRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1})}
   const showEmployeeErrors=employeeId=>{const nextFilters={...blankErrorFilters(),employee_id:text(employeeId)},nextRange={from:'',to:''},nextSort={key:'qc_date',asc:false};setDetail(null);setEmployeeNo('');setFilters(nextFilters);setAppliedFilters(nextFilters);setRange(nextRange);setAppliedRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1})}
   const setSortKey=key=>{const next={key,asc:sort.key===key?!sort.asc:true};setSort(next);setPage(1);load({nextSort:next,nextPage:1})}
   const changePage=next=>{setPage(next);load({nextPage:next})}
@@ -373,11 +372,11 @@ function ReportEmployeeDrawer({employeeNo,onClose}){
   const [state,setState]=useState({loading:true,error:'',detail:null,profileSummary:null})
   useEffect(()=>{let alive=true;(async()=>{try{
     const found=await supabase.functions.invoke('admin-employees',{body:{action:'list',page:1,page_size:20,filters:{employee_no:employeeNo,status:''}}})
-    if(found.error||found.data?.error)throw new Error(found.data?.error||found.error?.message||'员工读取失败')
+    if(found.error||found.data?.error)throw new Error(await edgeFunctionErrorMessage({data:found.data,error:found.error,fallback:'员工读取失败'}))
     const row=(found.data?.rows||[]).find(item=>upperText(item.employee_no)===upperText(employeeNo))||(found.data?.rows||[])[0]
     if(!row?.id)throw new Error('找不到对应员工档案')
     const [profile,profileSummaryResult]=await Promise.all([supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:row.id}}),supabase.rpc('admin_employee_profile_summary',{p_employee_id:row.id})])
-    if(profile.error||profile.data?.error)throw new Error(profile.data?.error||profile.error?.message||'员工档案读取失败')
+    if(profile.error||profile.data?.error)throw new Error(await edgeFunctionErrorMessage({data:profile.data,error:profile.error,fallback:'员工档案读取失败'}))
     if(profileSummaryResult.error)throw new Error(profileSummaryResult.error.message||'员工统计读取失败')
     if(alive)setState({loading:false,error:'',detail:profile.data,profileSummary:profileSummaryResult.data||null})
   }catch(error){if(alive)setState({loading:false,error:error.message||'员工档案读取失败',detail:null,profileSummary:null})}})();return()=>{alive=false}},[employeeNo])

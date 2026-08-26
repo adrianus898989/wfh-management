@@ -19,8 +19,8 @@ const copy = {
   pickerSubtitle: ['按题库来源的盘口和岗位选择可用试卷。', 'Choose an available exam by platform and position.', 'Chọn bài thi theo nền tảng và vị trí.', 'Pilih ujian berdasarkan platform dan posisi.'],
   platform: ['盘口', 'Platform', 'Nền tảng', 'Platform'],
   position: ['岗位', 'Position', 'Vị trí', 'Posisi'],
-  selectPlatform: ['请选择盘口', 'Select a platform', 'Chọn nền tảng', 'Pilih platform'],
-  selectPosition: ['请选择岗位', 'Select a position', 'Chọn vị trí', 'Pilih posisi'],
+  selectPlatform: ['请选择', 'Select a platform', 'Chọn nền tảng', 'Pilih platform'],
+  selectPosition: ['请选择', 'Select an exam', 'Chọn bài thi', 'Pilih ujian'],
   selected: ['当前选择', 'Selected exam', 'Bài thi đã chọn', 'Ujian terpilih'],
   inProgress: ['进行中', 'In progress', 'Đang làm', 'Sedang berlangsung'],
   questions: ['题目', 'Questions', 'Câu hỏi', 'Soal'],
@@ -180,11 +180,14 @@ export default function StaffExamPage() {
       setSelectedPlatform(''); setSelectedExamKey('')
       return
     }
-    if (assignments.some(exam => optionKey(exam) === selectedExamKey)) return
-    const first = assignments.find(exam => exam.resume_session_id) || assignments[0]
-    setSelectedPlatform(cleanLabel(first.series_name))
-    setSelectedExamKey(optionKey(first))
-  }, [assignments, selectedExamKey])
+    const platformStillAvailable = !selectedPlatform || assignments.some(exam => normalizedLabel(exam.series_name) === normalizedLabel(selectedPlatform))
+    if (!platformStillAvailable) {
+      setSelectedPlatform('')
+      setSelectedExamKey('')
+      return
+    }
+    if (selectedExamKey && !assignments.some(exam => optionKey(exam) === selectedExamKey)) setSelectedExamKey('')
+  }, [assignments, selectedPlatform, selectedExamKey])
 
   const platformOptions = useMemo(() => cleanOptions(assignments.map(exam => exam.series_name)), [assignments])
   const positionOptions = useMemo(() => assignments.filter(exam => normalizedLabel(exam.series_name) === normalizedLabel(selectedPlatform)), [assignments, selectedPlatform])
@@ -193,9 +196,8 @@ export default function StaffExamPage() {
   const passedCount = history.filter(item => item.status === 'graded' && item.passed).length
 
   const choosePlatform = value => {
-    const first = assignments.find(exam => normalizedLabel(exam.series_name) === normalizedLabel(value))
     setSelectedPlatform(value)
-    setSelectedExamKey(first ? optionKey(first) : '')
+    setSelectedExamKey('')
   }
 
   const start = async exam => {

@@ -3,10 +3,11 @@ import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { attendanceAmount, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
-import { adminLocalPageTabs } from '../config/navigation'
+import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
-import { adjustmentReason } from '../lib/adjustmentPresentation'
+import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentation'
 import { useAdminAccess } from '../lib/adminAccess'
+import { businessMonthIso, businessTodayIso, businessTodayRange } from '../lib/adminQueryDefaults'
 import { supabase } from '../lib/supabase'
 import { EmployeeDrawer } from './AdminEmployeesPage'
 
@@ -30,20 +31,13 @@ const scheduleTeamName=(row,profile={})=>{
   return values.map(organizationName).find(value=>value&&!MISSING_TEAM_LABELS.has(value))||''
 }
 const scheduleTeamKey=value=>organizationName(value).toLocaleLowerCase().replace(/\s+/g,'')
-const BUSINESS_TIME_ZONE='Asia/Manila'
-const todayIso=()=>{
-  try{
-    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:BUSINESS_TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date())
-    const value=Object.fromEntries(parts.map(part=>[part.type,part.value]))
-    return `${value.year}-${value.month}-${value.day}`
-  }catch{
-    return new Date().toISOString().slice(0,10)
-  }
-}
+const todayIso=businessTodayIso
 const emptyFilters=()=>({search:'',employee_no:'',employee_name:'',date_from:'',date_to:'',source_month:'',source_group:'',work_mode:'',event_kind:'',employee_status:'',team:'',position:'',country:'',platform:'',manager:'',match_status:''})
 const tabFilters=tab=>{
-  const next=emptyFilters()
-  if(['今日考勤','考勤记录','请假审批'].includes(tab))next.date_from=next.date_to=todayIso()
+  const next={
+    ...emptyFilters(),
+    ...(['今日考勤','考勤记录','请假审批','奖金 / 扣款'].includes(tab)?businessTodayRange():{}),
+  }
   if(tab==='请假审批')next.event_kind='leave'
   return next
 }
@@ -118,7 +112,8 @@ const SyncIndicator=({sync})=><div className={`attendance-sync-indicator ${sync?
 export default function AdminAttendancePage(){
   const [params,setParams]=useSearchParams()
   const access=useAdminAccess()
-  const requestedTab=params.get('tab')
+  const requestedRouteTab=params.get('tab')
+  const requestedTab=canonicalAdminTab('/admin/schedule',requestedRouteTab)
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
     if(value==='排班表')return access.hasPermission(PERMISSIONS.SCHEDULE_VIEW)
     if(value==='请假审批')return access.hasAllPermissions([PERMISSIONS.ATTENDANCE_VIEW,PERMISSIONS.LEAVE_APPROVE])
@@ -141,12 +136,13 @@ export default function AdminAttendancePage(){
   const [adjustmentNotice,setAdjustmentNotice]=useState(null)
   const employeeRequest=useRef(0)
 
-  const setTab=value=>{if(visibleTabs.includes(value))setParams(value===TABS[0]?{}:{tab:value})}
+  const setTab=value=>{if(visibleTabs.includes(value))setParams(value===TABS[0]?{}:adminTabParams('/admin/schedule',value))}
   useEffect(()=>{
     if(access.loading||!tab)return
-    if(requestedTab===tab||(!requestedTab&&tab===TABS[0]))return
-    setParams(tab===TABS[0]?{}:{tab},{replace:true})
-  },[access.loading,access.founder,access.permissionKey,requestedTab,tab,setParams])
+    const desiredRouteTab=tab===TABS[0]?null:adminTabSlug('/admin/schedule',tab)
+    if(requestedRouteTab===desiredRouteTab)return
+    setParams(desiredRouteTab?{tab:desiredRouteTab}:{},{replace:true})
+  },[access.loading,access.founder,access.permissionKey,requestedRouteTab,tab,setParams])
   useEffect(()=>{
     const next=tabFilters(tab)
     setDraft(next);setApplied(next);setPage(1);setState({loading:false,error:'',data:null});setEmployeeError('');setAdjustmentEditor(null);setAdjustmentNotice(null)
@@ -288,18 +284,18 @@ function AttendanceSummary({scope,summary,total}){
 function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail,canEditAdjustment,onEditAdjustment}){
   const adjustment=scope==='adjustment'
   return <section className={`attendance-table-card ${loading&&hasData?'is-loading':''}`}>
-    <header><div><h2>{adjustment?'奖金 / 扣款明细':'考勤记录明细'}</h2><p>{adjustment?'Supabase 保存与 Google 写入状态分开显示；仅协议内新增记录可以编辑。':'员工、组织与说明分列展示；点击原因或备注可查看完整文字。'}</p></div><span>{loading?'读取中…':`${rows.length} 条 / 本页`}</span></header>
+    <header><div><h2>{adjustment?'奖金 / 扣款明细':'考勤记录明细'}</h2><p>{adjustment?'Supabase 保存与 Google 写入状态分开显示；仅协议内新增记录可以编辑。':'日期、员工、组织和说明各自独立成列；点击原因或备注可查看完整文字。'}</p></div><span>{loading?'读取中…':`${rows.length} 条 / 本页`}</span></header>
     {!hasData&&loading?<div className="attendance-table-state">正在读取记录…</div>:!rows.length?<div className="attendance-table-state">当前筛选条件下暂无记录</div>:<div className="attendance-table-scroll"><table className={adjustment?'attendance-detail-table adjustment':'attendance-detail-table'}>
-      {adjustment&&<colgroup><col className="adjustment-date-col"/><col className="adjustment-hire-col"/><col className="adjustment-employee-col"/><col className="adjustment-type-col"/><col className="adjustment-status-col"/><col className="adjustment-organization-col"/><col className="adjustment-money-col"/><col className="adjustment-note-col"/><col className="adjustment-action-col"/></colgroup>}
-      <thead>{adjustment?<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>奖金 / 扣款 · 金额</th><th>原因</th><th>同步 / 操作</th></tr>:<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>负责人</th><th>原因</th><th>备注</th></tr>}</thead>
+      {adjustment&&<colgroup><col className="adjustment-date-col"/><col className="adjustment-hire-col"/><col className="adjustment-employee-col"/><col className="adjustment-type-col"/><col className="adjustment-status-col"/><col className="adjustment-organization-col"/><col className="adjustment-category-col"/><col className="adjustment-money-col"/><col className="adjustment-note-col"/><col className="adjustment-action-col"/></colgroup>}
+      {!adjustment&&<colgroup><col className="attendance-date-col"/><col className="attendance-hire-col"/><col className="attendance-id-col"/><col className="attendance-name-col"/><col className="attendance-type-col"/><col className="attendance-country-col"/><col className="attendance-status-col"/><col className="attendance-team-col"/><col className="attendance-position-col"/><col className="attendance-reason-col"/><col className="attendance-note-col"/></colgroup>}
+      <thead>{adjustment?<tr><th>日期</th><th>入职日期</th><th>员工</th><th>员工类型 / 国家</th><th>状态</th><th>团队 / 岗位</th><th>类型</th><th>奖惩金额</th><th>原因</th><th>同步 / 操作</th></tr>:<tr><th>日期</th><th>入职日期</th><th>员工 ID</th><th>姓名</th><th>员工类型</th><th>国家</th><th>状态</th><th>团队</th><th>岗位</th><th>原因</th><th>备注</th></tr>}</thead>
       <tbody>{rows.map((row,index)=>{const sync=adjustmentSyncState(row);return <tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <td className={adjustment?'attendance-adjustment-date-cell':''}><div className="attendance-event-cell"><strong>{row.event_date||'—'}</strong>{!adjustment&&<span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span>}{!adjustment&&row.is_mirror&&<em>镜像</em>}</div></td>
         <td><span className="attendance-hire-date">{text(row.hire_date).slice(0,10)||'—'}</span></td>
-        <td><div className="attendance-employee-cell">{row.employee_id?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||'未匹配'}</strong>}<span>{row.full_name||'—'}</span></div></td>
-        <td><div className="attendance-stack"><strong>{employeeTypeLabel(row)}</strong><span>{row.country||'—'}</span></div></td>
+        {adjustment?<><td><div className="attendance-employee-cell">{row.employee_id?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||'未匹配'}</strong>}<span>{row.full_name||'—'}</span></div></td><td><div className="attendance-stack"><strong>{employeeTypeLabel(row)}</strong><span>{row.country||'—'}</span></div></td></>:<><td className="attendance-employee-id-cell">{row.employee_id?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||'未匹配'}</strong>}</td><td className="attendance-name-cell">{row.full_name||'—'}</td><td>{employeeTypeLabel(row)}</td><td>{row.country||'—'}</td></>}
         <td><div className="attendance-status-stack"><span className={`attendance-employee-status ${text(row.employee_status).toLowerCase()}`}>{employeeStatusLabel(row.employee_status)}</span>{row.needs_review&&<span className="attendance-review-badge" title="员工身份尚未唯一确认，需要人工核对员工ID或姓名">待核对</span>}</div></td>
-        <td><div className="attendance-stack"><strong>{row.team_name||'—'}</strong><span>{row.position_name||'—'}</span></div></td>
-        {!adjustment&&<td>{row.manager||'—'}</td>}
+        {adjustment?<td><div className="attendance-stack"><strong>{row.team_name||'—'}</strong><span>{row.position_name||'—'}</span></div></td>:<><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td></>}
+        {adjustment&&<td className="attendance-adjustment-category-cell"><span className="attendance-adjustment-category" title={adjustmentCategory(row)}>{adjustmentCategory(row)}</span></td>}
         {adjustment&&<td className="attendance-adjustment-money-cell"><div className="attendance-adjustment-money"><span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span><div className={`attendance-amount ${text(row.event_kind).toLowerCase()}`}><strong>{attendanceAmount(row)}</strong>{row.raw_amount&&text(row.raw_amount)!==text(row.amount)&&<span>原值 {row.raw_amount}</span>}</div></div></td>}
         {!adjustment&&<td><button type="button" className="attendance-copy-button" title="查看完整原因" onClick={()=>onDetail(row)}>{row.reason||'—'}</button></td>}
         <td className={adjustment?'attendance-adjustment-note-cell':''}><button type="button" className={`attendance-copy-button note${adjustment?' adjustment-note':''}`} title={adjustment?'点击查看完整原因':'点击查看完整备注'} onClick={()=>onDetail(row)}>{adjustment?adjustmentReason(row):(row.note||'—')}</button></td>
@@ -314,7 +310,7 @@ function AttendanceRecordModal({row,adjustment,onClose}){
   return <div className="modal-mask attendance-main-modal-mask" onMouseDown={onClose}><div className="attendance-main-modal" role="dialog" aria-modal="true" aria-labelledby="attendance-main-modal-title" onMouseDown={event=>event.stopPropagation()}>
     <header><div><small>ATTENDANCE DETAIL</small><h2 id="attendance-main-modal-title">{attendanceKindLabel(row.event_kind)} · 完整记录</h2><p>{row.event_date||'—'} · {row.employee_no||'未匹配'} · {row.full_name||'—'}</p></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
     <div className="attendance-modal-facts">
-      <span><small>入职日期</small><b>{text(row.hire_date).slice(0,10)||'—'}</b></span><span><small>员工类型 / 国家</small><b>{[employeeTypeLabel(row),row.country].filter(Boolean).join(' · ')||'—'}</b></span><span><small>员工状态</small><b>{employeeStatusLabel(row.employee_status)}</b></span><span><small>团队 / 岗位</small><b>{[row.team_name,row.position_name].filter(Boolean).join(' · ')||'—'}</b></span>{!adjustment&&<span><small>负责人</small><b>{row.manager||'—'}</b></span>}{adjustment&&<span><small>金额 / 原值</small><b>{attendanceAmount(row)}{row.raw_amount?` · ${row.raw_amount}`:''}</b></span>}
+      <span><small>入职日期</small><b>{text(row.hire_date).slice(0,10)||'—'}</b></span><span><small>员工类型 / 国家</small><b>{[employeeTypeLabel(row),row.country].filter(Boolean).join(' · ')||'—'}</b></span><span><small>员工状态</small><b>{employeeStatusLabel(row.employee_status)}</b></span><span><small>团队 / 岗位</small><b>{[row.team_name,row.position_name].filter(Boolean).join(' · ')||'—'}</b></span>{adjustment&&<><span><small>类型</small><b>{adjustmentCategory(row)}</b></span><span><small>金额 / 原值</small><b>{attendanceAmount(row)}{row.raw_amount?` · ${row.raw_amount}`:''}</b></span></>}
     </div>
     {adjustment?<section><small>完整原因</small><p>{adjustmentReason(row)}</p></section>:<>
       <section><small>完整原因</small><p>{row.reason||'—'}</p></section>
@@ -340,6 +336,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
     event_date:text(record?.event_date).slice(0,10)||`${inferredMonth}-01`,
     amount:record?.amount==null?'':String(record.amount),
     currency:text(raw.currency||record?.currency)||workbookCurrencies[inferredWorkbook],
+    category:inferredWorkbook==='home_ph'?'':text(raw.category||record?.reason),
     note:text(record?.note),
   }))
   const [state,setState]=useState({loading:true,saving:false,error:'',options:{workbooks:[],months:[],employees:[]}})
@@ -357,7 +354,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
   },[])
 
   const update=(key,value)=>setDraft(current=>{
-    if(key==='workbook_key')return {...current,workbook_key:value,currency:workbookCurrencies[value]||''}
+    if(key==='workbook_key')return {...current,workbook_key:value,currency:workbookCurrencies[value]||'',category:value==='home_ph'?'':current.category}
     if(key==='source_month')return {...current,source_month:value,event_date:`${value}-01`}
     return {...current,[key]:value}
   })
@@ -383,6 +380,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
       event_date:draft.event_date,
       amount:draft.amount,
       currency:draft.currency,
+      category:text(draft.category),
       note:text(draft.note),
     }
     const {data,error}=await supabase.rpc('admin_adjustment_upsert',{p_payload:payload})
@@ -405,6 +403,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
       <label><span>日期 <em>必填</em></span><input type="date" min={`${draft.source_month}-01`} max={`${draft.source_month}-${monthEnd}`} value={draft.event_date} disabled={state.saving} onChange={event=>update('event_date',event.target.value)} required/></label>
       <label><span>币种 <em>固定</em></span><input value={draft.currency} readOnly aria-readonly="true"/></label>
       <label><span>金额 <em>必填</em></span><input type="number" step="0.01" min="-100000000" max="100000000" value={draft.amount} disabled={state.saving} onChange={event=>update('amount',event.target.value)} placeholder="例如 50 或 -20" required/><small>{Number(draft.amount)>0?'将记录为奖金':Number(draft.amount)<0?'将记录为扣除':'不能填写 0'}</small></label>
+      <label><span>类型 {draft.workbook_key==='home_ph'?<em>菲律宾表暂无独立类型列</em>:<em>必填</em>}</span><input maxLength="200" value={draft.category} disabled={state.saving||draft.workbook_key==='home_ph'} onChange={event=>update('category',event.target.value)} placeholder="例如：迟到 / 超时、质量奖励" required={draft.workbook_key!=='home_ph'}/><small>{draft.workbook_key==='home_ph'?'该表仍按两个半月金额栏与备注同步':'保存到 Google 表格的“类型”列，也可在后台搜索'}</small></label>
       <label className="adjustment-editor-note"><span>原因 <em>必填</em></span><textarea rows="4" maxLength="4000" value={draft.note} disabled={state.saving} onChange={event=>update('note',event.target.value)} placeholder="说明奖金或扣除原因" required/><small>保存到 Google 表格的“备注”列</small></label>
     </div>
     <footer><div><b>保存结果会明确分两步显示</b><span>Supabase 已保存 → Google 待同步 / 已同步</span></div><button type="button" className="secondary-action" disabled={state.saving} onClick={onClose}>取消</button><button type="submit" className="primary-action" disabled={state.loading||state.saving}>{state.saving?'正在保存 Supabase…':editing?'保存修改':'保存并进入同步队列'}</button></footer>
@@ -561,7 +560,7 @@ const shiftSort=(a,b)=>{
   return rank(a)-rank(b)||text(a).localeCompare(text(b),'zh-CN')
 }
 
-const monthValue=()=>todayIso().slice(0,7)
+const monthValue=businessMonthIso
 const monthMeta=value=>{
   const [year,month]=text(value).split('-').map(Number)
   const safeYear=year||new Date().getFullYear(),safeMonth=month||new Date().getMonth()+1
@@ -703,7 +702,10 @@ function AttendanceMatrixPane(){
   const request=useRef(0)
   const load=async(force=false)=>{
     const sequence=++request.current
-    setState(current=>({...current,loading:true,error:'',people:[],overview:null,total:0,pages:1}))
+    // Keep the last successful page while the next page is loading. Clearing
+    // `pages` to 1 here used to trigger the page-clamp effect immediately,
+    // cancelling every request for page 2+ and sending users back to page 1.
+    setState(current=>({...current,loading:true,error:''}))
     try{
       const payload=await fetchAttendanceMonth(month,{
         ...applied,
@@ -733,7 +735,7 @@ function AttendanceMatrixPane(){
       }))
       const serverPaged=payload.page!==undefined||payload.page_size!==undefined||payload.pages!==undefined
       setState({loading:false,error:'',people,options:payload.options||{},overview:payload.overview||null,sync:syncMeta(payload),total:Number(payload.total??people.length),pages:Math.max(1,Number(payload.pages||1)),serverPaged})
-    }catch(error){if(sequence===request.current)setState(current=>({...current,loading:false,error:message(error),people:[],overview:null,total:0,pages:1,serverPaged:false}))}
+    }catch(error){if(sequence===request.current)setState(current=>({...current,loading:false,error:message(error)}))}
   }
   useEffect(()=>{load()},[month,applied,page,pageSize])
   const bounds=useMemo(()=>monthMeta(month),[month])
@@ -764,7 +766,7 @@ function AttendanceMatrixPane(){
   const pagePeople=state.serverPaged?people:people.slice((page-1)*pageSize,page*pageSize)
   const total=state.serverPaged?state.total:people.length
   const overview=useMemo(()=>matrixOverviewFromPayload(state.overview,bounds)||matrixOverviewFor(people,bounds,month,state.serverPaged?'page':'filtered'),[state.overview,state.serverPaged,people,bounds,month])
-  useEffect(()=>{if(page>pages)setPage(pages)},[page,pages])
+  useEffect(()=>{if(!state.loading&&page>pages)setPage(pages)},[state.loading,page,pages])
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
   const apply=()=>{setApplied({...draft});setPage(1)}
   const reset=()=>{const next=blank();setDraft(next);setApplied(next);setPage(1)}

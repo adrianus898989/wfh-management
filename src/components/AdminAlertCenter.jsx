@@ -70,7 +70,12 @@ const alertErrorMessage = (error, locale, fallback) => {
     permission_denied: { zh:'当前账号没有查看这些预警的权限。', en:'This account cannot view these warnings.' },
     alert_not_found_or_out_of_scope: { zh:'预警不存在或已不在当前管理范围内。', en:'The warning is unavailable or outside your scope.' },
   }
-  return messages[raw]?.[locale] || raw || fallback
+  if (messages[raw]) return messages[raw][locale]
+  // Supabase's SDK wrapper text is diagnostic, not actionable UI copy. Keep
+  // alert failures inside the alert surface and use the localized operation
+  // fallback while retaining useful server-provided messages.
+  if (!raw || /^edge function returned a non-2xx status code$/i.test(raw)) return fallback
+  return raw
 }
 
 function alertCopy(row, locale) {
@@ -489,7 +494,7 @@ export function AdminAlertRecordsPage() {
     {state.error && <div className="page-error employee-notice">{state.error}</div>}
     <div className="admin-alert-record-table" ref={recordsRef}>
       <div className="admin-alert-table-head" aria-hidden="true">
-        <span>{locale === 'en' ? 'Hire date' : '入职日期'}</span><span>{locale === 'en' ? 'Employee ID' : '员工 ID'}</span><span>{locale === 'en' ? 'Name' : '姓名'}</span><span>{locale === 'en' ? 'Warning type' : '预警类型'}</span><span>{locale === 'en' ? 'Level' : '级别'}</span><span>{locale === 'en' ? 'Updated' : '更新时间'}</span><span>{locale === 'en' ? 'Summary' : '预警摘要'}</span><span>{locale === 'en' ? 'Details' : '详情'}</span>
+        <span>{locale === 'en' ? 'Hire date' : '入职日期'}</span><span>{locale === 'en' ? 'Employee ID' : '员工 ID'}</span><span>{locale === 'en' ? 'Name' : '姓名'}</span><span>{locale === 'en' ? 'Warning type' : '预警类型'}</span><span>{locale === 'en' ? 'Level' : '级别'}</span><span>{locale === 'en' ? 'Updated' : '更新时间'}</span><span>{locale === 'en' ? 'Summary' : '预警摘要'}</span><span>{locale === 'en' ? 'Read status' : '状态'}</span><span>{locale === 'en' ? 'Details' : '详情'}</span>
       </div>
       {state.loading && !state.rows.length ? <div className="admin-alert-table-loading" aria-label={locale === 'en' ? 'Loading warning records' : '正在读取预警记录'}>{[0,1,2,3].map(item => <span key={item} />)}</div>
         : !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'No matching warnings.' : '暂无符合条件的预警记录。'}</div>
@@ -506,7 +511,8 @@ export function AdminAlertRecordsPage() {
                 <span data-label={locale === 'en' ? 'Warning type' : '预警类型'} className="admin-alert-table-type"><i className={`admin-alert-category-dot ${meta.tone}`} />{meta[locale] || eventName(row, locale)}</span>
                 <span data-label={locale === 'en' ? 'Level' : '级别'}><i className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</i>{!row.is_active && <i className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</i>}</span>
                 <time data-label={locale === 'en' ? 'Updated' : '更新时间'} data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</time>
-                <span data-label={locale === 'en' ? 'Summary' : '预警摘要'} className="admin-alert-table-summary"><span data-admin-i18n-skip>{copy.message}</span><b className={`admin-alert-read-state ${readState.unread ? 'unread' : 'read'}`}>{readState.label}</b></span>
+                <span data-label={locale === 'en' ? 'Summary' : '预警摘要'} className="admin-alert-table-summary" data-admin-i18n-skip>{copy.message}</span>
+                <span data-label={locale === 'en' ? 'Read status' : '状态'} className="admin-alert-table-read"><b className={`admin-alert-read-state ${readState.unread ? 'unread' : 'read'}`}>{readState.label}</b></span>
                 <span className="admin-alert-table-expand">{expanded ? (locale === 'en' ? 'Collapse' : '收起') : (locale === 'en' ? 'Open' : '展开')}<i aria-hidden="true">⌄</i></span>
               </button>
               {expanded && <div className="admin-alert-expanded-panel">

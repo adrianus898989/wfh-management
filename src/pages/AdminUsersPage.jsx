@@ -90,6 +90,8 @@ export default function AdminUsersPage() {
   const [newRoleName, setNewRoleName] = useState('')
   const [searchDraft, setSearchDraft] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [deletingAccountId, setDeletingAccountId] = useState('')
+  const [accountToast, setAccountToast] = useState(null)
 
   const call = async (body) => {
     const { data, error } = await supabase.functions.invoke('admin-accounts', { body })
@@ -115,6 +117,11 @@ export default function AdminUsersPage() {
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!accountToast) return undefined
+    const timer = window.setTimeout(() => setAccountToast(null), 3600)
+    return () => window.clearTimeout(timer)
+  }, [accountToast])
   useEffect(() => {
     setTabState(USER_TABS.includes(requestedTab) ? requestedTab : 'backend')
   }, [requestedTab])
@@ -194,6 +201,15 @@ export default function AdminUsersPage() {
     () => buildRolePermissionSections(permissions),
     [permissions],
   )
+  const catalogPermissionIds = useMemo(
+    () => uniquePermissionIds(groupedPermissionSections.flatMap(section => section.pages).flatMap(page => page.items)),
+    [groupedPermissionSections],
+  )
+  const catalogPermissionIdSet = useMemo(() => new Set(catalogPermissionIds), [catalogPermissionIds])
+  const catalogPermissions = useMemo(
+    () => permissions.filter(permission => catalogPermissionIdSet.has(permission.id)),
+    [permissions, catalogPermissionIdSet],
+  )
 
   const visiblePermissionSections = useMemo(() => {
     const query = String(roleModal?.permission_search || '').trim().toLowerCase()
@@ -206,8 +222,11 @@ export default function AdminUsersPage() {
         const items = sectionMatches || pageMatches
           ? page.items
           : page.items.filter(permission => `${permission.name || ''} ${permission.code || ''} ${actionLabels[permission.actionKey] || ''}`.toLowerCase().includes(query))
-        return { ...page, items }
-      }).filter(page => page.items.length > 0)
+        const pendingItems = sectionMatches || pageMatches
+          ? (page.pendingItems || [])
+          : (page.pendingItems || []).filter(permission => `${permission.name || ''} ${permission.code || ''} ${actionLabels[permission.actionKey] || ''} 待拆分 旧共享`.toLowerCase().includes(query))
+        return { ...page, items, pendingItems, pendingCodes: pendingItems.map(permission => permission.code) }
+      }).filter(page => page.items.length > 0 || page.pendingItems.length > 0)
       return { ...section, pages }
     }).filter(section => section.pages.length > 0)
   }, [groupedPermissionSections, roleModal?.permission_search])
@@ -365,12 +384,26 @@ export default function AdminUsersPage() {
     } catch (e) { setError(e.message) }
   }
 
-  const deleteAccount = async (a) => {
+  const deleteAccount = async (a, accountKind) => {
+    if (!a?.auth_user_id || deletingAccountId) return
     if (!window.confirm('只删除登录账号，员工资料会保留。确认继续？')) return
+    setDeletingAccountId(a.auth_user_id)
+    setError('')
+    setAccountToast(null)
     try {
       await call({ action: 'delete_account', auth_user_id: a.auth_user_id })
-      await load()
-    } catch (e) { setError(e.message) }
+      setData(current => current ? ({
+        ...current,
+        backend_accounts: (current.backend_accounts || []).filter(account => account.auth_user_id !== a.auth_user_id),
+        employee_accounts: (current.employee_accounts || []).filter(account => account.auth_user_id !== a.auth_user_id),
+      }) : current)
+      setAccountToast({ type: 'success', message: accountKind === 'staff' ? '员工登录账号已删除，员工档案已保留。' : '后台账号已删除，员工档案已保留。' })
+    } catch (e) {
+      setError(e.message)
+      setAccountToast({ type: 'error', message: `删除失败：${e.message}` })
+    } finally {
+      setDeletingAccountId('')
+    }
   }
 
   const createRole = async () => {
@@ -466,7 +499,9 @@ export default function AdminUsersPage() {
         .access-tabs button.active{background:#fff;color:#255ec7;box-shadow:0 2px 8px rgba(35,55,85,.08)}
         .access-grid-actions{display:flex;gap:7px;flex-wrap:wrap}
         .access-grid-actions button{border:1px solid #d9e2ed;background:#fff;border-radius:7px;padding:6px 8px;font-size:11px;cursor:pointer}
+        .access-grid-actions button:disabled{opacity:.55;cursor:wait}.access-account-row-deleting{background:#fbfcfe}.access-account-row-deleting>td{opacity:.72}
         .access-grid-actions button.danger{color:#bd4242}
+        .access-toast{position:fixed;z-index:1200;top:76px;right:24px;display:flex;align-items:center;gap:10px;max-width:min(420px,calc(100vw - 32px));padding:12px 15px;border:1px solid #bfe5cf;border-radius:11px;background:#f0fbf5;color:#166c45;box-shadow:0 12px 28px rgba(30,55,85,.16);font-size:12px;font-weight:800}.access-toast.error{border-color:#efc5c5;background:#fff5f5;color:#a83d3d}.access-toast button{border:0;background:transparent;color:inherit;font-size:17px;cursor:pointer}
         .roles-workspace{overflow:hidden;border:1px solid #dce5f0;border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(29,51,82,.04)}
         .roles-overview{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 24px;border-bottom:1px solid #e5ebf3;background:linear-gradient(135deg,#f8fbff 0%,#f3f7ff 62%,#f8f6ff 100%)}
         .roles-overview-copy span{display:block;margin-bottom:5px;color:#315fc8;font-size:10px;font-weight:900;letter-spacing:.12em}.roles-overview-copy h2{margin:0 0 6px;color:#1f3552;font-size:20px}.roles-overview-copy p{max-width:660px;margin:0;color:#718198;font-size:13px;line-height:1.65}
@@ -487,7 +522,8 @@ export default function AdminUsersPage() {
         .role-modal-body{min-height:0;overflow:auto;padding:16px 18px 24px;overscroll-behavior:contain;scrollbar-gutter:stable}.role-modal .page-error{margin-bottom:12px}.role-identity-panel{display:grid;grid-template-columns:minmax(260px,1fr) auto;align-items:end;gap:18px;margin-bottom:12px;padding:14px 15px;border:1px solid #dfe6ef;border-radius:12px;background:#fff}.role-name-field{display:flex;flex-direction:column;gap:6px;color:#5e718a;font-size:11px;font-weight:850}.role-name-field input{width:100%;height:39px;border:1px solid #d3deea;border-radius:9px;padding:0 11px;color:#2e4561;outline:none}.role-name-field input:focus{border-color:#4b76dc;box-shadow:0 0 0 3px rgba(75,118,220,.09)}.role-name-field input:disabled{background:#f3f5f8;color:#728196}.role-selection-summary{display:flex;gap:8px}.role-selection-summary div{min-width:108px;padding:9px 11px;border-radius:9px;background:#f4f7fb}.role-selection-summary strong,.role-selection-summary small{display:block}.role-selection-summary strong{color:#2d5fce;font-size:17px}.role-selection-summary small{margin-top:2px;color:#8391a4;font-size:10px}
         .permission-guidance{display:flex;align-items:flex-start;gap:8px;margin:-2px 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.permission-guidance strong{flex:0 0 auto;color:#3564c8}.permission-toolbar{position:sticky;top:-16px;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding:11px 12px;border:1px solid #dce5ef;border-radius:11px;background:rgba(255,255,255,.96);box-shadow:0 5px 16px rgba(31,51,79,.05);backdrop-filter:blur(8px)}.permission-search{display:flex;align-items:center;min-width:260px;max-width:520px;flex:1;height:39px;border:1px solid #d3deea;border-radius:9px;background:#fff;padding:0 10px}.permission-search span{margin-right:7px;color:#91a0b3}.permission-search input{min-width:0;flex:1;height:35px;border:0;background:transparent;color:#344b67;outline:none}.permission-toolbar-actions{display:flex;gap:7px}.permission-toolbar-actions button{height:35px;border:1px solid #d3deea;border-radius:8px;background:#fff;padding:0 10px;color:#51677f;font-size:11px;font-weight:800;cursor:pointer}.permission-toolbar-actions button:hover{border-color:#b9cae2;background:#f7f9fc}.permission-toolbar-actions button:disabled{opacity:.5;cursor:not-allowed}.founder-permission-note{display:flex;align-items:flex-start;gap:9px;margin-bottom:12px;padding:11px 13px;border:1px solid #cce7d9;border-radius:10px;background:#f1fbf6;color:#34775b;font-size:11px;line-height:1.55}.founder-permission-note strong{flex:0 0 auto}
         .permission-sections{display:flex;flex-direction:column;gap:11px}.permission-section{overflow:hidden;border:1px solid #dce4ee;border-radius:13px;background:#fff}.permission-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;border-bottom:1px solid #e7ecf3;background:#f9fbfd}.permission-section-head-main{display:flex;align-items:center;gap:10px;min-width:0}.permission-section-head-main>input,.permission-page-title>input,.permission-option>input{width:17px;height:17px;flex:0 0 auto;margin:0;accent-color:#3568da;cursor:pointer}.permission-section-head-main>input:disabled,.permission-page-title>input:disabled,.permission-option>input:disabled{cursor:not-allowed}.permission-section-head h3{margin:0;color:#263e5b;font-size:14px}.permission-section-head p{margin:3px 0 0;color:#8290a3;font-size:10px}.permission-section-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}.permission-count{padding:4px 7px;border-radius:999px;background:#edf3ff;color:#3d65c3;font-size:10px;font-weight:850}.permission-section-actions button{width:29px;height:29px;border:0;border-radius:7px;background:#eef2f6;color:#667991;cursor:pointer}.permission-section.collapsed .permission-section-head{border-bottom:0}
-        .permission-page-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px}.permission-page{overflow:hidden;border:1px solid #e1e7ef;border-radius:11px;background:#fbfcfe}.permission-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #e8edf3;background:#fff}.permission-page-title{display:flex;align-items:flex-start;gap:9px;min-width:0}.permission-page-title>input{margin-top:2px}.permission-page-title strong,.permission-page-title small{display:block}.permission-page-title strong{color:#334b67;font-size:12px}.permission-page-title small{margin-top:3px;color:#8996a7;font-size:10px;line-height:1.45}.permission-page-head>span{flex:0 0 auto;color:#7c8ca0;font-size:10px}.permission-options{display:grid;grid-template-columns:1fr;gap:6px;padding:9px}.permission-option{display:flex;align-items:flex-start;gap:9px;min-width:0;padding:9px 10px;border:1px solid #e4e9f0;border-radius:8px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.permission-option:hover{border-color:#c8d6e9;background:#f9fbff}.permission-option.selected{border-color:#bfd0f4;background:#f2f6ff}.permission-option.locked{cursor:default}.permission-option>input{margin-top:2px}.permission-option-copy{min-width:0;flex:1}.permission-option-copy strong,.permission-option-copy small{display:block}.permission-option-copy strong{color:#3c5069;font-size:12px;line-height:1.4}.permission-option-copy small{overflow:hidden;margin-top:3px;color:#96a1b0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;white-space:nowrap;text-overflow:ellipsis}.permission-option-badges{display:flex;flex:0 0 auto;gap:4px}.permission-action-badge,.sensitive-badge{flex:0 0 auto;padding:3px 5px;border-radius:5px;font-size:9px;font-style:normal;font-weight:850}.permission-action-badge{background:#eaf1ff;color:#3564c8}.sensitive-badge{background:#fff0db;color:#a76520}.permission-empty-state{padding:35px 18px;border:1px dashed #ccd7e5;border-radius:12px;background:#fff;color:#7d8da2;text-align:center}.permission-empty-state strong,.permission-empty-state span{display:block}.permission-empty-state strong{margin-bottom:5px;color:#465d78;font-size:13px}.permission-empty-state span{font-size:11px}
+        .permission-page-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px}.permission-page{overflow:hidden;border:1px solid #e1e7ef;border-radius:11px;background:#fbfcfe}.permission-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #e8edf3;background:#fff}.permission-page-title{display:flex;align-items:flex-start;gap:9px;min-width:0}.permission-page-title>input{margin-top:2px}.permission-page-title strong,.permission-page-title small{display:block}.permission-page-title strong{color:#334b67;font-size:12px}.permission-page-title small{margin-top:3px;color:#8996a7;font-size:10px;line-height:1.45}.permission-page-head>span{flex:0 0 auto;color:#7c8ca0;font-size:10px}.permission-options{display:grid;grid-template-columns:1fr;gap:6px;padding:9px}.permission-option{display:flex;align-items:flex-start;gap:9px;min-width:0;padding:9px 10px;border:1px solid #e4e9f0;border-radius:8px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.permission-option:hover{border-color:#c8d6e9;background:#f9fbff}.permission-option.selected{border-color:#bfd0f4;background:#f2f6ff}.permission-option.locked{cursor:default}.permission-option.pending{border-style:dashed;border-color:#e5d4b5;background:#fffaf1;cursor:not-allowed}.permission-option.pending:hover{border-color:#e5d4b5;background:#fffaf1}.permission-option.pending.selected{border-color:#dcc18f;background:#fff7e7}.permission-option.pending>input{accent-color:#b68434}.permission-option>input{margin-top:2px}.permission-option-copy{min-width:0;flex:1}.permission-option-copy strong,.permission-option-copy small{display:block}.permission-option-copy strong{color:#3c5069;font-size:12px;line-height:1.4}.permission-option-copy small{overflow:hidden;margin-top:3px;color:#96a1b0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;white-space:nowrap;text-overflow:ellipsis}.permission-option-badges{display:flex;flex:0 0 auto;gap:4px}.permission-action-badge,.sensitive-badge,.permission-pending-badge{flex:0 0 auto;padding:3px 5px;border-radius:5px;font-size:9px;font-style:normal;font-weight:850}.permission-action-badge{background:#eaf1ff;color:#3564c8}.permission-pending-badge{background:#f8e8c9;color:#8b6328}.sensitive-badge{background:#fff0db;color:#a76520}.permission-empty-state{padding:35px 18px;border:1px dashed #ccd7e5;border-radius:12px;background:#fff;color:#7d8da2;text-align:center}.permission-empty-state strong,.permission-empty-state span{display:block}.permission-empty-state strong{margin-bottom:5px;color:#465d78;font-size:13px}.permission-empty-state span{font-size:11px}
+        .permission-page-pending{padding:9px 10px;border:1px dashed #e5d4b5;border-radius:8px;background:#fffaf1;color:#8a6733;font-size:10px;line-height:1.5}
         .role-modal>.modal-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;margin:0;padding:12px 18px;border-top:1px solid #dde5ef;background:#fff}.role-modal-actions-note{color:#8291a4;font-size:11px}.role-modal-actions-buttons{display:flex;gap:8px}.role-modal>.modal-actions button{height:39px}.role-modal>.modal-actions button:disabled{opacity:.55;cursor:not-allowed}
         .employee-search-results{grid-column:1/-1;max-height:235px;overflow:auto;border:1px solid #dce5ef;border-radius:10px;background:#fff;padding:5px}.employee-search-option{width:100%;display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;border:0;border-bottom:1px solid #edf1f5;background:#fff;padding:10px;text-align:left;cursor:pointer}.employee-search-option:hover{background:#f3f7ff}.employee-search-option:last-child{border-bottom:0}.employee-search-option strong{color:#24415f}.employee-search-option small{color:#738198}.employee-search-option span{font-size:11px;color:#376ac5}.linked-employee{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #bfe6d0;background:#f0fbf5;border-radius:9px;color:#18784a;font-size:12px}.linked-employee button{border:0;background:transparent;color:#b34b4b;cursor:pointer}
         .account-batch-builder{margin:13px 0 3px;padding:12px;border:1px solid #dce5f0;border-radius:12px;background:#f7f9fc}.account-batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.account-batch-toolbar strong,.account-batch-toolbar small{display:block}.account-batch-toolbar strong{color:#29425f;font-size:13px}.account-batch-toolbar small{margin-top:3px;color:#7f8da0;font-size:10px}.account-batch-toolbar button{height:36px;white-space:nowrap}.account-batch-empty{margin-top:10px;padding:12px;border:1px dashed #d5dfeb;border-radius:9px;background:#fff;color:#8a97a9;font-size:11px;text-align:center}.account-batch-list{display:flex;max-height:210px;flex-direction:column;gap:6px;margin-top:10px;overflow:auto}.account-batch-row{display:grid;grid-template-columns:25px minmax(0,1fr) auto;align-items:center;gap:9px;padding:9px 10px;border:1px solid #e0e7f0;border-radius:9px;background:#fff}.account-batch-row>span{display:grid;width:23px;height:23px;place-items:center;border-radius:7px;background:#edf3ff;color:#3567d1;font-size:10px;font-weight:900}.account-batch-row strong,.account-batch-row small,.account-batch-row em{display:block}.account-batch-row strong{color:#2e4561;font-size:12px}.account-batch-row small{overflow:hidden;margin-top:3px;color:#7e8b9d;font-size:10px;white-space:nowrap;text-overflow:ellipsis}.account-batch-row em{margin-top:3px;color:#bd4343;font-size:10px;font-style:normal}.account-batch-row>button{border:0;background:transparent;color:#b64a4a;font-size:10px;cursor:pointer}.account-batch-row.failed{border-color:#efc4c4;background:#fff8f8}
@@ -500,6 +536,8 @@ export default function AdminUsersPage() {
       </div>
 
       <AdminModuleNav />
+
+      {accountToast && <div className={`access-toast ${accountToast.type === 'error' ? 'error' : ''}`} role="status" aria-live="polite"><span>{accountToast.message}</span><button type="button" aria-label="关闭提示" onClick={() => setAccountToast(null)}>×</button></div>}
 
       {error && <div className="page-error">{error}</div>}
 
@@ -524,7 +562,8 @@ export default function AdminUsersPage() {
                   {visibleBackend.map(a => {
                     const role = getRole(a)
                     const founder = role?.code === 'founder'
-                    return <tr key={a.auth_user_id}>
+                    const deleting = deletingAccountId === a.auth_user_id
+                    return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : ''} aria-busy={deleting || undefined}>
                       <td><strong>{a.login_username || '-'}</strong></td>
                       <td><strong>{a.employee?.employee_no || adminT('未关联')}</strong></td>
                       <td>{a.employee?.full_name || '-'}</td>
@@ -537,11 +576,11 @@ export default function AdminUsersPage() {
                       </td>
                       <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span></td>
                       <td><div className="access-grid-actions">
-                        {!founder && canEditBackend && <button onClick={() => openEdit(a)}>{adminT('编辑')}</button>}
-                        {canResetBackendPassword && <button onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
-                        {canResetMfa && <button onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
-                        {!founder && canToggleBackend && <button onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
-                        {!founder && canDeleteBackend && <button className="danger" onClick={() => deleteAccount(a)}>{adminT('删除账号')}</button>}
+                        {!founder && canEditBackend && <button disabled={deleting} onClick={() => openEdit(a)}>{adminT('编辑')}</button>}
+                        {canResetBackendPassword && <button disabled={deleting} onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
+                        {canResetMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
+                        {!founder && canToggleBackend && <button disabled={deleting} onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
+                        {!founder && canDeleteBackend && <button disabled={deleting} className="danger" onClick={() => deleteAccount(a, 'backend')}>{adminT(deleting ? '删除中…' : '删除账号')}</button>}
                       </div></td>
                     </tr>
                   })}
@@ -555,7 +594,9 @@ export default function AdminUsersPage() {
               {staff.length === 0 ? <div className="empty-state">{adminT('暂无员工账号')}</div> :
               <table className="data-table">
                 <thead><tr><th>{adminT('登录邮箱')}</th><th>{adminT('员工ID')}</th><th>{adminT('姓名')}</th><th>{adminT('团队')}</th><th>{adminT('岗位')}</th><th>{adminT('状态')}</th><th>{adminT('激活时间')}</th><th>{adminT('操作')}</th></tr></thead>
-                <tbody>{visibleStaff.map(a => <tr key={a.auth_user_id}>
+                <tbody>{visibleStaff.map(a => {
+                  const deleting = deletingAccountId === a.auth_user_id
+                  return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : ''} aria-busy={deleting || undefined}>
                   <td><strong>{a.login_email || '-'}</strong></td>
                   <td><strong>{a.employee?.employee_no || '-'}</strong></td>
                   <td>{a.employee?.full_name || '-'}</td>
@@ -564,12 +605,12 @@ export default function AdminUsersPage() {
                   <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span></td>
                   <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                   <td><div className="access-grid-actions">
-                    {canResetStaffPassword && <button onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
-                    {canResetMfa && <button onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
-                    {canToggleStaff && <button onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
-                    {canDeleteStaff && <button className="danger" onClick={() => deleteAccount(a)}>{adminT('删除登录账号')}</button>}
+                    {canResetStaffPassword && <button disabled={deleting} onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
+                    {canResetMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
+                    {canToggleStaff && <button disabled={deleting} onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
+                    {canDeleteStaff && <button disabled={deleting} className="danger" onClick={() => deleteAccount(a, 'staff')}>{adminT(deleting ? '删除中…' : '删除登录账号')}</button>}
                   </div></td>
-                </tr>)}</tbody>
+                </tr>})}</tbody>
               </table>}
             </div>
           )}
@@ -583,8 +624,8 @@ export default function AdminUsersPage() {
                 </div>
                 <div className="roles-overview-stats">
                   <div><strong>{visibleRoles.length}</strong><small>{adminT('当前角色')}</small></div>
-                  <div><strong>{permissions.length}</strong><small>{adminT('权限项目')}</small></div>
-                  <div><strong>{permissions.filter(permission => permission.sensitive).length}</strong><small>{adminT('敏感权限')}</small></div>
+                  <div><strong>{catalogPermissions.length}</strong><small>{adminT('可独立配置')}</small></div>
+                  <div><strong>{catalogPermissions.filter(permission => permission.sensitive).length}</strong><small>{adminT('敏感权限')}</small></div>
                 </div>
               </div>
 
@@ -608,11 +649,15 @@ export default function AdminUsersPage() {
                   const grantedIds = role.code === 'founder'
                     ? new Set(permissions.map(permission => permission.id))
                     : rolePermissionMap.get(role.id) || new Set()
-                  const grantedCount = grantedIds.size
+                  const grantedCount = role.code === 'founder'
+                    ? catalogPermissionIds.length
+                    : catalogPermissionIds.filter(permissionId => grantedIds.has(permissionId)).length
                   const sectionLabels = groupedPermissionSections
-                    .filter(section => section.pages.some(page => page.items.some(permission => grantedIds.has(permission.id))))
+                    .filter(section => section.pages.some(page =>
+                      page.items.some(permission => role.code === 'founder' || grantedIds.has(permission.id))
+                      || (page.pendingItems || []).some(permission => role.code === 'founder' || grantedIds.has(permission.id))))
                     .map(section => adminT(section.label))
-                  const progress = permissions.length ? Math.round((grantedCount / permissions.length) * 100) : 0
+                  const progress = catalogPermissionIds.length ? Math.round((grantedCount / catalogPermissionIds.length) * 100) : 0
 
                   return <div className="role-card" key={role.id}>
                     <div className="role-card-head">
@@ -623,7 +668,7 @@ export default function AdminUsersPage() {
                       {role.system_locked && <span className="role-lock">{adminT('锁定')}</span>}
                     </div>
                     <div className="role-permission-summary">
-                      <div><span>{adminT('已授权项目')}</span><strong>{grantedCount} / {permissions.length}</strong></div>
+                      <div><span>{adminT('独立授权项目')}</span><strong>{grantedCount} / {catalogPermissionIds.length}</strong></div>
                       <div className="role-progress"><i style={{width:`${progress}%`}} /></div>
                       <div className="role-module-tags">
                         {sectionLabels.slice(0, 3).map(label => <span key={label}>{label}</span>)}
@@ -821,12 +866,14 @@ export default function AdminUsersPage() {
                     onChange={e => setRoleModal(x => ({...x, name:e.target.value, error:''}))}/>
                 </label>
                 <div className="role-selection-summary">
-                  <div><strong>{roleIsLocked ? permissions.length : permissions.filter(permission => selectedPermissionIds.has(permission.id)).length}</strong><small>{adminT('已选权限')}</small></div>
-                  <div><strong>{groupedPermissionSections.filter(section => section.pages.some(page => page.items.some(permission => roleIsLocked || selectedPermissionIds.has(permission.id)))).length}</strong><small>{adminT('已开模块')}</small></div>
+                  <div><strong>{roleIsLocked ? catalogPermissions.length : catalogPermissions.filter(permission => selectedPermissionIds.has(permission.id)).length}</strong><small>{adminT('已选权限')}</small></div>
+                  <div><strong>{groupedPermissionSections.filter(section => section.pages.some(page =>
+                    page.items.some(permission => roleIsLocked || selectedPermissionIds.has(permission.id))
+                    || (page.pendingItems || []).some(permission => roleIsLocked || selectedPermissionIds.has(permission.id)))).length}</strong><small>{adminT('已开模块')}</small></div>
                 </div>
               </div>
 
-              <div className="permission-guidance"><strong>授权说明</strong><span>模块和子页面与当前左侧菜单保持一致。查看、新增、编辑、删除等操作按页面实际能力显示；同一底层权限被多个页面共用时，勾选状态会自动同步。</span></div>
+              <div className="permission-guidance"><strong>授权说明</strong><span>模块和子页面与当前左侧菜单保持一致。只有真正按单页执行的权限可以勾选；旧系统中被多个子页共用的权限会显示为“待拆分”且只读，保留角色原有状态，不会伪装成独立授权。</span></div>
 
               <div className="permission-toolbar">
                 <label className="permission-search"><span>⌕</span>
@@ -835,8 +882,8 @@ export default function AdminUsersPage() {
                 </label>
                 <div className="permission-toolbar-actions">
                   {roleModal.permission_search && <button onClick={() => setRoleModal(x => ({...x, permission_search:''}))}>{adminT('清除搜索')}</button>}
-                  <button disabled={roleReadOnly} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), true)}>{adminT('全部勾选')}</button>
-                  <button disabled={roleReadOnly} onClick={() => updatePermissionSelection(permissions.map(permission => permission.id), false)}>{adminT('全部取消')}</button>
+                  <button disabled={roleReadOnly} onClick={() => updatePermissionSelection(catalogPermissionIds, true)}>{adminT('全部勾选')}</button>
+                  <button disabled={roleReadOnly} onClick={() => updatePermissionSelection(catalogPermissionIds, false)}>{adminT('全部取消')}</button>
                   <button disabled={roleModal.collapsed_sections.length === 0} onClick={() => setRoleModal(x => ({...x, collapsed_sections:[]}))}>{adminT('全部展开')}</button>
                 </div>
               </div>
@@ -855,7 +902,7 @@ export default function AdminUsersPage() {
                   return <section className={`permission-section ${sectionCollapsed ? 'collapsed' : ''}`} key={section.key}>
                     <div className="permission-section-head">
                       <label className="permission-section-head-main">
-                        <input type="checkbox" disabled={roleReadOnly}
+                        <input type="checkbox" disabled={roleReadOnly || sectionPermissionIds.length === 0}
                           ref={node => { if (node) node.indeterminate = sectionSelectedCount > 0 && sectionSelectedCount < sectionPermissionIds.length }}
                           checked={sectionSelectedCount === sectionPermissionIds.length && sectionPermissionIds.length > 0}
                           onChange={e => updatePermissionSelection(sectionPermissionIds, e.target.checked)} />
@@ -884,13 +931,13 @@ export default function AdminUsersPage() {
                         return <article className="permission-page" key={page.key}>
                           <div className="permission-page-head">
                             <label className="permission-page-title">
-                              <input type="checkbox" disabled={roleReadOnly}
+                              <input type="checkbox" disabled={roleReadOnly || pagePermissionIds.length === 0}
                                 ref={node => { if (node) node.indeterminate = pageSelectedCount > 0 && pageSelectedCount < pagePermissionIds.length }}
                                 checked={pageSelectedCount === pagePermissionIds.length && pagePermissionIds.length > 0}
                                 onChange={e => updatePermissionSelection(pagePermissionIds, e.target.checked)} />
                               <span><strong>{adminT(page.label)}</strong><small>{adminT(page.description)}</small></span>
                             </label>
-                            <span>{pageSelectedCount}/{pagePermissionIds.length}</span>
+                            <span>{pageSelectedCount}/{pagePermissionIds.length}{page.pendingItems?.length ? ` · 待拆分 ${page.pendingItems.length}` : ''}</span>
                           </div>
                           <div className="permission-options">
                             {page.items.map(permission => {
@@ -902,6 +949,15 @@ export default function AdminUsersPage() {
                                 <span className="permission-option-badges"><em className="permission-action-badge">{adminT(actionLabels[permission.actionKey] || permission.actionKey)}</em>{permission.sensitive && <em className="sensitive-badge">{adminT('敏感')}</em>}</span>
                               </label>
                             })}
+                            {(page.pendingItems || []).map(permission => {
+                              const checked = roleIsLocked || selectedPermissionIds.has(permission.id)
+                              return <label className={`permission-option pending ${checked ? 'selected' : ''}`} title="旧共享权限尚未完成逐页面后端迁移，当前只读" key={`pending-${page.key}-${permission.id}`}>
+                                <input type="checkbox" disabled readOnly checked={checked} />
+                                <span className="permission-option-copy"><strong>{displayPermissionName(permission)}</strong><small>{permission.code}</small></span>
+                                <span className="permission-option-badges"><em className="permission-pending-badge">待拆分 · 只读</em>{permission.sensitive && <em className="sensitive-badge">{adminT('敏感')}</em>}</span>
+                              </label>
+                            })}
+                            {page.items.length === 0 && !page.pendingItems?.length && <div className="permission-page-pending">当前页面尚无可单独配置的操作权限。</div>}
                           </div>
                         </article>
                       })}

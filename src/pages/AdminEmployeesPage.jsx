@@ -7,12 +7,14 @@ import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/
 import { AdminAlertRecordsPage, EmployeeAlertHistoryPanel } from '../components/AdminAlertCenter'
 import AdminDataEntryLogs from '../components/AdminDataEntryLogs'
 import AdminModuleNav from '../components/AdminModuleNav'
-import { adminLocalPageTabs } from '../config/navigation'
+import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 import { employeePortalAccountPresentation } from '../lib/employeeAccountStatus'
+import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import { employeeTrainerReviewRows } from '../lib/onlineTrainingPresentation'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -25,6 +27,11 @@ const EMPLOYEE_TAB_PERMISSIONS = {
 }
 
 const text = v => String(v ?? '').trim()
+const employeeRequestError = (error, fallback) => {
+  const raw=text(error?.message||error)
+  if(!raw||raw==='操作失败'||/^edge function returned a non-2xx status code$/i.test(raw)) return fallback
+  return raw
+}
 const localDateIso = () => {
   const d=new Date()
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
@@ -56,6 +63,7 @@ const blankEmployeeFilters=()=>({
 const blankPeopleFilters=()=>({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
 const blankResignationAnalyticsFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 const blankHistoryFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
+const hasFilterValues=filters=>Object.values(filters||{}).some(value=>text(value))
 const statusName = s => ({active:'在职',probation:'试用',suspended:'停用',inactive:'停用',resigned:'离职'}[s] || s || '-')
 const typeOptions = [
   '纯居家菲律宾',
@@ -429,7 +437,8 @@ export default function AdminEmployeesPage(){
     const permissions=EMPLOYEE_TAB_PERMISSIONS[item]
     return Array.isArray(permissions)?adminAccess.hasAnyPermission(permissions):adminAccess.hasPermission(permissions)
   })
-  const requestedTab=sp.get('tab')
+  const requestedRouteTab=sp.get('tab')
+  const requestedTab=canonicalAdminTab('/admin/employees',requestedRouteTab)
   const initialTab=requestedTab==='入离职记录'?'离职记录':['团队管理','岗位管理'].includes(requestedTab)?'人员分析':requestedTab
   const [tab,setTabState]=useState(EMPLOYEE_TABS.includes(initialTab)?initialTab:'员工档案')
   const auditLogViews=[
@@ -447,6 +456,7 @@ export default function AdminEmployeesPage(){
     schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]},
     permissions:{},actions:{can_create:false,can_edit:false},
   })
+  const [metaError,setMetaError]=useState('')
   const [rows,setRows]=useState([])
   const [total,setTotal]=useState(0)
   const [page,setPage]=useState(1)
@@ -472,6 +482,7 @@ export default function AdminEmployeesPage(){
 
   const [analytics,setAnalytics]=useState({
     loading:true,
+    error:'',
     kpis:{},
     trend:[],
     teams:[],
@@ -480,7 +491,7 @@ export default function AdminEmployeesPage(){
     shifts:[],
   })
   const [peopleAnalytics,setPeopleAnalytics]=useState({
-    loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[],
+    loading:true,error:'',kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[],
   })
   const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState(blankPeopleFilters)
@@ -488,7 +499,7 @@ export default function AdminEmployeesPage(){
   const [analysisDetail,setAnalysisDetail]=useState(null)
   const [analysisDetailLoading,setAnalysisDetailLoading]=useState(false)
   const [analysisView,setAnalysisView]=useState(requestedTab==='团队管理'?'团队分析':requestedTab==='岗位管理'?'岗位分析':'总览')
-  const [resignationAnalytics,setResignationAnalytics]=useState({loading:true,kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[]})
+  const [resignationAnalytics,setResignationAnalytics]=useState({loading:true,error:'',kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[]})
   const [resignationAnalyticsFilters,setResignationAnalyticsFilters]=useState(blankResignationAnalyticsFilters)
   const [appliedResignationAnalyticsFilters,setAppliedResignationAnalyticsFilters]=useState(blankResignationAnalyticsFilters)
 
@@ -522,7 +533,7 @@ export default function AdminEmployeesPage(){
 
   const invoke=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employees',{body})
-    if(error||data?.error) throw new Error(data?.error||error?.message||'操作失败')
+    if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'操作失败'}))
     return data
   }
 
@@ -541,7 +552,7 @@ export default function AdminEmployeesPage(){
 
   const writeEmployee=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employee-write',{body})
-    if(error||data?.error) throw new Error(data?.error||error?.message||'员工资料保存失败')
+    if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'员工资料保存失败'}))
     return data
   }
 
@@ -555,7 +566,7 @@ export default function AdminEmployeesPage(){
 
   const checkEmployeeIdentity=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employee-write',{body:{action:'check_identity',...body}})
-    if(error||data?.error) throw new Error(data?.error||error?.message||'员工ID / 姓名检查失败')
+    if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'员工ID / 姓名检查失败'}))
     return data
   }
 
@@ -572,7 +583,12 @@ export default function AdminEmployeesPage(){
         loadMasterPositionOptions(),
       ])
       setMeta({...baseMeta,position_options:positionOptions})
-    }catch(e){ setError(e.message) }
+      setMetaError('')
+    }catch(e){
+      // Meta is an enhancement for filters and action visibility. A transient
+      // background failure must not poison unrelated employee sub-pages.
+      setMetaError(employeeRequestError(e,'筛选选项暂时不可用，当前页面仍可继续使用。'))
+    }
   }
 
   const loadArchiveStats=async(silent=false)=>{
@@ -581,49 +597,42 @@ export default function AdminEmployeesPage(){
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'overview',today}})
-      if(error||data?.error) throw new Error(data?.error||error?.message||'员工结构统计读取失败')
+      if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'员工结构统计读取失败'}))
       setArchiveStats({...data,loading:false,error:'',refreshed_at:new Date().toISOString()})
     }catch(e){
       setArchiveStats(v=>({...v,loading:false,error:e.message||'员工结构统计读取失败'}))
     }
   }
 
-  const loadAnalytics=async()=>{
-    setAnalytics(v=>({...v,loading:true}))
-    try{
-      const d=new Date()
-      const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      const data=await invoke({action:'analytics',today})
-      setAnalytics({...data,loading:false})
-    }catch(e){
-      setAnalytics(v=>({...v,loading:false}))
-      setError(e.message)
-    }
-  }
-
   const loadPeopleAnalytics=async(nextFilters=appliedAnalysisFilters)=>{
-    setPeopleAnalytics(v=>({...v,loading:true}))
+    setPeopleAnalytics(v=>({...v,loading:true,error:''}))
     try{
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const data=await invoke({action:'analytics',today,filters:nextFilters})
-      setPeopleAnalytics({...data,loading:false})
+      setPeopleAnalytics({...data,loading:false,error:''})
+      // The unfiltered response is also the base directory used by team and
+      // position views. Reuse it instead of sending a duplicate heavy request.
+      if(!hasFilterValues(nextFilters)){
+        setAnalytics({...data,loading:false,error:''})
+        setResignationAnalytics({...data,loading:false,error:''})
+      }
     }catch(e){
-      setPeopleAnalytics(v=>({...v,loading:false}))
-      setError(e.message)
+      const message=employeeRequestError(e,'人员分析读取失败，请重试。')
+      setPeopleAnalytics(v=>({...v,loading:false,error:message}))
+      if(!hasFilterValues(nextFilters)) setAnalytics(v=>({...v,loading:false,error:message}))
     }
   }
 
   const loadResignationAnalytics=async(nextFilters=appliedResignationAnalyticsFilters)=>{
-    setResignationAnalytics(v=>({...v,loading:true}))
+    setResignationAnalytics(v=>({...v,loading:true,error:''}))
     try{
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const data=await invoke({action:'analytics',today,filters:nextFilters})
-      setResignationAnalytics({...data,loading:false})
+      setResignationAnalytics({...data,loading:false,error:''})
     }catch(e){
-      setResignationAnalytics(v=>({...v,loading:false}))
-      setError(e.message)
+      setResignationAnalytics(v=>({...v,loading:false,error:employeeRequestError(e,'离职分析读取失败，请重试。')}))
     }
   }
 
@@ -631,7 +640,7 @@ export default function AdminEmployeesPage(){
     const archiveFilters={...nextFilters,status:'active'}
     if(text(archiveFilters.risk_level)||text(archiveFilters.account_status)){
       const {data,error}=await supabase.functions.invoke('admin-employee-risk-list',{body:{action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters,risk_level:archiveFilters.risk_level}})
-      if(error||data?.error) throw new Error(data?.error||error?.message||'等级筛选读取失败')
+      if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'等级筛选读取失败'}))
       return data
     }
     return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters})
@@ -688,9 +697,14 @@ export default function AdminEmployeesPage(){
     try{
       const jobs=[]
       if(canViewEmployees) jobs.push(loadMeta())
-      if(canViewEmployees||canViewAnalytics) jobs.push(loadAnalytics(),loadArchiveStats(true))
+      if(canViewEmployees||canViewAnalytics) jobs.push(loadArchiveStats(true))
       if(canViewEmployees&&tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
-      if(canViewAnalytics&&tab==='人员分析') jobs.push(loadPeopleAnalytics(appliedAnalysisFilters),loadResignationAnalytics(appliedResignationAnalyticsFilters))
+      if(canViewAnalytics&&tab==='人员分析'){
+        jobs.push(loadPeopleAnalytics(appliedAnalysisFilters))
+        // The default resignation data is identical to the default people
+        // analytics payload and is populated by loadPeopleAnalytics above.
+        if(hasFilterValues(appliedResignationAnalyticsFilters)) jobs.push(loadResignationAnalytics(appliedResignationAnalyticsFilters))
+      }
       if(canViewEmployees&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
       if(canViewAudit&&tab==='操作日志'&&auditSubview==='employment') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
       if(canViewEmployees&&selected?.employee?.id){
@@ -708,7 +722,7 @@ export default function AdminEmployeesPage(){
     if(adminAccess.loading||(!canViewEmployees&&!canViewAnalytics))return undefined
     const initialJobs=[]
     if(canViewEmployees) initialJobs.push(loadMeta())
-    if(canViewEmployees||canViewAnalytics) initialJobs.push(loadAnalytics(),loadArchiveStats())
+    if(canViewEmployees||canViewAnalytics) initialJobs.push(loadArchiveStats())
     Promise.all(initialJobs).finally(()=>{lastAutoRefreshAtRef.current=Date.now()})
     const refreshIfStale=()=>{
       if(document.hidden||Date.now()-lastAutoRefreshAtRef.current<300000)return
@@ -726,14 +740,14 @@ export default function AdminEmployeesPage(){
 
   useEffect(()=>{
     if(adminAccess.loading)return
-    const raw=sp.get('tab')
+    const raw=canonicalAdminTab('/admin/employees',sp.get('tab'))
     const t=raw==='入离职记录'?'离职记录':raw
     const normalized=t==='团队管理'||t==='岗位管理'?'人员分析':t||'员工档案'
     if(!tabs.includes(normalized)){
       const fallback=tabs[0]
       if(fallback){
         setTabState(fallback)
-        setSp(fallback==='员工档案'?{}:{tab:fallback},{replace:true})
+        setSp(fallback==='员工档案'?{}:adminTabParams('/admin/employees',fallback),{replace:true})
       }
       return
     }
@@ -741,6 +755,8 @@ export default function AdminEmployeesPage(){
       setTabState('人员分析')
       setAnalysisView(t==='团队管理'?'团队分析':'岗位分析')
     }else setTabState(normalized)
+    const desiredRouteTab=normalized==='员工档案'?null:adminTabSlug('/admin/employees',raw||normalized)
+    if(requestedRouteTab!==desiredRouteTab)setSp(desiredRouteTab?{tab:desiredRouteTab}:{},{replace:true})
   },[sp,adminAccess.loading,adminAccess.permissionKey])
 
   useEffect(()=>{
@@ -762,12 +778,6 @@ export default function AdminEmployeesPage(){
   },[tab,canViewAnalytics])
 
   useEffect(()=>{
-    if(!canViewAnalytics||tab!=='人员分析') return
-    const t=setTimeout(()=>loadResignationAnalytics(appliedResignationAnalyticsFilters),100)
-    return()=>clearTimeout(t)
-  },[tab,canViewAnalytics])
-
-  useEffect(()=>{
     const handler=e=>{
       const d=e.detail||{}
       setRestoreModal({employee_id:d.employee_id,employee_no:d.employee_no,full_name:d.full_name,restore_portal:true})
@@ -779,12 +789,12 @@ export default function AdminEmployeesPage(){
   const setTab=v=>{
     if(!tabs.includes(v))return
     setTabState(v)
-    setSp(v==='员工档案'?{}:{tab:v})
+    setSp(v==='员工档案'?{}:adminTabParams('/admin/employees',v))
   }
   const setAuditSubview=key=>{
     if(!auditLogViews.some(item=>item.key===key))return
     const next=new URLSearchParams(sp)
-    next.set('tab','操作日志')
+    next.set('tab',adminTabSlug('/admin/employees','操作日志'))
     if(key==='employment') next.delete('log')
     else next.set('log',key)
     setSp(next)
@@ -920,14 +930,14 @@ export default function AdminEmployeesPage(){
         setPage(1)
         const [listData]=await Promise.all([
           fetchEmployeeListData(1,pageSize,appliedFilters),
-          loadMeta(),loadAnalytics(),loadArchiveStats(),
+          loadMeta(),loadArchiveStats(),
         ])
         const visibleRows=(listData.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
         setRows(visibleRows)
         setTotal(Math.max(0,(listData.total||0)-((listData.rows||[]).length-visibleRows.length)))
         if(data?.employee_id) setSelected(await invoke({action:'detail',employee_id:data.employee_id}))
       }else{
-        await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(page,pageSize)])
+        await Promise.all([loadMeta(),loadArchiveStats(),loadList(page,pageSize)])
         if(employee_id) setSelected(await invoke({action:'detail',employee_id}))
       }
     }catch(e){ setError(e.message) }
@@ -983,7 +993,7 @@ export default function AdminEmployeesPage(){
       let dateRows=[]
       if(employeeNos.length){
         const {data:dateData,error:dateError}=await supabase.functions.invoke('admin-employee-dates',{body:{employee_nos:employeeNos}})
-        if(error||dateData?.error) throw new Error(dateData?.error||dateError?.message||'员工入离职日期读取失败')
+        if(error||dateData?.error) throw new Error(await edgeFunctionErrorMessage({data:dateData,error:dateError,fallback:'员工入离职日期读取失败'}))
         dateRows=dateData?.rows||[]
       }
       const dateMap=new Map(dateRows.map(x=>[text(x.employee_no).toUpperCase(),x]))
@@ -1003,7 +1013,7 @@ export default function AdminEmployeesPage(){
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'tenure_details',bucket,today,include_test:true}})
-      if(error||data?.error) throw new Error(data?.error||error?.message||'入职时长人员读取失败')
+      if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'入职时长人员读取失败'}))
       const uniqueRows=dedupeAnalysisRows(data.rows||[])
       setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title:`${label} · 在职员工`}))
     }catch(e){ setError(e.message); setAnalysisDetail(null) }
@@ -1024,7 +1034,7 @@ export default function AdminEmployeesPage(){
         reason:editResignModal.reason,
       })
       setEditResignModal(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(page,pageSize),loadHistory(historyPage,historyPageSize)])
+      await Promise.all([loadMeta(),loadArchiveStats(),loadList(page,pageSize),loadHistory(historyPage,historyPageSize)])
       if(!sheetSyncSucceeded(data?.sync)) setError(`离职记录已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
@@ -1043,7 +1053,7 @@ export default function AdminEmployeesPage(){
       setResignModal(null); setSelected(null)
       setHistoryPage(1)
       setTab('离职记录')
-      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters)])
+      await Promise.all([loadMeta(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters)])
       if(!sheetSyncSucceeded(data?.sync)) setError(`离职已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
@@ -1058,7 +1068,7 @@ export default function AdminEmployeesPage(){
       })
       setRestoreModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters)])
+      await Promise.all([loadMeta(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters)])
       if(!sheetSyncSucceeded(data?.sync)) setError(`已恢复 Supabase 在职状态，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
@@ -1076,7 +1086,7 @@ export default function AdminEmployeesPage(){
       })
       setCancelHireModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadAnalytics(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters),loadAudit(1,auditPageSize,auditFilters,{silent:true})])
+      await Promise.all([loadMeta(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters),loadAudit(1,auditPageSize,auditFilters,{silent:true})])
       if(data?.sheet_warning) setError(data.sheet_warning)
     }catch(e){ setError(e.message) }
   }
@@ -1086,12 +1096,7 @@ export default function AdminEmployeesPage(){
     setGenerated(null); setActivationError(''); setActivationCopyStatus(''); setActivationLoading(target)
     try{
       const {data,error}=await supabase.functions.invoke('admin-accounts',{body:{action:'generate_activation_code',employee_no:target,valid_hours:72}})
-      if(error){
-        let detail=''
-        try{ detail=(await error.context?.json())?.error||'' }catch{}
-        throw new Error(detail||data?.error||error.message||'激活码生成失败')
-      }
-      if(data?.error) throw new Error(data.error)
+      if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'激活码生成失败'}))
       if(!text(data?.activation_code)) throw new Error('激活码生成成功，但服务未返回可复制的激活码')
       setGenerated(data)
     }catch(e){
@@ -1199,6 +1204,11 @@ export default function AdminEmployeesPage(){
   const sectionTitle=pageChrome.active.sectionLabel||'员工管理'
   const sectionKicker={alerts:'RISK & NOTIFICATION CENTER',workforce:'WORKFORCE & SCHEDULING',attendance_exams:'ATTENDANCE · EXAMS · REWARDS'}[pageChrome.active.groupId]||'PEOPLE & ORGANIZATION'
 
+  // A failed request in one employee sub-page must not leave a stale banner
+  // above every other sub-page after navigation. The destination loader will
+  // surface its own current error if that request also fails.
+  useEffect(()=>{ setError('') },[visibleTab])
+
   return <div className="content-page employee-page pro-employee-page">
     <div className="module-title-row">
       <div>
@@ -1213,7 +1223,8 @@ export default function AdminEmployeesPage(){
 
     <AdminModuleNav />
 
-    {error&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
+    {error&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
+    {metaError&&['员工档案','人员分析','离职记录','操作日志'].includes(visibleTab)&&<div className="employee-inline-sync-note" role="status"><span>{metaError}</span><button type="button" onClick={loadMeta}>重新读取</button></div>}
     {visibleTab==='员工档案'&&<>
       <div className="archive-compact-head">
         <div><h2>员工档案</h2><span>当前仅显示在职员工 · 共 {meta.active||0} 人</span></div>
@@ -1229,11 +1240,11 @@ export default function AdminEmployeesPage(){
           <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="primary-action" onClick={applyEmployeeFilters} disabled={loading}>{loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetEmployeeFilters} disabled={loading}>重置</button></div>
         </div>
         {showFilters&&<div className="filter-grid employee-filter-grid v24-advanced-filter-grid">
-          <label>团队<FilterCombo value={filters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="employee-team-filter"/></label>
-          <label>岗位<FilterCombo value={filters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位 / 输入搜索" listId="employee-position-filter"/></label>
+          <label>团队<FilterCombo value={filters.team} options={(meta.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="employee-team-filter"/></label>
+          <label>岗位<FilterCombo value={filters.position} options={(meta.positions||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位 / 输入搜索" listId="employee-position-filter"/></label>
           <label>员工国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="employee-country-filter"/></label>
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
-          <label>班次<FilterCombo value={filters.shift_name} options={cleanShiftOptions((analytics.shifts||[]).map(x=>x.name).length?(analytics.shifts||[]).map(x=>x.name):(meta.options?.shifts||[]))} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="employee-shift-filter"/></label>
+          <label>班次<FilterCombo value={filters.shift_name} options={cleanShiftOptions(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="employee-shift-filter"/></label>
           <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人 / 输入搜索" listId="employee-leader-filter"/></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
@@ -1286,13 +1297,15 @@ export default function AdminEmployeesPage(){
         {analysisViews.map(x=><button type="button" key={x} className={analysisView===x?'active':''} onClick={()=>changeAnalysisView(x)}>{x}</button>)}
       </div>
 
+      {(analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error)&&<div className="employee-inline-sync-note is-error" role="alert"><span>{analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error}</span><button type="button" onClick={()=>analysisView==='离职分析'?loadResignationAnalytics(appliedResignationAnalyticsFilters):loadPeopleAnalytics(appliedAnalysisFilters)}>重新读取</button></div>}
+
       {analysisView!=='离职分析'&&<div className="analytics-filter-panel v24-analytics-filter-panel">
         <div className={`people-filter-grid view-${analysisView}`}>
           {analysisView==='总览'&&<><label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.employee_no} onChange={e=>setAnalysisFilters({...analysisFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label><label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.full_name} onChange={e=>setAnalysisFilters({...analysisFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label><label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.work_tg} onChange={e=>setAnalysisFilters({...analysisFilters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label></>}
-          {['总览','团队分析','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>}
-          {['总览','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>岗位</span><FilterCombo value={analysisFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/></label>}
-          {['总览','国家分析'].includes(analysisView)&&<label className="pro-filter-field"><span>员工国家</span><FilterCombo value={analysisFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="analysis-country"/></label>}
-          {['总览','班次分析'].includes(analysisView)&&<label className="pro-filter-field"><span>班次</span><FilterCombo value={analysisFilters.shift_name} options={cleanShiftOptions((analytics.shifts||[]).map(x=>x.name))} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/></label>}
+          {['总览','团队分析','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={(meta.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>}
+          {['总览','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>岗位</span><FilterCombo value={analysisFilters.position} options={(meta.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/></label>}
+          {['总览','国家分析'].includes(analysisView)&&<label className="pro-filter-field"><span>员工国家</span><FilterCombo value={analysisFilters.country} options={meta.options?.countries||[]} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="analysis-country"/></label>}
+          {['总览','班次分析'].includes(analysisView)&&<label className="pro-filter-field"><span>班次</span><FilterCombo value={analysisFilters.shift_name} options={cleanShiftOptions(meta.options?.shifts||[])} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/></label>}
           <label className="pro-filter-field people-date-range-field"><span>分析日期区间</span><div className="pro-date-range"><input type="date" value={analysisFilters.date_from} onChange={e=>setAnalysisFilters({...analysisFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={analysisFilters.date_to} onChange={e=>setAnalysisFilters({...analysisFilters,date_to:e.target.value})}/></div></label>
           <div className="filter-toolbar-actions people-filter-actions"><button className="primary-action people-query-action" onClick={applyAnalysisFilters} disabled={peopleAnalytics.loading} aria-busy={peopleAnalytics.loading}>{peopleAnalytics.loading&&<i className="employee-action-spinner" aria-hidden="true"/>}<span>{peopleAnalytics.loading?'查询中':'查询'}</span></button><button className="secondary-action people-reset-action" onClick={resetAnalysisFilters} disabled={peopleAnalytics.loading}>重置</button></div>
         </div>
@@ -1401,9 +1414,9 @@ export default function AdminEmployeesPage(){
       <div className="resignation-filter-panel v25-resignation-filter-panel resignation-search-panel">
         <label className="resign-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.employee_no} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
         <label className="resign-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.full_name} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
-        <label className="resign-filter-field"><span>团队</span><FilterCombo value={historyDraftFilters.team} options={(analytics.teams||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/></label>
-        <label className="resign-filter-field"><span>岗位</span><FilterCombo value={historyDraftFilters.position} options={(analytics.positions||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="history-position"/></label>
-        <label className="resign-filter-field"><span>员工国家</span><FilterCombo value={historyDraftFilters.country} options={(analytics.countries||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="history-country"/></label>
+        <label className="resign-filter-field"><span>团队</span><FilterCombo value={historyDraftFilters.team} options={(meta.teams||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/></label>
+        <label className="resign-filter-field"><span>岗位</span><FilterCombo value={historyDraftFilters.position} options={(meta.positions||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="history-position"/></label>
+        <label className="resign-filter-field"><span>员工国家</span><FilterCombo value={historyDraftFilters.country} options={meta.options?.countries||[]} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="history-country"/></label>
         <label className="resign-filter-field v25-resign-reason"><span>离职原因</span><input value={historyDraftFilters.reason} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,reason:e.target.value})} placeholder="输入离职原因关键字"/></label>
         <label className="resign-filter-field v25-resign-date"><span>离职日期区间</span><div className="pro-date-range"><input aria-label="离职日期起" type="date" value={historyDraftFilters.date_from} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_from:e.target.value})}/><b>—</b><input aria-label="离职日期止" type="date" value={historyDraftFilters.date_to} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_to:e.target.value})}/></div></label>
         <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={applyHistoryFilters} disabled={historyLoading}>{historyLoading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetHistoryFilters} disabled={historyLoading}>重置</button></div>
@@ -1746,6 +1759,9 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const [adjustmentData,setAdjustmentData]=useState(null)
   const [adjustmentLoading,setAdjustmentLoading]=useState(false)
   const [adjustmentError,setAdjustmentError]=useState('')
+  const [trainerReviewData,setTrainerReviewData]=useState({rows:[],total:0,page:1,pages:1})
+  const [trainerReviewLoading,setTrainerReviewLoading]=useState(false)
+  const [trainerReviewError,setTrainerReviewError]=useState('')
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
@@ -1759,6 +1775,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     ['payroll','工资记录',adminAccess.hasPermission('payroll.view')],
     ['attendance','员工出勤记录',adminAccess.hasPermission('attendance.view')],
     ['penalties','奖金 / 扣款',adminAccess.hasPermission('adjustment.view')],
+    ['trainer_reviews','老师评价',adminAccess.hasAnyPermission(['online_training.view','online_training.submit','online_training.review','online_training.manage'])],
   ].filter(([, ,allowed])=>allowed),[adminAccess.founder,adminAccess.permissionKey])
   useEffect(()=>setActiveSection('info'),[e.id])
   useEffect(()=>{
@@ -1843,6 +1860,34 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     }).finally(()=>alive&&setEmployeeErrorsLoading(false))
     return()=>{alive=false}
   },[e.id,activeSection])
+  useEffect(()=>{
+    if(!e.id||activeSection!=='trainer_reviews')return
+    let alive=true
+    setTrainerReviewLoading(true);setTrainerReviewError('')
+    const load=async()=>{
+      try{
+        const args={p_query:'',p_date_from:null,p_date_to:null,p_employee_id:e.id,p_page:1,p_page_size:50}
+        const first=await supabase.rpc('online_training_list',args)
+        if(first.error)throw first.error
+        const rows=[...(first.data?.rows||[])]
+        const pages=Math.max(1,Number(first.data?.pages||1))
+        if(pages>1){
+          const results=await Promise.all(Array.from({length:pages-1},(_,index)=>supabase.rpc('online_training_list',{...args,p_page:index+2})))
+          for(const result of results){
+            if(result.error)throw result.error
+            rows.push(...(result.data?.rows||[]))
+          }
+        }
+        if(alive)setTrainerReviewData({rows,total:Number(first.data?.total||rows.length),page:1,pages})
+      }catch(error){
+        if(alive)setTrainerReviewError(employeeRequestError(error,'老师评价读取失败，请重试。'))
+      }finally{
+        if(alive)setTrainerReviewLoading(false)
+      }
+    }
+    load()
+    return()=>{alive=false}
+  },[e.id,activeSection])
 
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
@@ -1871,6 +1916,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
         {activeSection==='payroll'&&<EmployeePayrollHistoryPanel data={payrollData} loading={payrollLoading} error={payrollError}/>}
         {activeSection==='attendance'&&<EmployeeAttendancePanel data={attendanceData} loading={attendanceLoading} error={attendanceError}/>}
         {activeSection==='penalties'&&<EmployeeAdjustmentPanel data={adjustmentData} loading={adjustmentLoading} error={adjustmentError}/>}
+        {activeSection==='trainer_reviews'&&<EmployeeTrainerReviewPanel data={trainerReviewData} employeeId={e.id} loading={trainerReviewLoading} error={trainerReviewError}/>}
         {activeSection==='info'&&<>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
@@ -1894,6 +1940,30 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
       </div>
     </>}
   </div></div>
+}
+
+const TRAINING_ATTENDANCE_LABELS={normal:'正常上班',rest:'公休',leave:'请假',absent:'缺席',transferred:'回家'}
+
+function EmployeeTrainerReviewPanel({data,employeeId,loading,error}){
+  const rows=employeeTrainerReviewRows(data?.rows||[],employeeId)
+  return <section className="detail-panel employee-trainer-review-panel">
+    <div className="detail-panel-head"><div><h3>老师评价</h3><p>按线上培训日报日期查看老师对该员工的工作与培训评价。</p></div><span className="employee-exam-count">{rows.length} 条</span></div>
+    {loading?<div className="employee-exam-empty">正在读取老师评价...</div>:error?<div className="employee-exam-empty error">{error}</div>:rows.length?<div className="employee-trainer-review-list">{rows.map(row=>{
+      const details=[
+        ['当天工作 / 培训评语',row.workDetails],
+        ['工作表现',row.performance],
+        ['发现问题',row.issues],
+        ['后续安排',row.followUp],
+        ['状态说明',row.statusNote],
+        ['岗位数据 / 首次响应',row.responseTime],
+      ].filter(([,value])=>text(value))
+      return <article key={row.key}>
+        <header><div><strong>{text(row.reportDate).slice(0,10)||'—'}</strong><span>培训老师：{row.trainerName||'未填写'}</span></div><em className={row.attendanceStatus}>{TRAINING_ATTENDANCE_LABELS[row.attendanceStatus]||row.attendanceStatus}</em></header>
+        {details.length?<div className="employee-trainer-review-grid">{details.map(([label,value])=><div key={label}><b>{label}</b><p>{value}</p></div>)}</div>:<div className="employee-trainer-review-empty">该日已记录，老师未填写额外评价。</div>}
+        <footer><span>{row.reportTitle||'线上培训日报'}</span><span>更新：{formatDateTime(row.submittedAt)}</span></footer>
+      </article>
+    })}</div>:<div className="employee-exam-empty">暂无老师评价</div>}
+  </section>
 }
 
 function EmployeeErrorPanel({data,loading,error}){

@@ -5,6 +5,7 @@ import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 import { adminNavigation, adminRouteAccess, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from '../config/navigation'
 import { AdminAccessProvider } from '../lib/adminAccess'
+import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
 import AdminTopbar from './AdminTopbar'
 
 const navKey = item => item.id || item.to
@@ -44,7 +45,9 @@ export default function AppLayout({ mode, children }) {
       const {data,error}=await supabase.functions.invoke('admin-accounts',{body:{action:'access'}})
       if(!alive)return
       if(error||data?.error){
-        setAdminAccess({loading:false,founder:false,permissions:[],error:data?.error||error?.message||'权限读取失败'})
+        const message=await edgeFunctionErrorMessage({data,error,fallback:'权限读取失败，请重试'})
+        if(!alive)return
+        setAdminAccess({loading:false,founder:false,permissions:[],error:message})
         return
       }
       setAdminAccess({
@@ -122,7 +125,7 @@ export default function AppLayout({ mode, children }) {
         : <AdminAccessProvider access={adminAccess}>{children}</AdminAccessProvider>
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${mode==='admin'?'admin-shell':'staff-shell'}`}>
       <aside className={`sidebar pro-sidebar ${mode==='staff'?'staff-sidebar':''}`}>
         <div className="sidebar-brand">
           <div className="sidebar-logo">W</div>

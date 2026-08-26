@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { adjustmentReason } from '../lib/adjustmentPresentation'
+import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentation'
 import { attendanceHistoryRemark } from '../lib/attendancePresentation'
 
 const text = value => String(value ?? '').trim()
@@ -102,7 +102,7 @@ function RecordDetailsModal({row,onClose,adjustment=false}){
         <div><small>{adjustment?'ADJUSTMENT DETAIL':'ATTENDANCE DETAIL'}</small><h3 id="employee-attendance-record-title">{attendanceKindLabel(row.event_kind)} · {row.event_date||'日期未记录'}</h3><p>{row.employee_no||'—'} · {row.full_name||'—'}</p></div>
         <button type="button" aria-label="关闭" onClick={onClose}>×</button>
       </header>
-      {adjustment&&<div className="attendance-record-modal-meta"><span><small>金额 / 币种</small><b className={kindTone(row.event_kind)}>{attendanceAmount(row)}</b></span></div>}
+      {adjustment&&<div className="attendance-record-modal-meta"><span><small>类型</small><b>{adjustmentCategory(row)}</b></span><span><small>金额 / 币种</small><b className={kindTone(row.event_kind)}>{attendanceAmount(row)}</b></span></div>}
       {adjustment?<section><small>原因</small><p>{adjustmentReason(row)}</p></section>:<>
         <section><small>原因</small><p>{row.reason||'—'}</p></section>
         <section><small>完整备注</small><p>{row.note||'—'}</p></section>
@@ -140,17 +140,17 @@ export function EmployeeAdjustmentPanel({data,loading,error}){
   const currencyCount=(currency,key)=>currencySummary[currency]?`${currencySummary[currency]?.[key]||0} 笔`:'—'
   const [selected,setSelected]=useState(null)
   const [filters,setFilters]=useState(emptyHistoryFilters)
-  const visibleRows=useMemo(()=>rows.filter(row=>historyMatches(row,filters,['reason','note','raw_amount',row=>attendanceAmount(row),row=>attendanceKindLabel(row.event_kind)])),[rows,filters])
+  const visibleRows=useMemo(()=>rows.filter(row=>historyMatches(row,filters,['reason','note','raw_amount',row=>adjustmentCategory(row),row=>attendanceAmount(row),row=>attendanceKindLabel(row.event_kind)])),[rows,filters])
   return <section className="detail-panel employee-attendance-panel employee-adjustment-panel">
     <div className="detail-panel-head"><div><h3>奖金 / 扣款记录</h3></div><span className="employee-exam-count">{visibleRows.length} 条</span></div>
     {loading?<div className="attendance-panel-state">正在读取奖金 / 扣款记录…</div>:error?<div className="attendance-panel-state error">{error}</div>:<>
-      <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索金额、奖金、扣款或原因"/>
+      <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索类型、金额、奖金、扣款或原因"/>
       <div className="employee-adjustment-summary">
         <SummaryItem label="USD 奖金" value={`${currencyCount('USD','bonus_count')} · ${currencyValue('USD','bonus_total')}`} tone="positive"/><SummaryItem label="USD 扣款" value={`${currencyCount('USD','deduction_count')} · ${currencyValue('USD','deduction_total')}`} tone="negative"/><SummaryItem label="USD 净额" value={currencyValue('USD','net_amount')}/><SummaryItem label="PHP 奖金" value={`${currencyCount('PHP','bonus_count')} · ${currencyValue('PHP','bonus_total')}`} tone="positive"/><SummaryItem label="PHP 扣款" value={`${currencyCount('PHP','deduction_count')} · ${currencyValue('PHP','deduction_total')}`} tone="negative"/><SummaryItem label="PHP 净额" value={currencyValue('PHP','net_amount')}/><SummaryItem label="币种待核对" value={summary.currency_review_count||0} tone="warning"/><SummaryItem label="金额未解析" value={summary.incomplete||0} tone="warning"/>
       </div>
       {visibleRows.length?<div className="employee-adjustment-list">{visibleRows.map((row,index)=><article key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <div className="employee-adjustment-amount"><span className={`attendance-kind ${kindTone(row.event_kind)}`}>{attendanceKindLabel(row.event_kind)}</span><b className={kindTone(row.event_kind)}>{attendanceAmount(row)}</b><small>{row.event_date||'—'}</small></div>
-        <div className="employee-adjustment-copy"><small>原因</small><p>{adjustmentReason(row)}</p></div>
+        <div className="employee-adjustment-copy"><small>类型</small><strong>{adjustmentCategory(row)}</strong><small>原因</small><p>{adjustmentReason(row)}</p></div>
         <button type="button" onClick={()=>setSelected(row)}>详情</button>
       </article>)}</div>:<div className="attendance-panel-state">暂无奖金 / 扣款记录</div>}
     </>}

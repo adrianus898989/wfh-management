@@ -1,13 +1,18 @@
-import { adminNavigation } from './navigation.js'
+import { adminNavigation, adminTabSlug, canonicalAdminTab } from './navigation.js'
 import { PERMISSIONS } from './permissions.js'
 
 const unique = values => [...new Set(values.filter(Boolean))]
 
 const targetKey = to => {
   const url = new URL(to, 'https://wfh.local')
-  const tab = url.searchParams.get('tab')
-  return `${url.pathname}${tab ? `?tab=${tab}` : ''}`
+  const routeTab = url.searchParams.get('tab')
+  if (!routeTab) return url.pathname
+  const canonicalTab = canonicalAdminTab(url.pathname, routeTab)
+  return `${url.pathname}?tab=${adminTabSlug(url.pathname, canonicalTab)}`
 }
+
+const pageKey = (pathname, canonicalTab) =>
+  `${pathname}?tab=${adminTabSlug(pathname, canonicalTab)}`
 
 const permissionCodesFromAccess = item => unique([
   ...(item.allPermissions || []),
@@ -28,44 +33,44 @@ const PAGE_ACTION_CODES = {
     PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW,
     PERMISSIONS.SENSITIVE_EMPLOYEE_EDIT,
   ],
-  '/admin/employees?tab=人员分析': [PERMISSIONS.TEAM_VIEW, PERMISSIONS.TEAM_EDIT],
-  '/admin/employees?tab=离职记录': [
+  [pageKey('/admin/employees', '人员分析')]: [PERMISSIONS.TEAM_VIEW, PERMISSIONS.TEAM_EDIT],
+  [pageKey('/admin/employees', '离职记录')]: [
     PERMISSIONS.EMPLOYEE_RESIGN,
     PERMISSIONS.EMPLOYEE_REACTIVATE,
   ],
-  '/admin/employees?tab=停电 / 断网记录': [
+  [pageKey('/admin/employees', '停电 / 断网记录')]: [
     PERMISSIONS.CONNECTIVITY_CREATE,
     PERMISSIONS.CONNECTIVITY_EDIT,
     PERMISSIONS.CONNECTIVITY_DELETE,
   ],
   '/admin/reports': [PERMISSIONS.EXPORT_GENERAL],
-  '/admin/reports?tab=人员': [PERMISSIONS.EXPORT_GENERAL],
-  '/admin/reports?tab=盘口人数': [PERMISSIONS.EXPORT_GENERAL],
-  '/admin/reports?tab=错误统计': [PERMISSIONS.REPORT_EDIT, PERMISSIONS.EXPORT_GENERAL],
+  [pageKey('/admin/reports', '人员')]: [PERMISSIONS.EXPORT_GENERAL],
+  [pageKey('/admin/reports', '盘口人数')]: [PERMISSIONS.EXPORT_GENERAL],
+  [pageKey('/admin/reports', '错误统计')]: [PERMISSIONS.REPORT_EDIT, PERMISSIONS.EXPORT_GENERAL],
   '/admin/schedule': [PERMISSIONS.SCHEDULE_EDIT],
-  '/admin/schedule?tab=出勤表': [PERMISSIONS.ATTENDANCE_EDIT, PERMISSIONS.EXPORT_GENERAL],
-  '/admin/schedule?tab=考勤记录': [PERMISSIONS.ATTENDANCE_EDIT, PERMISSIONS.EXPORT_GENERAL],
-  '/admin/schedule?tab=请假审批': [PERMISSIONS.ATTENDANCE_EDIT],
-  '/admin/schedule?tab=奖金 / 扣款': [
+  [pageKey('/admin/schedule', '出勤表')]: [PERMISSIONS.ATTENDANCE_EDIT, PERMISSIONS.EXPORT_GENERAL],
+  [pageKey('/admin/schedule', '考勤记录')]: [PERMISSIONS.ATTENDANCE_EDIT, PERMISSIONS.EXPORT_GENERAL],
+  [pageKey('/admin/schedule', '请假审批')]: [PERMISSIONS.ATTENDANCE_EDIT],
+  [pageKey('/admin/schedule', '奖金 / 扣款')]: [
     PERMISSIONS.ADJUSTMENT_CREATE,
     PERMISSIONS.ADJUSTMENT_APPROVE,
     PERMISSIONS.EXPORT_GENERAL,
   ],
   '/admin/training': [PERMISSIONS.EXPORT_GENERAL],
-  '/admin/training?tab=考试记录': [PERMISSIONS.EXAM_DELETE, PERMISSIONS.EXPORT_GENERAL],
-  '/admin/training?tab=题库': [PERMISSIONS.EXAM_DELETE],
+  [pageKey('/admin/training', '考试记录')]: [PERMISSIONS.EXAM_DELETE, PERMISSIONS.EXPORT_GENERAL],
+  [pageKey('/admin/training', '题库')]: [PERMISSIONS.EXAM_DELETE],
   '/admin/work-execution': [PERMISSIONS.REPORT_EDIT],
-  '/admin/work-execution?tab=daily-inspection': [PERMISSIONS.REPORT_EDIT],
-  '/admin/work-execution?tab=quality-inspection': [PERMISSIONS.REPORT_EDIT],
-  '/admin/payroll?tab=待发布': [
+  [pageKey('/admin/work-execution', 'daily-inspection')]: [PERMISSIONS.REPORT_EDIT],
+  [pageKey('/admin/work-execution', 'quality-inspection')]: [PERMISSIONS.REPORT_EDIT],
+  [pageKey('/admin/payroll', '待发布')]: [
     PERMISSIONS.PAYROLL_EDIT,
     PERMISSIONS.PAYROLL_APPROVE,
     PERMISSIONS.PAYROLL_PUBLISH,
     PERMISSIONS.PAYROLL_RULE_EDIT,
   ],
-  '/admin/payroll?tab=已发布': [PERMISSIONS.PAYROLL_EXPORT],
-  '/admin/payroll?tab=导入记录': [PERMISSIONS.PAYROLL_EDIT],
-  '/admin/payroll?tab=申请记录': [
+  [pageKey('/admin/payroll', '已发布')]: [PERMISSIONS.PAYROLL_EXPORT],
+  [pageKey('/admin/payroll', '导入记录')]: [PERMISSIONS.PAYROLL_EDIT],
+  [pageKey('/admin/payroll', '申请记录')]: [
     PERMISSIONS.SENSITIVE_PAYMENT_VIEW,
     PERMISSIONS.SENSITIVE_PAYMENT_EDIT,
     PERMISSIONS.SENSITIVE_PAYMENT_APPROVE,
@@ -73,14 +78,21 @@ const PAGE_ACTION_CODES = {
     PERMISSIONS.SENSITIVE_PAYOUT_EDIT,
     PERMISSIONS.SENSITIVE_PAYOUT_APPROVE,
   ],
-  '/admin/users?tab=staff': [
+  [pageKey('/admin/users', 'staff')]: [
     PERMISSIONS.USER_MANAGE,
     PERMISSIONS.USER_DISABLE_EMPLOYEE,
     PERMISSIONS.USER_ACTIVATION_GENERATE,
     PERMISSIONS.USER_EMAIL_CHANGE,
   ],
-  '/admin/users?tab=roles': [PERMISSIONS.SCOPE_MANAGE, PERMISSIONS.AUDIT_VIEW],
+  [pageKey('/admin/users', 'roles')]: [PERMISSIONS.SCOPE_MANAGE, PERMISSIONS.AUDIT_VIEW],
 }
+
+// Permission ids created before the current menu were commonly reused by
+// several child pages.  Those ids are not independently enforceable: changing
+// one would silently change every route that still checks the same id.  The
+// catalog detects those shared ids from the current navigation and exposes
+// them as disabled `pendingItems` on every affected page.  A real selectable
+// checkbox is rendered only when its database id belongs to one current page.
 
 const SECTION_DESCRIPTIONS = {
   home: '首页数据与概览入口',
@@ -145,28 +157,54 @@ const sortPermissionItems = items => [...items].sort((left, right) => {
 
 export const uniquePermissionIds = permissions => unique(permissions.map(permission => permission.id))
 
-/**
- * Build the role editor directly from the current sidebar hierarchy. A single
- * underlying permission can legitimately appear on more than one page; its
- * checkbox stays synchronized because every occurrence uses the same id.
- */
-export function buildRolePermissionSections(permissions = []) {
-  const byCode = new Map(permissions.map(permission => [permission.code, permission]))
-  const referencedCodes = new Set()
-
-  const sections = adminNavigation.map(section => {
-    const pageEntries = section.children || [section]
-    const pages = pageEntries.map(page => {
-      const key = targetKey(page.to)
-      const codes = unique([
+const navigationPermissionPages = () => adminNavigation.flatMap(section => {
+  const pageEntries = section.children || [section]
+  return pageEntries.map(page => {
+    const key = targetKey(page.to)
+    return {
+      section,
+      page,
+      key,
+      codes: unique([
         ...permissionCodesFromAccess(page),
         ...(PAGE_ACTION_CODES[key] || []),
-      ])
+      ]),
+    }
+  })
+})
+
+/** Build the editor without presenting a shared legacy id as page-specific. */
+export function buildRolePermissionSections(permissions = []) {
+  const byCode = new Map(permissions.map(permission => [permission.code, permission]))
+  const navigationPages = navigationPermissionPages()
+  const pageKeysByCode = new Map()
+  for (const entry of navigationPages) {
+    for (const code of entry.codes) {
+      if (!pageKeysByCode.has(code)) pageKeysByCode.set(code, new Set())
+      pageKeysByCode.get(code).add(entry.key)
+    }
+  }
+  const sharedCodes = new Set(
+    [...pageKeysByCode.entries()]
+      .filter(([, pageKeys]) => pageKeys.size > 1)
+      .map(([code]) => code),
+  )
+  const assignedCodes = new Set()
+
+  const sections = adminNavigation.map(section => {
+    const sectionPages = navigationPages.filter(entry => entry.section.id === section.id)
+    const pages = sectionPages.map(({ page, key, codes }) => {
+      const pendingItems = sortPermissionItems(codes
+        .filter(code => sharedCodes.has(code))
+        .map(code => byCode.get(code))
+        .filter(Boolean)
+        .map(permission => ({ ...permission, actionKey: actionKey(permission.code) })))
       const items = sortPermissionItems(codes
+        .filter(code => !sharedCodes.has(code) && !assignedCodes.has(code))
         .map(code => byCode.get(code))
         .filter(Boolean)
         .map(permission => {
-          referencedCodes.add(permission.code)
+          assignedCodes.add(permission.code)
           return { ...permission, actionKey: actionKey(permission.code) }
         }))
 
@@ -175,8 +213,10 @@ export function buildRolePermissionSections(permissions = []) {
         label: page.label,
         description: PAGE_DESCRIPTIONS[page.label] || '按页面实际功能授权',
         items,
+        pendingItems,
+        pendingCodes: pendingItems.map(permission => permission.code),
       }
-    }).filter(page => page.items.length > 0)
+    })
 
     return {
       key: section.id,
@@ -184,10 +224,10 @@ export function buildRolePermissionSections(permissions = []) {
       description: SECTION_DESCRIPTIONS[section.id] || '按最新菜单页面配置权限',
       pages,
     }
-  }).filter(section => section.pages.length > 0)
+  })
 
   const unassigned = sortPermissionItems(permissions
-    .filter(permission => !referencedCodes.has(permission.code))
+    .filter(permission => !assignedCodes.has(permission.code) && !sharedCodes.has(permission.code))
     .map(permission => ({ ...permission, actionKey: actionKey(permission.code) })))
 
   if (unassigned.length) {
@@ -200,6 +240,8 @@ export function buildRolePermissionSections(permissions = []) {
         label: '其他系统功能',
         description: '保留新旧功能权限，避免权限项目遗漏',
         items: unassigned,
+        pendingItems: [],
+        pendingCodes: [],
       }],
     })
   }

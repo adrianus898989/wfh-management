@@ -97,10 +97,12 @@ test('employee warning history uses an exact employee filter and includes resolv
   assert.equal(adminAlertEmployeeHistoryFilters(''), null)
 })
 
-test('warning read state has explicit localized labels for the summary cell', () => {
+test('warning read state has explicit localized labels in a dedicated status column', () => {
   assert.deepEqual(adminAlertReadState({ unread:true }, 'zh'), { unread:true, label:'未读' })
   assert.deepEqual(adminAlertReadState({ unread:false }, 'en'), { unread:false, label:'Read' })
-  assert.match(alertCenterComponent, /className="admin-alert-table-summary"[\s\S]{0,300}admin-alert-read-state/)
+  assert.match(alertCenterComponent, /\? 'Summary' : '预警摘要'\}<\/span><span>\{locale === 'en' \? 'Read status' : '状态'\}<\/span>/)
+  assert.match(alertCenterComponent, /className="admin-alert-table-summary"[^>]*>\{copy\.message\}<\/span>/)
+  assert.match(alertCenterComponent, /className="admin-alert-table-read">[\s\S]{0,180}admin-alert-read-state/)
 })
 
 test('employee warning history keeps the existing session, type permission, and employee scope guards', () => {

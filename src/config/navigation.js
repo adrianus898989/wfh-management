@@ -1,7 +1,84 @@
 import { PERMISSIONS } from './permissions.js'
 
 const enc = value => encodeURIComponent(value)
-const tab = (path, value) => `${path}?tab=${enc(value)}`
+
+// Keep UI labels in Chinese, but never use presentation text as a route key.
+// The reverse lookup deliberately accepts the old Chinese values so bookmarks
+// created before the slug migration continue to open the same page.
+export const ADMIN_TAB_SLUGS = Object.freeze({
+  '/admin/employees':Object.freeze({
+    '员工档案':'employee-directory',
+    '人员分析':'people-analysis',
+    '团队管理':'team-management',
+    '岗位管理':'position-management',
+    '停电 / 断网记录':'connectivity-records',
+    '预警记录':'alerts',
+    '离职记录':'resignation-records',
+    '入离职记录':'employment-history',
+    '操作日志':'change-history',
+  }),
+  '/admin/reports':Object.freeze({
+    '总汇':'overview',
+    '人员':'people-distribution',
+    '排班表':'legacy-schedule',
+    '盘口人数':'platform-headcount',
+    '统计':'statistics',
+    '错误统计':'error-statistics',
+  }),
+  '/admin/schedule':Object.freeze({
+    '排班表':'roster',
+    '出勤表':'monthly-attendance',
+    '今日考勤':'today-attendance',
+    '考勤记录':'attendance-records',
+    '请假审批':'leave-approvals',
+    '奖金 / 扣款':'adjustments',
+  }),
+  '/admin/daily':Object.freeze({
+    '每日工作报告':'daily-reports',
+    '线上培训报告':'training-reports',
+  }),
+  '/admin/training':Object.freeze({
+    '考试概览':'overview',
+    '考试记录':'records',
+    '题库':'question-bank',
+    '人工批改':'manual-grading',
+  }),
+  '/admin/payroll':Object.freeze({
+    '工资导入':'import',
+    '待发布':'pending',
+    '已发布':'published',
+    '导入记录':'import-history',
+    '收款资料审核':'payment-change-review',
+    '申请记录':'payment-change-history',
+  }),
+  '/admin/users':Object.freeze({backend:'backend',staff:'staff',roles:'roles'}),
+  '/admin/work-execution':Object.freeze({
+    'daily-inspection':'daily-inspection',
+    'quality-inspection':'quality-inspection',
+  }),
+})
+
+const ADMIN_TAB_LABELS = Object.freeze(Object.fromEntries(Object.entries(ADMIN_TAB_SLUGS).map(([path, mapping]) => [
+  path,
+  Object.freeze(Object.fromEntries(Object.entries(mapping).map(([label, slug]) => [slug, label]))),
+])))
+
+export function adminTabSlug(pathname, canonicalTab = '') {
+  const value = String(canonicalTab || '').trim()
+  return ADMIN_TAB_SLUGS[pathname]?.[value] || value
+}
+
+export function canonicalAdminTab(pathname, routeValue = '') {
+  const value = String(routeValue || '').trim()
+  return ADMIN_TAB_LABELS[pathname]?.[value] || value
+}
+
+export function adminTabParams(pathname, canonicalTab = '') {
+  const value = adminTabSlug(pathname, canonicalTab)
+  return value ? { tab:value } : {}
+}
+
+const tab = (path, value) => `${path}?tab=${enc(adminTabSlug(path, value))}`
 const item = (label, to, access = {}) => ({ label, to, ...access })
 
 const ACCESS = {
@@ -176,16 +253,25 @@ const DEFAULT_TABS = {
 export function adminTargetMatches(to, pathname, search = '') {
   const target = targetUrl(to)
   if (target.pathname !== pathname) return false
-  const requestedTab = new URLSearchParams(search).get('tab') ?? DEFAULT_TABS[pathname] ?? null
-  const targetTab = target.searchParams.get('tab') ?? DEFAULT_TABS[target.pathname] ?? null
+  const requestedValue = new URLSearchParams(search).get('tab')
+  const targetValue = target.searchParams.get('tab')
+  const requestedTab = requestedValue === null
+    ? DEFAULT_TABS[pathname] ?? null
+    : canonicalAdminTab(pathname, requestedValue)
+  const targetTab = targetValue === null
+    ? DEFAULT_TABS[target.pathname] ?? null
+    : canonicalAdminTab(target.pathname, targetValue)
   return targetTab === requestedTab
 }
 
 export function requestedAdminRoute(pathname, search = '') {
-  const requestedTab = new URLSearchParams(search).get('tab')
+  const rawRequestedTab = new URLSearchParams(search).get('tab')
+  const requestedTab = rawRequestedTab === null ? null : canonicalAdminTab(pathname, rawRequestedTab)
   return adminRouteAccess.find(entry => {
     const target = targetUrl(entry.to)
-    return target.pathname === pathname && target.searchParams.get('tab') === requestedTab
+    const rawTargetTab = target.searchParams.get('tab')
+    const targetTab = rawTargetTab === null ? null : canonicalAdminTab(target.pathname, rawTargetTab)
+    return target.pathname === pathname && targetTab === requestedTab
   }) || null
 }
 
@@ -203,7 +289,7 @@ export function adminSectionItems(pathname, search = '') {
 // presentation bridge: it resolves a canonical page/tab to the new sidebar name
 // without changing the underlying URL or feature key.
 export function adminPagePresentation(pathname, canonicalTab = '') {
-  const search = canonicalTab ? `?tab=${enc(canonicalTab)}` : ''
+  const search = canonicalTab ? `?tab=${enc(adminTabSlug(pathname, canonicalTab))}` : ''
   const routeEntry = requestedAdminRoute(pathname, search)
   const section = adminNavigation.find(entry => entry.id === routeEntry?.groupId)
   const candidates = section?.children || (section ? [section] : [])

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
+import { adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import OnlineTrainingPage from './OnlineTrainingPage'
 import '../styles-daily-work.css'
 
@@ -100,7 +101,7 @@ function AttachmentGrid({ attachments, onOpen, compact=false }) {
 
 function LegacyDailyWorkPage() {
   const [searchParams,setSearchParams] = useSearchParams()
-  const requestedTab = searchParams.get('tab')
+  const requestedTab = canonicalAdminTab('/admin/daily',searchParams.get('tab'))
   const tab = TABS.find(item => item.label === requestedTab) || TABS[0]
   const [rows,setRows] = useState([])
   const [access,setAccess] = useState({ userId:'', canSubmit:false, canManage:false })
@@ -211,7 +212,7 @@ function LegacyDailyWorkPage() {
   }),[rows,todayKey])
 
   const changeTab = item => {
-    setSearchParams(item === TABS[0] ? {} : { tab:item.label },{ replace:true })
+    setSearchParams(item === TABS[0] ? {} : adminTabParams('/admin/daily',item.label),{ replace:true })
   }
 
   const releasePending = items => {
@@ -560,5 +561,18 @@ function LegacyDailyWorkPage() {
 }
 
 export default function AdminDailyWorkPage(){
+  const [searchParams,setSearchParams]=useSearchParams()
+  const routeTab=searchParams.get('tab')
+
+  useEffect(()=>{
+    if(!routeTab)return
+    const canonicalTab=canonicalAdminTab('/admin/daily',routeTab)
+    const desiredRouteTab=adminTabSlug('/admin/daily',canonicalTab)
+    if(!desiredRouteTab||desiredRouteTab===routeTab)return
+    const next=new URLSearchParams(searchParams)
+    next.set('tab',desiredRouteTab)
+    setSearchParams(next,{replace:true})
+  },[routeTab,setSearchParams])
+
   return <OnlineTrainingPage/>
 }

@@ -18,6 +18,21 @@ const ADJUSTMENT_PH_METADATA_HEADERS = Object.freeze([
   '__sync_first_half_external_id', '__sync_first_half_origin', '__sync_first_half_revision',
   '__sync_second_half_external_id', '__sync_second_half_origin', '__sync_second_half_revision',
 ]);
+const ADJUSTMENT_PH_HEADERS = Object.freeze([
+  '姓名', 'ID', '金额1-15', '类型', '金额16-末', '类型', '备注1-15', '备注16-末', '日期',
+]);
+const ADJUSTMENT_STANDARD_SCHEMAS = Object.freeze([
+  Object.freeze({
+    key: 'with_category',
+    hasCategory: true,
+    headers: Object.freeze(['姓名', 'ID', '奖金', '扣除', '类型', '备注', '日期']),
+  }),
+  Object.freeze({
+    key: 'legacy_without_category',
+    hasCategory: false,
+    headers: Object.freeze(['姓名', 'ID', '奖金', '扣除', '备注', '日期']),
+  }),
+]);
 const ADJUSTMENT_MONTHS = Object.freeze(['2026-09', '2026-10', '2026-11', '2026-12']);
 const ADJUSTMENT_SYNC_EXPECTED_URL =
   'https://ibvntgtydsavdiyqekrq.supabase.co/functions/v1/adjustment-sheet-sync';
@@ -26,31 +41,32 @@ const ADJUSTMENT_WORKBOOKS = Object.freeze({
   onsite: Object.freeze({
     spreadsheetId: '1EeWiXV9BEAHhfZBV67PQ9PMHvQ9ufSOWqbXhlWbL5Kg',
     gid: 1011694934,
+    tabName: '奖惩填表',
     currency: 'USD',
     layout: 'standard',
-    starts: Object.freeze([1, 8, 15, 22]), // A:F, H:M, O:T, V:AA
-    metadataStarts: Object.freeze([28, 31, 34, 37]), // AB:AD, AE:AG, AH:AJ, AK:AM
-    headers: Object.freeze(['姓名', 'ID', '奖金', '扣除', '备注', '日期']),
+    starts: Object.freeze([1, 9, 17, 25]), // A:G, I:O, Q:W, Y:AE
+    metadataStarts: Object.freeze([32, 35, 38, 41]), // AF:AH, AI:AK, AL:AN, AO:AQ
+    headers: Object.freeze(['姓名', 'ID', '奖金', '扣除', '类型', '备注', '日期']),
   }),
   home_vim: Object.freeze({
     spreadsheetId: '1x6-k7VqePZEJW2EMqaGvBJqYkGf_MXVpoZRl0Zue2AQ',
     gid: 3368572,
+    tabName: '奖惩填表',
     currency: 'USD',
     layout: 'standard',
-    starts: Object.freeze([1, 8, 15, 22]),
-    metadataStarts: Object.freeze([28, 31, 34, 37]),
-    headers: Object.freeze(['姓名', 'ID', '奖金', '扣除', '备注', '日期']),
+    starts: Object.freeze([1, 9, 17, 25]),
+    metadataStarts: Object.freeze([32, 35, 38, 41]),
+    headers: Object.freeze(['姓名', 'ID', '奖金', '扣除', '类型', '备注', '日期']),
   }),
   home_ph: Object.freeze({
     spreadsheetId: '1j2MAKfOe3Yd-8_OQHsdpOe2__WGXg2oWc2jsefbHzZQ',
     gid: 687407921,
+    tabName: '奖惩填表',
     currency: 'PHP',
     layout: 'philippines',
-    starts: Object.freeze([1, 9, 17, 25]), // A:G, I:O, Q:W, Y:AE
-    // Six non-overlapping metadata columns per month:
-    // Sep AF:AK, Oct AL:AQ, Nov AR:AW, Dec AX:BC.
-    metadataStarts: Object.freeze([32, 38, 44, 50]),
-    headers: Object.freeze(['姓名', 'ID', '金额1-15', '金额16-末', '备注1-15', '备注16-末', '日期']),
+    starts: Object.freeze([1, 11, 21, 31]), // A:I, K:S, U:AC, AE:AM
+    metadataStarts: Object.freeze([41, 47, 53, 59]), // AO:AT, AU:AZ, BA:BF, BG:BL
+    headers: ADJUSTMENT_PH_HEADERS,
   }),
 });
 
@@ -82,6 +98,7 @@ function adjustmentRoute_(workbookKey, month) {
     sourceKey: 'adjustment_' + workbookKey + '_' + month.replace('-', '_'),
     spreadsheetId: workbook.spreadsheetId,
     gid: workbook.gid,
+    tabName: workbook.tabName,
     currency: workbook.currency,
     layout: workbook.layout,
     start: workbook.starts[monthIndex],
@@ -89,6 +106,8 @@ function adjustmentRoute_(workbookKey, month) {
     metadataStart: workbook.metadataStarts[monthIndex],
     metadataWidth: workbook.layout === 'philippines' ? 6 : 3,
     headers: workbook.headers,
+    hasCategory: workbook.layout === 'philippines' || workbook.headers.length === 7,
+    schemaKey: workbook.layout === 'standard' ? 'with_category' : 'philippines',
   };
 }
 
@@ -121,12 +140,266 @@ function adjustmentRoutes_() {
   return result;
 }
 
+function adjustmentHeaderMatchesAt_(header, start, expected) {
+  if (start < 1 || start + expected.length - 1 > header.length) return false;
+  return expected.every(function (value, index) {
+    return adjustmentHeaderKey_(header[start - 1 + index]) === adjustmentHeaderKey_(value);
+  });
+}
+
+function adjustmentExactHeadersAt_(header, start, expected) {
+  if (start < 1 || start + expected.length - 1 > header.length) return false;
+  return expected.every(function (value, index) {
+    return String(header[start - 1 + index] || '').trim() === value;
+  });
+}
+
+/**
+ * Parse a month title without using its physical position.  These workbooks
+ * are all for 2026, so a title such as `9月` belongs to 2026; an explicit
+ * year is retained so a historical block from another year cannot be routed
+ * into a 2026 source by accident.
+ */
+function adjustmentMonthFromTitle_(value) {
+  const normalized = String(value || '').replace(/[\s\u3000]+/g, '');
+  let match = normalized.match(/^(\d{4})年(0?[1-9]|1[0-2])月(?:份)?$/);
+  if (!match) match = normalized.match(/^(\d{4})[-/](0?[1-9]|1[0-2])(?:月(?:份)?)?$/);
+  if (match) return match[1] + '-' + String(Number(match[2])).padStart(2, '0');
+  match = normalized.match(/^(0?[1-9]|1[0-2])月(?:份)?$/);
+  if (!match) return '';
+  return '2026-' + String(Number(match[1])).padStart(2, '0');
+}
+
+/**
+ * Resolve the standard 9–12 month blocks from the sheet's actual header row.
+ * The seven-column schema is preferred, while the previous six-column schema
+ * remains readable/write-safe until that workbook receives its 类型 column.
+ */
+function adjustmentResolveStandardRoutes_(sheet, workbookKey, headerRow) {
+  if (headerRow < 2) {
+    throw new Error('standard 奖惩表必须在业务表头上一行保留月份标题。');
+  }
+  const lastColumn = Math.max(Number(sheet.getLastColumn()), 1);
+  const rows = sheet.getRange(headerRow - 1, 1, 2, lastColumn).getDisplayValues();
+  const titles = rows[0] || [];
+  const header = rows[1] || [];
+  const byMonth = {};
+  let column = 1;
+  while (column <= header.length) {
+    let match = null;
+    for (let index = 0; index < ADJUSTMENT_STANDARD_SCHEMAS.length; index += 1) {
+      const schema = ADJUSTMENT_STANDARD_SCHEMAS[index];
+      if (adjustmentHeaderMatchesAt_(header, column, schema.headers)) {
+        match = schema;
+        break;
+      }
+    }
+    if (!match) {
+      column += 1;
+      continue;
+    }
+    const candidateMonth = adjustmentMonthFromTitle_(titles[column - 1]);
+    if (!candidateMonth) {
+      throw new Error(
+        'standard 奖惩表检测到业务表头，但对应月份标题缺失或无法识别，停止安装/写入。'
+      );
+    }
+    // The same tab may retain March–August historical blocks.  They are
+    // intentionally ignored and are never returned to edit/write callers.
+    if (ADJUSTMENT_MONTHS.indexOf(candidateMonth) >= 0) {
+      if (byMonth[candidateMonth]) {
+        throw new Error('standard 奖惩表 9–12 月份标题重复，停止安装/写入。');
+      }
+      byMonth[candidateMonth] = { start: column, schema: match };
+    }
+    column += match.headers.length;
+  }
+  const missing = ADJUSTMENT_MONTHS.filter(function (month) { return !byMonth[month]; });
+  if (missing.length) {
+    throw new Error(
+      'standard 奖惩表必须按月份标题识别 9–12 月的 4 个业务块；缺少 ' +
+      missing.join(', ') +
+      '。支持表头：姓名、ID、奖金、扣除、[类型]、备注、日期。未读取或写入业务数据。'
+    );
+  }
+
+  const businessStarts = ADJUSTMENT_MONTHS.map(function (month) { return byMonth[month].start; });
+  if (businessStarts.some(function (start, index) {
+    return index > 0 && start <= businessStarts[index - 1];
+  })) {
+    throw new Error('standard 奖惩表 9–12 月业务块顺序不正确，停止安装/写入。');
+  }
+
+  const businessEnd = ADJUSTMENT_MONTHS.reduce(function (maximum, month) {
+    const match = byMonth[month];
+    return Math.max(maximum, match.start + match.schema.headers.length - 1);
+  }, 0);
+  const metadataMatches = [];
+  for (let metadataColumn = businessEnd + 1;
+    metadataColumn <= header.length - ADJUSTMENT_STANDARD_METADATA_HEADERS.length + 1;
+    metadataColumn += 1) {
+    if (adjustmentHeaderMatchesAt_(header, metadataColumn, ADJUSTMENT_STANDARD_METADATA_HEADERS)) {
+      metadataMatches.push(metadataColumn);
+      metadataColumn += ADJUSTMENT_STANDARD_METADATA_HEADERS.length - 1;
+    }
+  }
+  if (metadataMatches.length && (
+    metadataMatches.length !== ADJUSTMENT_MONTHS.length ||
+    metadataMatches.some(function (start, index) { return start !== metadataMatches[0] + index * 3; })
+  )) {
+    throw new Error('standard 奖惩同步协议列不完整或不连续，停止安装/写入，未修改任何单元格。');
+  }
+  const metadataBase = metadataMatches.length ? metadataMatches[0] : businessEnd + 1;
+  return ADJUSTMENT_MONTHS.map(function (month, index) {
+    const preferred = adjustmentRoute_(workbookKey, month);
+    const match = byMonth[month];
+    return Object.assign({}, preferred, {
+      start: match.start,
+      width: match.schema.headers.length,
+      headers: match.schema.headers,
+      hasCategory: match.schema.hasCategory,
+      schemaKey: match.schema.key,
+      metadataStart: metadataBase + index * 3,
+    });
+  });
+}
+
+function adjustmentMonthTitleMatches_(value, month) {
+  return adjustmentMonthFromTitle_(value) === month;
+}
+
+/**
+ * Resolve the Philippines 9–12 month blocks without assuming their physical
+ * columns. A block is accepted only when its merged row-1 month title and all
+ * nine row-2 business headers agree. Metadata may move as one contiguous
+ * four-by-six region; when it is not installed yet, only the allowlisted blank
+ * AO:BL region is eligible. No business cell is written by this resolver.
+ */
+function adjustmentResolvePhilippinesRoutes_(sheet, workbookKey, headerRow) {
+  if (headerRow !== 2) {
+    throw new Error('Philippines 奖惩表只允许第 1 行月份标题和第 2 行 9 列业务表头。');
+  }
+  const workbook = ADJUSTMENT_WORKBOOKS[workbookKey];
+  const lastColumn = Math.max(Number(sheet.getLastColumn()), 1);
+  const rows = sheet.getRange(headerRow - 1, 1, 2, lastColumn).getDisplayValues();
+  const titles = rows[0] || [];
+  const header = rows[1] || [];
+  const byMonth = {};
+  let column = 1;
+  while (column <= header.length) {
+    if (!adjustmentExactHeadersAt_(header, column, ADJUSTMENT_PH_HEADERS)) {
+      column += 1;
+      continue;
+    }
+    const month = adjustmentMonthFromTitle_(titles[column - 1]);
+    if (!month) {
+      throw new Error('Philippines 奖惩表月份标题缺失或与 9 列表头不对应，停止安装/写入。');
+    }
+    // March–August blocks are historical input on this same tab.  Only the
+    // allowlisted September–December blocks can reach synchronization code.
+    if (ADJUSTMENT_MONTHS.indexOf(month) < 0) {
+      column += ADJUSTMENT_PH_HEADERS.length;
+      continue;
+    }
+    if (byMonth[month]) {
+      throw new Error('Philippines 奖惩表 9–12 月份标题重复，停止安装/写入。');
+    }
+    byMonth[month] = column;
+    column += ADJUSTMENT_PH_HEADERS.length;
+  }
+  const missing = ADJUSTMENT_MONTHS.filter(function (month) { return !byMonth[month]; });
+  if (missing.length) {
+    throw new Error(
+      'Philippines 奖惩表必须按第 1 行月份标题识别 9–12 月的 4 个 9 列业务块；缺少 ' +
+      missing.join(', ') + '。未读取或写入业务数据。'
+    );
+  }
+  const businessStarts = ADJUSTMENT_MONTHS.map(function (month) { return byMonth[month]; });
+  if (businessStarts.some(function (start, index) {
+    return index > 0 && start <= businessStarts[index - 1];
+  })) {
+    throw new Error('Philippines 奖惩表 9–12 月业务块顺序不正确，停止安装/写入。');
+  }
+
+  const businessEnd = ADJUSTMENT_MONTHS.reduce(function (maximum, month) {
+    return Math.max(maximum, byMonth[month] + ADJUSTMENT_PH_HEADERS.length - 1);
+  }, 0);
+  const metadataMatches = [];
+  for (let metadataColumn = businessEnd + 1;
+    metadataColumn <= header.length - ADJUSTMENT_PH_METADATA_HEADERS.length + 1;
+    metadataColumn += 1) {
+    if (adjustmentExactHeadersAt_(header, metadataColumn, ADJUSTMENT_PH_METADATA_HEADERS)) {
+      metadataMatches.push(metadataColumn);
+      metadataColumn += ADJUSTMENT_PH_METADATA_HEADERS.length - 1;
+    }
+  }
+  if (metadataMatches.length && (
+    metadataMatches.length !== ADJUSTMENT_MONTHS.length ||
+    metadataMatches.some(function (start, index) { return start !== metadataMatches[0] + index * 6; })
+  )) {
+    throw new Error('Philippines 奖惩同步协议列不完整或不连续，停止安装/写入。');
+  }
+  let metadataStarts = metadataMatches;
+  if (!metadataStarts.length) {
+    const preferredBusinessEnd = workbook.starts[workbook.starts.length - 1] +
+      ADJUSTMENT_PH_HEADERS.length - 1;
+    const metadataGap = workbook.metadataStarts[0] - preferredBusinessEnd;
+    const metadataBase = businessEnd + metadataGap;
+    metadataStarts = ADJUSTMENT_MONTHS.map(function (_month, index) {
+      return metadataBase + index * ADJUSTMENT_PH_METADATA_HEADERS.length;
+    });
+    metadataStarts.forEach(function (start) {
+      if (start <= businessEnd) {
+        throw new Error('Philippines 奖惩同步协议列与业务块重叠，停止安装/写入。');
+      }
+      const existing = header.slice(start - 1, start - 1 + ADJUSTMENT_PH_METADATA_HEADERS.length);
+      const empty = existing.every(function (value) { return !String(value || '').trim(); });
+      if (!empty) {
+        throw new Error('Philippines 预留同步协议列已有其他表头，停止安装/写入。');
+      }
+    });
+  }
+  return ADJUSTMENT_MONTHS.map(function (month, index) {
+    return Object.assign({}, adjustmentRoute_(workbookKey, month), {
+      start: byMonth[month],
+      width: ADJUSTMENT_PH_HEADERS.length,
+      headers: ADJUSTMENT_PH_HEADERS,
+      hasCategory: true,
+      schemaKey: 'philippines',
+      metadataStart: metadataStarts[index],
+      metadataWidth: ADJUSTMENT_PH_METADATA_HEADERS.length,
+    });
+  });
+}
+
+function adjustmentResolveRoutesForSheet_(sheet, workbookKey, headerRow) {
+  const workbook = ADJUSTMENT_WORKBOOKS[workbookKey];
+  if (!workbook) throw new Error('来源不在允许清单。');
+  if (workbook.layout === 'standard') {
+    return adjustmentResolveStandardRoutes_(sheet, workbookKey, headerRow);
+  }
+  return adjustmentResolvePhilippinesRoutes_(sheet, workbookKey, headerRow);
+}
+
+function adjustmentResolvedRoute_(sheet, workbookKey, month, headerRow) {
+  const routes = adjustmentResolveRoutesForSheet_(sheet, workbookKey, headerRow);
+  const route = routes.filter(function (candidate) { return candidate.month === month; })[0];
+  if (!route) throw new Error('月份不在允许清单。');
+  return route;
+}
+
 function adjustmentSheet_(route) {
   const spreadsheet = SpreadsheetApp.openById(route.spreadsheetId);
   const sheet = spreadsheet.getSheets().filter(function (candidate) {
     return candidate.getSheetId() === route.gid;
   })[0];
   if (!sheet) throw new Error('固定 gid 不存在：' + route.sourceKey);
+  if (sheet.getName() !== route.tabName) {
+    throw new Error(
+      route.sourceKey + ' 工作表名称不一致，预期「' + route.tabName +
+      '」，实际「' + sheet.getName() + '」。未读取或写入业务数据。'
+    );
+  }
   return sheet;
 }
 
@@ -141,7 +414,10 @@ function validateAdjustmentRoute_(sheet, route, headerRow) {
   const actual = sheet.getRange(headerRow, route.start, 1, route.width).getDisplayValues()[0];
   const expected = route.headers;
   for (let index = 0; index < expected.length; index += 1) {
-    if (adjustmentHeaderKey_(actual[index]) !== adjustmentHeaderKey_(expected[index])) {
+    const matches = route.layout === 'philippines'
+      ? String(actual[index] || '').trim() === expected[index]
+      : adjustmentHeaderKey_(actual[index]) === adjustmentHeaderKey_(expected[index]);
+    if (!matches) {
       throw new Error(
         route.sourceKey + ' 表头不一致，第 ' + (index + 1) + ' 列预期「' + expected[index] +
         '」，实际「' + actual[index] + '」。未写入任何同步列。'
@@ -193,11 +469,15 @@ function installAdjustmentSync() {
   if (!Number.isInteger(config.headerRow) || config.headerRow < 1 || config.headerRow > 20) {
     throw new Error('ADJUSTMENT_HEADER_ROW 必须是 1–20 的整数。');
   }
-  const validated = adjustmentRoutes_().map(function (route) {
-    const sheet = adjustmentSheet_(route);
-    validateAdjustmentRoute_(sheet, route, config.headerRow);
-    validateAdjustmentMetadataRegion_(sheet, route, config.headerRow);
-    return { route: route, sheet: sheet };
+  const validated = [];
+  Object.keys(ADJUSTMENT_WORKBOOKS).forEach(function (workbookKey) {
+    const preferred = adjustmentRoute_(workbookKey, ADJUSTMENT_MONTHS[0]);
+    const sheet = adjustmentSheet_(preferred);
+    adjustmentResolveRoutesForSheet_(sheet, workbookKey, config.headerRow).forEach(function (route) {
+      validateAdjustmentRoute_(sheet, route, config.headerRow);
+      validateAdjustmentMetadataRegion_(sheet, route, config.headerRow);
+      validated.push({ route: route, sheet: sheet });
+    });
   });
 
   removeAdjustmentSyncTriggers();
@@ -267,24 +547,26 @@ function adjustmentSyncEveryMinute() {
 function writeAdjustmentOutboxItem_(item) {
   const workbookKey = String(item.workbook_key || '');
   const month = String(item.source_month || '');
-  const route = adjustmentRoute_(workbookKey, month);
-  if (String(item.source_key || '') !== route.sourceKey ||
-      String(item.spreadsheet_id || '') !== route.spreadsheetId ||
-      Number(item.sheet_gid) !== route.gid ||
-      String(item.currency || '') !== route.currency ||
-      String(item.layout || '') !== route.layout) {
+  const preferredRoute = adjustmentRoute_(workbookKey, month);
+  if (String(item.source_key || '') !== preferredRoute.sourceKey ||
+      String(item.spreadsheet_id || '') !== preferredRoute.spreadsheetId ||
+      Number(item.sheet_gid) !== preferredRoute.gid ||
+      String(item.currency || '') !== preferredRoute.currency ||
+      String(item.layout || '') !== preferredRoute.layout) {
     throw new Error('fatal:outbox_route_mismatch');
   }
   const externalId = adjustmentUuid_(item.external_id, 'external_id');
   const revision = Number(item.revision);
   if (!Number.isSafeInteger(revision) || revision < 1) throw new Error('fatal:invalid_revision');
   const eventDate = adjustmentDate_(item.event_date);
-  if (eventDate.key.slice(0, 7) !== route.month) throw new Error('fatal:event_date_outside_month');
+  if (eventDate.key.slice(0, 7) !== preferredRoute.month) throw new Error('fatal:event_date_outside_month');
+  const sheet = adjustmentSheet_(preferredRoute);
+  const headerRow = adjustmentSyncConfig_().headerRow;
+  const route = adjustmentResolvedRoute_(sheet, workbookKey, month, headerRow);
+  validateAdjustmentRoute_(sheet, route, headerRow);
+  validateAdjustmentMetadataRegion_(sheet, route, headerRow);
   const sourceSlot = adjustmentOutboundSourceSlot_(route, item, eventDate.key);
   const slotMetadata = adjustmentSlotMetadata_(route, sourceSlot);
-  const sheet = adjustmentSheet_(route);
-  const headerRow = adjustmentSyncConfig_().headerRow;
-  validateAdjustmentRoute_(sheet, route, headerRow);
   const dataRow = headerRow + 1;
   const row = findAdjustmentExternalRow_(sheet, route, slotMetadata, externalId, dataRow)
     || findAdjustmentEmptyRow_(sheet, route, dataRow);
@@ -344,9 +626,13 @@ function adjustmentOutboundValues_(route, item, suppliedEventDate) {
   const name = String(item.employee_name || '').trim();
   const employeeNo = String(item.employee_no || '').trim();
   const note = String(item.note || '').trim();
-  if (!name || !employeeNo || !note) throw new Error('fatal:required_field_missing');
+  const category = String(item.category || item.reason || '').trim();
+  if (!name || !employeeNo || !category || !note) throw new Error('fatal:required_field_missing');
   if (route.layout === 'standard') {
-    return [name, employeeNo, amount > 0 ? amount : '', amount < 0 ? amount : '', note, eventDate.date];
+    if (route.hasCategory === false) {
+      return [name, employeeNo, amount > 0 ? amount : '', amount < 0 ? amount : '', note, eventDate.date];
+    }
+    return [name, employeeNo, amount > 0 ? amount : '', amount < 0 ? amount : '', category, note, eventDate.date];
   }
   throw new Error('fatal:philippines_requires_slot_write');
 }
@@ -355,9 +641,10 @@ function adjustmentPhilippinesWritePlan_(sheet, route, row, sourceSlot, item, ev
   const amount = Number(item.signed_amount);
   const name = String(item.employee_name || '').trim();
   const employeeNo = String(item.employee_no || '').trim();
+  const category = String(item.category || item.reason || '').trim();
   const note = String(item.note || '').trim();
   if (!Number.isFinite(amount) || amount === 0) throw new Error('fatal:invalid_signed_amount');
-  if (!name || !employeeNo || !note) throw new Error('fatal:required_field_missing');
+  if (!name || !employeeNo || !category || !note) throw new Error('fatal:required_field_missing');
 
   const otherSlot = sourceSlot === 'first_half' ? 'second_half' : 'first_half';
   const otherMetadata = adjustmentSlotMetadata_(route, otherSlot);
@@ -368,7 +655,7 @@ function adjustmentPhilippinesWritePlan_(sheet, route, row, sourceSlot, item, ev
     const existing = sheet.getRange(row, route.start, 1, route.width).getValues()[0];
     const currentName = String(existing[0] || '').trim();
     const currentEmployeeNo = String(existing[1] || '').trim();
-    const currentDate = existing[6] ? adjustmentDate_(existing[6]).key : '';
+    const currentDate = existing[8] ? adjustmentDate_(existing[8]).key : '';
     if ((currentName && currentName !== name) ||
         (currentEmployeeNo && currentEmployeeNo.toUpperCase() !== employeeNo.toUpperCase())) {
       throw new Error('fatal:paired_slot_identity_conflict');
@@ -378,20 +665,23 @@ function adjustmentPhilippinesWritePlan_(sheet, route, row, sourceSlot, item, ev
     }
   }
 
-  const amountOffset = sourceSlot === 'first_half' ? 2 : 3;
-  const noteOffset = sourceSlot === 'first_half' ? 4 : 5;
+  const amountOffset = sourceSlot === 'first_half' ? 2 : 4;
+  const categoryOffset = sourceSlot === 'first_half' ? 3 : 5;
+  const noteOffset = sourceSlot === 'first_half' ? 6 : 7;
   return {
     layout: 'philippines', row: row, start: route.start,
     name: name, employeeNo: employeeNo,
     amountColumn: route.start + amountOffset, amount: amount,
+    categoryColumn: route.start + categoryOffset, category: category,
     noteColumn: route.start + noteOffset, note: note,
-    dateColumn: route.start + 6, date: eventDate.date,
+    dateColumn: route.start + 8, date: eventDate.date,
   };
 }
 
 function applyPhilippinesAdjustmentWritePlan_(sheet, plan) {
   sheet.getRange(plan.row, plan.start, 1, 2).setValues([[plan.name, plan.employeeNo]]);
   sheet.getRange(plan.row, plan.amountColumn, 1, 1).setValue(plan.amount);
+  sheet.getRange(plan.row, plan.categoryColumn, 1, 1).setValue(plan.category);
   sheet.getRange(plan.row, plan.noteColumn, 1, 1).setValue(plan.note);
   sheet.getRange(plan.row, plan.dateColumn, 1, 1).setValue(plan.date);
 }
@@ -441,8 +731,7 @@ function adjustmentSyncOnEdit(event) {
   const lock = LockService.getScriptLock();
   lock.waitLock(300000);
   try {
-    ADJUSTMENT_MONTHS.forEach(function (month) {
-      const route = adjustmentRoute_(workbookKey, month);
+    adjustmentResolveRoutesForSheet_(sheet, workbookKey, config.headerRow).forEach(function (route) {
       const editFirst = event.range.getColumn();
       const editLast = event.range.getLastColumn();
       if (editLast < route.start || editFirst > route.start + route.width - 1) return;
@@ -466,12 +755,12 @@ function adjustmentEditedSourceSlots_(route, editFirst, editLast) {
     const column = route.start + offset;
     return editFirst <= column && editLast >= column;
   };
-  if (intersectsOffset(0) || intersectsOffset(1) || intersectsOffset(6)) {
+  if (intersectsOffset(0) || intersectsOffset(1) || intersectsOffset(8)) {
     return ['first_half', 'second_half'];
   }
   const slots = [];
-  if (intersectsOffset(2) || intersectsOffset(4)) slots.push('first_half');
-  if (intersectsOffset(3) || intersectsOffset(5)) slots.push('second_half');
+  if (intersectsOffset(2) || intersectsOffset(3) || intersectsOffset(6)) slots.push('first_half');
+  if (intersectsOffset(4) || intersectsOffset(5) || intersectsOffset(7)) slots.push('second_half');
   return slots;
 }
 
@@ -511,7 +800,8 @@ function queueAdjustmentInboundRow_(sheet, route, row, editedSourceSlots) {
       external_id: externalId, origin: 'google', revision: revision,
       source_slot: parsed.sourceSlot,
       event_date: parsed.eventDate, signed_amount: parsed.amount, currency: route.currency,
-      employee_no: parsed.employeeNo, employee_name: parsed.name, note: parsed.note, google_row: row,
+      employee_no: parsed.employeeNo, employee_name: parsed.name,
+      category: parsed.category || '', note: parsed.note, google_row: row,
     };
   });
   const requestId = Utilities.getUuid();
@@ -553,7 +843,9 @@ function deliverQueuedAdjustmentInbound_(entry) {
 function adjustmentInboundRows_(route, values, display, editedSourceSlots) {
   const name = String(display[0] || '').trim();
   const employeeNo = String(display[1] || '').trim();
-  const dateCell = values[route.layout === 'standard' ? 5 : 6];
+  const dateCell = values[route.layout === 'philippines'
+    ? 8
+    : route.hasCategory === false ? 5 : 6];
   const eventDate = adjustmentDate_(dateCell).key;
   if (eventDate.slice(0, 7) !== route.month) throw new Error('日期不属于当前月份块。');
   if (!name || !employeeNo) throw new Error('姓名、ID 和日期都是必填项。');
@@ -563,12 +855,16 @@ function adjustmentInboundRows_(route, values, display, editedSourceSlots) {
     if ((bonus !== 0 && deduction !== 0) || (bonus === 0 && deduction === 0)) {
       throw new Error('奖金与扣除必须且只能填写一个。');
     }
-    const note = String(display[4] || '').trim();
+    const category = route.hasCategory === false
+      ? (bonus !== 0 ? '奖金' : '扣款')
+      : String(display[4] || '').trim();
+    const note = String(display[route.hasCategory === false ? 4 : 5] || '').trim();
+    if (route.hasCategory !== false && !category) throw new Error('类型是必填项。');
     if (!note) throw new Error('备注是必填项。');
     return [{
       name: name, employeeNo: employeeNo, eventDate: eventDate,
       amount: bonus !== 0 ? Math.abs(bonus) : -Math.abs(deduction),
-      note: note, sourceSlot: 'primary',
+      category: category, note: note, sourceSlot: 'primary',
     }];
   }
 
@@ -576,21 +872,23 @@ function adjustmentInboundRows_(route, values, display, editedSourceSlots) {
     ? editedSourceSlots
     : ['first_half', 'second_half'];
   const definitions = [
-    { sourceSlot: 'first_half', amountIndex: 2, noteIndex: 4, label: '1-15' },
-    { sourceSlot: 'second_half', amountIndex: 3, noteIndex: 5, label: '16-末' },
+    { sourceSlot: 'first_half', amountIndex: 2, categoryIndex: 3, noteIndex: 6, label: '1-15' },
+    { sourceSlot: 'second_half', amountIndex: 4, categoryIndex: 5, noteIndex: 7, label: '16-末' },
   ].filter(function (definition) { return requested.indexOf(definition.sourceSlot) >= 0; });
   const rows = [];
   definitions.forEach(function (definition) {
     const amount = adjustmentNumber_(display[definition.amountIndex]);
+    const category = String(display[definition.categoryIndex] || '').trim();
     const note = String(display[definition.noteIndex] || '').trim();
-    if (amount === 0 && note) {
-      throw new Error(definition.label + ' 有备注但金额为空或 0。');
+    if (amount === 0 && (category || note)) {
+      throw new Error(definition.label + ' 有类型/备注但金额为空或 0。');
     }
     if (amount === 0) return;
+    if (!category) throw new Error(definition.label + ' 金额对应的类型是必填项。');
     if (!note) throw new Error(definition.label + ' 金额对应的备注是必填项。');
     rows.push({
       name: name, employeeNo: employeeNo, eventDate: eventDate,
-      amount: amount, note: note, sourceSlot: definition.sourceSlot,
+      amount: amount, category: category, note: note, sourceSlot: definition.sourceSlot,
     });
   });
   if (!rows.length) throw new Error('所编辑期间的金额不能清空或设为 0。');

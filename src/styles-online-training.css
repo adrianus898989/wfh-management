@@ -123,3 +123,16 @@
 
 @media(max-width:980px){.ot-report-detail-workspace,.ot-history-workspace{grid-template-columns:280px minmax(0,1fr)}.ot-summary-box.compact{grid-template-columns:1fr}.ot-selected-member-detail>.ot-attachments.compact,.ot-history-selected>.ot-attachments.compact{grid-template-columns:repeat(3,minmax(90px,1fr))}}
 @media(max-width:720px){.ot-modal.ot-view,.ot-modal.ot-history{width:calc(100vw - 12px)}.ot-report-detail-workspace,.ot-history-workspace{display:block;max-height:none}.ot-member-index,.ot-history-index{max-height:220px;border-right:0;border-bottom:1px solid #dfe7f0}.ot-selected-member-detail,.ot-history-selected{max-height:50vh}.ot-compact-table{min-width:980px}.ot-loading-columns,.ot-loading-row{min-width:980px}.ot-selected-member-detail>.ot-attachments.compact,.ot-history-selected>.ot-attachments.compact{grid-template-columns:repeat(2,minmax(90px,1fr))}}
+
+/* Training reports open only from explicit actions; nested views retain their own scroll state. */
+.ot-compact-table tbody tr{cursor:default}
+.ot-person-name{display:block;min-width:0;overflow:hidden;color:#29415e;font-size:13px;font-weight:850;text-overflow:ellipsis;white-space:nowrap}
+.ot-modal.ot-trainer-history{display:flex;max-height:min(88vh,840px);flex-direction:column}
+.ot-trainer-history .ot-modal-scroll{display:flex;flex:1;min-height:0;flex-direction:column;overflow:hidden}
+.ot-trainer-history .ot-compact-table-shell.in-modal{flex:1;min-height:180px;max-height:min(52vh,560px);overflow:auto;overscroll-behavior:contain}
+.ot-trainer-history-summary .identity.text-only{padding-left:2px}
+.ot-member-index,.ot-history-index{min-height:0}
+.ot-member-index>div,.ot-history-index>div{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+.ot-team-summary.invalid{border-color:#ef9b9b;box-shadow:0 0 0 3px rgba(204,68,68,.08)}
+.ot-team-summary.invalid textarea{border-color:#d95f5f;background:#fff8f8}
+@media(max-width:720px){.ot-member-index>div{max-height:190px}.ot-trainer-history .ot-compact-table-shell.in-modal{max-height:50vh}}

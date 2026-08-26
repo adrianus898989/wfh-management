@@ -405,6 +405,9 @@
 /* ===== Employee Module V12 ===== */
 .employee-notice{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .employee-notice button{border:0;background:transparent;color:inherit;font-size:18px}
+.employee-inline-sync-note{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:10px 12px;border:1px solid #ecd9a8;border-radius:10px;background:#fffaf0;color:#765c20;font-size:11px;font-weight:700}
+.employee-inline-sync-note.is-error{border-color:#efc8c4;background:#fff6f5;color:#9b4540}
+.employee-inline-sync-note button{flex:0 0 auto;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;padding:6px 10px;font:inherit;cursor:pointer}
 .compact-select,.compact-date{height:40px;border:1px solid #d9e2ec;border-radius:9px;background:#fff;color:#4a5f78;padding:0 10px;font-size:10px;font-weight:700}
 .lifecycle-table{min-width:1180px}
 .event-chip{display:inline-flex;align-items:center;min-height:23px;padding:0 8px;border-radius:999px;font-size:9px;font-weight:800}
@@ -1262,3 +1265,25 @@
 .employee-structure-stats .analysis-card-head p{
   display:none!important;
 }
+
+/* Employee archive: teacher evaluations sourced from existing online training reports. */
+.employee-trainer-review-panel{grid-column:1/-1;min-width:0}
+.employee-trainer-review-list{display:grid;gap:12px;padding:14px}
+.employee-trainer-review-list article{overflow:hidden;border:1px solid #dbe5f2;border-radius:14px;background:#fff}
+.employee-trainer-review-list article>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid #e8eef6;background:#f8fbff}
+.employee-trainer-review-list article>header div{min-width:0}
+.employee-trainer-review-list article>header strong,.employee-trainer-review-list article>header span{display:block}
+.employee-trainer-review-list article>header strong{color:#263f5e;font-size:13px}
+.employee-trainer-review-list article>header span{margin-top:3px;color:#77899f;font-size:10px}
+.employee-trainer-review-list article>header em{padding:5px 8px;border-radius:999px;background:#e7f8ef;color:#138057;font-size:10px;font-style:normal;font-weight:850;white-space:nowrap}
+.employee-trainer-review-list article>header em.rest{background:#f0f3f7;color:#6f7e91}
+.employee-trainer-review-list article>header em.leave{background:#fff1db;color:#ad6e09}
+.employee-trainer-review-list article>header em.absent{background:#ffeaea;color:#bd4444}
+.employee-trainer-review-list article>header em.transferred{background:#eaf1ff;color:#3769d2}
+.employee-trainer-review-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:12px 14px}
+.employee-trainer-review-grid>div{min-width:0;padding:10px 11px;border:1px solid #e5ebf3;border-radius:9px;background:#fbfcfe}
+.employee-trainer-review-grid b{color:#6e8096;font-size:10px}
+.employee-trainer-review-grid p{margin:5px 0 0;color:#324a66;font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.employee-trainer-review-empty{padding:18px 14px;color:#78899d;font-size:12px}
+.employee-trainer-review-list article>footer{display:flex;justify-content:space-between;gap:12px;padding:9px 14px;border-top:1px solid #edf1f6;color:#7d8da1;font-size:10px}
+@media(max-width:720px){.employee-trainer-review-grid{grid-template-columns:1fr}.employee-trainer-review-list article>footer{align-items:flex-start;flex-direction:column}}

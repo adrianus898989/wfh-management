@@ -1,6 +1,7 @@
 import { supabase } from './lib/supabase'
 import { getAllErrorSummaryMap } from './lib/errorSummaryStore'
 import { legacyErrorTables } from './lib/legacyErrorTableScope'
+import { edgeFunctionErrorMessage } from './lib/edgeFunctionError'
 
 const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
@@ -139,7 +140,7 @@ export async function openEmployeeErrorHistory(id,name,summary={}){
   mask.addEventListener('mousedown',e=>{if(e.target===mask)mask.remove()});modal.querySelector('header button')?.addEventListener('click',()=>mask.remove())
   try{
     const {data,error}=await supabase.functions.invoke('admin-report-errors',{body:{employee_id:id,date_basis:'qc',page_size:500}})
-    if(error||data?.error)throw new Error(data?.error||error?.message||'读取失败')
+    if(error||data?.error)throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'错误记录读取失败'}))
     const counts=data?.period_counts||{}
     for(const key of ['month','last_3d','last_7d','last_30d','total']){
       const value=Number(counts[key]);const target=modal.querySelector(`[data-stat="${key}"] b`)

@@ -2,15 +2,18 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import AdminModuleNav from '../components/AdminModuleNav'
-import { adminLocalPageTabs } from '../config/navigation'
+import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { EmployeeDrawer } from './AdminEmployeesPage'
 import { ExamImageGallery } from '../components/ExamImageGallery'
+import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import { businessTodayIso } from '../lib/adminQueryDefaults'
 
 const TABS=['考试概览','考试记录','题库','人工批改']
 const blankQuestion={series_name:'',team_name:'',position_name:'',question_en:'',question_zh:'',question_vi:'',points:5,difficulty:1,image_urls:[],active:true}
 const blankSessionFilters={employeeNo:'',employeeName:'',exam:'',team:'',position:'',status:'',grader:'',source:'',dateFrom:'',dateTo:''}
+const todaySessionFilters=()=>{const day=businessTodayIso();return {...blankSessionFilters,dateFrom:day,dateTo:day}}
 const message=e=>e?.message||String(e||'操作失败')
 const fmt=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—'
 const score=v=>v==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:2})
@@ -38,7 +41,8 @@ const recentDays=(rows,count=7)=>{
 export default function AdminTrainingPage(){
   const [params,setParams]=useSearchParams()
   const access=useAdminAccess()
-  const requestedTab=params.get('tab')
+  const requestedRouteTab=params.get('tab')
+  const requestedTab=canonicalAdminTab('/admin/training',requestedRouteTab)
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
     if(!access.hasPermission(PERMISSIONS.EXAM_VIEW))return false
     if(value==='题库')return access.hasPermission(PERMISSIONS.EXAM_MANAGE)
@@ -56,8 +60,9 @@ export default function AdminTrainingPage(){
   const [question,setQuestion]=useState(null)
   const [questionView,setQuestionView]=useState(null)
   const [grading,setGrading]=useState(null)
-  const [sessionDraft,setSessionDraft]=useState(blankSessionFilters)
-  const [sessionFilters,setSessionFilters]=useState(blankSessionFilters)
+  const initialSessionFilters=()=>requestedTab==='人工批改'?blankSessionFilters:todaySessionFilters()
+  const [sessionDraft,setSessionDraft]=useState(initialSessionFilters)
+  const [sessionFilters,setSessionFilters]=useState(initialSessionFilters)
   const [sessionPage,setSessionPage]=useState(1)
   const [sessionPageSize,setSessionPageSize]=useState(30)
   const [sessionData,setSessionData]=useState({rows:[],total:0})
@@ -94,24 +99,32 @@ export default function AdminTrainingPage(){
   useEffect(()=>{loadSessions()},[access.loading,access.founder,access.permissionKey,tab,sessionFilters,sessionPage,sessionPageSize])
   useEffect(()=>{
     if(access.loading||!tab)return
-    if(requestedTab===tab||(!requestedTab&&tab===TABS[0]))return
-    setParams(tab===TABS[0]?{}:{tab},{replace:true})
-  },[access.loading,access.founder,access.permissionKey,requestedTab,tab,setParams])
-  const setTab=x=>{if(visibleTabs.includes(x))setParams(x===TABS[0]?{}:{tab:x})}
+    const desiredRouteTab=tab===TABS[0]?null:adminTabSlug('/admin/training',tab)
+    if(requestedRouteTab===desiredRouteTab)return
+    setParams(desiredRouteTab?{tab:desiredRouteTab}:{},{replace:true})
+  },[access.loading,access.founder,access.permissionKey,requestedRouteTab,tab,setParams])
+  const setTab=x=>{
+    if(!visibleTabs.includes(x))return
+    if(x==='考试记录'||x==='人工批改'){
+      const next=x==='人工批改'?blankSessionFilters:todaySessionFilters()
+      setSessionDraft(next);setSessionFilters(next);setSessionPage(1)
+    }
+    setParams(x===TABS[0]?{}:adminTabParams('/admin/training',x))
+  }
   const apply=()=>{setPage(1);setFilters({...draft})}
   const reset=()=>{const x={search:'',team:'',position:''};setDraft(x);setFilters(x);setPage(1)}
   const applySessions=()=>{setSessionPage(1);setSessionFilters({...sessionDraft})}
-  const resetSessions=()=>{setSessionDraft(blankSessionFilters);setSessionFilters(blankSessionFilters);setSessionPage(1)}
+  const resetSessions=()=>{const next=tab==='人工批改'?blankSessionFilters:todaySessionFilters();setSessionDraft(next);setSessionFilters(next);setSessionPage(1)}
   const showEmployeeRecords=s=>{
     const next={...blankSessionFilters,employeeNo:s.employee_no||''}
-    setSessionDraft(next);setSessionFilters(next);setSessionPage(1);setTab('考试记录')
+    setTab('考试记录');setSessionDraft(next);setSessionFilters(next);setSessionPage(1)
   }
   const openEmployee=async s=>{
     if(!s.employee_id)return
     setEmployeeDetail({employee:{id:s.employee_id,employee_no:s.employee_no,full_name:s.employee_name},missing_fields:[]})
     setEmployeeDetailLoading(true);setError('')
     const {data:detail,error:e}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:s.employee_id}})
-    if(e||detail?.error){setError(message(e||detail?.error));setEmployeeDetail(null)}else setEmployeeDetail(detail)
+    if(e||detail?.error){setError(await edgeFunctionErrorMessage({data:detail,error:e,fallback:'员工档案读取失败'}));setEmployeeDetail(null)}else setEmployeeDetail(detail)
     setEmployeeDetailLoading(false)
   }
   const counts=data?.counts||{}

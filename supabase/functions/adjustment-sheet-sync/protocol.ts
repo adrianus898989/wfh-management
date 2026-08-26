@@ -126,10 +126,14 @@ export async function normalizeInbound(value: unknown) {
     const currency = text(row.currency).toUpperCase();
     if (currency !== route.currency) throw new Error("currency_does_not_match_workbook");
     const note = text(row.note);
+    const category = text(row.category);
     const employeeName = text(row.employee_name);
     const employeeNo = text(row.employee_no).toUpperCase();
     if (!note || note.length > 4000 || !employeeName || !employeeNo || employeeNo.length > 100) {
       throw new Error("invalid_inbound_row");
+    }
+    if (category.length > 200 || !category) {
+      throw new Error("invalid_adjustment_category");
     }
     const googleRow = Number(row.google_row);
     if (!Number.isSafeInteger(googleRow) || googleRow < 3) throw new Error("invalid_google_row");
@@ -150,6 +154,7 @@ export async function normalizeInbound(value: unknown) {
       currency,
       employee_no: employeeNo,
       employee_name: employeeName,
+      category: category || null,
       note,
       google_row: googleRow,
     };

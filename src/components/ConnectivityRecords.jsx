@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { businessTodayIso, businessTodayRange } from '../lib/adminQueryDefaults'
 import { supabase } from '../lib/supabase'
 import { Pagination } from './DataPageControls'
 
@@ -7,10 +8,7 @@ const EVIDENCE_BUCKET='connectivity-evidence'
 const MAX_EVIDENCE_FILES=3
 const MAX_EVIDENCE_SIZE=50*1024*1024
 const ALLOWED_EVIDENCE_TYPES=new Set(['image/jpeg','image/png','image/webp','image/gif','image/heic','image/heif','video/mp4','video/quicktime','video/webm'])
-const today=()=>{
-  const d=new Date()
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-}
+const today=businessTodayIso
 const typeLabel=value=>({power_outage:'停电',internet_outage:'断网'}[value]||value||'—')
 const statusLabel=value=>({reported:'已记录',verified:'已核实',resolved:'已恢复',rejected:'不成立'}[value]||value||'—')
 const durationLabel=value=>{
@@ -26,7 +24,7 @@ const calculatedDuration=(start,end)=>{
   const from=sh*60+sm,to=eh*60+em
   return to>=from?to-from:24*60-from+to
 }
-const initialFilters=()=>({employee_no:'',employee_name:'',team:'',position:'',incident_type:'',status:'',country:'',date_from:'',date_to:''})
+const initialFilters=()=>({employee_no:'',employee_name:'',team:'',position:'',incident_type:'',status:'',country:'',...businessTodayRange()})
 const initialRecord=()=>({id:null,employee_no:'',incident_date:today(),incident_type:'internet_outage',started_at:'',ended_at:'',details:'',status:'reported'})
 const evidenceItems=row=>Array.isArray(row?.attachments)?row.attachments:[]
 const evidenceMime=file=>{

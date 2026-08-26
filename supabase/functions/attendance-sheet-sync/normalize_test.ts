@@ -152,6 +152,8 @@ const annualSourcePayload = (config: AnnualSourceConfig) => ({
   spreadsheet_id: config.spreadsheetId,
   sheet_gid: config.sheetGid,
   tab_name: config.tabName,
+  leave_sheet_gid: config.leaveSheetGid,
+  leave_tab_name: config.leaveTabName,
   adjustment_sheet_gid: config.adjustmentSheetGid,
   adjustment_tab_name: config.adjustmentTabName,
 });
@@ -161,6 +163,9 @@ function annualMatrices(
   attendanceRows: string[][],
   adjustmentRows: string[][],
   metadataRows: string[][] = [],
+  leaveRows: string[][] = [],
+  adjustmentSchema: "with_category" | "legacy_without_category" | "philippines" =
+    config.layout === "home_ph" ? "philippines" : "with_category",
 ) {
   const attendanceHeader = Array(config.maxColumns).fill("");
   attendanceHeader[config.nameColumn] = "姓名";
@@ -171,17 +176,24 @@ function annualMatrices(
   const adjustmentMonth = Array(config.adjustmentColumns).fill("");
   adjustmentMonth[0] = `${Number(config.month.slice(5))}月份`;
   const adjustmentHeader = config.layout === "home_ph"
-    ? ["姓名", "ID", "金额1-15", "金额16-末", "备注1-15", "备注16-末", "日期"]
-    : ["姓名", "ID", "奖金", "扣除", "备注", "日期"];
+    ? ["姓名", "ID", "金额1-15", "类型", "金额16-末", "类型", "备注1-15", "备注16-末", "日期"]
+    : adjustmentSchema === "legacy_without_category"
+      ? ["姓名", "ID", "奖金", "扣除", "", "备注", "日期"]
+      : ["姓名", "ID", "奖金", "扣除", "类型", "备注", "日期"];
+  const normalizedAdjustmentRows = adjustmentRows.map((row) =>
+    config.layout !== "home_ph" && row.length === 6
+      ? [...row.slice(0, 4), adjustmentSchema === "legacy_without_category" ? "" : "测试类型", ...row.slice(4)]
+      : row
+  );
   const metadataHeader = config.layout === "home_ph"
     ? [
       "__sync_first_half_external_id", "__sync_first_half_origin", "__sync_first_half_revision",
       "__sync_second_half_external_id", "__sync_second_half_origin", "__sync_second_half_revision",
     ]
     : ["__sync_external_id", "__sync_origin", "__sync_revision"];
-  const adjustmentDataRowCount = Math.max(adjustmentRows.length, metadataRows.length);
+  const adjustmentDataRowCount = Math.max(normalizedAdjustmentRows.length, metadataRows.length);
   const adjustmentData = Array.from({ length: adjustmentDataRowCount }, (_, index) => {
-    const row = adjustmentRows[index] ?? [];
+    const row = normalizedAdjustmentRows[index] ?? [];
     return [...row, ...Array(Math.max(config.adjustmentColumns - row.length, 0)).fill("")]
       .slice(0, config.adjustmentColumns);
   });
@@ -195,8 +207,15 @@ function annualMatrices(
       ...row,
       ...Array(Math.max(config.maxColumns - row.length, 0)).fill(""),
     ].slice(0, config.maxColumns))],
+    leaves: [
+      [`${Number(config.month.slice(5))}月份`, "", "", "", ""],
+      ["日期", "姓名", "ID", "类型", "备注"],
+      ...leaveRows.map((row) => [...row, ...Array(Math.max(config.leaveColumns - row.length, 0)).fill("")]
+        .slice(0, config.leaveColumns)),
+    ],
     adjustments: [adjustmentMonth, adjustmentHeader, ...adjustmentData],
     adjustment_metadata: [Array(config.adjustmentMetadataColumns).fill(""), metadataHeader, ...metadataData],
+    adjustment_schema: adjustmentSchema,
   };
 }
 
@@ -255,14 +274,54 @@ Deno.test("normalizes sparse annual attendance and signed USD adjustments by emp
   assert(adjustments[0].employee_no_raw === "WD-100", "employee ID was not preserved for primary matching");
   assert(adjustments.some((row) => row.amount === 100 && row.event_kind === "bonus"), "positive amount was not bonus");
   assert(adjustments.some((row) => row.amount === -25 && row.event_kind === "deduction"), "negative amount was not deduction");
+  assert(adjustments.every((row) => row.reason === "测试类型"), "standard 类型 was not persisted as reason");
   assert(adjustments.every((row) => row.raw_values.currency === "USD"), "onsite currency audit was not USD");
   assert(adjustments.every((row) => row.currency === "USD"), "onsite allowlisted currency was not normalized");
+});
+
+Deno.test("休假填表 is authoritative over the monthly grid and preserves the note", async () => {
+  const config = annualConfig("home_vimm_annual_2026_09");
+  const employee = Array(config.maxColumns).fill("");
+  employee[config.nameColumn] = "Leave Employee";
+  employee[config.employeeNoColumn] = "LEAVE-1";
+  employee[config.dayStartColumn + 4] = "公休";
+  const values = annualMatrices(
+    config,
+    [employee],
+    [],
+    [],
+    [["2026-09-05", "Leave Employee", "LEAVE-1", "请假", "medical appointment"]],
+  );
+  const result = await normalizeAnnual(config, values);
+  const rows = result.rows.filter((row) => row.event_date === "2026-09-05");
+  assert(rows.length === 1, "monthly grid duplicated the authoritative leave row");
+  assert(rows[0].event_kind === "leave", "leave type did not override the grid status");
+  assert(rows[0].reason === "请假" && rows[0].note === "medical appointment", "leave explanation was lost");
+  assert(rows[0].raw_values.source_tab === "休假填表", "leave provenance was not preserved");
+});
+
+Deno.test("legacy six-column standard adjustments remain readable without shifting note/date", async () => {
+  const config = annualConfig("onsite_annual_2026_09");
+  const values = annualMatrices(
+    config,
+    [],
+    [["Legacy", "LEG-1", "", "-10", "late 10 minutes", "2026-09-06"]],
+    [],
+    [],
+    "legacy_without_category",
+  );
+  const result = await normalizeAnnual(config, values);
+  const adjustment = result.rows.find((row) => row.kind === "adjustment");
+  assert(adjustment?.event_date === "2026-09-06", "legacy date shifted columns");
+  assert(adjustment?.note === "late 10 minutes", "legacy note shifted columns");
+  assert(adjustment?.reason === "扣款" && adjustment.raw_values.raw_type === "扣款", "legacy type fallback failed");
 });
 
 Deno.test("Philippines half-month amounts create two stable PHP records with paired notes", async () => {
   const config = annualConfig("home_ph_annual_2026_09");
   const values = annualMatrices(config, [], [[
-    "PH EMPLOYEE", "PH-100", "300", "-50", "first note", "second note", "09/15/2026",
+    "PH EMPLOYEE", "PH-100", "300", "绩效奖金", "-50", "迟到 / 超时",
+    "first note", "second note", "09/15/2026",
   ]]);
   const result = await normalizeAnnual(config, values);
   assert(result.rows.length === 2, "PH half-month amounts did not create two records");
@@ -270,6 +329,7 @@ Deno.test("Philippines half-month amounts create two stable PHP records with pai
   const second = result.rows.find((row) => row.raw_values.source_slot === "second_half");
   assert(first?.amount === 300 && first.note === "first note" && first.event_kind === "bonus", "first half mapping failed");
   assert(second?.amount === -50 && second.note === "second note" && second.event_kind === "deduction", "second half mapping failed");
+  assert(first?.reason === "绩效奖金" && second?.reason === "迟到 / 超时", "PH 类型 mapping failed");
   assert(first?.event_date === second?.event_date, "PH half-month records did not share the row date");
   assert(first?.source_item_key !== second?.source_item_key, "PH half-month stable keys collided");
   assert(first?.raw_values.currency === "PHP" && second?.raw_values.currency === "PHP", "PH currency audit was not PHP");
@@ -294,7 +354,8 @@ Deno.test("standard managed metadata suppresses the whole adjustment row", async
 Deno.test("Philippines managed metadata suppresses slots independently", async () => {
   const config = annualConfig("home_ph_annual_2026_10");
   const values = annualMatrices(config, [], [[
-    "PH", "PH-SLOT", "300", "-50", "managed first", "annual second", "2026-10-20",
+    "PH", "PH-SLOT", "300", "奖励", "-50", "迟到 / 超时",
+    "managed first", "annual second", "2026-10-20",
   ]], [[
     "7985fb59-b915-47e9-a115-feacc3ab52a1", "google", "4", "", "", "",
   ]]);
@@ -320,7 +381,7 @@ Deno.test("fails closed on partial or invalid managed metadata", async () => {
 
   const ph = annualConfig("home_ph_annual_2026_12");
   const invalidSecondSlot = annualMatrices(ph, [], [[
-    "B", "ID-B", "10", "20", "a", "b", "2026-12-20",
+    "B", "ID-B", "10", "奖励", "20", "奖励", "a", "b", "2026-12-20",
   ]], [[
     "7985fb59-b915-47e9-a115-feacc3ab52a1", "google", "1",
     "not-a-uuid", "supabase", "2",
@@ -332,6 +393,20 @@ Deno.test("fails closed on partial or invalid managed metadata", async () => {
     phRejected = error instanceof Error && error.message.startsWith("adjustment_metadata_invalid:");
   }
   assert(phRejected, "invalid PH slot metadata was accepted");
+});
+
+Deno.test("Philippines non-zero half-month amount requires its own 类型", async () => {
+  const config = annualConfig("home_ph_annual_2026_11");
+  const values = annualMatrices(config, [], [[
+    "PH", "PH-TYPE", "100", "", "-20", "迟到 / 超时", "first", "second", "2026-11-10",
+  ]]);
+  let rejected = false;
+  try {
+    await normalizeAnnual(config, values);
+  } catch (error) {
+    rejected = error instanceof Error && error.message === "adjustment_type_required:row_3";
+  }
+  assert(rejected, "PH amount without its paired 类型 was accepted");
 });
 
 Deno.test("managed metadata is part of the annual snapshot hash", async () => {

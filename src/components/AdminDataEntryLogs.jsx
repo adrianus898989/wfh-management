@@ -1,9 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useAdminI18n } from '../lib/adminI18n'
+import { businessTodayIso } from '../lib/adminQueryDefaults'
 import { supabase } from '../lib/supabase'
 import '../data-entry-logs.css'
 
 const clean = value => String(value ?? '').trim()
+const initialLogFilters = () => {
+  const day = businessTodayIso()
+  return { search: '', dateFrom: day, dateTo: day }
+}
 
 const formatDateTime = (value, locale) => {
   if (!value) return '—'
@@ -39,8 +44,8 @@ export default function AdminDataEntryLogs({ category = 'adjustment' }) {
   const { locale, t } = useAdminI18n()
   const normalizedCategory = category === 'attendance' ? 'attendance' : 'adjustment'
   const title = normalizedCategory === 'attendance' ? t('出勤录入日志') : t('奖金扣款录入日志')
-  const [filters, setFilters] = useState({ search: '', dateFrom: '', dateTo: '' })
-  const [applied, setApplied] = useState({ search: '', dateFrom: '', dateTo: '' })
+  const [filters, setFilters] = useState(initialLogFilters)
+  const [applied, setApplied] = useState(initialLogFilters)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [state, setState] = useState({ loading: true, error: '', data: { rows: [], total: 0, pages: 1 } })
@@ -89,18 +94,20 @@ export default function AdminDataEntryLogs({ category = 'adjustment' }) {
   }
 
   const reset = () => {
-    const empty = { search: '', dateFrom: '', dateTo: '' }
-    const alreadyEmpty = page === 1 && JSON.stringify(applied) === JSON.stringify(empty)
-    setFilters(empty)
-    setApplied(empty)
+    const defaults = initialLogFilters()
+    const alreadyDefault = page === 1 && JSON.stringify(applied) === JSON.stringify(defaults)
+    setFilters(defaults)
+    setApplied(defaults)
     setPage(1)
-    if (alreadyEmpty) load()
+    if (alreadyDefault) load()
   }
 
   return <section className="admin-entry-logs">
     <header className="admin-entry-logs-head">
       <div><small>DATA ENTRY AUDIT</small><h2>{title}</h2><p>{subtitle}</p></div>
-      <strong>{locale === 'en' ? `${total.toLocaleString()} records` : `${total.toLocaleString()} 条`}</strong>
+      <strong>{state.loading
+        ? (locale === 'en' ? 'Updating…' : '正在更新…')
+        : (locale === 'en' ? `${total.toLocaleString()} records` : `${total.toLocaleString()} 条`)}</strong>
     </header>
     <form className="admin-entry-log-filters" onSubmit={submit}>
       <label><span>{t('员工 / 录入账号 / 原因')}</span><input value={filters.search} onChange={event => setFilters(current => ({ ...current, search: event.target.value }))} placeholder={t('输入员工ID、姓名、录入账号或原因')} /></label>
@@ -112,7 +119,7 @@ export default function AdminDataEntryLogs({ category = 'adjustment' }) {
     {state.error && <div className="admin-entry-log-error"><span>{state.error}</span><button type="button" onClick={load}>{t('重试')}</button></div>}
     <div className="admin-entry-log-table"><table>
       <thead><tr><th>{t('录入 / 更新时间')}</th><th>{t('录入账号')}</th><th>{t('员工')}</th><th>{t('记录日期')}</th><th>{t('记录类型')}</th>{normalizedCategory === 'adjustment' && <th>{t('金额')}</th>}<th>{t('原因 / 备注')}</th><th>{t('数据来源 / 同步')}</th></tr></thead>
-      <tbody>{state.loading ? <tr><td colSpan={normalizedCategory === 'adjustment' ? 8 : 7}><div className="admin-entry-log-empty">{t('正在读取录入日志…')}</div></td></tr> : rows.length ? rows.map(row => <tr key={row.id}>
+      <tbody>{state.loading && !rows.length ? <tr><td colSpan={normalizedCategory === 'adjustment' ? 8 : 7}><div className="admin-entry-log-empty">{t('正在读取录入日志…')}</div></td></tr> : rows.length ? rows.map(row => <tr key={row.id}>
         <td><b>{actionLabel(row.action, t)}</b><span>{formatDateTime(row.created_at, locale)}</span></td>
         <td><b>{row.actor_name || t('系统 / 外部同步')}</b><span>{row.actor_user_id || '—'}</span></td>
         <td><b>{row.employee_no || '—'}</b><span>{row.full_name || '—'}</span></td>

@@ -3,6 +3,7 @@ import { Pagination } from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { supabase } from '../lib/supabase'
 import { useAdminI18n } from '../lib/adminI18n'
+import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
 import {
   COMPANY_ASSET_TABS,
   COMPANY_HARDWARE_TABS,
@@ -80,7 +81,7 @@ export default function AdminCompanyAssetsPage() {
       const { data, error: requestError } = await supabase.functions.invoke('admin-accounts', {
         body:{ action:'company_assets' },
       })
-      if (requestError || data?.error) throw new Error(data?.error || requestError?.message || '公司资产资料读取失败')
+      if (requestError || data?.error) throw new Error(await edgeFunctionErrorMessage({ data, error:requestError, fallback:'公司资产资料读取失败' }))
       setRows(normalizeCompanyAssetEmployees(data?.employees || []))
     } catch (requestError) {
       setError(requestError?.message || '公司资产资料读取失败')

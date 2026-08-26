@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { adminLocalPageTabs, adminNavigation, adminPagePresentation, adminSectionItems, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from './navigation.js'
+import { ADMIN_TAB_SLUGS, adminLocalPageTabs, adminNavigation, adminPagePresentation, adminRouteAccess, adminSectionItems, adminTabSlug, canonicalAdminTab, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from './navigation.js'
 
 const visibleItems = adminNavigation.flatMap(entry => entry.children || [entry])
 const group = id => adminNavigation.find(entry => entry.id === id)
@@ -30,10 +30,43 @@ test('admin sidebar uses the requested top-level order and names', () => {
 })
 
 test('new menu names keep pointing at canonical existing tabs', () => {
-  assert.equal(group('attendance_exams').children.find(entry => entry.label === '线上培训日报记录表').to, '/admin/daily?tab=%E7%BA%BF%E4%B8%8A%E5%9F%B9%E8%AE%AD%E6%8A%A5%E5%91%8A')
-  assert.equal(group('attendance_exams').children.find(entry => entry.label === '奖惩表').to, '/admin/schedule?tab=%E5%A5%96%E9%87%91%20%2F%20%E6%89%A3%E6%AC%BE')
+  assert.equal(group('attendance_exams').children.find(entry => entry.label === '线上培训日报记录表').to, '/admin/daily?tab=training-reports')
+  assert.equal(group('attendance_exams').children.find(entry => entry.label === '奖惩表').to, '/admin/schedule?tab=adjustments')
   assert.equal(group('account_usage').children.find(entry => entry.label === '员工前端账号').to, '/admin/users?tab=staff')
-  assert.equal(group('payroll').children.find(entry => entry.label === '修改工资信息记录').to, '/admin/payroll?tab=%E7%94%B3%E8%AF%B7%E8%AE%B0%E5%BD%95')
+  assert.equal(group('payroll').children.find(entry => entry.label === '修改工资信息记录').to, '/admin/payroll?tab=payment-change-history')
+})
+
+test('English slugs are stable while old Chinese bookmarks remain compatible', () => {
+  assert.equal(adminTabSlug('/admin/schedule', '出勤表'), 'monthly-attendance')
+  assert.equal(canonicalAdminTab('/admin/schedule', 'monthly-attendance'), '出勤表')
+  assert.equal(canonicalAdminTab('/admin/schedule', '出勤表'), '出勤表')
+  assert.ok(requestedAdminRoute('/admin/schedule', '?tab=monthly-attendance'))
+  assert.ok(requestedAdminRoute('/admin/schedule', '?tab=%E5%87%BA%E5%8B%A4%E8%A1%A8'))
+  assert.ok(requestedAdminRoute('/admin/daily', '?tab=training-reports'))
+  assert.ok(requestedAdminRoute('/admin/daily', '?tab=%E7%BA%BF%E4%B8%8A%E5%9F%B9%E8%AE%AD%E6%8A%A5%E5%91%8A'))
+  assert.equal(
+    adminTargetMatches('/admin/schedule?tab=monthly-attendance', '/admin/schedule', '?tab=%E5%87%BA%E5%8B%A4%E8%A1%A8'),
+    true,
+  )
+})
+
+test('every generated admin tab is English while every legacy tab value remains canonical', () => {
+  const generatedTargets = [
+    ...adminNavigation.flatMap(entry => entry.children || [entry]),
+    ...adminRouteAccess,
+  ]
+  for (const entry of generatedTargets) {
+    const target = new URL(entry.to, 'https://wfh.local')
+    const routeTab = target.searchParams.get('tab')
+    if (routeTab) assert.match(routeTab, /^[a-z0-9-]+$/, entry.to)
+  }
+
+  for (const [pathname, tabs] of Object.entries(ADMIN_TAB_SLUGS)) {
+    for (const [legacyTab, slug] of Object.entries(tabs)) {
+      assert.equal(canonicalAdminTab(pathname, legacyTab), legacyTab)
+      assert.equal(canonicalAdminTab(pathname, slug), legacyTab)
+    }
+  }
 })
 
 test('hidden legacy tabs remain authorized by their original route permissions', () => {

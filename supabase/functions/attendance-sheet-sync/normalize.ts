@@ -1,4 +1,4 @@
-export const PARSER_VERSION = "2026-annual-sep-dec-v2";
+export const PARSER_VERSION = "2026-annual-sep-dec-v5";
 
 type TriggerKind = "change" | "daily_reconcile" | "manual";
 type SourceGroup = "home" | "onsite_to_home";
@@ -23,8 +23,12 @@ export type AnnualSourceConfig = {
   spreadsheetId: string;
   sheetGid: string;
   tabName: string;
+  leaveSheetGid: string;
+  leaveTabName: "休假填表";
+  leaveMaxRows: number;
+  leaveColumns: 5;
   adjustmentSheetGid: string;
-  adjustmentTabName: "填表";
+  adjustmentTabName: "奖惩填表";
   sourceGroup: SourceGroup;
   currency: "USD" | "PHP";
   month: `2026-${"09" | "10" | "11" | "12"}`;
@@ -32,7 +36,7 @@ export type AnnualSourceConfig = {
   maxRows: number;
   maxColumns: number;
   adjustmentMaxRows: number;
-  adjustmentColumns: 6 | 7;
+  adjustmentColumns: 7 | 9;
   adjustmentMetadataColumns: 3 | 6;
   nameColumn: number;
   employeeNoColumn: number;
@@ -83,14 +87,18 @@ const ANNUAL_WORKBOOKS: readonly AnnualWorkbookDefinition[] = [
     sourcePrefix: "onsite_annual_2026",
     workbookKey: "onsite",
     spreadsheetId: "1EeWiXV9BEAHhfZBV67PQ9PMHvQ9ufSOWqbXhlWbL5Kg",
+    leaveSheetGid: "868595464",
+    leaveTabName: "休假填表",
+    leaveMaxRows: 1600,
+    leaveColumns: 5,
     adjustmentSheetGid: "1011694934",
-    adjustmentTabName: "填表",
+    adjustmentTabName: "奖惩填表",
     sourceGroup: "onsite_to_home",
     currency: "USD",
     layout: "onsite",
     maxRows: 1600,
     adjustmentMaxRows: 1100,
-    adjustmentColumns: 6,
+    adjustmentColumns: 7,
     adjustmentMetadataColumns: 3,
     nameColumn: 4,
     employeeNoColumn: 8,
@@ -111,14 +119,18 @@ const ANNUAL_WORKBOOKS: readonly AnnualWorkbookDefinition[] = [
     sourcePrefix: "home_vimm_annual_2026",
     workbookKey: "home_vimm",
     spreadsheetId: "1x6-k7VqePZEJW2EMqaGvBJqYkGf_MXVpoZRl0Zue2AQ",
+    leaveSheetGid: "1582220550",
+    leaveTabName: "休假填表",
+    leaveMaxRows: 1600,
+    leaveColumns: 5,
     adjustmentSheetGid: "3368572",
-    adjustmentTabName: "填表",
+    adjustmentTabName: "奖惩填表",
     sourceGroup: "home",
     currency: "USD",
     layout: "home_vimm",
     maxRows: 1600,
     adjustmentMaxRows: 1100,
-    adjustmentColumns: 6,
+    adjustmentColumns: 7,
     adjustmentMetadataColumns: 3,
     nameColumn: 4,
     employeeNoColumn: 7,
@@ -139,14 +151,18 @@ const ANNUAL_WORKBOOKS: readonly AnnualWorkbookDefinition[] = [
     sourcePrefix: "home_ph_annual_2026",
     workbookKey: "home_ph",
     spreadsheetId: "1j2MAKfOe3Yd-8_OQHsdpOe2__WGXg2oWc2jsefbHzZQ",
+    leaveSheetGid: "1880767097",
+    leaveTabName: "休假填表",
+    leaveMaxRows: 1600,
+    leaveColumns: 5,
     adjustmentSheetGid: "687407921",
-    adjustmentTabName: "填表",
+    adjustmentTabName: "奖惩填表",
     sourceGroup: "home",
     currency: "PHP",
     layout: "home_ph",
     maxRows: 1600,
     adjustmentMaxRows: 1100,
-    adjustmentColumns: 7,
+    adjustmentColumns: 9,
     adjustmentMetadataColumns: 6,
     nameColumn: 4,
     employeeNoColumn: 5,
@@ -220,6 +236,8 @@ export type NormalizedSnapshot = {
     spreadsheet_id: string;
     sheet_gid: string;
     tab_name: string;
+    leave_sheet_gid?: string;
+    leave_tab_name?: string;
     adjustment_sheet_gid?: string;
     adjustment_tab_name?: string;
   };
@@ -238,6 +256,7 @@ const MAX_CELL_LENGTH = 40_000;
 
 const stringValue = (value: unknown) => String(value ?? "").trim();
 const nullableText = (value: unknown) => stringValue(value) || null;
+const headerKey = (value: unknown) => stringValue(value).replace(/[\s\u3000_\-—–/]+/g, "").toLowerCase();
 
 export async function sha256Hex(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
@@ -259,6 +278,8 @@ function sourceFromPayload(value: unknown): SourceConfig {
     candidate.sheetGid === stringValue(source.sheet_gid) &&
     candidate.tabName === stringValue(source.tab_name) &&
     (candidate.mode === "legacy" || (
+      candidate.leaveSheetGid === stringValue(source.leave_sheet_gid) &&
+      candidate.leaveTabName === stringValue(source.leave_tab_name) &&
       candidate.adjustmentSheetGid === stringValue(source.adjustment_sheet_gid) &&
       candidate.adjustmentTabName === stringValue(source.adjustment_tab_name)
     ))
@@ -304,8 +325,10 @@ function assertLegacyHeader(values: string[][]): void {
 
 function assertAnnualHeaders(
   attendance: string[][],
+  leaves: string[][],
   adjustments: string[][],
   source: AnnualSourceConfig,
+  adjustmentSchema: "with_category" | "legacy_without_category" | "philippines",
 ): void {
   if (attendance.length < 1) throw new Error("sheet_headers_missing");
   const header = attendance[0] ?? [];
@@ -319,8 +342,20 @@ function assertAnnualHeaders(
     }
   }
 
-  if (adjustments.length < 2) throw new Error("adjustment_headers_missing");
+  if (leaves.length < 2) throw new Error("leave_headers_missing");
   const monthNumber = String(Number(source.month.slice(5)));
+  if (!new RegExp(`^${monthNumber}月份?$`).test(stringValue(leaves[0]?.[0]))) {
+    throw new Error("leave_month_header_mismatch");
+  }
+  const leaveHeader = leaves[1] ?? [];
+  const expectedLeave = ["日期", "姓名", "ID", "类型", "备注"];
+  for (let column = 0; column < expectedLeave.length; column += 1) {
+    if (headerKey(leaveHeader[column]) !== headerKey(expectedLeave[column])) {
+      throw new Error(`leave_header_mismatch_column_${column + 1}`);
+    }
+  }
+
+  if (adjustments.length < 2) throw new Error("adjustment_headers_missing");
   if (!new RegExp(`^${monthNumber}月份?$`).test(stringValue(adjustments[0]?.[0]))) {
     throw new Error("adjustment_month_header_mismatch");
   }
@@ -332,10 +367,12 @@ function assertAnnualHeaders(
   if (source.layout === "home_ph") {
     const expected: Array<[number, RegExp]> = [
       [2, /金额.*1\s*[-–—至]\s*15|amount.*1\s*[-–—to]+\s*15/i],
-      [3, /金额.*16\s*[-–—至]\s*末|amount.*16/i],
-      [4, /备注.*1\s*[-–—至]\s*15|note.*1\s*[-–—to]+\s*15/i],
-      [5, /备注.*16\s*[-–—至]\s*末|note.*16/i],
-      [6, /日期|date/i],
+      [3, /类型|類型|type|category/i],
+      [4, /金额.*16\s*[-–—至]\s*末|amount.*16/i],
+      [5, /类型|類型|type|category/i],
+      [6, /备注.*1\s*[-–—至]\s*15|note.*1\s*[-–—to]+\s*15/i],
+      [7, /备注.*16\s*[-–—至]\s*末|note.*16/i],
+      [8, /日期|date/i],
     ];
     for (const [column, pattern] of expected) {
       if (!pattern.test(stringValue(adjustmentHeader[column]))) {
@@ -343,9 +380,15 @@ function assertAnnualHeaders(
       }
     }
   } else {
-    const expected: Array<[number, RegExp]> = [
-      [2, /奖金|獎金|bonus/i], [3, /扣除|deduction/i], [4, /备注|note/i], [5, /日期|date/i],
-    ];
+    const expected: Array<[number, RegExp]> = adjustmentSchema === "legacy_without_category"
+      ? [[2, /奖金|獎金|bonus/i], [3, /扣除|deduction/i], [5, /备注|note/i], [6, /日期|date/i]]
+      : [
+        [2, /奖金|獎金|bonus/i], [3, /扣除|deduction/i], [4, /类型|類型|type|category/i],
+        [5, /备注|note/i], [6, /日期|date/i],
+      ];
+    if (adjustmentSchema === "legacy_without_category" && stringValue(adjustmentHeader[4])) {
+      throw new Error("adjustment_legacy_category_placeholder_not_empty");
+    }
     for (const [column, pattern] of expected) {
       if (!pattern.test(stringValue(adjustmentHeader[column]))) {
         throw new Error(`adjustment_header_mismatch_column_${column + 1}`);
@@ -584,7 +627,17 @@ async function normalizeAnnualSnapshot(
     throw new Error("values_must_be_object");
   }
   const snapshot = payload.values as Record<string, unknown>;
+  const adjustmentSchemaSupplied = Object.prototype.hasOwnProperty.call(snapshot, "adjustment_schema");
+  const adjustmentSchemaRaw = stringValue(snapshot.adjustment_schema) ||
+    (source.layout === "home_ph" ? "philippines" : "with_category");
+  if (source.layout === "home_ph" ? adjustmentSchemaRaw !== "philippines" :
+    !["with_category", "legacy_without_category"].includes(adjustmentSchemaRaw)) {
+    throw new Error("invalid_adjustment_schema");
+  }
+  const adjustmentSchema = adjustmentSchemaRaw as
+    "with_category" | "legacy_without_category" | "philippines";
   const attendanceRaw = normalizeMatrix(snapshot.attendance, source.maxRows, source.maxColumns);
+  const leavesRaw = normalizeMatrix(snapshot.leaves, source.leaveMaxRows, source.leaveColumns);
   const adjustmentsRaw = normalizeMatrix(snapshot.adjustments, source.adjustmentMaxRows, source.adjustmentColumns);
   const metadataRaw = normalizeMatrix(
     snapshot.adjustment_metadata,
@@ -592,20 +645,24 @@ async function normalizeAnnualSnapshot(
     source.adjustmentMetadataColumns,
   );
   if (metadataRaw.length !== adjustmentsRaw.length) throw new Error("adjustment_metadata_row_count_mismatch");
-  assertAnnualHeaders(attendanceRaw, adjustmentsRaw, source);
+  assertAnnualHeaders(attendanceRaw, leavesRaw, adjustmentsRaw, source, adjustmentSchema);
   assertAnnualMetadataHeaders(metadataRaw, source);
   const canonicalSnapshot = {
     attendance: attendanceRaw,
+    leaves: leavesRaw,
     adjustments: adjustmentsRaw,
     adjustment_metadata: metadataRaw,
+    ...(adjustmentSchemaSupplied ? { adjustment_schema: adjustmentSchema } : {}),
   };
   if (await sha256Hex(JSON.stringify(canonicalSnapshot)) !== snapshotHash) throw new Error("snapshot_hash_mismatch");
 
   const attendance = attendanceRaw.map((row) => row.map(stringValue));
+  const leaves = leavesRaw.map((row) => row.map(stringValue));
   const adjustments = adjustmentsRaw.map((row) => row.map(stringValue));
   const adjustmentMetadata = metadataRaw.map((row) => row.map(stringValue));
   const pending: Array<Promise<NormalizedRecord>> = [];
   const stableKeys = new Set<string>();
+  const authoritativeLeaveDays = new Set<string>();
   let warningCount = 0;
 
   const addRecord = (
@@ -616,6 +673,61 @@ async function normalizeAnnualSnapshot(
     stableKeys.add(logicalKey);
     pending.push(applyStableIdentity(row, logicalKey));
   };
+
+  // The dedicated 休假填表 is the authoritative 9–12 month source. It carries
+  // the human-entered type and explanation that the compact monthly grid cannot.
+  for (let index = 2; index < leaves.length; index += 1) {
+    const row = leaves[index];
+    const rawRow = leavesRaw[index];
+    if (rawRow.every((cell) => !stringValue(cell))) continue;
+    const eventDate = parseAnnualDate(rawRow[0], source);
+    const name = nullableText(row[1]);
+    const employeeNo = nullableText(row[2]);
+    const rawType = nullableText(rawRow[3]);
+    if (!name && !employeeNo) throw new Error(`leave_employee_identity_required:row_${index + 1}`);
+    if (!rawType) throw new Error(`leave_type_required:row_${index + 1}`);
+    const eventKind = attendanceEventKind(rawType);
+    if (eventKind === "other") throw new Error(`leave_type_unrecognized:row_${index + 1}`);
+    const employeeKey = identityKey(employeeNo, name);
+    const dayKey = `${employeeKey}|${eventDate}`;
+    authoritativeLeaveDays.add(dayKey);
+    const sourceBlock = eventKind === "resignation" ? "resignation" : "attendance";
+    const logicalKey = `${sourceBlock}|${employeeKey}|${eventDate}|day`;
+    addRecord({
+      source_block: sourceBlock,
+      kind: sourceBlock,
+      event_date: eventDate,
+      event_kind: eventKind,
+      reason: rawType,
+      note: nullableText(rawRow[4]),
+      amount: null,
+      raw_amount: null,
+      currency: null,
+      employee_no_raw: employeeNo,
+      employee_name_raw: name,
+      employee_status_raw: null,
+      team_name_raw: null,
+      position_name_raw: null,
+      country_raw: source.fixedCountry,
+      platform_raw: null,
+      manager_raw: null,
+      raw_values: {
+        spreadsheet_id: source.spreadsheetId,
+        source_tab: source.leaveTabName,
+        source_group_label: source.sourceGroup,
+        source_block: sourceBlock,
+        source_physical_row: String(index + 1),
+        source_month_block: source.month,
+        raw_date: rawRow[0] ?? "",
+        raw_name: rawRow[1] ?? "",
+        raw_employee_no: rawRow[2] ?? "",
+        raw_status: rawRow[3] ?? "",
+        raw_note: rawRow[4] ?? "",
+      },
+      is_mirror: false,
+      source_updated_at: capturedAt,
+    }, logicalKey);
+  }
 
   for (let index = 1; index < attendance.length; index += 1) {
     const row = attendance[index];
@@ -638,6 +750,7 @@ async function normalizeAnnualSnapshot(
         continue;
       }
       const eventDate = `${source.month}-${String(day).padStart(2, "0")}`;
+      if (authoritativeLeaveDays.has(`${employeeKey}|${eventDate}`)) continue;
       const isResignation = eventKind === "resignation";
       const sourceBlock = isResignation ? "resignation" : "attendance";
       // Status is mutable. Keeping it out of the day-event identity turns a
@@ -684,14 +797,26 @@ async function normalizeAnnualSnapshot(
 
   const adjustmentSlots = source.layout === "home_ph"
     ? [
-      { amountColumn: 2, noteColumn: 4, slot: "first_half", metadataOffset: 0 },
-      { amountColumn: 3, noteColumn: 5, slot: "second_half", metadataOffset: 3 },
+      { amountColumn: 2, categoryColumn: 3, noteColumn: 6, slot: "first_half", metadataOffset: 0 },
+      { amountColumn: 4, categoryColumn: 5, noteColumn: 7, slot: "second_half", metadataOffset: 3 },
     ]
     : [
-      { amountColumn: 2, noteColumn: 4, slot: "bonus_column", metadataOffset: 0 },
-      { amountColumn: 3, noteColumn: 4, slot: "deduction_column", metadataOffset: 0 },
+      {
+        amountColumn: 2,
+        categoryColumn: adjustmentSchema === "legacy_without_category" ? null : 4,
+        noteColumn: 5,
+        slot: "bonus_column",
+        metadataOffset: 0,
+      },
+      {
+        amountColumn: 3,
+        categoryColumn: adjustmentSchema === "legacy_without_category" ? null : 4,
+        noteColumn: 5,
+        slot: "deduction_column",
+        metadataOffset: 0,
+      },
     ];
-  const dateColumn = source.layout === "home_ph" ? 6 : 5;
+  const dateColumn = source.layout === "home_ph" ? 8 : 6;
 
   for (let index = 2; index < adjustments.length; index += 1) {
     const row = adjustments[index];
@@ -725,13 +850,19 @@ async function normalizeAnnualSnapshot(
       const parsed = parseSignedAmount(rawRow[slot.amountColumn]);
       if (parsed.amount === null || parsed.amount === 0) continue;
       const eventDate = parseAnnualDate(rawRow[dateColumn], source);
+      const category = slot.categoryColumn === null
+        ? (parsed.amount > 0 ? "奖金" : "扣款")
+        : nullableText(rawRow[slot.categoryColumn]);
+      if (slot.categoryColumn !== null && !category) {
+        throw new Error(`adjustment_type_required:row_${physicalRow}`);
+      }
       const logicalKey = `adjustment|${employeeKey}|${eventDate}|${slot.slot}`;
       addRecord({
         source_block: "adjustment",
         kind: "adjustment",
         event_date: eventDate,
         event_kind: parsed.amount > 0 ? "bonus" : "deduction",
-        reason: null,
+        reason: category,
         note: nullableText(rawRow[slot.noteColumn]),
         amount: parsed.amount,
         raw_amount: parsed.rawAmount,
@@ -755,6 +886,7 @@ async function normalizeAnnualSnapshot(
           raw_name: rawRow[0] ?? "",
           raw_employee_no: rawRow[1] ?? "",
           raw_amount: rawRow[slot.amountColumn] ?? "",
+          raw_type: category ?? "",
           raw_note: rawRow[slot.noteColumn] ?? "",
           raw_date: rawRow[dateColumn] ?? "",
           currency: source.currency,
@@ -767,7 +899,8 @@ async function normalizeAnnualSnapshot(
 
   return {
     rows: await Promise.all(pending),
-    readRowCount: Math.max(attendance.length - 1, 0) + Math.max(adjustments.length - 2, 0),
+    readRowCount: Math.max(attendance.length - 1, 0) + Math.max(leaves.length - 2, 0) +
+      Math.max(adjustments.length - 2, 0),
     warningCount,
   };
 }
@@ -800,6 +933,8 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSnaps
       sheet_gid: source.sheetGid,
       tab_name: source.tabName,
       ...(source.mode === "annual" ? {
+        leave_sheet_gid: source.leaveSheetGid,
+        leave_tab_name: source.leaveTabName,
         adjustment_sheet_gid: source.adjustmentSheetGid,
         adjustment_tab_name: source.adjustmentTabName,
       } : {}),

@@ -9,12 +9,16 @@ import {
 } from '../lib/onlineTrainingIdentity'
 import {
   employeeTrainingTableRow,
+  mergeTrainerIdentityDirectory,
   selectedTrainingHistoryRow,
+  trainerIdentityCandidates,
   trainerTrainingTableRow,
 } from '../lib/onlineTrainingPresentation'
+import {businessTodayRange} from '../lib/adminQueryDefaults'
 import {Pagination} from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
 import {EmployeeDrawer} from './AdminEmployeesPage'
+import {edgeFunctionErrorMessage} from '../lib/edgeFunctionError'
 import '../styles-online-training.css'
 
 const BUCKET='online-training'
@@ -27,7 +31,6 @@ const MAX_IMAGE_EDGE=1600
 const text=value=>String(value??'').trim()
 const MANILA_DATE_FORMAT=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'})
 const isoToday=()=>{const parts=Object.fromEntries(MANILA_DATE_FORMAT.formatToParts(new Date()).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));return `${parts.year}-${parts.month}-${parts.day}`}
-const isoMonthStart=()=>`${isoToday().slice(0,7)}-01`
 const dateText=value=>value?new Date(`${value}T00:00:00`).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}):'—'
 const timeText=value=>value?new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'
 const inclusiveDays=(from,to)=>{
@@ -49,7 +52,7 @@ const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,
 const identityKey=onlineTrainingIdentityKey
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
-const defaultFilters=()=>({...EMPTY_FILTERS,from:isoMonthStart(),to:isoToday()})
+const defaultFilters=()=>{const range=businessTodayRange();return{...EMPTY_FILTERS,from:range.date_from,to:range.date_to}}
 const delay=ms=>new Promise(resolve=>window.setTimeout(resolve,ms))
 const isTransientError=error=>/failed to fetch|networkerror|network request failed|load failed|connection|timeout/i.test(text(error?.message||error))
 const readableError=(error,fallback)=>isTransientError(error)?'连接短暂中断，请点击“重新读取”':text(error?.message)||fallback
@@ -380,7 +383,12 @@ export default function OnlineTrainingPage(){
           })))
           batch.forEach(next=>reports.push(...(next?.rows||[])))
         }
-        const trainers=groupTrainerPeople(people,reports)
+        const groupedTrainers=groupTrainerPeople(people,reports)
+        const candidates=trainerIdentityCandidates(groupedTrainers)
+        const directory=candidates.length
+          ?await readCall('online_training_resolve_trainer_identities',{p_candidates:candidates})
+          :[]
+        const trainers=mergeTrainerIdentityDirectory(groupedTrainers,directory)
         const trainerPages=Math.max(1,Math.ceil(trainers.length/TRAINER_PAGE_SIZE))
         const safePage=Math.min(Math.max(1,nextPage),trainerPages)
         const start=(safePage-1)*TRAINER_PAGE_SIZE
@@ -521,8 +529,9 @@ export default function OnlineTrainingPage(){
       if(member.attendance_status==='normal'&&!text(member.work_details))issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:'未填写当天工作情况'})
       else if(REASON_REQUIRED.has(member.attendance_status)&&!text(member.status_note))issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:`${ATTENDANCE[member.attendance_status]?.label||'异常状态'}未填写原因`})
     })
-    if(!issues.length)return null
-    return{message:`还有 ${issues.length} 名人员的记录未完成，请补齐后再提交`,issues}
+    if(issues.length)return{message:`还有 ${issues.length} 名人员的记录未完成，请补齐后再提交`,issues}
+    if(!text(editor.draft.report_summary))return{message:'请填写团队总体工作情况',issues:[],summary:true}
+    return null
   }
 
   const saveReport=async()=>{
@@ -530,6 +539,7 @@ export default function OnlineTrainingPage(){
     if(validation){
       setEditor(current=>({...current,validation}))
       if(validation.issues?.length)window.setTimeout(()=>document.getElementById(`ot-member-${validation.issues[0].index}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0)
+      else if(validation.summary)window.setTimeout(()=>document.getElementById('ot-team-summary')?.scrollIntoView({behavior:'smooth',block:'center'}),0)
       return
     }
     setSaving(true);setError('');setEditor(current=>({...current,validation:null}))
@@ -603,7 +613,7 @@ export default function OnlineTrainingPage(){
     try{
       const {data,error:edgeError}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:employeeId}})
       if(requestId!==profileRequestRef.current)return
-      if(edgeError||data?.error)throw edgeError||new Error(data.error)
+      if(edgeError||data?.error)throw new Error(await edgeFunctionErrorMessage({data,error:edgeError,fallback:'员工完整档案读取失败'}))
       setProfile({loading:false,detail:data,error:''})
     }catch(err){
       if(requestId!==profileRequestRef.current)return
@@ -697,6 +707,8 @@ export default function OnlineTrainingPage(){
 
   const closeTrainerHistory=()=>{
     trainerHistoryRequestRef.current+=1
+    viewingRequestRef.current+=1
+    setViewing(null)
     setTrainerHistory(null)
   }
 
@@ -788,7 +800,7 @@ export default function OnlineTrainingPage(){
     </form>
     {(loading&&!bootstrap)||(searching&&!result.rows.length)?<ListSkeleton mode={mode}/>:
       mode==='reports'?<ReportList rows={result.rows} onHistory={loadTrainerHistory}/>
-      :<PeopleList rows={result.rows} onHistory={openHistory} onProfile={openProfile}/>
+      :<PeopleList rows={result.rows} onHistory={openHistory}/>
     }
 
     {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={mode==='reports'?TRAINER_PAGE_SIZE:PEOPLE_PAGE_SIZE} onPage={setPage}/>}
@@ -797,12 +809,12 @@ export default function OnlineTrainingPage(){
       assignment={bootstrap.auto_assignment||{}} trainerOptions={bootstrap.manager_options||[]} onSelectTrainer={selectAdminTrainer}
       rosterSyncedAt={bootstrap.roster_synced_at} pendingFiles={pendingFiles} onFiles={addFiles} onRemovePending={removePending}
       onRemoveExisting={removeExisting} onOpenImage={setLightbox} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/></OverlayPortal>} 
-    {viewing&&<OverlayPortal><ViewModal row={viewing} onClose={closeViewer} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{const source=viewing;closeViewer();openEdit(source)}} onDelete={()=>{const source=viewing;closeViewer();setDeleteTarget(source)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>}
-    {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/></OverlayPortal>} 
+    {trainerHistory&&<OverlayPortal><TrainerHistoryModal state={trainerHistory} onClose={closeTrainerHistory} onOpen={openView} onDelete={setDeleteTarget}/></OverlayPortal>}
+    {viewing&&<OverlayPortal><ViewModal row={viewing} returnToHistory={Boolean(trainerHistory)} onClose={closeViewer} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{const source=viewing;closeViewer();closeTrainerHistory();openEdit(source)}} onDelete={()=>{const source=viewing;closeViewer();setDeleteTarget(source)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>}
+    {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/></OverlayPortal>}
     {profile&&!profile.error&&<EmployeeDrawer detail={profile.detail||{employee:{}}} loading={profile.loading} readOnly onClose={closeProfile}/>}
     {profile?.error&&<OverlayPortal><ProfileErrorDrawer state={profile} onClose={closeProfile}/></OverlayPortal>}
     {history&&<OverlayPortal><HistoryModal state={history} onClose={closeHistory} onProfile={openProfile} onSelectDate={selectHistoryDate} onDelete={row=>{closeHistory();setDeleteTarget(row)}}/></OverlayPortal>}
-    {trainerHistory&&<OverlayPortal><TrainerHistoryModal state={trainerHistory} onClose={closeTrainerHistory} onOpen={row=>{closeTrainerHistory();openView(row)}} onDelete={row=>{closeTrainerHistory();setDeleteTarget(row)}}/></OverlayPortal>}
     {lightbox&&<OverlayPortal><div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div></OverlayPortal>}
   </div>
 }
@@ -811,15 +823,15 @@ function ReportList({rows,onHistory}){
   if(!rows?.length)return <div className="ot-empty"><span>培</span><h3>没有匹配的培训人员</h3><p>可以调整员工、组织或日期条件后重新查询。</p></div>
   return <section className="ot-compact-table-shell" aria-label="培训人员日报列表"><table className="ot-compact-table">
     <thead><tr><th>入职日期</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>培训人</th><th>日报数量</th><th>最近日报</th><th>操作</th></tr></thead>
-    <tbody>{rows.map(trainer=>{const item=trainerTrainingTableRow(trainer);return <tr key={item.key} tabIndex="0" role="button" aria-label={`查看 ${item.name||'培训人员'} 的全部日报`} onClick={()=>onHistory(trainer)} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onHistory(trainer)}}}>
+    <tbody>{rows.map(trainer=>{const item=trainerTrainingTableRow(trainer);return <tr key={item.key}>
       <td data-label="入职日期">{dateText(item.hireDate)}</td>
       <td data-label="员工ID"><strong className="ot-cell-id">{item.employeeNo||'—'}</strong></td>
-      <td data-label="姓名"><div className="ot-person-cell"><span>{text(item.name).slice(0,1).toUpperCase()||'培'}</span><strong>{item.name||'未填写'}</strong></div></td>
+      <td data-label="姓名"><strong className="ot-person-name">{item.name||'未填写'}</strong></td>
       <td data-label="团队 / 岗位"><div className="ot-stacked-cell"><strong>{item.teams.join(' / ')||'—'}</strong><span>{item.positions.join(' / ')||'—'}</span></div></td>
       <td data-label="培训人"><div className="ot-stacked-cell"><strong>{item.name||'—'}</strong><span>{trainer.group_names?.join(' / ')||'线上培训'}</span></div></td>
       <td data-label="日报数量"><div className="ot-report-count-cell"><strong>{item.reportCount} 份</strong><span>{item.recordedDays} 个记录日 · {item.employeeCount} 名员工</span></div></td>
       <td data-label="最近日报"><strong>{dateText(item.lastReportDate)}</strong></td>
-      <td data-label="操作"><button type="button" className="ot-table-action" onClick={event=>{event.stopPropagation();onHistory(trainer)}}>查看日报</button></td>
+      <td data-label="操作"><button type="button" className="ot-table-action" onClick={()=>onHistory(trainer)}>查看日报</button></td>
     </tr>})}</tbody>
   </table></section>
 }
@@ -829,19 +841,19 @@ function ListSkeleton({mode}){
   return <section className="ot-compact-table-shell ot-compact-table-loading" aria-label="正在读取日报列表" aria-busy="true"><div className="ot-loading-columns" aria-hidden="true">{Array.from({length:8},(_,index)=><i key={index}/>)}</div>{Array.from({length:count},(_,index)=><div className="ot-loading-row" key={index} aria-hidden="true">{Array.from({length:8},(_,cell)=><i key={cell}/>)}</div>)}</section>
 }
 
-function PeopleList({rows,onHistory,onProfile}){
+function PeopleList({rows,onHistory}){
   if(!rows?.length)return <div className="ot-empty"><span>人</span><h3>没有找到员工培训记录</h3><p>可以输入员工ID或姓名搜索。</p></div>
   return <section className="ot-compact-table-shell" aria-label="员工日报列表"><table className="ot-compact-table">
     <thead><tr><th>入职日期</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>培训人</th><th>日报数量</th><th>最近日报</th><th>操作</th></tr></thead>
-    <tbody>{rows.map(person=>{const item=employeeTrainingTableRow(person);return <tr key={item.key} tabIndex="0" role="button" aria-label={`查看 ${item.name||item.employeeNo} 的日报`} onClick={()=>onHistory(person)} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onHistory(person)}}}>
+    <tbody>{rows.map(person=>{const item=employeeTrainingTableRow(person);return <tr key={item.key}>
       <td data-label="入职日期">{dateText(item.hireDate)}</td>
-      <td data-label="员工ID"><button type="button" className="ot-table-link" onClick={event=>{event.stopPropagation();onProfile(person.employee_id)}}>{item.employeeNo||'—'}</button></td>
-      <td data-label="姓名"><button type="button" className="ot-person-cell as-button" onClick={event=>{event.stopPropagation();onProfile(person.employee_id)}}><span>{text(item.name).slice(0,1).toUpperCase()||'员'}</span><strong>{item.name||'未填写'}</strong></button></td>
+      <td data-label="员工ID"><strong className="ot-cell-id">{item.employeeNo||'—'}</strong></td>
+      <td data-label="姓名"><strong className="ot-person-name">{item.name||'未填写'}</strong></td>
       <td data-label="团队 / 岗位"><div className="ot-stacked-cell"><strong>{item.team||'—'}</strong><span>{item.position||'—'}</span></div></td>
       <td data-label="培训人"><div className="ot-stacked-cell"><strong>{item.trainer||'—'}</strong><span>{person.group_name||person.shift_name||'—'}</span></div></td>
       <td data-label="日报数量"><div className="ot-report-count-cell"><strong>{item.reportCount} 份</strong><span>有记录 {item.recordedDays} · 未记录 {item.missingDays}</span></div></td>
       <td data-label="最近日报"><strong>{dateText(item.lastReportDate)}</strong></td>
-      <td data-label="操作"><button type="button" className="ot-table-action" onClick={event=>{event.stopPropagation();onHistory(person)}}>查看日报</button></td>
+      <td data-label="操作"><button type="button" className="ot-table-action" onClick={()=>onHistory(person)}>查看日报</button></td>
     </tr>})}</tbody>
   </table></section>
 }
@@ -851,10 +863,10 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
   const linked=editor.assignmentMode==='linked',admin=editor.assignmentMode==='admin',editing=editor.assignmentMode==='edit'
   const facts=[['线上培训',d.trainer_name],['团队',d.team_name],['组别',d.group_name],['班次',d.shift_name],['平台 / 盘口',d.platform]]
   const invalidIndexes=new Set((editor.validation?.issues||[]).map(issue=>issue.index))
-  const locateInvalid=()=>{const first=editor.validation?.issues?.[0];if(first)document.getElementById(`ot-member-${first.index}`)?.scrollIntoView({behavior:'smooth',block:'center'})}
+  const locateInvalid=()=>{const first=editor.validation?.issues?.[0];if(first)document.getElementById(`ot-member-${first.index}`)?.scrollIntoView({behavior:'smooth',block:'center'});else if(editor.validation?.summary)document.getElementById('ot-team-summary')?.scrollIntoView({behavior:'smooth',block:'center'})}
   return <div className="ot-backdrop" onMouseDown={event=>{if(!saving&&event.target===event.currentTarget)onClose()}}><div className="ot-modal ot-editor">
     <header><div><span>{editor.original?'EDIT TRAINING REPORT':'NEW TRAINING REPORT'}</span><h2>{editor.original?'编辑线上培训日报':'提交线上培训日报'}</h2></div><button type="button" onClick={onClose} disabled={saving}>×</button></header>
-    {editor.validation&&<div className="ot-editor-alert" role="alert"><div><strong>{editor.validation.message}</strong>{editor.validation.issues?.length>0&&<span>{editor.validation.issues.map(issue=>`${issue.employee_no} · ${issue.employee_name}（${issue.detail}）`).join('；')}</span>}</div>{editor.validation.issues?.length>0&&<button type="button" onClick={locateInvalid}>定位第一处</button>}</div>}
+    {editor.validation&&<div className="ot-editor-alert" role="alert"><div><strong>{editor.validation.message}</strong>{editor.validation.issues?.length>0&&<span>{editor.validation.issues.map(issue=>`${issue.employee_no} · ${issue.employee_name}（${issue.detail}）`).join('；')}</span>}</div>{(editor.validation.issues?.length>0||editor.validation.summary)&&<button type="button" onClick={locateInvalid}>定位填写</button>}</div>}
     <div className="ot-modal-scroll">
       <section className="ot-form-section ot-auto-roster"><div className="section-title"><div><b>1. 账号与居家排班已自动关联</b><small>人员以「居家排班表 · 填表」的线上培训字段为准，不需要自行筛选</small></div><strong>{editor.members.length} 名组员</strong></div>
         <div className="ot-auto-top">
@@ -879,11 +891,14 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
           {d.attachments.map(item=><div key={item.path}><button type="button" className="preview" disabled={!item.url} onClick={()=>item.url&&onOpenImage(item)}>{item.url?<img src={item.url} alt={item.name}/>:<span>已上传</span>}<b>{item.name}</b><small>点击查看大图</small></button><button type="button" className="remove" onClick={()=>onRemoveExisting(item.path)}>移除</button></div>)}
           {pendingFiles.map((item,index)=><div key={item.preview}><button type="button" className="preview" onClick={()=>onOpenImage({url:item.preview,name:item.file.name})}><img src={item.preview} alt={item.file.name}/><b>{item.file.name}</b><small>点击查看大图</small></button><button type="button" className="remove" onClick={()=>onRemovePending(index)}>移除</button></div>)}
         </div>}
-        <details className="ot-optional-summary"><summary>可选：补充团队整体总结、共同问题或下一步安排</summary><div className="ot-form-grid">
-          <label className="wide"><span>整体培训总结</span><textarea rows="3" value={d.report_summary} onChange={e=>updateDraft('report_summary',e.target.value)} placeholder="概括今天整体完成情况"/></label>
-          <label className="wide"><span>共同问题</span><textarea rows="3" value={d.issues_summary} onChange={e=>updateDraft('issues_summary',e.target.value)} placeholder="多人出现的共同问题"/></label>
-          <label className="wide"><span>下一步安排</span><textarea rows="3" value={d.next_plan} onChange={e=>updateDraft('next_plan',e.target.value)} placeholder="明日培训重点或需要主管跟进的事项"/></label>
-        </div></details>
+      </section>
+
+      <section id="ot-team-summary" className={`ot-form-section ot-team-summary ${editor.validation?.summary?'invalid':''}`}><div className="section-title"><div><b>4. 团队总体工作情况 *</b><small>必填；概括当天整体工作与培训情况，共同问题和下一步安排可继续补充</small></div><strong>必填</strong></div>
+        <div className="ot-form-grid">
+          <label className="wide"><span>团队总体工作情况 *</span><textarea required aria-required="true" rows="4" value={d.report_summary} onChange={e=>updateDraft('report_summary',e.target.value)} placeholder="概括今天团队整体完成情况与培训表现"/></label>
+          <label className="wide"><span>共同问题（选填）</span><textarea rows="3" value={d.issues_summary} onChange={e=>updateDraft('issues_summary',e.target.value)} placeholder="多人出现的共同问题"/></label>
+          <label className="wide"><span>下一步安排（选填）</span><textarea rows="3" value={d.next_plan} onChange={e=>updateDraft('next_plan',e.target.value)} placeholder="明日培训重点或需要主管跟进的事项"/></label>
+        </div>
       </section>
     </div>
     <footer className="ot-modal-actions"><button type="button" onClick={onClose} disabled={saving}>取消</button><button type="button" className="primary" onClick={onSave} disabled={saving||!editor.members.length}>{saving?'保存中…':editor.original?'保存修改':'提交日报'}</button></footer>
@@ -907,7 +922,7 @@ function MemberEditor({member,index,invalid,onChange,onMetric,onProfile}){
   </article>
 }
 
-function ViewModal({row,onClose,onProfile,onOpenImage,onEdit,onDelete,onCopy,onReview}){
+function ViewModal({row,returnToHistory=false,onClose,onProfile,onOpenImage,onEdit,onDelete,onCopy,onReview}){
   const [note,setNote]=useState(row.review_note||'')
   const [selectedMemberId,setSelectedMemberId]=useState(()=>text(row.members?.[0]?.id)||text(row.members?.[0]?.employee_id)||text(row.members?.[0]?.employee_no))
   useEffect(()=>{
@@ -934,7 +949,7 @@ function ViewModal({row,onClose,onProfile,onOpenImage,onEdit,onDelete,onCopy,onR
       {(row.review_note||row.review_status!=='pending')&&<div className={`ot-review-note ${row.review_status}`}><strong>{REVIEW[row.review_status]}</strong><p>{row.review_note||'已查看，无补充批注。'}</p></div>}
       {row.can_review&&<div className="ot-review-box"><label>组长 / 主管批注<textarea rows="2" value={note} onChange={e=>setNote(e.target.value)} placeholder="可填写需补充内容；仅查看可直接标记已阅"/></label><div><button onClick={()=>onReview('read',note)}>标记已阅</button><button className="warn" onClick={()=>onReview('needs_changes',note)}>需要补充</button></div></div>}
     </div>
-    <footer className="ot-modal-actions"><button onClick={onCopy}>复制 Telegram 格式</button>{row.can_edit&&<button onClick={onEdit}>编辑</button>}{row.can_edit&&<button className="danger" onClick={onDelete}>删除</button>}<button className="primary" onClick={onClose}>关闭</button></footer>
+    <footer className="ot-modal-actions"><button onClick={onCopy}>复制 Telegram 格式</button>{row.can_edit&&<button onClick={onEdit}>编辑</button>}{row.can_edit&&<button className="danger" onClick={onDelete}>删除</button>}<button className="primary" onClick={onClose}>{returnToHistory?'返回日报列表':'关闭'}</button></footer>
   </div></div>
 }
 
@@ -958,11 +973,11 @@ function TrainerHistoryModal({state,onClose,onOpen,onDelete}){
   return <div className="ot-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><div className="ot-modal ot-trainer-history">
     <header><div><span>TRAINER REPORT HISTORY</span><h2>{trainer.trainer_name||'线上培训'} · 全部日报</h2></div><button onClick={onClose}>×</button></header>
     <div className="ot-modal-scroll">
-      <section className="ot-trainer-history-summary"><div className="identity"><span>{text(trainer.trainer_name).slice(0,1).toUpperCase()||'培'}</span><div><small>线上培训</small><strong>{trainer.trainer_name||'未填写'}</strong><em>{trainer.team_names?.join(' / ')||'未填写团队'} · {trainer.position_names?.join(' / ')||'未填写岗位'}</em></div></div><div className="metrics"><span><small>日报</small><b>{state.rows.length}</b></span><span><small>记录日</small><b>{new Set(state.rows.map(row=>row.report_date)).size}</b></span><span><small>培训员工</small><b>{employeeCount}</b></span></div></section>
+      <section className="ot-trainer-history-summary"><div className="identity text-only"><div><small>线上培训</small><strong>{trainer.trainer_name||'未填写'}</strong><em>{trainer.team_names?.join(' / ')||'未填写团队'} · {trainer.position_names?.join(' / ')||'未填写岗位'}</em></div></div><div className="metrics"><span><small>日报</small><b>{state.rows.length}</b></span><span><small>记录日</small><b>{new Set(state.rows.map(row=>row.report_date)).size}</b></span><span><small>培训员工</small><b>{employeeCount}</b></span></div></section>
       <div className="ot-trainer-date-filter"><label><span>只看某一天</span><input type="date" value={date} onChange={event=>setDate(event.target.value)}/></label><button type="button" disabled={!date} onClick={()=>setDate('')}>清除日期</button><small>{date?`${dateText(date)} · ${visibleRows.length} 份`:`全部 ${state.rows.length} 份日报`}</small></div>
       {state.loading?<div className="ot-inline-skeleton"><i/><i/><i/></div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!visibleRows.length?<div className="ot-empty small"><h3>{date?'该日没有日报':'当前培训人员尚无日报'}</h3><p>零日报培训人员会保留在列表中。</p></div>:<section className="ot-compact-table-shell in-modal"><table className="ot-compact-table ot-trainer-report-table"><thead><tr><th>日报日期</th><th>日报内容</th><th>提交人</th><th>员工</th><th>状态统计</th><th>操作</th></tr></thead><tbody>{visibleRows.map(row=>{
         const counts=Object.fromEntries(Object.keys(ATTENDANCE).map(key=>[key,(row.members||[]).filter(member=>member.attendance_status===key).length]))
-        return <tr key={row.id} tabIndex="0" role="button" aria-label={`查看 ${dateText(row.report_date)} 日报`} onClick={()=>onOpen(row)} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onOpen(row)}}}><td data-label="日报日期"><div className="ot-stacked-cell"><strong>{dateText(row.report_date)}</strong><span>{timeText(row.created_at)}</span></div></td><td data-label="日报内容"><div className="ot-stacked-cell"><strong>{row.title||`线上培训日报 · ${row.report_date}`}</strong><span className="summary">{row.report_summary||row.issues_summary||row.next_plan||'已保存当天培训记录'}</span></div></td><td data-label="提交人"><div className="ot-stacked-cell"><strong>{row.author_name||row.trainer_name||'后台账号'}</strong><span>{row.author_employee_no||'—'}</span></div></td><td data-label="员工"><strong>{row.members?.length||0} 名</strong></td><td data-label="状态统计"><div className="ot-status-inline"><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span></div></td><td data-label="操作"><div className="ot-table-actions"><button type="button" onClick={event=>{event.stopPropagation();onOpen(row)}}>查看</button>{row.can_edit&&<button type="button" className="danger" onClick={event=>{event.stopPropagation();onDelete(row)}}>删除</button>}</div></td></tr>
+        return <tr key={row.id}><td data-label="日报日期"><div className="ot-stacked-cell"><strong>{dateText(row.report_date)}</strong><span>{timeText(row.created_at)}</span></div></td><td data-label="日报内容"><div className="ot-stacked-cell"><strong>{row.title||`线上培训日报 · ${row.report_date}`}</strong><span className="summary">{row.report_summary||row.issues_summary||row.next_plan||'已保存当天培训记录'}</span></div></td><td data-label="提交人"><div className="ot-stacked-cell"><strong>{row.author_name||row.trainer_name||'后台账号'}</strong><span>{row.author_employee_no||'—'}</span></div></td><td data-label="员工"><strong>{row.members?.length||0} 名</strong></td><td data-label="状态统计"><div className="ot-status-inline"><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span></div></td><td data-label="操作"><div className="ot-table-actions"><button type="button" onClick={()=>onOpen(row)}>查看</button>{row.can_edit&&<button type="button" className="danger" onClick={()=>onDelete(row)}>删除</button>}</div></td></tr>
       })}</tbody></table></section>}
     </div><footer className="ot-modal-actions"><button className="primary" onClick={onClose}>关闭</button></footer>
   </div></div>
