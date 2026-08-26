@@ -11,7 +11,7 @@ const COPY = {
   zh: {
     title: '修改收款资料', introBank: '菲律宾籍纯居家员工仅可修改银行卡或电子钱包。', introUsdt: '当前员工类型仅可修改 USDT 地址。',
     apply: '提交修改申请', current: '当前资料', noCurrent: '当前收款资料不完整，请联系管理员补齐后再申请。',
-    pendingExists: '已有一笔申请尚未完成审核或人工修改，完成前不能重复提交。', old: '旧资料（必须完全一致）', next: '新资料',
+    pendingExists: '已有一笔申请尚未完成审核或人工修改，完成前不能重复提交。', old: '系统当前资料（只读）', next: '新资料',
     transfer: '银行 / 钱包名称', accountName: '收款姓名', accountNumber: '银行卡 / 钱包账号', usdt: 'USDT 地址',
     reason: '修改原因', identityProof: '身份证明', paymentProof: '新收款资料截图', fileHint: 'JPG、PNG、WEBP 或 PDF，单个不超过 10MB',
     cancel: '取消', submit: '提交申请', submitting: '提交中…', history: '申请进度', none: '暂无修改申请。',
@@ -22,7 +22,7 @@ const COPY = {
   en: {
     title: 'Change payment details', introBank: 'Pure remote employees in the Philippines can only change bank or e-wallet details.', introUsdt: 'Your employee type can only change the USDT address.',
     apply: 'Request a change', current: 'Current details', noCurrent: 'Your current payment details are incomplete. Contact an administrator before submitting a request.',
-    pendingExists: 'A previous request is still under review or awaiting its manual update.', old: 'Current details (must match exactly)', next: 'New details',
+    pendingExists: 'A previous request is still under review or awaiting its manual update.', old: 'Current system details (read only)', next: 'New details',
     transfer: 'Bank / wallet name', accountName: 'Account holder name', accountNumber: 'Bank / wallet account', usdt: 'USDT address',
     reason: 'Reason for change', identityProof: 'Identity proof', paymentProof: 'New payment details screenshot', fileHint: 'JPG, PNG, WEBP or PDF; maximum 10 MB each',
     cancel: 'Cancel', submit: 'Submit request', submitting: 'Submitting…', history: 'Request status', none: 'No change requests yet.',
@@ -33,7 +33,7 @@ const COPY = {
   vi: {
     title: 'Thay đổi thông tin nhận tiền', introBank: 'Nhân viên làm việc tại nhà người Philippines chỉ có thể đổi tài khoản ngân hàng hoặc ví điện tử.', introUsdt: 'Loại nhân viên hiện tại chỉ có thể đổi địa chỉ USDT.',
     apply: 'Gửi yêu cầu thay đổi', current: 'Thông tin hiện tại', noCurrent: 'Thông tin nhận tiền hiện tại chưa đầy đủ. Vui lòng liên hệ quản trị viên.',
-    pendingExists: 'Yêu cầu trước vẫn đang được duyệt hoặc chờ cập nhật thủ công.', old: 'Thông tin cũ (phải khớp hoàn toàn)', next: 'Thông tin mới',
+    pendingExists: 'Yêu cầu trước vẫn đang được duyệt hoặc chờ cập nhật thủ công.', old: 'Thông tin hiện tại trong hệ thống (chỉ đọc)', next: 'Thông tin mới',
     transfer: 'Tên ngân hàng / ví', accountName: 'Tên chủ tài khoản', accountNumber: 'Số tài khoản / ví', usdt: 'Địa chỉ USDT',
     reason: 'Lý do thay đổi', identityProof: 'Giấy tờ tùy thân', paymentProof: 'Ảnh thông tin nhận tiền mới', fileHint: 'JPG, PNG, WEBP hoặc PDF; tối đa 10 MB mỗi tệp',
     cancel: 'Hủy', submit: 'Gửi yêu cầu', submitting: 'Đang gửi…', history: 'Trạng thái yêu cầu', none: 'Chưa có yêu cầu thay đổi.',
@@ -44,7 +44,7 @@ const COPY = {
   id: {
     title: 'Ubah data pembayaran', introBank: 'Karyawan remote murni Filipina hanya dapat mengubah rekening bank atau e-wallet.', introUsdt: 'Jenis karyawan Anda hanya dapat mengubah alamat USDT.',
     apply: 'Ajukan perubahan', current: 'Data saat ini', noCurrent: 'Data pembayaran saat ini belum lengkap. Hubungi administrator sebelum mengajukan.',
-    pendingExists: 'Permintaan sebelumnya masih ditinjau atau menunggu pembaruan manual.', old: 'Data lama (harus sama persis)', next: 'Data baru',
+    pendingExists: 'Permintaan sebelumnya masih ditinjau atau menunggu pembaruan manual.', old: 'Data sistem saat ini (hanya baca)', next: 'Data baru',
     transfer: 'Nama bank / dompet', accountName: 'Nama pemilik rekening', accountNumber: 'Rekening bank / dompet', usdt: 'Alamat USDT',
     reason: 'Alasan perubahan', identityProof: 'Bukti identitas', paymentProof: 'Tangkapan layar data pembayaran baru', fileHint: 'JPG, PNG, WEBP atau PDF; maksimum 10 MB per file',
     cancel: 'Batal', submit: 'Kirim permintaan', submitting: 'Mengirim…', history: 'Status permintaan', none: 'Belum ada permintaan perubahan.',
@@ -129,7 +129,7 @@ export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
-  const [form, setForm] = useState({ oldTransfer: '', oldName: '', oldAccount: '', newTransfer: '', newName: '', newAccount: '', oldUsdt: '', newUsdt: '', reason: '', identity: null, payment: null })
+  const [form, setForm] = useState({ newTransfer: '', newName: '', newAccount: '', newUsdt: '', reason: '', identity: null, payment: null })
   const identityRef = useRef(null)
   const paymentRef = useRef(null)
 
@@ -147,7 +147,7 @@ export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
     && !['matched', 'not_applicable'].includes(clean(request.fulfillment_status))
   ))
   const reset = () => {
-    setForm({ oldTransfer: '', oldName: '', oldAccount: '', newTransfer: '', newName: '', newAccount: '', oldUsdt: '', newUsdt: '', reason: '', identity: null, payment: null })
+    setForm({ newTransfer: '', newName: '', newAccount: '', newUsdt: '', reason: '', identity: null, payment: null })
     if (identityRef.current) identityRef.current.value = ''
     if (paymentRef.current) paymentRef.current.value = ''
   }
@@ -172,15 +172,12 @@ export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
         if (error) throw error
         uploaded.push(path)
       }
-      const oldData = kind === 'bank_wallet'
-        ? { transfer_using: clean(form.oldTransfer), account_name: clean(form.oldName), account_number: clean(form.oldAccount) }
-        : { usdt_address: clean(form.oldUsdt) }
       const newData = kind === 'bank_wallet'
         ? { transfer_using: clean(form.newTransfer), account_name: clean(form.newName), account_number: clean(form.newAccount) }
         : { usdt_address: clean(form.newUsdt) }
       const { error } = await supabase.rpc('staff_submit_payout_change_request', {
         p_request_id: requestId,
-        p_old_data: oldData,
+        p_old_data: {},
         p_new_data: newData,
         p_reason: clean(form.reason),
         p_identity_proof_path: identityPath,
@@ -217,7 +214,7 @@ export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
     {open && <div className="payment-change-modal-backdrop" role="presentation" onMouseDown={close}><section className="payment-change-modal staff" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}>
       <header><div><small>PAYMENT CHANGE REQUEST</small><h2>{copy.title}</h2></div><button type="button" disabled={saving} onClick={close}>×</button></header>
       <form onSubmit={submit}>
-        <fieldset><legend>{copy.old}</legend>{kind === 'bank_wallet' ? <div className="payment-change-form-grid"><label>{copy.transfer}<input required value={form.oldTransfer} onChange={event => setForm({ ...form, oldTransfer: event.target.value })} autoComplete="off" /></label><label>{copy.accountName}<input required value={form.oldName} onChange={event => setForm({ ...form, oldName: event.target.value })} autoComplete="off" /></label><label className="wide">{copy.accountNumber}<input required value={form.oldAccount} onChange={event => setForm({ ...form, oldAccount: event.target.value })} autoComplete="off" /></label></div> : <label>{copy.usdt}<input required value={form.oldUsdt} onChange={event => setForm({ ...form, oldUsdt: event.target.value })} autoComplete="off" /></label>}</fieldset>
+        <fieldset className="payment-change-current-fieldset"><legend>{copy.old}</legend><div className="payment-change-readonly-current"><PaymentFacts kind={kind} value={state.data?.current} masked /></div></fieldset>
         <fieldset><legend>{copy.next}</legend>{kind === 'bank_wallet' ? <div className="payment-change-form-grid"><label>{copy.transfer}<input required value={form.newTransfer} onChange={event => setForm({ ...form, newTransfer: event.target.value })} /></label><label>{copy.accountName}<input required value={form.newName} onChange={event => setForm({ ...form, newName: event.target.value })} /></label><label className="wide">{copy.accountNumber}<input required value={form.newAccount} onChange={event => setForm({ ...form, newAccount: event.target.value })} /></label></div> : <label>{copy.usdt}<input required value={form.newUsdt} onChange={event => setForm({ ...form, newUsdt: event.target.value })} /></label>}</fieldset>
         <label>{copy.reason}<textarea required minLength={5} maxLength={1000} rows={3} value={form.reason} onChange={event => setForm({ ...form, reason: event.target.value })} /></label>
         <div className="payment-change-proof-grid"><label>{copy.identityProof}<input ref={identityRef} required type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={event => setForm({ ...form, identity: event.target.files?.[0] || null })} /><span>{form.identity?.name || copy.fileHint}</span></label><label>{copy.paymentProof}<input ref={paymentRef} required type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={event => setForm({ ...form, payment: event.target.files?.[0] || null })} /><span>{form.payment?.name || copy.fileHint}</span></label></div>

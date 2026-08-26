@@ -12,6 +12,7 @@ import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
+import { employeePortalAccountPresentation } from '../lib/employeeAccountStatus'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -1255,12 +1256,13 @@ export default function AdminEmployeesPage(){
             <thead><tr><th>等级</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=>{
               const risk=employeeRiskMeta(r)
+              const portalAccount=employeePortalAccountPresentation(r)
               return <tr key={r.id}>
                 <td>{risk?<span className={`employee-risk-badge ${risk.className}`} data-admin-i18n-skip title={locale==='en'?`Total errors: ${Number(r.total_error_count||0)}`:`累计错误 ${Number(r.total_error_count||0)} 笔`}>{risk[locale]||risk.zh}</span>:'—'}</td>
                 <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
                 <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
-                <td>{r.account_opened?<span className="status-chip">已开通</span>:<span className="status-chip off">未开通</span>}</td>
-                <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{!r.account_opened&&meta.actions?.can_generate_activation_code&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
+                <td><span className={portalAccount.className}>{portalAccount.label}</span></td>
+                <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{portalAccount.canGenerateActivationCode&&meta.actions?.can_generate_activation_code&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
               </tr>
             })}</tbody>
           </table>

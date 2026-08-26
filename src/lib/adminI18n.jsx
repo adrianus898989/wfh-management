@@ -463,6 +463,7 @@ const english = {
   '系统数据': 'System data',
   '完整': 'Complete',
   '已开通': 'Enabled',
+  '已停用': 'Disabled',
   '未开通': 'Not enabled',
   '已激活': 'Activated',
   '未激活': 'Not activated',

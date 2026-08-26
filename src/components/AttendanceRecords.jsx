@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { adjustmentReason } from '../lib/adjustmentPresentation'
+import { attendanceHistoryRemark } from '../lib/attendancePresentation'
 
 const text = value => String(value ?? '').trim()
 
@@ -93,29 +94,6 @@ function HistoryFilters({filters,setFilters,placeholder='搜索备注或内容'}
 
 const emptyHistoryFilters=()=>({from:'',to:'',keyword:''})
 
-function AttendanceMonthlySummary({rows}){
-  const months=useMemo(()=>{
-    const grouped=new Map()
-    rows.forEach(row=>{
-      const month=historyDate(row).slice(0,7)
-      if(!month)return
-      if(!grouped.has(month))grouped.set(month,{month,public_holiday:0,home_leave:0,leave:0,half_day:0,absence:0,resignation:0,total:0})
-      const item=grouped.get(month)
-      const kind=text(row.event_kind||row.kind).toLowerCase()==='absent'?'absence':text(row.event_kind||row.kind).toLowerCase()
-      if(Object.prototype.hasOwnProperty.call(item,kind))item[kind]+=1
-      item.total+=1
-    })
-    return [...grouped.values()].sort((a,b)=>b.month.localeCompare(a.month))
-  },[rows])
-  if(!months.length)return null
-  return <div className="employee-attendance-months">
-    {months.map(item=><article key={item.month}>
-      <header><strong>{item.month.replace('-','年')}月</strong><span>{item.total} 天</span></header>
-      <div><span className="public_holiday"><small>公</small><b>{item.public_holiday}</b></span><span className="home_leave"><small>回</small><b>{item.home_leave}</b></span><span className="leave"><small>请</small><b>{item.leave}</b></span><span className="half_day"><small>半</small><b>{item.half_day}</b></span><span className="absence"><small>缺</small><b>{item.absence}</b></span><span className="resignation"><small>离</small><b>{item.resignation}</b></span></div>
-    </article>)}
-  </div>
-}
-
 function RecordDetailsModal({row,onClose,adjustment=false}){
   if(!row)return null
   return <div className="modal-mask attendance-record-modal-mask" onMouseDown={onClose}>
@@ -137,24 +115,20 @@ function RecordDetailsModal({row,onClose,adjustment=false}){
 export function EmployeeAttendancePanel({data,loading,error}){
   const sourceRows=data?.rows||data?.history||[]
   const rows=sourceRows.filter(row=>ATTENDANCE_EVENT_KINDS.has(text(row?.event_kind||row?.kind).toLowerCase()))
-  const summary=data?.summary||{}
-  const [selected,setSelected]=useState(null)
   const [filters,setFilters]=useState(emptyHistoryFilters)
   const visibleRows=useMemo(()=>rows.filter(row=>historyMatches(row,filters,['reason','note',row=>attendanceKindLabel(row.event_kind||row.kind)])),[rows,filters])
   return <section className="detail-panel employee-attendance-panel">
     <div className="detail-panel-head"><div><h3>员工出勤记录</h3></div><span className="employee-exam-count">{visibleRows.length} 条</span></div>
     {loading?<div className="attendance-panel-state">正在读取出勤记录…</div>:error?<div className="attendance-panel-state error">{error}</div>:<>
       <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索状态、原因或备注"/>
-      <div className="employee-attendance-summary">
-        <SummaryItem label="公休" value={summary.public_holiday}/><SummaryItem label="回家" value={summary.home_leave}/><SummaryItem label="请假" value={summary.leave}/><SummaryItem label="半天" value={summary.half_day}/><SummaryItem label="缺席" value={summary.absence} tone="negative"/><SummaryItem label="离职" value={summary.resignation}/>
-      </div>
-      <AttendanceMonthlySummary rows={visibleRows}/>
-      {visibleRows.length?<div className="employee-attendance-list">{visibleRows.map((row,index)=><article key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
-        <div className="employee-attendance-record-head"><div><strong>{row.event_date||'—'}</strong><span className={`attendance-kind ${kindTone(row.event_kind)}`}>{attendanceKindLabel(row.event_kind)}</span></div><button type="button" onClick={()=>setSelected(row)}>查看完整说明</button></div>
-        <div className="employee-attendance-record-body"><div><small>原因</small><p>{row.reason||'—'}</p></div><div><small>备注</small><p>{row.note||'—'}</p></div></div>
-      </article>)}</div>:<div className="attendance-panel-state">暂无出勤记录</div>}
+      {visibleRows.length?<div className="employee-attendance-compact-wrap"><table className="employee-attendance-compact-table">
+        <thead><tr><th>日期</th><th>类型</th><th>备注 / 原因</th></tr></thead>
+        <tbody>{visibleRows.map((row,index)=>{
+          const kind=row.event_kind||row.kind
+          return <tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}><td>{historyDate(row)||'—'}</td><td><span className={`attendance-kind ${kindTone(kind)}`}>{attendanceKindLabel(kind)}</span></td><td>{attendanceHistoryRemark(row)}</td></tr>
+        })}</tbody>
+      </table></div>:<div className="attendance-panel-state">暂无出勤记录</div>}
     </>}
-    {selected&&<RecordDetailsModal row={selected} onClose={()=>setSelected(null)}/>}
   </section>
 }
 

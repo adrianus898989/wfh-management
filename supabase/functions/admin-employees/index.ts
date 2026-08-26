@@ -1002,7 +1002,7 @@ Deno.serve(async (req) => {
       const ids = (rows || []).map((r:any) => r.id);
       const employeeNos = (rows || []).map((r:any) => employeeNoKey(r.employee_no)).filter(Boolean);
       const emptyRelated = { data:[], error:null };
-      const [{ data:pays }, { data:contacts }, { data:accountRows }, { data:errorSummaries, error:errorSummaryError }] = ids.length ? await Promise.all([
+      const [{ data:pays }, { data:contacts }, { data:accountRows, error:accountRowsError }, { data:errorSummaries, error:errorSummaryError }] = ids.length ? await Promise.all([
         service.from("employee_payment_profiles").select("*").in("employee_id",ids),
         service.from("employee_contact_profiles").select("employee_id,telegram_username").in("employee_id",ids),
         service.from("user_access").select("employee_id,employee_portal_enabled,active").in("employee_id",ids),
@@ -1010,13 +1010,23 @@ Deno.serve(async (req) => {
           ? service.from("employee_error_summary").select("employee_no,month_error_count,total_error_count").in("employee_no",employeeNos)
           : Promise.resolve(emptyRelated),
       ]) : [emptyRelated,emptyRelated,emptyRelated,emptyRelated];
+      // Never turn a failed account lookup into an all-“未开通” success page.
+      // That would be a dangerous false negative and would expose duplicate
+      // activation actions for accounts that already exist.
+      if (accountRowsError) throw accountRowsError;
       if (errorSummaryError) throw errorSummaryError;
 
       const payMap = new Map((pays || []).map((x:any) => [x.employee_id,x]));
       const contactMap = new Map((contacts || []).map((x:any) => [x.employee_id,x]));
       const errorSummaryMap = new Map((errorSummaries || []).map((x:any) => [employeeNoKey(x.employee_no),x]));
-      const accountSet = new Set(
-        (accountRows || []).filter((x:any)=>x.employee_portal_enabled && x.active).map((x:any)=>x.employee_id)
+      // A portal mapping means the account has been provisioned. `active` is
+      // only its current enabled/disabled state and must not turn an existing
+      // account back into “未开通”. Account creation and self-registration
+      // write Auth + user_access transactionally (with rollback on failure).
+      const portalAccountRows = (accountRows || []).filter((x:any)=>x.employee_portal_enabled);
+      const accountSet = new Set(portalAccountRows.map((x:any)=>x.employee_id));
+      const activeAccountSet = new Set(
+        portalAccountRows.filter((x:any)=>x.active === true).map((x:any)=>x.employee_id)
       );
 
       const result = (rows || []).map((r:any) => {
@@ -1032,7 +1042,10 @@ Deno.serve(async (req) => {
           month_error_count:monthErrorCount,
           total_error_count:totalErrorCount,
           risk_level:employeeRiskKey(totalErrorCount),
-          missing_fields:missing,missing_count:missing.length,account_opened:accountSet.has(r.id),
+          missing_fields:missing,
+          missing_count:missing.length,
+          account_opened:accountSet.has(r.id),
+          account_active:activeAccountSet.has(r.id),
         };
       });
 

@@ -114,7 +114,7 @@ Deno.serve(async (req) => {
 
     const { data: caller, error: callerError } = await admin
       .from('user_access')
-      .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,active,roles(id,code,name)')
+      .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,active,login_username,login_email,roles(id,code,name)')
       .eq('auth_user_id', userData.user.id)
       .maybeSingle()
 
@@ -496,7 +496,7 @@ Deno.serve(async (req) => {
       if (caller.employee_id) {
         const { data: employee, error: employeeError } = await admin
           .from('employees')
-          .select('id,team_id,position_id')
+          .select('id,employee_no,full_name,team_id,position_id')
           .eq('id', caller.employee_id)
           .maybeSingle()
         if (employeeError) return json(req, { error: '无法读取当前账号的数据范围' }, 500)
@@ -513,7 +513,139 @@ Deno.serve(async (req) => {
           data_scope: caller.data_scope || null,
           team_id: employeeContext?.team_id || null,
           position_id: employeeContext?.position_id || null,
+          login_username: caller.login_username || null,
+          login_email: caller.login_email || userData.user.email || null,
+          employee_no: employeeContext?.employee_no || null,
+          full_name: employeeContext?.full_name || null,
         },
+      })
+    }
+
+    if (action === 'online_presence') {
+      if (!can('account.view') && !can('user.view') && !can('employee.view')) {
+        return json(req, { error:'无在线账号查看权限' }, 403)
+      }
+      const nowIso = new Date().toISOString()
+      const { data: leaseRows, error: leaseError } = await admin
+        .from('app_session_leases')
+        .select('user_id,portal,claimed_at,last_seen_at,lease_expires_at')
+        .gt('lease_expires_at', nowIso)
+        .in('portal', ['admin', 'staff'])
+        .order('last_seen_at', { ascending:false })
+
+      if (leaseError) return json(req, { error:'无法读取在线状态' }, 500)
+
+      const userIds = [...new Set((leaseRows || []).map((row: any) => cleanString(row.user_id)).filter(Boolean))]
+      if (!userIds.length) {
+        return json(req, {
+          ok:true,
+          refreshed_at:nowIso,
+          online_window_seconds:300,
+          admin:{ count:0, rows:[] },
+          staff:{ count:0, rows:[] },
+        })
+      }
+
+      const { data: accessRows, error: accessError } = await admin
+        .from('user_access')
+        .select('auth_user_id,employee_id,login_username,login_email,backend_enabled,employee_portal_enabled,active')
+        .in('auth_user_id', userIds)
+
+      if (accessError) return json(req, { error:'无法读取在线账号' }, 500)
+
+      const accessMap = new Map((accessRows || []).map((row: any) => [cleanString(row.auth_user_id), row]))
+      const liveEmployeeIds = [...new Set((accessRows || []).map((row: any) => cleanString(row.employee_id)).filter(Boolean))]
+      const visibleEmployeeIds = new Set<string>()
+
+      if (isFounder || activeCaller.data_scope === 'all') {
+        liveEmployeeIds.forEach(id => visibleEmployeeIds.add(id))
+      } else if (activeCaller.data_scope === 'self') {
+        if (activeCaller.employee_id) visibleEmployeeIds.add(cleanString(activeCaller.employee_id))
+      } else if (activeCaller.data_scope === 'own_team' && activeCaller.employee_id) {
+        const { data: callerEmployee, error: callerEmployeeError } = await admin
+          .from('employees').select('team_id').eq('id', activeCaller.employee_id).maybeSingle()
+        if (callerEmployeeError) return json(req, { error:'无法读取在线账号范围' }, 500)
+        if (callerEmployee?.team_id && liveEmployeeIds.length) {
+          const { data: teamEmployees, error: teamEmployeeError } = await admin
+            .from('employees').select('id').in('id', liveEmployeeIds).eq('team_id', callerEmployee.team_id)
+          if (teamEmployeeError) return json(req, { error:'无法读取在线账号范围' }, 500)
+          ;(teamEmployees || []).forEach((row: any) => visibleEmployeeIds.add(cleanString(row.id)))
+        }
+      } else if (activeCaller.data_scope === 'assigned_teams') {
+        const [scopeTeamRes, scopeEmployeeRes] = await Promise.all([
+          admin.from('user_scope_teams').select('team_id').eq('auth_user_id', authenticatedUser.id),
+          admin.from('user_scope_employees').select('employee_id').eq('auth_user_id', authenticatedUser.id),
+        ])
+        if (scopeTeamRes.error || scopeEmployeeRes.error) return json(req, { error:'无法读取在线账号范围' }, 500)
+        ;(scopeEmployeeRes.data || []).forEach((row: any) => {
+          const id = cleanString(row.employee_id)
+          if (liveEmployeeIds.includes(id)) visibleEmployeeIds.add(id)
+        })
+        const scopedTeamIds = (scopeTeamRes.data || []).map((row: any) => cleanString(row.team_id)).filter(Boolean)
+        if (scopedTeamIds.length && liveEmployeeIds.length) {
+          const { data: teamEmployees, error: teamEmployeeError } = await admin
+            .from('employees').select('id').in('id', liveEmployeeIds).in('team_id', scopedTeamIds)
+          if (teamEmployeeError) return json(req, { error:'无法读取在线账号范围' }, 500)
+          ;(teamEmployees || []).forEach((row: any) => visibleEmployeeIds.add(cleanString(row.id)))
+        }
+      }
+
+      const employeeMap = new Map<string, any>()
+      if (liveEmployeeIds.length) {
+        const { data: employeeRows, error: employeeError } = await admin
+          .from('employees')
+          .select('id,employee_no,full_name,team_id,position_id,teams(id,name),positions(id,name)')
+          .in('id', liveEmployeeIds)
+        if (employeeError) return json(req, { error:'无法读取在线员工资料' }, 500)
+        ;(employeeRows || []).forEach((row: any) => employeeMap.set(cleanString(row.id), row))
+      }
+
+      const canSeeEmployee = (employeeId: unknown) => Boolean(employeeId) && visibleEmployeeIds.has(cleanString(employeeId))
+      const formatEmployee = (employeeId: unknown) => {
+        const employee: any = employeeId ? employeeMap.get(cleanString(employeeId)) : null
+        const team = Array.isArray(employee?.teams) ? employee.teams[0] : employee?.teams
+        const position = Array.isArray(employee?.positions) ? employee.positions[0] : employee?.positions
+        return {
+          employee_no:cleanString(employee?.employee_no),
+          full_name:cleanString(employee?.full_name),
+          team:cleanString(team?.name),
+          position:cleanString(position?.name),
+        }
+      }
+
+      const visibleRows = (leaseRows || []).flatMap((lease: any) => {
+        const account: any = accessMap.get(cleanString(lease.user_id))
+        if (!account?.active) return []
+        if (lease.portal === 'admin' && !account.backend_enabled) return []
+        if (lease.portal === 'staff' && !account.employee_portal_enabled) return []
+        const accountInScope = account.employee_id
+          ? canSeeEmployee(account.employee_id)
+          : (isFounder || activeCaller.data_scope === 'all')
+        if (!accountInScope && cleanString(lease.user_id) !== cleanString(userData.user.id)) return []
+
+        const employee = formatEmployee(account.employee_id)
+        const username = cleanString(account.login_username) || cleanString(account.login_email)
+        return [{
+          portal:lease.portal,
+          name:employee.full_name || username || (lease.portal === 'admin' ? '后台账号' : '员工账号'),
+          username,
+          employee_no:employee.employee_no,
+          team:employee.team,
+          position:employee.position,
+          last_seen_at:lease.last_seen_at,
+          claimed_at:lease.claimed_at,
+          current:cleanString(lease.user_id) === cleanString(userData.user.id),
+        }]
+      })
+
+      const adminRows = visibleRows.filter((row: any) => row.portal === 'admin')
+      const staffRows = visibleRows.filter((row: any) => row.portal === 'staff')
+      return json(req, {
+        ok:true,
+        refreshed_at:nowIso,
+        online_window_seconds:300,
+        admin:{ count:adminRows.length, rows:adminRows },
+        staff:{ count:staffRows.length, rows:staffRows },
       })
     }
 

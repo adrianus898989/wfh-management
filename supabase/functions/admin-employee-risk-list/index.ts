@@ -190,12 +190,14 @@ Deno.serve(async req => {
         .order('employee_no', { ascending: true })),
       loadPagedQuery(() => service.from('user_access')
         .select('employee_id,employee_portal_enabled,active')
-        .eq('employee_portal_enabled', true)
-        .eq('active', true)),
+        .eq('employee_portal_enabled', true)),
     ])
 
     const summaryMap = new Map((summaryRows || []).map((row: any) => [upper(row.employee_no), row]))
     const accountSet = new Set((allAccountRows || []).map((row: any) => row.employee_id))
+    const activeAccountSet = new Set(
+      (allAccountRows || []).filter((row: any) => row.active === true).map((row: any) => row.employee_id)
+    )
     const matched = (allEmployees || []).filter((employee: any) => {
       const summary: any = summaryMap.get(upper(employee.employee_no))
       const currentRisk = riskKey(summary?.total_error_count || 0)
@@ -232,6 +234,7 @@ Deno.serve(async req => {
           missing_fields: missing,
           missing_count: missing.length,
           account_opened: accountSet.has(employee.id),
+          account_active: activeAccountSet.has(employee.id),
           operator_account: operatorMap.get(employee.id) || '',
         }
       }),

@@ -5,7 +5,7 @@ import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 import { adminNavigation, adminRouteAccess, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from '../config/navigation'
 import { AdminAccessProvider } from '../lib/adminAccess'
-import { AdminAlertBell } from './AdminAlertCenter'
+import AdminTopbar from './AdminTopbar'
 
 const navKey = item => item.id || item.to
 const navUrl = to => new URL(to, 'https://wfh.local')
@@ -56,6 +56,10 @@ export default function AppLayout({ mode, children }) {
         dataScope:data?.caller?.data_scope||'',
         teamId:data?.caller?.team_id||'',
         positionId:data?.caller?.position_id||'',
+        loginUsername:data?.caller?.login_username||'',
+        loginEmail:data?.caller?.login_email||'',
+        employeeNo:data?.caller?.employee_no||'',
+        fullName:data?.caller?.full_name||'',
         error:'',
       })
     })()
@@ -123,7 +127,6 @@ export default function AppLayout({ mode, children }) {
         <div className="sidebar-brand">
           <div className="sidebar-logo">W</div>
           <div className="sidebar-brand-copy"><strong>WFH</strong><small>{mode==='admin'?'MANAGEMENT':'STAFF'}</small></div>
-          {mode==='admin'&&<AdminAlertBell access={adminAccess}/>}
         </div>
 
         {mode==='admin' ? <nav className="sidebar-nav sidebar-nav-pro">
@@ -192,6 +195,7 @@ export default function AppLayout({ mode, children }) {
         <button className="sidebar-logout" onClick={logout}>{mode==='admin'?adminT('退出登录'):t('nav.signOut','退出登录')}</button>
       </aside>
       <main className="main">
+        {mode === 'admin' && <AdminTopbar access={adminAccess} />}
         {mode === 'admin' ? adminMain : children}
       </main>
     </div>

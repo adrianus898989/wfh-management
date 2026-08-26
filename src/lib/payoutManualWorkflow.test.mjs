@@ -6,6 +6,8 @@ const migrationUrl = new URL('../../supabase/migrations/20260826141000_payout_ma
 const sql = await readFile(migrationUrl, 'utf8')
 const guardMigrationUrl = new URL('../../supabase/migrations/20260826145000_close_payout_race_and_log_scope.sql', import.meta.url)
 const guardSql = await readFile(guardMigrationUrl, 'utf8')
+const serverOwnedOldDataMigrationUrl = new URL('../../supabase/migrations/20260826150000_payout_change_server_owned_old_data.sql', import.meta.url)
+const serverOwnedOldDataSql = await readFile(serverOwnedOldDataMigrationUrl, 'utf8')
 const workflowComponentUrl = new URL('../components/PaymentChangeWorkflow.jsx', import.meta.url)
 const workflowComponent = await readFile(workflowComponentUrl, 'utf8')
 
@@ -68,4 +70,27 @@ test('latest entry-log RPC excludes records that have no provable employee scope
 
 test('migration does not replace the shared alert-center RPC', () => {
   assert.doesNotMatch(sql, /create or replace function public\.admin_alert_center/i)
+})
+
+test('staff payout submission snapshots canonical old details instead of trusting employee input', () => {
+  assert.match(serverOwnedOldDataSql, /from public\.employee_payment_profiles p[\s\S]+for update/i)
+  assert.match(serverOwnedOldDataSql, /v_old:=jsonb_build_object\([\s\S]+v_profile\.gcash_account/i)
+  assert.match(serverOwnedOldDataSql, /v_old:=jsonb_build_object\([\s\S]+v_profile\.usdt_address/i)
+  assert.doesNotMatch(serverOwnedOldDataSql, /p_old_data\s*->>/i)
+  assert.doesNotMatch(serverOwnedOldDataSql, /old_payment_mismatch/i)
+  assert.match(serverOwnedOldDataSql, /insert into public\.payout_change_requests\([\s\S]+v_old,v_new,v_reason,'pending'/i)
+  assert.match(serverOwnedOldDataSql, /insert into public\.audit_logs\([\s\S]+jsonb_build_object\('payment_kind',v_kind,'payment',v_old\)/i)
+  assert.doesNotMatch(serverOwnedOldDataSql, /create or replace function public\.admin_review_payout_change_request/i)
+  assert.doesNotMatch(serverOwnedOldDataSql, /create or replace function public\.admin_payout_change_requests/i)
+})
+
+test('staff form renders current payout details read only and submits only replacement fields', () => {
+  assert.match(workflowComponent, /className="payment-change-current-fieldset"/)
+  assert.match(workflowComponent, /<PaymentFacts kind=\{kind\} value=\{state\.data\?\.current\} masked \/>/)
+  assert.match(workflowComponent, /p_old_data:\s*\{\}/)
+  assert.doesNotMatch(workflowComponent, /form\.old(?:Transfer|Name|Account|Usdt)/)
+  assert.match(workflowComponent, /form\.newTransfer/)
+  assert.match(workflowComponent, /form\.newUsdt/)
+  assert.match(workflowComponent, /identityProof/)
+  assert.match(workflowComponent, /paymentProof/)
 })
