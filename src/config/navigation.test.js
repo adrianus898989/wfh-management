@@ -1,0 +1,55 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { adminNavigation, adminTargetMatches, requestedAdminRoute } from './navigation.js'
+
+const visibleItems = adminNavigation.flatMap(entry => entry.children || [entry])
+const group = id => adminNavigation.find(entry => entry.id === id)
+
+test('admin sidebar uses the requested top-level order and names', () => {
+  assert.deepEqual(adminNavigation.map(entry => entry.label), [
+    '首页',
+    '预警中心',
+    '员工排班管理统计',
+    '考勤考试奖惩统计',
+    '工作执行与负责人管理统计',
+    '工资统计',
+    '后台账号使用情况',
+  ])
+  assert.deepEqual(group('workforce').children.map(entry => entry.label), [
+    '员工档案查询表', '人员分析表', '离职记录表', '档案变更记录',
+    '汇总表', '人员分布总表', '站点人数报表', '排班表',
+  ])
+  assert.equal(visibleItems.filter(entry => entry.label === '排班表').length, 1)
+})
+
+test('new menu names keep pointing at canonical existing tabs', () => {
+  assert.equal(group('attendance_exams').children.find(entry => entry.label === '线上培训日报记录表').to, '/admin/daily?tab=%E7%BA%BF%E4%B8%8A%E5%9F%B9%E8%AE%AD%E6%8A%A5%E5%91%8A')
+  assert.equal(group('attendance_exams').children.find(entry => entry.label === '奖惩表').to, '/admin/schedule?tab=%E5%A5%96%E9%87%91%20%2F%20%E6%89%A3%E6%AC%BE')
+  assert.equal(group('account_usage').children.find(entry => entry.label === '员工前端账号').to, '/admin/users?tab=staff')
+})
+
+test('hidden legacy tabs remain authorized by their original route permissions', () => {
+  const legacy = [
+    ['/admin/reports', '?tab=%E6%8E%92%E7%8F%AD%E8%A1%A8'],
+    ['/admin/schedule', '?tab=%E4%BB%8A%E6%97%A5%E8%80%83%E5%8B%A4'],
+    ['/admin/payroll', '?tab=%E5%B7%A5%E8%B5%84%E5%AF%BC%E5%85%A5'],
+    ['/admin/payroll', '?tab=%E6%94%B6%E6%AC%BE%E8%B5%84%E6%96%99%E5%AE%A1%E6%A0%B8'],
+    ['/admin/daily', '?tab=%E6%AF%8F%E6%97%A5%E5%B7%A5%E4%BD%9C%E6%8A%A5%E5%91%8A'],
+  ]
+  legacy.forEach(([pathname, search]) => assert.ok(requestedAdminRoute(pathname, search), `${pathname}${search}`))
+})
+
+test('same-path items activate only their own tab while default-tab aliases remain compatible', () => {
+  const alertTarget = '/admin/employees?tab=%E9%A2%84%E8%AD%A6%E8%AE%B0%E5%BD%95'
+  assert.equal(adminTargetMatches(alertTarget, '/admin/employees', '?tab=%E9%A2%84%E8%AD%A6%E8%AE%B0%E5%BD%95'), true)
+  assert.equal(adminTargetMatches(alertTarget, '/admin/employees', '?tab=%E4%BA%BA%E5%91%98%E5%88%86%E6%9E%90'), false)
+  assert.equal(adminTargetMatches('/admin/employees', '/admin/employees', '?tab=%E5%91%98%E5%B7%A5%E6%A1%A3%E6%A1%88'), true)
+  assert.equal(adminTargetMatches('/admin/users', '/admin/users', '?tab=backend'), true)
+})
+
+test('planning routes use existing permissions and are part of the guarded route registry', () => {
+  const eventRoute = requestedAdminRoute('/admin/work-execution', '')
+  const chatRoute = requestedAdminRoute('/admin/account-usage', '')
+  assert.ok(eventRoute?.permissions?.includes('report.view'))
+  assert.deepEqual(chatRoute?.permissions, ['user.view'])
+})

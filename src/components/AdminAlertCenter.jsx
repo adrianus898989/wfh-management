@@ -3,26 +3,19 @@ import { useNavigate } from 'react-router-dom'
 import { Pagination } from './DataPageControls'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
+import {
+  ADMIN_ALERT_GROUPS,
+  ADMIN_ALERT_PERMISSIONS,
+  ADMIN_ALERT_TYPES,
+  adminAlertPendingReason,
+  visibleAdminAlertTypes,
+} from '../lib/adminAlertCatalog'
 import { adminAlertEmployeeTarget, adminAlertTarget } from '../lib/adminAlertRoutes'
 import { supabase } from '../lib/supabase'
 import '../styles-admin-alerts.css'
 
-const ALERT_PERMISSIONS = [
-  'payroll.payout_change.review',
-  'report.view',
-  'adjustment.view',
-  'attendance.view',
-]
-
-const TYPE_META = {
-  payout_change: { zh:'收款资料修改', en:'Payment change', icon:'款', tone:'blue' },
-  error_spike: { zh:'错误频率', en:'Error frequency', icon:'错', tone:'red' },
-  deduction_frequency: { zh:'扣款频率', en:'Deduction frequency', icon:'扣', tone:'orange' },
-  late_timeout_frequency: { zh:'迟到 / 超时', en:'Late / timeout', icon:'迟', tone:'orange' },
-  consecutive_rest: { zh:'连续公休', en:'Consecutive rest', icon:'休', tone:'violet' },
-  weekly_absence: { zh:'一周缺席', en:'Weekly absence', icon:'缺', tone:'red' },
-  monthly_leave: { zh:'月休假超限', en:'Monthly leave limit', icon:'假', tone:'violet' },
-}
+const ALERT_PERMISSIONS = ADMIN_ALERT_PERMISSIONS
+const TYPE_META = ADMIN_ALERT_TYPES
 
 const SEVERITY_META = {
   info: { zh:'通知', en:'Notice' },
@@ -67,6 +60,8 @@ function alertCopy(row, locale) {
     case 'consecutive_rest': return { title:'Consecutive rest-day warning', message:`${name} is marked for ${count} consecutive public rest days.` }
     case 'weekly_absence': return { title:'Weekly absence warning', message:`${name} was absent ${count} days in the last 7 days.` }
     case 'monthly_leave': return { title:'Monthly leave warning', message:`${name} has ${count} leave days this month (home leave excluded).` }
+    case 'exam_failed': return { title:'Latest exam failed', message:`${name}'s latest graded exam did not pass${row?.payload?.percentage == null ? '.' : ` (${countText(row.payload.percentage)}%).`}` }
+    case 'resigned_account_active': return { title:'Resigned account not recovered', message:`${name} is resigned but still has ${count} enabled login mapping(s).` }
     default: return { title:clean(row?.title) || eventName(row, locale), message:clean(row?.message) || '—' }
   }
 }
@@ -189,19 +184,23 @@ export function AdminAlertRecordsPage() {
   const requestRef = useRef(0)
   const latestRef = useRef(null)
   const canViewEmployees = access.hasPermission('employee.view')
-  const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', severity:'', unread_only:false })
+  const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false })
   const [filters, setFilters] = useState(draft)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
   const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, pages:1, active:0, unread:0, typeCounts:{} })
   latestRef.current = { page, pageSize, filters }
 
-  const typeOptions = useMemo(() => Object.entries(TYPE_META).filter(([type]) => {
-    if (type === 'payout_change') return access.hasPermission('payroll.payout_change.review')
-    if (type === 'error_spike') return access.hasPermission('report.view')
-    if (['deduction_frequency','late_timeout_frequency'].includes(type)) return access.hasPermission('adjustment.view')
-    return access.hasPermission('attendance.view')
-  }), [access.permissionKey, access.founder])
+  const typeOptions = useMemo(() => visibleAdminAlertTypes(access, {
+    readyOnly:true,
+    group:draft.group,
+  }), [access.permissionKey, access.founder, draft.group])
+  const categoryOptions = useMemo(() => visibleAdminAlertTypes(access, {
+    group:draft.group,
+  }), [access.permissionKey, access.founder, draft.group])
+  const groupOptions = useMemo(() => Object.entries(ADMIN_ALERT_GROUPS).filter(([group]) => (
+    group === 'all' || visibleAdminAlertTypes(access, { group }).length > 0
+  )), [access.permissionKey, access.founder])
 
   const load = async (nextPage=page, nextSize=pageSize, nextFilters=filters) => {
     const requestId = ++requestRef.current
@@ -238,7 +237,16 @@ export function AdminAlertRecordsPage() {
 
   const apply = () => { setFilters({ ...draft }); setPage(1); load(1, pageSize, draft) }
   const reset = () => {
-    const next = { search:'', status:'active', alert_type:'', severity:'', unread_only:false }
+    const next = { search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false }
+    setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
+  }
+  const selectGroup = group => {
+    const next = { ...draft, group, alert_type:'' }
+    setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
+  }
+  const selectCategory = (type, meta) => {
+    if (!meta.ready) return
+    const next = { ...draft, group:meta.group, alert_type:type }
     setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
   }
   const markOne = async row => {
@@ -259,8 +267,26 @@ export function AdminAlertRecordsPage() {
     <div className="admin-alert-summary">
       <article><span>{locale === 'en' ? 'Active warnings' : '进行中预警'}</span><strong>{state.active}</strong><small>{locale === 'en' ? 'Current rules matched' : '当前仍符合规则'}</small></article>
       <article className="unread"><span>{locale === 'en' ? 'Unread' : '未读消息'}</span><strong>{state.unread}</strong><small>{locale === 'en' ? 'For this account' : '仅统计当前账号'}</small></article>
-      {typeOptions.slice(0, 5).map(([type, meta]) => <article key={type}><span>{meta[locale]}</span><strong>{numeric(state.typeCounts[type])}</strong><small>{locale === 'en' ? 'Active' : '进行中'}</small></article>)}
+      <article><span>{locale === 'en' ? 'Live rules' : '已接入规则'}</span><strong>{visibleAdminAlertTypes(access, { readyOnly:true }).length}</strong><small>{locale === 'en' ? 'Permission-visible' : '当前权限可见'}</small></article>
+      <article><span>{locale === 'en' ? 'Pending sources' : '待接入数据源'}</span><strong>{visibleAdminAlertTypes(access).filter(([, meta]) => !meta.ready).length}</strong><small>{locale === 'en' ? 'Shown as zero, no false positives' : '固定显示 0，不制造误报'}</small></article>
     </div>
+
+    <section className="admin-alert-category-panel" aria-label={locale === 'en' ? 'Warning categories' : '预警子分类'}>
+      <nav className="admin-alert-group-nav" aria-label={locale === 'en' ? 'Warning category groups' : '预警分类导航'}>
+        {groupOptions.map(([group, meta]) => <button type="button" key={group} className={draft.group === group ? 'active' : ''} aria-current={draft.group === group ? 'page' : undefined} onClick={() => selectGroup(group)}>{meta[locale]}</button>)}
+      </nav>
+      <div className="admin-alert-category-grid">
+        {categoryOptions.map(([type, meta]) => {
+          const pendingReason = adminAlertPendingReason(meta, locale)
+          return <button type="button" key={type} className={`${draft.alert_type === type ? 'active' : ''} ${meta.ready ? 'ready' : 'pending'}`} disabled={!meta.ready} title={pendingReason || ''} onClick={() => selectCategory(type, meta)}>
+            <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
+            <span><b>{meta[locale]}</b><small>{meta.ready ? (locale === 'en' ? 'Live rule' : '已接入') : (locale === 'en' ? 'Pending source' : '待接入')}</small></span>
+            <strong>{meta.ready ? numeric(state.typeCounts[type]) : 0}</strong>
+            {!meta.ready && <em>{pendingReason}</em>}
+          </button>
+        })}
+      </div>
+    </section>
 
     <div className="admin-alert-filter-card">
       <label><span>{locale === 'en' ? 'Employee / warning' : '员工 / 预警内容'}</span><input value={draft.search} onChange={event => setDraft(current => ({ ...current, search:event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} placeholder={locale === 'en' ? 'Employee ID, name or warning' : '员工ID、姓名或预警内容'} /></label>
@@ -274,9 +300,9 @@ export function AdminAlertRecordsPage() {
     <details className="admin-alert-rule-guide">
       <summary>{locale === 'en' ? 'Warning rules' : '预警规则说明'}</summary>
       <div>{locale === 'en' ? <>
-        <span>Payment changes: immediate</span><span>Errors: ≥6 / 3 days</span><span>Deductions: ≥4 / 7 days</span><span>Late or timeout: ≥3 / 7 days</span><span>Public rest: ≥2 consecutive days</span><span>Absence: ≥2 / 7 days</span><span>Monthly leave: &gt;5 days; half day = 0.5, home leave excluded</span>
+        <span>Payment changes: immediate</span><span>Errors: ≥6 / 3 days</span><span>Deductions: ≥4 / 7 days</span><span>Late or timeout: ≥3 / 7 days</span><span>Public rest: ≥2 consecutive days</span><span>Absence: ≥2 / 7 days</span><span>Monthly leave: &gt;5 days; half day = 0.5, home leave excluded</span><span>Exam: latest graded attempt failed</span><span>Resigned account: any enabled linked access</span><span>Pending cards remain 0 until the source contract is confirmed</span>
       </> : <>
-        <span>收款资料修改：即时</span><span>错误：3天内 ≥6笔</span><span>扣款：7天内 ≥4次</span><span>迟到 / 超时：7天内 ≥3次</span><span>公休：连续 ≥2天</span><span>缺席：7天内 ≥2天</span><span>月休假：&gt;5天；半天算0.5，回家不计</span>
+        <span>收款资料修改：即时</span><span>错误：3天内 ≥6笔</span><span>扣款：7天内 ≥4次</span><span>迟到 / 超时：7天内 ≥3次</span><span>公休：连续 ≥2天</span><span>缺席：7天内 ≥2天</span><span>月休假：&gt;5天；半天算0.5，回家不计</span><span>考试：最近一次已评分结果不及格</span><span>离职账号：仍有任一启用登录映射</span><span>待接入卡片在规则确认前固定为 0</span>
       </>}</div>
     </details>
 

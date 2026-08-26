@@ -6,6 +6,15 @@ import { useAdminI18n } from '../lib/adminI18n'
 
 const USER_TABS = ['backend', 'staff', 'roles']
 
+const accountDateTime = value => {
+  const date = new Date(value || '')
+  if (!Number.isFinite(date.getTime())) return '—'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', hour12:false,
+  }).format(date)
+}
+
 const blankAccount = () => ({
   auth_user_id: '',
   employee_id: '',
@@ -634,7 +643,7 @@ export default function AdminUsersPage() {
             <div className="data-card table-scroll">
               {staff.length === 0 ? <div className="empty-state">{adminT('暂无员工账号')}</div> :
               <table className="data-table">
-                <thead><tr><th>{adminT('登录邮箱')}</th><th>{adminT('员工ID')}</th><th>{adminT('姓名')}</th><th>{adminT('团队')}</th><th>{adminT('岗位')}</th><th>{adminT('状态')}</th><th>{adminT('操作')}</th></tr></thead>
+                <thead><tr><th>{adminT('登录邮箱')}</th><th>{adminT('员工ID')}</th><th>{adminT('姓名')}</th><th>{adminT('团队')}</th><th>{adminT('岗位')}</th><th>{adminT('状态')}</th><th>{adminT('激活时间')}</th><th>{adminT('操作')}</th></tr></thead>
                 <tbody>{visibleStaff.map(a => <tr key={a.auth_user_id}>
                   <td><strong>{a.login_email || '-'}</strong></td>
                   <td><strong>{a.employee?.employee_no || '-'}</strong></td>
@@ -642,6 +651,7 @@ export default function AdminUsersPage() {
                   <td>{a.employee?.teams?.name || '-'}</td>
                   <td>{a.employee?.positions?.name || '-'}</td>
                   <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                   <td><div className="access-grid-actions">
                     {canResetStaffPassword && <button onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
                     {canResetMfa && <button onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}

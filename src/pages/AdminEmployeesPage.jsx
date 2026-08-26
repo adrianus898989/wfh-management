@@ -7,6 +7,7 @@ import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/
 import { AdminAlertRecordsPage } from '../components/AdminAlertCenter'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
+import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
@@ -14,7 +15,7 @@ const EMPLOYEE_TAB_PERMISSIONS = {
   '员工档案': 'employee.view',
   '人员分析': 'employee.analytics.view',
   '停电 / 断网记录': 'connectivity.view',
-  '预警记录': ['payroll.payout_change.review','report.view','adjustment.view','attendance.view'],
+  '预警记录': ADMIN_ALERT_PERMISSIONS,
   '离职记录': 'employee.view',
   '操作日志': 'audit.view',
 }
@@ -514,13 +515,15 @@ export default function AdminEmployeesPage(){
 
   useEffect(()=>{
     if(!canViewEmployees||!requestedEmployeeId||requestedEmployeeRef.current===requestedEmployeeId)return
+    let cancelled=false
     requestedEmployeeRef.current=requestedEmployeeId
     setSelected({employee:{id:requestedEmployeeId},missing_fields:[]})
     setDetailLoading(true)
     invoke({action:'detail',employee_id:requestedEmployeeId})
-      .then(setSelected)
-      .catch(e=>{setError(e.message);setSelected(null);requestedEmployeeRef.current=''})
-      .finally(()=>setDetailLoading(false))
+      .then(detail=>{if(!cancelled)setSelected(detail)})
+      .catch(e=>{if(!cancelled){setError(e.message);setSelected(null);requestedEmployeeRef.current=''}})
+      .finally(()=>{if(!cancelled)setDetailLoading(false)})
+    return()=>{cancelled=true}
   },[requestedEmployeeId,canViewEmployees])
 
   const writeEmployee=async body=>{
@@ -626,20 +629,14 @@ export default function AdminEmployeesPage(){
     try{
       const data=await fetchEmployeeListData(nextPage,nextSize,nextFilters)
       const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
-      const [operatorMap,errorSummaryMap]=await Promise.all([
-        loadOperatorMap(visibleRows.map(r=>r.id)),
-        getAllErrorSummaryMap().catch(()=>new Map()),
-      ])
+      const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))
       setRows(visibleRows.map(r=>{
-        const summary=errorSummaryMap.get(text(r.employee_no).toUpperCase())
-        const rawTotalErrorCount=summary?.total_error_count??r.total_error_count
-        const hasTotalErrorCount=rawTotalErrorCount!==null&&rawTotalErrorCount!==undefined&&text(rawTotalErrorCount)!==''
-        const totalErrorCount=hasTotalErrorCount?Number(rawTotalErrorCount):null
+        const totalErrorCount=Number(r.total_error_count||0)
         return {
           ...r,
-          month_error_count:summary?.month_error_count??r.month_error_count??null,
+          month_error_count:Number(r.month_error_count||0),
           total_error_count:totalErrorCount,
-          risk_level:hasTotalErrorCount?riskKeyFromCount(totalErrorCount):text(r.risk_level),
+          risk_level:riskKeyFromCount(totalErrorCount),
           operator_account:operatorMap.get(text(r.id))||text(r.operator_account),
         }
       }))

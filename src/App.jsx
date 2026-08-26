@@ -27,6 +27,7 @@ import AdminTrainingPage from './pages/AdminTrainingPage'
 import StaffExamPage from './pages/StaffExamPage'
 import AdminPayrollPage from './pages/AdminPayrollPage'
 import StaffPayrollPage from './pages/StaffPayrollPage'
+import AdminPlanningPage from './pages/AdminPlanningPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 import { StaffI18nProvider, useStaffLocale } from './lib/staffI18n'
@@ -355,6 +356,8 @@ function AppRoutes() {
     <Route path="/admin/payroll" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPayrollPage /></AppLayout></Protected>} />
     <Route path="/admin/reports" element={<Protected mode="admin"><AppLayout mode="admin"><AdminReportsPage /></AppLayout></Protected>} />
     <Route path="/admin/users" element={<Protected mode="admin"><AppLayout mode="admin"><AdminUsersPage /></AppLayout></Protected>} />
+    <Route path="/admin/work-execution" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="work-execution" /></AppLayout></Protected>} />
+    <Route path="/admin/account-usage" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="account-usage" /></AppLayout></Protected>} />
     <Route path="/staff" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome /></AppLayout></Protected>} />
     <Route path="/staff/schedule" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.schedule','我的排班')} /></AppLayout></Protected>} />
     <Route path="/staff/attendance" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.attendance','我的出勤')} /></AppLayout></Protected>} />

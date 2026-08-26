@@ -1,70 +1,192 @@
-import { PERMISSIONS } from './permissions'
+import { PERMISSIONS } from './permissions.js'
 
 const enc = value => encodeURIComponent(value)
+const tab = (path, value) => `${path}?tab=${enc(value)}`
+const item = (label, to, access = {}) => ({ label, to, ...access })
 
+const ACCESS = {
+  dashboard: { permissions:[PERMISSIONS.DASHBOARD_VIEW] },
+  employee: { permissions:[PERMISSIONS.EMPLOYEE_VIEW] },
+  employeeAnalytics: { permissions:[PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW] },
+  connectivity: { permissions:[PERMISSIONS.CONNECTIVITY_VIEW] },
+  alerts: { permissions:[
+    PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW,
+    PERMISSIONS.REPORT_VIEW,
+    PERMISSIONS.ADJUSTMENT_VIEW,
+    PERMISSIONS.ATTENDANCE_VIEW,
+    PERMISSIONS.DAILY_WORK_MANAGE,
+    PERMISSIONS.EXAM_VIEW,
+    PERMISSIONS.ACCOUNT_VIEW,
+    PERMISSIONS.USER_VIEW,
+  ] },
+  audit: { permissions:[PERMISSIONS.AUDIT_VIEW] },
+  report: { permissions:[PERMISSIONS.REPORT_VIEW] },
+  schedule: { permissions:[PERMISSIONS.SCHEDULE_VIEW] },
+  attendance: { permissions:[PERMISSIONS.ATTENDANCE_VIEW] },
+  leave: { allPermissions:[PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.LEAVE_APPROVE] },
+  adjustment: { permissions:[PERMISSIONS.ADJUSTMENT_VIEW] },
+  dailyWork: { permissions:[PERMISSIONS.REPORT_VIEW, PERMISSIONS.DAILY_WORK_SUBMIT, PERMISSIONS.DAILY_WORK_MANAGE] },
+  onlineTraining: { permissions:[PERMISSIONS.ONLINE_TRAINING_VIEW, PERMISSIONS.ONLINE_TRAINING_SUBMIT, PERMISSIONS.ONLINE_TRAINING_REVIEW, PERMISSIONS.ONLINE_TRAINING_MANAGE] },
+  exam: { permissions:[PERMISSIONS.EXAM_VIEW] },
+  examManage: { allPermissions:[PERMISSIONS.EXAM_VIEW, PERMISSIONS.EXAM_MANAGE] },
+  examGrade: { allPermissions:[PERMISSIONS.EXAM_VIEW, PERMISSIONS.EXAM_GRADE] },
+  payrollImport: { allPermissions:[PERMISSIONS.PAYROLL_VIEW, PERMISSIONS.PAYROLL_EDIT] },
+  payrollPending: { allPermissions:[PERMISSIONS.PAYROLL_VIEW], permissions:[PERMISSIONS.PAYROLL_APPROVE, PERMISSIONS.PAYROLL_PUBLISH] },
+  payroll: { permissions:[PERMISSIONS.PAYROLL_VIEW] },
+  payoutReview: { permissions:[PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
+  payoutHistory: { permissions:[PERMISSIONS.PAYROLL_PAYOUT_CHANGE_VIEW, PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
+  backendAccounts: { permissions:[PERMISSIONS.USER_VIEW, PERMISSIONS.ACCOUNT_VIEW, PERMISSIONS.ACCOUNT_CREATE, PERMISSIONS.ACCOUNT_EDIT, PERMISSIONS.ACCOUNT_DISABLE, PERMISSIONS.ACCOUNT_DELETE, PERMISSIONS.ACCOUNT_RESET_PASSWORD, PERMISSIONS.ACCOUNT_OTP_TOGGLE, PERMISSIONS.ACCOUNT_MFA_RESET] },
+  staffAccounts: { permissions:[PERMISSIONS.USER_VIEW, PERMISSIONS.USER_ACCOUNT_CREATE, PERMISSIONS.USER_ACCOUNT_DISABLE, PERMISSIONS.USER_ACCOUNT_DELETE, PERMISSIONS.USER_PASSWORD_RESET, PERMISSIONS.ACCOUNT_MFA_RESET] },
+  roles: { permissions:[PERMISSIONS.ROLE_MANAGE] },
+  accountUsage: { permissions:[PERMISSIONS.USER_VIEW] },
+}
+
+// Labels and ordering below are presentation-only. Every item still points to
+// the existing page and its canonical tab so moving the menu cannot change the
+// page's data, actions, or permission checks.
 export const adminNavigation = [
-  { to: '/admin', label: '首页', icon: '⌂', permissions: [PERMISSIONS.DASHBOARD_VIEW] },
+  { id:'home', to:'/admin', label:'首页', icon:'⌂', ...ACCESS.dashboard },
+  { id:'alerts', to:tab('/admin/employees', '预警记录'), label:'预警中心', icon:'警', ...ACCESS.alerts },
   {
-    to: '/admin/employees', label: '员工管理', icon: '人', children: [
-      { label: '员工档案', to: `/admin/employees?tab=${enc('员工档案')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
-      { label: '人员分析', to: `/admin/employees?tab=${enc('人员分析')}`, permissions: [PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW] },
-      { label: '停电 / 断网记录', to: `/admin/employees?tab=${enc('停电 / 断网记录')}`, permissions: [PERMISSIONS.CONNECTIVITY_VIEW] },
-      { label: '预警记录', to: `/admin/employees?tab=${enc('预警记录')}`, permissions: [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW, PERMISSIONS.REPORT_VIEW, PERMISSIONS.ADJUSTMENT_VIEW, PERMISSIONS.ATTENDANCE_VIEW] },
-      { label: '离职记录', to: `/admin/employees?tab=${enc('离职记录')}`, permissions: [PERMISSIONS.EMPLOYEE_VIEW] },
-      { label: '操作日志', to: `/admin/employees?tab=${enc('操作日志')}`, permissions: [PERMISSIONS.AUDIT_VIEW] },
+    id:'workforce', label:'员工排班管理统计', icon:'员', children:[
+      item('员工档案查询表', '/admin/employees', ACCESS.employee),
+      item('人员分析表', tab('/admin/employees', '人员分析'), ACCESS.employeeAnalytics),
+      item('离职记录表', tab('/admin/employees', '离职记录'), ACCESS.employee),
+      item('档案变更记录', tab('/admin/employees', '操作日志'), ACCESS.audit),
+      item('汇总表', '/admin/reports', ACCESS.report),
+      item('人员分布总表', tab('/admin/reports', '人员'), ACCESS.report),
+      item('站点人数报表', tab('/admin/reports', '盘口人数'), ACCESS.report),
+      item('排班表', '/admin/schedule', ACCESS.schedule),
     ],
   },
   {
-    to: '/admin/reports', label: '统计报表', icon: '报', children: [
-      { label: '总汇', to: `/admin/reports?tab=${enc('总汇')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
-      { label: '人员', to: `/admin/reports?tab=${enc('人员')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
-      { label: '排班表', to: `/admin/reports?tab=${enc('排班表')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
-      { label: '盘口人数', to: `/admin/reports?tab=${enc('盘口人数')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
-      { label: '统计', to: `/admin/reports?tab=${enc('统计')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
-      { label: '错误统计', to: `/admin/reports?tab=${enc('错误统计')}`, permissions: [PERMISSIONS.REPORT_VIEW] },
+    id:'attendance_exams', label:'考勤考试奖惩统计', icon:'考', children:[
+      item('月考勤休假记录表', tab('/admin/schedule', '出勤表'), ACCESS.attendance),
+      item('停电/断网记录', tab('/admin/employees', '停电 / 断网记录'), ACCESS.connectivity),
+      item('日考勤打卡记录表', tab('/admin/schedule', '考勤记录'), ACCESS.attendance),
+      item('请假审批记录表', tab('/admin/schedule', '请假审批'), ACCESS.leave),
+      item('错误记录统计报表', tab('/admin/reports', '错误统计'), ACCESS.report),
+      item('线上培训日报记录表', tab('/admin/daily', '线上培训报告'), ACCESS.onlineTraining),
+      item('考试汇总表', '/admin/training', ACCESS.exam),
+      item('人工批改', tab('/admin/training', '人工批改'), ACCESS.examGrade),
+      item('考试记录表', tab('/admin/training', '考试记录'), ACCESS.exam),
+      item('题库表', tab('/admin/training', '题库'), ACCESS.examManage),
+      item('奖惩表', tab('/admin/schedule', '奖金 / 扣款'), ACCESS.adjustment),
     ],
   },
   {
-    to: '/admin/schedule', label: '排班与考勤', icon: '班', children: [
-      { label: '排班表', to: `/admin/schedule?tab=${enc('排班表')}`, permissions: [PERMISSIONS.SCHEDULE_VIEW] },
-      { label: '出勤表', to: `/admin/schedule?tab=${enc('出勤表')}`, permissions: [PERMISSIONS.ATTENDANCE_VIEW] },
-      { label: '今日考勤', to: `/admin/schedule?tab=${enc('今日考勤')}`, permissions: [PERMISSIONS.ATTENDANCE_VIEW] },
-      { label: '考勤记录', to: `/admin/schedule?tab=${enc('考勤记录')}`, permissions: [PERMISSIONS.ATTENDANCE_VIEW] },
-      { label: '请假审批', to: `/admin/schedule?tab=${enc('请假审批')}`, allPermissions: [PERMISSIONS.ATTENDANCE_VIEW, PERMISSIONS.LEAVE_APPROVE] },
-      { label: '奖金 / 扣款', to: `/admin/schedule?tab=${enc('奖金 / 扣款')}`, permissions: [PERMISSIONS.ADJUSTMENT_VIEW] },
+    id:'work_execution', label:'工作执行与负责人管理统计', icon:'执', children:[
+      item('事件跟踪表', '/admin/work-execution', ACCESS.dailyWork),
+      item('每日巡视项目日报记录表', tab('/admin/work-execution', 'daily-inspection'), ACCESS.dailyWork),
+      item('质检日报记录表', tab('/admin/work-execution', 'quality-inspection'), ACCESS.dailyWork),
     ],
   },
   {
-    to: '/admin/daily', label: '每日工作', icon: '日', children: [
-      { label: '线上培训报告', to: '/admin/daily', permissions: [PERMISSIONS.ONLINE_TRAINING_VIEW, PERMISSIONS.ONLINE_TRAINING_SUBMIT, PERMISSIONS.ONLINE_TRAINING_REVIEW, PERMISSIONS.ONLINE_TRAINING_MANAGE] },
+    id:'payroll', label:'工资统计', icon:'薪', children:[
+      item('待发布工资表', tab('/admin/payroll', '待发布'), ACCESS.payrollPending),
+      item('已发布工资表', tab('/admin/payroll', '已发布'), ACCESS.payroll),
+      item('导入记录', tab('/admin/payroll', '导入记录'), ACCESS.payroll),
     ],
   },
   {
-    to: '/admin/training', label: '考试管理', icon: '考', children: [
-      { label: '考试概览', to: `/admin/training?tab=${enc('考试概览')}`, permissions: [PERMISSIONS.EXAM_VIEW] },
-      { label: '考试记录', to: `/admin/training?tab=${enc('考试记录')}`, permissions: [PERMISSIONS.EXAM_VIEW] },
-      { label: '题库', to: `/admin/training?tab=${enc('题库')}`, allPermissions: [PERMISSIONS.EXAM_VIEW, PERMISSIONS.EXAM_MANAGE] },
-      { label: '人工批改', to: `/admin/training?tab=${enc('人工批改')}`, allPermissions: [PERMISSIONS.EXAM_VIEW, PERMISSIONS.EXAM_GRADE] },
-    ],
-  },
-  {
-    to: '/admin/payroll', label: '工资中心', icon: '薪', children: [
-      { label: '工资导入', to: `/admin/payroll?tab=${enc('工资导入')}`, allPermissions: [PERMISSIONS.PAYROLL_VIEW, PERMISSIONS.PAYROLL_EDIT] },
-      { label: '待发布', to: `/admin/payroll?tab=${enc('待发布')}`, allPermissions: [PERMISSIONS.PAYROLL_VIEW], permissions: [PERMISSIONS.PAYROLL_APPROVE, PERMISSIONS.PAYROLL_PUBLISH] },
-      { label: '已发布', to: `/admin/payroll?tab=${enc('已发布')}`, permissions: [PERMISSIONS.PAYROLL_VIEW] },
-      { label: '导入记录', to: `/admin/payroll?tab=${enc('导入记录')}`, permissions: [PERMISSIONS.PAYROLL_VIEW] },
-      { label: '收款资料审核', to: `/admin/payroll?tab=${enc('收款资料审核')}`, permissions: [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
-      { label: '申请记录', to: `/admin/payroll?tab=${enc('申请记录')}`, permissions: [PERMISSIONS.PAYROLL_PAYOUT_CHANGE_VIEW, PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
-    ],
-  },
-  {
-    to: '/admin/users', label: '用户与权限', icon: '权', children: [
-      { label: '后台账号', to: '/admin/users?tab=backend', permissions: [PERMISSIONS.USER_VIEW, PERMISSIONS.ACCOUNT_VIEW, PERMISSIONS.ACCOUNT_CREATE, PERMISSIONS.ACCOUNT_EDIT, PERMISSIONS.ACCOUNT_DISABLE, PERMISSIONS.ACCOUNT_DELETE, PERMISSIONS.ACCOUNT_RESET_PASSWORD, PERMISSIONS.ACCOUNT_OTP_TOGGLE, PERMISSIONS.ACCOUNT_MFA_RESET] },
-      { label: '员工账号', to: '/admin/users?tab=staff', permissions: [PERMISSIONS.USER_VIEW, PERMISSIONS.USER_ACCOUNT_CREATE, PERMISSIONS.USER_ACCOUNT_DISABLE, PERMISSIONS.USER_ACCOUNT_DELETE, PERMISSIONS.USER_PASSWORD_RESET, PERMISSIONS.ACCOUNT_MFA_RESET] },
-      { label: '角色与权限', to: '/admin/users?tab=roles', permissions: [PERMISSIONS.ROLE_MANAGE] },
+    id:'account_usage', label:'后台账号使用情况', icon:'权', children:[
+      item('员工使用聊天工具', '/admin/account-usage', ACCESS.accountUsage),
+      item('员工前端账号', tab('/admin/users', 'staff'), ACCESS.staffAccounts),
+      item('后台账号', '/admin/users', ACCESS.backendAccounts),
+      item('后台角色权限', tab('/admin/users', 'roles'), ACCESS.roles),
     ],
   },
 ]
+
+const route = (to, access, groupId = '') => ({ to, groupId, ...access })
+
+// Route authorization is deliberately independent from the visible sidebar.
+// Hidden legacy tabs remain reachable (and keep their original permissions),
+// including links/bookmarks created before this menu reorganization.
+export const adminRouteAccess = [
+  route('/admin', ACCESS.dashboard, 'home'),
+  route('/admin/employees', ACCESS.employee, 'workforce'),
+  route(tab('/admin/employees', '员工档案'), ACCESS.employee, 'workforce'),
+  route(tab('/admin/employees', '人员分析'), ACCESS.employeeAnalytics, 'workforce'),
+  route(tab('/admin/employees', '团队管理'), ACCESS.employeeAnalytics, 'workforce'),
+  route(tab('/admin/employees', '岗位管理'), ACCESS.employeeAnalytics, 'workforce'),
+  route(tab('/admin/employees', '停电 / 断网记录'), ACCESS.connectivity, 'attendance_exams'),
+  route(tab('/admin/employees', '预警记录'), ACCESS.alerts, 'alerts'),
+  route(tab('/admin/employees', '离职记录'), ACCESS.employee, 'workforce'),
+  route(tab('/admin/employees', '入离职记录'), ACCESS.employee, 'workforce'),
+  route(tab('/admin/employees', '操作日志'), ACCESS.audit, 'workforce'),
+
+  route('/admin/reports', ACCESS.report, 'workforce'),
+  route(tab('/admin/reports', '总汇'), ACCESS.report, 'workforce'),
+  route(tab('/admin/reports', '人员'), ACCESS.report, 'workforce'),
+  route(tab('/admin/reports', '排班表'), ACCESS.report, 'workforce'),
+  route(tab('/admin/reports', '盘口人数'), ACCESS.report, 'workforce'),
+  route(tab('/admin/reports', '统计'), ACCESS.report, 'workforce'),
+  route(tab('/admin/reports', '错误统计'), ACCESS.report, 'attendance_exams'),
+
+  route('/admin/schedule', ACCESS.schedule, 'workforce'),
+  route(tab('/admin/schedule', '排班表'), ACCESS.schedule, 'workforce'),
+  route(tab('/admin/schedule', '出勤表'), ACCESS.attendance, 'attendance_exams'),
+  route(tab('/admin/schedule', '今日考勤'), ACCESS.attendance, 'attendance_exams'),
+  route(tab('/admin/schedule', '考勤记录'), ACCESS.attendance, 'attendance_exams'),
+  route(tab('/admin/schedule', '请假审批'), ACCESS.leave, 'attendance_exams'),
+  route(tab('/admin/schedule', '奖金 / 扣款'), ACCESS.adjustment, 'attendance_exams'),
+
+  route('/admin/daily', { permissions:[...ACCESS.dailyWork.permissions, ...ACCESS.onlineTraining.permissions] }, 'work_execution'),
+  route(tab('/admin/daily', '每日工作报告'), ACCESS.dailyWork, 'work_execution'),
+  route(tab('/admin/daily', '线上培训报告'), ACCESS.onlineTraining, 'attendance_exams'),
+
+  route('/admin/training', ACCESS.exam, 'attendance_exams'),
+  route(tab('/admin/training', '考试概览'), ACCESS.exam, 'attendance_exams'),
+  route(tab('/admin/training', '考试记录'), ACCESS.exam, 'attendance_exams'),
+  route(tab('/admin/training', '题库'), ACCESS.examManage, 'attendance_exams'),
+  route(tab('/admin/training', '人工批改'), ACCESS.examGrade, 'attendance_exams'),
+
+  route('/admin/payroll', ACCESS.payrollImport, 'payroll'),
+  route(tab('/admin/payroll', '工资导入'), ACCESS.payrollImport, 'payroll'),
+  route(tab('/admin/payroll', '待发布'), ACCESS.payrollPending, 'payroll'),
+  route(tab('/admin/payroll', '已发布'), ACCESS.payroll, 'payroll'),
+  route(tab('/admin/payroll', '导入记录'), ACCESS.payroll, 'payroll'),
+  route(tab('/admin/payroll', '收款资料审核'), ACCESS.payoutReview, 'payroll'),
+  route(tab('/admin/payroll', '申请记录'), ACCESS.payoutHistory, 'payroll'),
+
+  route('/admin/users', ACCESS.backendAccounts, 'account_usage'),
+  route(tab('/admin/users', 'backend'), ACCESS.backendAccounts, 'account_usage'),
+  route(tab('/admin/users', 'staff'), ACCESS.staffAccounts, 'account_usage'),
+  route(tab('/admin/users', 'roles'), ACCESS.roles, 'account_usage'),
+
+  route('/admin/work-execution', ACCESS.dailyWork, 'work_execution'),
+  route(tab('/admin/work-execution', 'daily-inspection'), ACCESS.dailyWork, 'work_execution'),
+  route(tab('/admin/work-execution', 'quality-inspection'), ACCESS.dailyWork, 'work_execution'),
+  route('/admin/account-usage', ACCESS.accountUsage, 'account_usage'),
+]
+
+const targetUrl = to => new URL(to, 'https://wfh.local')
+const DEFAULT_TABS = {
+  '/admin/employees':'员工档案',
+  '/admin/reports':'总汇',
+  '/admin/schedule':'排班表',
+  '/admin/daily':'每日工作报告',
+  '/admin/training':'考试概览',
+  '/admin/payroll':'工资导入',
+  '/admin/users':'backend',
+}
+
+export function adminTargetMatches(to, pathname, search = '') {
+  const target = targetUrl(to)
+  if (target.pathname !== pathname) return false
+  const requestedTab = new URLSearchParams(search).get('tab') ?? DEFAULT_TABS[pathname] ?? null
+  const targetTab = target.searchParams.get('tab') ?? DEFAULT_TABS[target.pathname] ?? null
+  return targetTab === requestedTab
+}
+
+export function requestedAdminRoute(pathname, search = '') {
+  const requestedTab = new URLSearchParams(search).get('tab')
+  return adminRouteAccess.find(entry => {
+    const target = targetUrl(entry.to)
+    return target.pathname === pathname && target.searchParams.get('tab') === requestedTab
+  }) || null
+}
 
 export const staffNavigation = [
   { to: '/staff', key: 'nav.home', label: '首页' },

@@ -5,5 +5,5 @@ export function adminAlertTarget(alertType) {
 }
 
 export function adminAlertEmployeeTarget(employeeId) {
-  return `/admin/employees?tab=${encodeURIComponent('员工档案')}&employee=${encodeURIComponent(String(employeeId || ''))}`
+  return `/admin/employees?tab=${encodeURIComponent('预警记录')}&employee=${encodeURIComponent(String(employeeId || ''))}`
 }

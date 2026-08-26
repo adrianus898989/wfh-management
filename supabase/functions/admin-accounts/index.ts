@@ -621,7 +621,7 @@ Deno.serve(async (req) => {
         scopeEmployeeRes,
       ] = await Promise.all([
         mayViewAccounts ? admin.from('user_access')
-          .select('auth_user_id,employee_id,role_id,login_username,login_email,backend_enabled,employee_portal_enabled,otp_required,data_scope,active,must_change_password,roles(id,code,name,system_locked,active)')
+          .select('auth_user_id,employee_id,role_id,login_username,login_email,backend_enabled,employee_portal_enabled,otp_required,data_scope,active,must_change_password,created_at,roles(id,code,name,system_locked,active)')
           .order('created_at', { ascending: true }) : emptyResult(),
         (mayManageRoles || mayCreateAccounts || can('account.edit'))
           ? admin.from('roles').select('id,code,name,system_locked,active').order('name')

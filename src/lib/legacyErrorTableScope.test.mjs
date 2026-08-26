@@ -58,4 +58,15 @@ test('员工档案原生表头与数据行列数一致，等级只渲染一次',
   assert.match(pageSource, /normal:\{zh:'正常',en:'Normal'/)
   assert.match(rowSource, /data-admin-i18n-skip/)
   assert.match(rowSource, /risk\[locale\]\|\|risk\.zh/)
+
+  const loadListStart = pageSource.indexOf('const loadList=async')
+  const loadListEnd = pageSource.indexOf('const loadHistory=async', loadListStart)
+  const loadListSource = pageSource.slice(loadListStart, loadListEnd)
+  assert.doesNotMatch(loadListSource, /getAllErrorSummaryMap/)
+  assert.match(loadListSource, /total_error_count:totalErrorCount/)
+  assert.match(loadListSource, /risk_level:riskKeyFromCount\(totalErrorCount\)/)
+
+  const endpointSource = await readFile(new URL('../../supabase/functions/admin-employees/index.ts', import.meta.url), 'utf8')
+  assert.match(endpointSource, /from\("employee_error_summary"\)/)
+  assert.match(endpointSource, /risk_level:employeeRiskKey\(totalErrorCount\)/)
 })

@@ -1,3 +1,5 @@
+// The payload schema is unchanged; keep the database contract version at v1
+// while the parser reconciles duplicate identities deterministically.
 export const PARSER_VERSION = "schedule-roster-a-m-v1";
 
 export const SCHEDULE_SOURCE = Object.freeze({
@@ -141,7 +143,8 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSched
   if (computedHash !== snapshotHash) throw new Error("snapshot_hash_mismatch");
 
   const rows: NormalizedScheduleRow[] = [];
-  const seenEmployeeIds = new Map<string, number>();
+  const employeeIdIndexes = new Map<string, number>();
+  const missingIdNameIndexes = new Map<string, number>();
   let parseWarningCount = 0;
   for (let index = 1; index < rawValues.length; index += 1) {
     const cells = rawValues[index].map(trimmed);
@@ -156,17 +159,7 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSched
     // only ID-backed rows are eligible for employee-directory matching. A
     // complete ID-column outage is rejected below and the database removal
     // guard rejects a large partial outage before replacing the last snapshot.
-    if (!employeeId) {
-      parseWarningCount += 1;
-    } else if (seenEmployeeIds.has(employeeId)) {
-      throw new Error(
-        `snapshot_duplicate_employee_id_rows_${seenEmployeeIds.get(employeeId)}_${index + 1}`,
-      );
-    } else {
-      seenEmployeeIds.set(employeeId, index + 1);
-    }
-
-    rows.push({
+    const row: NormalizedScheduleRow = {
       source_row: index + 1,
       responsible: cells[0],
       onsite_trainer: cells[1],
@@ -181,7 +174,37 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSched
       position: cells[10],
       platform: cells[11],
       work_content: cells[12],
-    });
+    };
+
+    if (employeeId) {
+      const existingIndex = employeeIdIndexes.get(employeeId);
+      if (existingIndex !== undefined) {
+        // The live sheet contains historical duplicate assignments for the
+        // same person. Keep the latest/current source row deterministically,
+        // but never merge two different names behind one employee ID.
+        const existing = rows[existingIndex];
+        if (existing.name.trim().toLocaleUpperCase("en") !== name.trim().toLocaleUpperCase("en")) {
+          throw new Error(
+            `snapshot_duplicate_employee_id_name_conflict_rows_${existing.source_row}_${index + 1}`,
+          );
+        }
+        rows[existingIndex] = row;
+        parseWarningCount += 1;
+        continue;
+      }
+      employeeIdIndexes.set(employeeId, rows.length);
+    } else {
+      const nameIdentity = name.toLocaleUpperCase("en").replace(/\s+/g, " ");
+      const existingIndex = missingIdNameIndexes.get(nameIdentity);
+      parseWarningCount += 1;
+      if (existingIndex !== undefined) {
+        rows[existingIndex] = row;
+        continue;
+      }
+      missingIdNameIndexes.set(nameIdentity, rows.length);
+    }
+
+    rows.push(row);
   }
   if (rows.length === 0) throw new Error("snapshot_has_no_roster_rows");
   if (!rows.some((row) => row.employee_id)) throw new Error("snapshot_has_no_employee_ids");

@@ -6,6 +6,8 @@ begin;
 do $$
 declare
   v_refresh_definition text;
+  v_wrapper_definition text;
+  v_extended_definition text;
 begin
   if not exists (
     select 1 from pg_catalog.pg_class relation
@@ -30,13 +32,26 @@ begin
   end if;
 
   select pg_catalog.pg_get_functiondef(
-    'alerts_private.refresh_alerts()'::regprocedure
+    'alerts_private.refresh_core_alerts()'::regprocedure
   ) into v_refresh_definition;
   if strpos(v_refresh_definition, 'count(distinct error.record_key) >= 6') = 0
      or strpos(v_refresh_definition, 'having count(*) >= 4') = 0
      or strpos(v_refresh_definition, 'home_leave_excluded') = 0
      or strpos(v_refresh_definition, 'payout_change') > 0 then
     raise exception 'one or more warning thresholds are missing';
+  end if;
+
+  select pg_catalog.pg_get_functiondef(
+    'alerts_private.refresh_alerts()'::regprocedure
+  ) into v_wrapper_definition;
+  select pg_catalog.pg_get_functiondef(
+    'alerts_private.refresh_extended_alerts()'::regprocedure
+  ) into v_extended_definition;
+  if strpos(v_wrapper_definition, 'refresh_core_alerts') = 0
+     or strpos(v_wrapper_definition, 'refresh_extended_alerts') = 0
+     or strpos(v_extended_definition, 'latest_graded_attempt_failed') = 0
+     or strpos(v_extended_definition, 'resigned_account_active') = 0 then
+    raise exception 'extended alert refresh composition is missing';
   end if;
 
   if not exists (

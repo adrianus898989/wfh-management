@@ -2,6 +2,7 @@ import {
   HOME_ROSTER_HEADERS,
   HOME_ROSTER_SOURCE,
   normalizeSnapshot,
+  PARSER_VERSION,
   SCHEDULE_ROSTER_HEADERS,
   SCHEDULE_ROSTER_SOURCE,
   sha256Hex,
@@ -88,6 +89,8 @@ Deno.test("normalizes the atomic home and schedule snapshot", async () => {
   const schedule = scheduleValues(baseScheduleRows);
   const dateValues = [["", ""], ["", ""], ["2026-08-01", ""]];
   const result = await normalizeSnapshot(await payloadFor(home, schedule, dateValues));
+  assert(PARSER_VERSION === "employee-master-dual-source-v1", "database parser contract drifted");
+  assert(result.parser_version === PARSER_VERSION, "payload parser version mismatch");
   assert(result.home_rows.length === 1, "home row count mismatch");
   assert(result.schedule_rows.length === 1, "schedule row count mismatch");
   assert(result.home_rows[0].employee_id === "WD001", "home ID was not normalized");
@@ -215,22 +218,18 @@ Deno.test("allows a historical resigned row without ID but rejects an active one
   assert(error instanceof SnapshotValidationError && error.code === "home_active_row_missing_employee_id", "active missing ID was accepted");
 });
 
-Deno.test("fails closed with both source rows for a duplicate schedule ID", async () => {
+Deno.test("keeps the latest schedule assignment for a repeated ID", async () => {
   const home = homeValues(baseHomeRows);
   const schedule = scheduleValues([
     ["", "", "", "", "审单财务组1", "熊猫PH", "AKI", "FZ526082415", "白班", "菲律宾", "客服", "学熊猫PH", ""],
     ["", "", "", "", "客服组43", "熊猫PH", "AKI", " fz526082415 ", "白班", "菲律宾", "客服", "AA45/F75", ""],
   ]);
   const dateValues = [["", ""], ["", ""], ["2026-08-01", ""]];
-  let error: unknown;
-  try {
-    await normalizeSnapshot(await payloadFor(home, schedule, dateValues));
-  } catch (caught) {
-    error = caught;
-  }
-  assert(error instanceof SnapshotValidationError, "duplicate schedule ID was accepted");
-  assert((error as SnapshotValidationError).code === "schedule_duplicate_employee_id", "unexpected duplicate error code");
-  assert(JSON.stringify((error as SnapshotValidationError).details.rows) === "[2,3]", "duplicate rows were not reported");
+  const result = await normalizeSnapshot(await payloadFor(home, schedule, dateValues));
+  assert(result.schedule_rows.length === 1, "duplicate identity was not collapsed");
+  assert(result.schedule_rows[0].source_row === 3, "latest schedule row was not retained");
+  assert(result.schedule_rows[0].group === "客服组43", "latest assignment was not retained");
+  assert(result.parse_warning_count >= 1, "resolved duplicate should warn");
 });
 
 Deno.test("rejects source drift and a changed payload with a reused hash", async () => {

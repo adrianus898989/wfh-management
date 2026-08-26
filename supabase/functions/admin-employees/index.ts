@@ -13,6 +13,16 @@ const json = (body: unknown, status = 200) =>
   });
 
 const text = (v: unknown) => String(v ?? "").trim();
+const employeeNoKey = (v: unknown) => text(v).toUpperCase();
+
+function employeeRiskKey(value: unknown) {
+  const count = Number(value || 0);
+  if (count >= 31) return "high";
+  if (count >= 16) return "watch";
+  if (count >= 9) return "attention";
+  if (count >= 1) return "normal";
+  return "excellent";
+}
 
 function jwtSessionId(token:string){
   try{
@@ -990,14 +1000,21 @@ Deno.serve(async (req) => {
       if (error) throw error;
 
       const ids = (rows || []).map((r:any) => r.id);
-      const [{ data:pays }, { data:contacts }, { data:accountRows }] = ids.length ? await Promise.all([
+      const employeeNos = (rows || []).map((r:any) => employeeNoKey(r.employee_no)).filter(Boolean);
+      const emptyRelated = { data:[], error:null };
+      const [{ data:pays }, { data:contacts }, { data:accountRows }, { data:errorSummaries, error:errorSummaryError }] = ids.length ? await Promise.all([
         service.from("employee_payment_profiles").select("*").in("employee_id",ids),
         service.from("employee_contact_profiles").select("employee_id,telegram_username").in("employee_id",ids),
         service.from("user_access").select("employee_id,employee_portal_enabled,active").in("employee_id",ids),
-      ]) : [{data:[]},{data:[]},{data:[]}];
+        employeeNos.length
+          ? service.from("employee_error_summary").select("employee_no,month_error_count,total_error_count").in("employee_no",employeeNos)
+          : Promise.resolve(emptyRelated),
+      ]) : [emptyRelated,emptyRelated,emptyRelated,emptyRelated];
+      if (errorSummaryError) throw errorSummaryError;
 
       const payMap = new Map((pays || []).map((x:any) => [x.employee_id,x]));
       const contactMap = new Map((contacts || []).map((x:any) => [x.employee_id,x]));
+      const errorSummaryMap = new Map((errorSummaries || []).map((x:any) => [employeeNoKey(x.employee_no),x]));
       const accountSet = new Set(
         (accountRows || []).filter((x:any)=>x.employee_portal_enabled && x.active).map((x:any)=>x.employee_id)
       );
@@ -1005,10 +1022,16 @@ Deno.serve(async (req) => {
       const result = (rows || []).map((r:any) => {
         const merged = { ...r, telegram_username:contactMap.get(r.id)?.telegram_username };
         const missing = missingFields(merged,payMap.get(r.id));
+        const errorSummary = errorSummaryMap.get(employeeNoKey(r.employee_no));
+        const monthErrorCount = Number(errorSummary?.month_error_count || 0);
+        const totalErrorCount = Number(errorSummary?.total_error_count || 0);
         return {
           ...r,
           work_tg:canViewEmployeeSensitive?r.work_tg:(r.work_tg?"****":null),
           backend_accounts:canViewEmployeeSensitive?r.backend_accounts:(r.backend_accounts?"****":null),
+          month_error_count:monthErrorCount,
+          total_error_count:totalErrorCount,
+          risk_level:employeeRiskKey(totalErrorCount),
           missing_fields:missing,missing_count:missing.length,account_opened:accountSet.has(r.id),
         };
       });

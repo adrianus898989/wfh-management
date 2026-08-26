@@ -1,3 +1,5 @@
+// The payload schema is unchanged; keep the database contract version at v1
+// while the parser reconciles duplicate identities deterministically.
 export const PARSER_VERSION = "employee-master-dual-source-v1";
 
 export const HOME_ROSTER_SOURCE = Object.freeze({
@@ -407,7 +409,8 @@ async function normalizeScheduleRoster(value: unknown) {
   if (actualHash !== expectedHash) throw new SnapshotValidationError("snapshot_hash_mismatch", { source: "schedule_roster" });
 
   const rows: NormalizedScheduleRosterRow[] = [];
-  const seen = new Map<string, number>();
+  const employeeIdIndexes = new Map<string, number>();
+  const missingIdNameIndexes = new Map<string, number>();
   let warnings = 0;
   for (let index = SCHEDULE_ROSTER_SOURCE.headerRow; index < values.length; index += 1) {
     const cells = values[index].map(trimmed);
@@ -416,18 +419,8 @@ async function normalizeScheduleRoster(value: unknown) {
     const employeeId = normalizeEmployeeId(cells[7]);
     if (!name && !employeeId) continue;
     if (!name) throw new SnapshotValidationError("schedule_row_missing_name", { row: sourceRow, employee_id: employeeId });
-    if (!employeeId) {
-      warnings += 1;
-    } else if (seen.has(employeeId)) {
-      throw new SnapshotValidationError("schedule_duplicate_employee_id", {
-        employee_id: employeeId,
-        rows: [seen.get(employeeId), sourceRow],
-      });
-    } else {
-      seen.set(employeeId, sourceRow);
-    }
     const onsiteMarker = hasOnsiteMarker(cells[12]);
-    rows.push({
+    const row: NormalizedScheduleRosterRow = {
       source_row: sourceRow,
       responsible: cells[0],
       onsite_trainer: cells[1],
@@ -444,7 +437,35 @@ async function normalizeScheduleRoster(value: unknown) {
       platform: cells[11],
       work_content: cells[12],
       onsite_marker: onsiteMarker,
-    });
+    };
+
+    if (employeeId) {
+      const existingIndex = employeeIdIndexes.get(employeeId);
+      if (existingIndex !== undefined) {
+        const existing = rows[existingIndex];
+        if (existing.name_key !== row.name_key) {
+          throw new SnapshotValidationError("schedule_duplicate_employee_id_name_conflict", {
+            employee_id: employeeId,
+            rows: [existing.source_row, sourceRow],
+          });
+        }
+        // Later rows are the current assignment in this append-style roster.
+        rows[existingIndex] = row;
+        warnings += 1;
+        continue;
+      }
+      employeeIdIndexes.set(employeeId, rows.length);
+    } else {
+      const existingIndex = missingIdNameIndexes.get(row.name_key);
+      warnings += 1;
+      if (existingIndex !== undefined) {
+        rows[existingIndex] = row;
+        continue;
+      }
+      missingIdNameIndexes.set(row.name_key, rows.length);
+    }
+
+    rows.push(row);
   }
   if (!rows.length) throw new SnapshotValidationError("schedule_roster_empty");
   if (!rows.some((row) => row.employee_id)) throw new SnapshotValidationError("schedule_employee_ids_missing");

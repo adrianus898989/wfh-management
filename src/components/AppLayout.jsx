@@ -3,24 +3,12 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { signOutAppSession, supabase } from '../lib/supabase'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
-import { adminNavigation, staffNavigation } from '../config/navigation'
+import { adminNavigation, adminRouteAccess, adminTargetMatches, requestedAdminRoute, staffNavigation } from '../config/navigation'
 import { AdminAccessProvider } from '../lib/adminAccess'
 import { AdminAlertBell } from './AdminAlertCenter'
 
+const navKey = item => item.id || item.to
 const navUrl = to => new URL(to, 'https://wfh.local')
-const childPath = to => navUrl(to).pathname
-
-function requestedAdminNavigationItem(pathname, search) {
-  if (pathname === '/admin') return adminNavigation.find(item => item.to === '/admin') || null
-  const group = adminNavigation.find(item => item.children?.some(child => childPath(child.to) === pathname))
-  if (!group) return null
-  const requestedTab = new URLSearchParams(search).get('tab')
-  return group.children.find((child, index) => {
-    const target = navUrl(child.to)
-    const targetTab = target.searchParams.get('tab')
-    return target.pathname === pathname && (targetTab ? targetTab === requestedTab : (!requestedTab && index === 0))
-  }) || null
-}
 
 export default function AppLayout({ mode, children }) {
   const navigate = useNavigate()
@@ -81,23 +69,23 @@ export default function AppLayout({ mode, children }) {
     return !item.permissions?.length||item.permissions.some(permissionAllowed)
   }
   const visibleAdminNav=adminAccess.loading||adminAccess.error?[]:adminNavigation.map(item=>item.children?({...item,children:item.children.filter(navAllowed)}):item).filter(item=>navAllowed(item)&&(!item.children||item.children.length))
-  const requestedAdminItem=mode==='admin'?requestedAdminNavigationItem(location.pathname,location.search):null
+  const requestedAdminItem=mode==='admin'?requestedAdminRoute(location.pathname,location.search):null
   const requestedAdminAllowed=Boolean(requestedAdminItem&&navAllowed(requestedAdminItem))
   const firstAllowedAdminTarget=visibleAdminNav.reduce((target,item)=>target||(item.children?.[0]?.to||item.to),'')
-  const requestedAdminGroup=adminNavigation.find(item=>item.children?.some(child=>childPath(child.to)===location.pathname))
-  const routeFallbackTarget=requestedAdminGroup?.children?.find(navAllowed)?.to||firstAllowedAdminTarget
+  const requestedAdminGroup=adminNavigation.find(item=>item.children&&item.id===requestedAdminItem?.groupId)
+  const samePageCandidates=adminRouteAccess.filter(item=>navUrl(item.to).pathname===location.pathname&&item!==requestedAdminItem&&navAllowed(item))
+  const samePageFallback=(requestedAdminItem
+    ? samePageCandidates.find(item=>navUrl(item.to).searchParams.has('tab'))
+    : samePageCandidates.find(item=>!navUrl(item.to).searchParams.has('tab'))
+  )||samePageCandidates[0]
+  const routeFallbackTarget=samePageFallback?.to||requestedAdminGroup?.children?.find(navAllowed)?.to||firstAllowedAdminTarget
 
-  const groupActive = item => location.pathname.startsWith(item.to) || item.children?.some(child=>{
-    const path=childPath(child.to)
-    return location.pathname===path || location.pathname.startsWith(`${path}/`)
-  })
-  const pathGroup = adminNavigation.find(x => x.children && groupActive(x))?.to || null
+  const pathGroup = requestedAdminGroup?.id || null
   const [openGroup,setOpenGroup] = useState(pathGroup)
 
   useEffect(()=>{
-    if (pathGroup && openGroup && openGroup !== pathGroup) setOpenGroup(pathGroup)
-    if (!pathGroup && openGroup) setOpenGroup(null)
-  },[location.pathname])
+    setOpenGroup(pathGroup)
+  },[pathGroup])
 
   useEffect(()=>{
     if(mode!=='admin'||adminAccess.loading||adminAccess.error||requestedAdminAllowed)return
@@ -110,10 +98,9 @@ export default function AppLayout({ mode, children }) {
     navigate(mode==='admin'?'/admin/login':'/staff/login')
   }
 
-  const activeTab = new URLSearchParams(location.search).get('tab')
-
   const clickParent = item=>{
-    setOpenGroup(openGroup===item.to ? null : item.to)
+    const key=navKey(item)
+    setOpenGroup(current=>current===key ? null : key)
   }
 
   const adminMain = adminAccess.loading
@@ -135,28 +122,26 @@ export default function AppLayout({ mode, children }) {
 
         {mode==='admin' ? <nav className="sidebar-nav sidebar-nav-pro">
           {visibleAdminNav.map(item=>{
-            const expanded = openGroup===item.to
+            const key = navKey(item)
+            const expanded = openGroup===key
 
             if(!item.children) return (
-              <NavLink key={item.to} to={item.to} end={item.to==='/admin'} className={({isActive})=>isActive?'active nav-parent':'nav-parent'}>
+              <NavLink key={key} to={item.to} end={item.to==='/admin'} className={adminTargetMatches(item.to,location.pathname,location.search)?'active nav-parent':'nav-parent'}>
                 <span className="nav-icon">{item.icon}</span>
                 <span className="nav-parent-label">{adminT(item.label)}</span>
               </NavLink>
             )
 
-            return <div className="nav-group" key={item.to}>
-              <button type="button" className="nav-parent nav-parent-button" aria-expanded={expanded} onClick={()=>clickParent(item)}>
+            return <div className={`nav-group ${pathGroup===key?'active-group':''}`} key={key}>
+              <button type="button" className={`nav-parent nav-parent-button ${pathGroup===key?'active':''}`} aria-expanded={expanded} onClick={()=>clickParent(item)}>
                 <span className="nav-icon">{item.icon}</span>
                 <span className="nav-parent-label">{adminT(item.label)}</span>
                 <span className="nav-chevron">{expanded?'⌄':'›'}</span>
               </button>
 
               {expanded && <div className="nav-children">
-                {item.children.map((child,index)=>{
-                  const target = new URL(child.to,'https://wfh.local')
-                  const targetTab = target.searchParams.get('tab')
-                  const samePath = location.pathname===target.pathname || location.pathname.startsWith(`${target.pathname}/`)
-                  const childActive = samePath && (targetTab ? (activeTab ? activeTab===targetTab : index===0) : true)
+                {item.children.map(child=>{
+                  const childActive = adminTargetMatches(child.to,location.pathname,location.search)
                   return <NavLink key={child.label} to={child.to} className={childActive?'active-child':''}>
                     <span className="child-dot"/>{adminT(child.label)}
                   </NavLink>
