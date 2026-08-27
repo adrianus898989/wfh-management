@@ -13,6 +13,7 @@ import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 import { employeePortalAccountPresentation } from '../lib/employeeAccountStatus'
+import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { employeeArchiveCsv, employeeArchiveExportFilename } from '../lib/employeeArchiveExport'
 import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
 import { employeeTrainerReviewRows } from '../lib/onlineTrainingPresentation'
@@ -437,6 +438,7 @@ export default function AdminEmployeesPage(){
   const canViewAnalytics=adminAccess.hasPermission('employee.analytics.view')
   const canViewAudit=adminAccess.hasPermission('employee.change_history.view')
   const canViewSensitiveEmployees=adminAccess.hasPermission(PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW)
+  const canGenerateActivationCode=adminAccess.hasPermission(PERMISSIONS.USER_ACTIVATION_GENERATE)
   const canViewAdjustmentLogs=canViewAudit&&adminAccess.hasPermission('adjustment.page.view')
   const canViewAttendanceLogs=canViewAudit&&adminAccess.hasAnyPermission(['attendance.monthly.view','attendance.today.view','attendance.records.view','attendance.leave.view'])
   const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>{
@@ -1382,7 +1384,7 @@ export default function AdminEmployeesPage(){
                 <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
                 <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
                 <td><span className={portalAccount.className}>{portalAccount.label}</span></td>
-                <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{portalAccount.canGenerateActivationCode&&meta.actions?.can_generate_activation_code&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
+                <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{portalAccount.canGenerateActivationCode&&(meta.actions?.can_generate_activation_code||canGenerateActivationCode)&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
               </tr>
             })}</tbody>
           </table>
