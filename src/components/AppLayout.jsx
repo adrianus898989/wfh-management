@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { signOutAppSession, supabase } from '../lib/supabase'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
@@ -92,9 +92,12 @@ export default function AppLayout({ mode, children }) {
   const staffGroup = mode==='staff' ? requestedStaffGroup(location.pathname, location.search) : null
   const [openStaffGroup,setOpenStaffGroup] = useState(staffGroup?.id || null)
 
-  useEffect(()=>{
+  // Keep the expanded group in sync before the new route is painted. Using a
+  // normal effect leaves one frame where the old group is still expanded,
+  // which becomes very visible while a data-heavy page is loading.
+  useLayoutEffect(()=>{
     setOpenGroup(pathGroup)
-  },[pathGroup])
+  },[location.key,pathGroup])
 
   useEffect(()=>{
     if (staffGroup?.children?.length) setOpenStaffGroup(staffGroup.id)

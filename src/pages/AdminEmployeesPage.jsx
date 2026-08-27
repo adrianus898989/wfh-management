@@ -8,6 +8,7 @@ import { AdminAlertRecordsPage, EmployeeAlertHistoryPanel } from '../components/
 import AdminDataEntryLogs from '../components/AdminDataEntryLogs'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
+import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'

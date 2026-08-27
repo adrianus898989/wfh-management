@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
+import AppCrashBoundary, { recoverStaleAsset } from './components/AppCrashBoundary'
 import appStyles from './styles.css?inline'
 import proStyles from './styles-pro.css?inline'
 import reportsStyles from './styles-reports.css?inline'
@@ -25,7 +26,11 @@ const pro = document.createElement('style'); pro.setAttribute('data-wfh-pro-styl
 const reports = document.createElement('style'); reports.setAttribute('data-wfh-reports-styles', 'true'); reports.textContent = reportsStyles; document.head.appendChild(reports)
 const employeeV27 = document.createElement('style'); employeeV27.setAttribute('data-wfh-employee-v27-styles', 'true'); employeeV27.textContent = employeeV27Styles; document.head.appendChild(employeeV27)
 document.documentElement.setAttribute('data-wfh-ui-build', 'exam-v1-team-position')
-ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter basename="/wfh-management"><App /></BrowserRouter></React.StrictMode>)
+window.addEventListener('vite:preloadError', event => {
+  event.preventDefault()
+  recoverStaleAsset(event.payload || event)
+})
+ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><AppCrashBoundary><BrowserRouter basename="/wfh-management"><App /></BrowserRouter></AppCrashBoundary></React.StrictMode>)
 
 // Keep only legacy layers that still provide UI not owned by the React pages.
 // They are DOM driven; native report/employee pages own workload and grade data.
