@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { classifySessionFailure } from './sessionFailure.js'
+import { readFunctionResponsePayload } from './functionErrors.js'
 const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
@@ -113,6 +114,28 @@ export const bootstrapAppSessionAccess=()=>timedAppSessionRpc(
 )
 
 export const heartbeatAppSession=()=>timedAppSessionRpc(supabase,'app_session_heartbeat')
+
+// Admin claims and heartbeats cross the Edge trust boundary so the gateway IP
+// can refresh a five-minute session attestation before the database renews the
+// matching five-minute lease. A temporary Edge outage returns a retryable
+// error: it never actively revokes the local/Auth session, but it also cannot
+// renew the server lease forever. Staff never calls this function.
+export const guardAdminAppSession=async(method='claim')=>{
+  let result
+  try{
+    result=await withPromiseTimeout(
+      supabase.functions.invoke('admin-ip-guard',{
+        body:{action:method==='claim'?'claim':'heartbeat'},
+      }),
+      APP_SESSION_RPC_TIMEOUT_MS,
+      'APP_SESSION_TIMEOUT',
+    )
+  }catch(error){return {data:null,error}}
+
+  const payload=await readFunctionResponsePayload(result)
+  if(payload&&typeof payload.ok==='boolean')return {data:payload,error:null}
+  return {data:null,error:result?.error||timeoutError('ADMIN_IP_GUARD_INVALID_RESPONSE')}
+}
 
 export const releaseAppSession=()=>timedAppSessionRpc(supabase,'app_session_release')
 

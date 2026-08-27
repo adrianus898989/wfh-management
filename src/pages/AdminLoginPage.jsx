@@ -29,6 +29,8 @@ const LOGIN_ERROR_MESSAGES = {
   SESSION_CHECK_UNAVAILABLE: '登录会话验证暂不可用，请稍后重试',
   ACTIVE_SESSION_EXISTS: '旧会话接管未完成，请重新登录',
   SESSION_REJECTED: '登录会话已失效，请重试',
+  ADMIN_IP_NOT_ALLOWED: '当前IP不在后台登录白名单中，请联系管理员',
+  CLIENT_IP_UNAVAILABLE: '服务端无法读取当前IP，请联系管理员检查可信代理配置',
 }
 
 const loginErrorMessage = response => LOGIN_ERROR_MESSAGES[response?.code]
@@ -43,6 +45,8 @@ export default function AdminLoginPage() {
     const notice = consumeAppSessionNotice('admin')
     return notice === 'active_elsewhere'
       ? '当前会话已结束：该账号正在另一浏览器使用'
+      : notice === 'ip_not_allowed'
+        ? '当前会话已结束：当前IP不在后台登录白名单中'
       : notice === 'session_ended'
         ? '登录会话已失效，请重新登录'
         : ''

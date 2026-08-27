@@ -7,6 +7,7 @@ import {
   clearSessionActivity,
   configured,
   discardLocalAppSession,
+  guardAdminAppSession,
   heartbeatAppSession,
   isSessionIdleExpired,
   setAppSessionNotice,
@@ -20,6 +21,7 @@ import StaffRegisterPage from './pages/StaffRegisterPage'
 import MfaPage from './pages/MfaPage'
 import AdminEmployeesPage from './pages/AdminEmployeesPage'
 import AdminUsersPage from './pages/AdminUsersPage'
+import AdminIpAllowlistPage from './pages/AdminIpAllowlistPage'
 import AdminAttendancePage from './pages/AdminAttendancePage'
 import AdminReportsPage from './pages/AdminReportsPage'
 import AdminDailyWorkPage from './pages/AdminDailyWorkPage'
@@ -86,6 +88,7 @@ function Protected({ children, mode }) {
       'active_elsewhere',
       'staff_account_not_found',
       'staff_account_missing',
+      'ip_not_allowed',
     ].includes(reason)
     const terminalBootstrapReason = reason => [
       'auth_session_missing',
@@ -117,7 +120,9 @@ function Protected({ children, mode }) {
     const checkLease = (method = 'claim') => {
       if (leaseCheckPromise) return leaseCheckPromise
       leaseCheckPromise = Promise.resolve(
-        method === 'heartbeat' ? heartbeatAppSession() : claimAppSession(mode),
+        mode === 'admin'
+          ? guardAdminAppSession(method)
+          : method === 'heartbeat' ? heartbeatAppSession() : claimAppSession(mode),
       ).catch(error => ({ data:null, error }))
         .finally(() => { leaseCheckPromise = null })
       return leaseCheckPromise
@@ -135,6 +140,8 @@ function Protected({ children, mode }) {
           release:false,
           notice:mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
             ? 'account_not_found'
+            : mode==='admin' && reason==='ip_not_allowed'
+              ? 'ip_not_allowed'
             : reason==='active_elsewhere'||reason==='not_owner'
               ? 'active_elsewhere'
               : 'session_ended',
@@ -357,6 +364,7 @@ function AppRoutes() {
     <Route path="/admin/payroll" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPayrollPage /></AppLayout></Protected>} />
     <Route path="/admin/reports" element={<Protected mode="admin"><AppLayout mode="admin"><AdminReportsPage /></AppLayout></Protected>} />
     <Route path="/admin/users" element={<Protected mode="admin"><AppLayout mode="admin"><AdminUsersPage /></AppLayout></Protected>} />
+    <Route path="/admin/ip-allowlist" element={<Protected mode="admin"><AppLayout mode="admin"><AdminIpAllowlistPage /></AppLayout></Protected>} />
     <Route path="/admin/work-execution" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="work-execution" /></AppLayout></Protected>} />
     <Route path="/admin/account-usage" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="account-usage" /></AppLayout></Protected>} />
     <Route path="/staff" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome /></AppLayout></Protected>} />

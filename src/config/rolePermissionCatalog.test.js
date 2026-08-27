@@ -43,6 +43,10 @@ test('latest menu pages expose their supported granular operations', () => {
   assert.ok(codes('后台账号').has(PERMISSIONS.ACCOUNT_CREATE))
   assert.ok(codes('后台账号').has(PERMISSIONS.ACCOUNT_EDIT))
   assert.ok(codes('后台账号').has(PERMISSIONS.ACCOUNT_DELETE))
+  assert.deepEqual(
+    [...codes('后台登入IP白名单')],
+    [PERMISSIONS.ACCOUNT_IP_ALLOWLIST_MANAGE],
+  )
   assert.ok(codes('修改工资信息记录').has(PERMISSIONS.PAYROLL_PAYOUT_CHANGE_VIEW))
   assert.ok(page('修改工资信息记录').pendingCodes.includes(PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW))
 })

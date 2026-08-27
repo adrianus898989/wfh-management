@@ -108,6 +108,7 @@ export const PERMISSIONS = {
   ACCOUNT_RESET_PASSWORD: 'account.reset_password',
   ACCOUNT_OTP_TOGGLE: 'account.otp_toggle',
   ACCOUNT_MFA_RESET: 'account.mfa_reset',
+  ACCOUNT_IP_ALLOWLIST_MANAGE: 'account.ip_allowlist.manage',
   ROLE_MANAGE: 'role.manage',
   SCOPE_MANAGE: 'scope.manage',
 
@@ -372,6 +373,7 @@ export const PERMISSION_GROUPS = [
       [PERMISSIONS.ACCOUNT_RESET_PASSWORD, '重置后台账号密码'],
       [PERMISSIONS.ACCOUNT_OTP_TOGGLE, '开启 / 关闭登录 OTP'],
       [PERMISSIONS.ACCOUNT_MFA_RESET, '重置 Google OTP'],
+      [PERMISSIONS.ACCOUNT_IP_ALLOWLIST_MANAGE, '管理后台登录 IP 白名单'],
       [PERMISSIONS.ROLE_MANAGE, '管理角色与权限'],
       [PERMISSIONS.SCOPE_MANAGE, '管理账号数据范围'],
       [PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW, '查看员工敏感资料'],

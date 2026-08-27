@@ -101,7 +101,7 @@ const SECTION_DESCRIPTIONS = {
   attendance_exams: '考勤、请假、培训、考试及奖惩记录',
   work_execution: '事件跟踪、巡视日报与质检日报',
   payroll: '工资导入、审核、发布及收款资料修改记录',
-  account_usage: '公司资产、员工账号、后台账号与角色权限',
+  account_usage: '公司资产、员工账号、后台账号、登录IP白名单与角色权限',
 }
 
 const PAGE_DESCRIPTIONS = {
@@ -136,6 +136,7 @@ const PAGE_DESCRIPTIONS = {
   '公司提供资产': '查看公司提供的硬件、软件与账号资产',
   '员工前端账号': '查看、创建、停用及维护员工前端账号',
   '后台账号': '查看、新增、编辑、停用及删除后台账号',
+  '后台登入IP白名单': '管理后台登录允许的 IPv4 / IPv6 网络及强制开关',
   '后台角色权限': '管理角色权限、数据范围及权限变更日志',
 }
 

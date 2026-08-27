@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.4'
+import { jwtSessionId, trustedClientIp } from '../_shared/adminIp.ts'
 
 const allowedOrigin = 'https://adrianus898989.github.io'
 
@@ -32,6 +33,8 @@ const loginMessages: Record<string, string> = {
   SESSION_CHECK_UNAVAILABLE: '登录会话验证暂不可用，请稍后重试',
   ACTIVE_SESSION_EXISTS: '旧会话接管未完成，请重新登录',
   SESSION_REJECTED: '登录会话已失效，请重试',
+  ADMIN_IP_NOT_ALLOWED: '当前IP不在后台登录白名单中',
+  CLIENT_IP_UNAVAILABLE: '服务端无法读取当前IP，请联系管理员检查可信代理配置',
 }
 
 function loginError(req: Request, code: string, status: number) {
@@ -256,6 +259,28 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     })
 
+    const clientIp = trustedClientIp(req)
+    if (mode === 'admin') {
+      // This RPC consumes only the gateway-observed CF-Connecting-IP value.
+      // No browser body/header fallback can choose the address being checked.
+      const { data: ipGate, error: ipGateError } = await admin.rpc('admin_ip_prelogin_check', {
+        p_client_ip: clientIp || null,
+      })
+      if (ipGateError) {
+        console.error('ADMIN_LOGIN_IP_GATE_ERROR', safeErrorMeta(ipGateError))
+        return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
+      }
+      if (!ipGate?.ok) {
+        return loginError(
+          req,
+          ipGate?.reason === 'client_ip_unavailable'
+            ? 'CLIENT_IP_UNAVAILABLE'
+            : 'ADMIN_IP_NOT_ALLOWED',
+          403,
+        )
+      }
+    }
+
     const { access, unavailable } = await findAccess(admin, identifier, mode)
 
     if (unavailable) {
@@ -312,6 +337,35 @@ Deno.serve(async (req) => {
       console.error('ADMIN_LOGIN_ID_MISMATCH')
       await discardCandidateSession(authClient)
       return loginError(req, mode === 'staff' ? 'STAFF_ACCOUNT_NOT_FOUND' : 'ACCOUNT_UNAVAILABLE', 403)
+    }
+
+    if (mode === 'admin') {
+      const sessionId = jwtSessionId(authData.session.access_token)
+      if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
+        await discardCandidateSession(authClient)
+        return loginError(req, 'SESSION_REJECTED', 401)
+      }
+      const { data: attestation, error: attestationError } = await admin.rpc('admin_ip_session_attest', {
+        p_user_id: authData.user.id,
+        p_session_id: sessionId,
+        p_client_ip: clientIp || null,
+        p_source: 'login',
+      })
+      if (attestationError) {
+        console.error('ADMIN_LOGIN_IP_ATTEST_ERROR', safeErrorMeta(attestationError))
+        await discardCandidateSession(authClient)
+        return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
+      }
+      if (!attestation?.ok) {
+        await discardCandidateSession(authClient)
+        return loginError(
+          req,
+          attestation?.reason === 'client_ip_unavailable'
+            ? 'CLIENT_IP_UNAVAILABLE'
+            : 'ADMIN_IP_NOT_ALLOWED',
+          403,
+        )
+      }
     }
 
     const mfaRequired = mode === 'admin' && Boolean(access.otp_required)

@@ -34,6 +34,13 @@ test('new menu names keep pointing at canonical existing tabs', () => {
   assert.equal(group('attendance_exams').children.find(entry => entry.label === '奖惩表').to, '/admin/schedule?tab=adjustments')
   assert.equal(group('account_usage').children.find(entry => entry.label === '员工前端账号').to, '/admin/users?tab=staff')
   assert.equal(group('payroll').children.find(entry => entry.label === '修改工资信息记录').to, '/admin/payroll?tab=payment-change-history')
+  const accountItems = group('account_usage').children
+  const accountIndex = accountItems.findIndex(entry => entry.label === '后台账号')
+  assert.deepEqual(accountItems[accountIndex + 1], {
+    label:'后台登入IP白名单',
+    to:'/admin/ip-allowlist',
+    permissions:['account.ip_allowlist.manage'],
+  })
 })
 
 test('English slugs are stable while old Chinese bookmarks remain compatible', () => {
@@ -116,6 +123,13 @@ test('planning routes use existing permissions and are part of the guarded route
   assert.ok(eventRoute?.permissions?.includes('report.view'))
   assert.equal(assetRoute?.groupId, 'account_usage')
   assert.deepEqual(assetRoute?.permissions, ['user.view'])
+})
+
+test('backend IP allowlist has a dedicated guarded route and permission', () => {
+  const route = requestedAdminRoute('/admin/ip-allowlist', '')
+  assert.equal(route?.groupId, 'account_usage')
+  assert.deepEqual(route?.permissions, ['account.ip_allowlist.manage'])
+  assert.equal(requestedAdminRoute('/admin/ip-allowlist', '?tab=anything'), null)
 })
 
 test('page chrome uses the new menu labels without changing canonical route tabs', () => {

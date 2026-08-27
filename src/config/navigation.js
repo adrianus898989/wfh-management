@@ -113,6 +113,7 @@ const ACCESS = {
   payoutReview: { permissions:[PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
   payoutHistory: { permissions:[PERMISSIONS.PAYROLL_PAYOUT_CHANGE_VIEW, PERMISSIONS.PAYROLL_PAYOUT_CHANGE_REVIEW] },
   backendAccounts: { permissions:[PERMISSIONS.USER_VIEW, PERMISSIONS.ACCOUNT_VIEW, PERMISSIONS.ACCOUNT_CREATE, PERMISSIONS.ACCOUNT_EDIT, PERMISSIONS.ACCOUNT_DISABLE, PERMISSIONS.ACCOUNT_DELETE, PERMISSIONS.ACCOUNT_RESET_PASSWORD, PERMISSIONS.ACCOUNT_OTP_TOGGLE, PERMISSIONS.ACCOUNT_MFA_RESET] },
+  ipAllowlist: { permissions:[PERMISSIONS.ACCOUNT_IP_ALLOWLIST_MANAGE] },
   staffAccounts: { permissions:[PERMISSIONS.USER_VIEW, PERMISSIONS.USER_ACCOUNT_CREATE, PERMISSIONS.USER_ACCOUNT_DISABLE, PERMISSIONS.USER_ACCOUNT_DELETE, PERMISSIONS.USER_PASSWORD_RESET, PERMISSIONS.ACCOUNT_MFA_RESET] },
   roles: { permissions:[PERMISSIONS.ROLE_MANAGE] },
   accountUsage: { permissions:[PERMISSIONS.USER_VIEW] },
@@ -171,6 +172,7 @@ export const adminNavigation = [
       item('公司提供资产', '/admin/account-usage', ACCESS.accountUsage),
       item('员工前端账号', tab('/admin/users', 'staff'), ACCESS.staffAccounts),
       item('后台账号', '/admin/users', ACCESS.backendAccounts),
+      item('后台登入IP白名单', '/admin/ip-allowlist', ACCESS.ipAllowlist),
       item('后台角色权限', tab('/admin/users', 'roles'), ACCESS.roles),
     ],
   },
@@ -232,6 +234,7 @@ export const adminRouteAccess = [
   route(tab('/admin/users', 'backend'), ACCESS.backendAccounts, 'account_usage'),
   route(tab('/admin/users', 'staff'), ACCESS.staffAccounts, 'account_usage'),
   route(tab('/admin/users', 'roles'), ACCESS.roles, 'account_usage'),
+  route('/admin/ip-allowlist', ACCESS.ipAllowlist, 'account_usage'),
 
   route('/admin/work-execution', ACCESS.dailyWork, 'work_execution'),
   route(tab('/admin/work-execution', 'daily-inspection'), ACCESS.dailyWork, 'work_execution'),

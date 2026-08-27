@@ -46,15 +46,18 @@ function normalizeEvents(payload, locale) {
 }
 
 export function adminAlertAttendanceDetails(row, locale='zh') {
-  if (!['weekly_absence', 'monthly_leave'].includes(row?.alert_type)) return null
+  if (!['consecutive_rest', 'weekly_absence', 'monthly_leave'].includes(row?.alert_type)) return null
   const payload = isRecord(row?.payload) ? row.payload : {}
   const events = normalizeEvents(payload, locale)
   const monthly = row.alert_type === 'monthly_leave'
+  const consecutiveRest = row.alert_type === 'consecutive_rest'
   return {
     kind:row.alert_type,
     title:monthly
       ? (locale === 'en' ? 'Dates counted toward this month' : '本月计入休假的日期明细')
-      : (locale === 'en' ? 'Absence dates and reasons' : '缺席日期与原因'),
+      : consecutiveRest
+        ? (locale === 'en' ? 'Consecutive rest dates and reasons' : '连续公休日期与原因')
+        : (locale === 'en' ? 'Absence dates and reasons' : '缺席日期与原因'),
     events,
     missingDetails:events.length === 0,
     homeLeaveExcluded:monthly && payload.home_leave_excluded !== false,
@@ -104,5 +107,43 @@ export function adminAlertReadState(row, locale='zh') {
     label:locale === 'en'
       ? (unread ? 'Unread' : 'Read')
       : (unread ? '未读' : '已读'),
+  }
+}
+
+export function adminAlertReaders(row) {
+  if (!Array.isArray(row?.readers)) return []
+  return row.readers.flatMap(value => {
+    if (!isRecord(value)) return []
+    const account = clean(value.account)
+    const readAt = clean(value.read_at)
+    if (!account || !readAt) return []
+    return [{
+      authUserId:clean(value.auth_user_id),
+      account,
+      readAt,
+    }]
+  }).sort((a, b) => b.readAt.localeCompare(a.readAt) || a.account.localeCompare(b.account))
+}
+
+export function adminAlertFollowUpState(row, locale='zh') {
+  const source = isRecord(row?.follow_up) ? row.follow_up : {}
+  const readers = adminAlertReaders(row)
+  const status = ['confirmed', 'handled'].includes(source.status) ? source.status : 'pending'
+  const confirmedBy = clean(source.confirmed_by_name)
+  const handledBy = clean(source.handled_by_name)
+  const latestReader = readers[0]?.account || ''
+  const labels = locale === 'en'
+    ? { pending:readers.length ? 'Awaiting confirmation' : 'Not read', confirmed:'Confirmed · awaiting handling', handled:'Handled' }
+    : { pending:readers.length ? '待确认' : '尚未读取', confirmed:'已确认 · 待处理', handled:'已处理' }
+  return {
+    status,
+    label:labels[status],
+    actor:status === 'handled' ? handledBy : status === 'confirmed' ? confirmedBy : latestReader,
+    readers,
+    confirmedBy,
+    confirmedAt:clean(source.confirmed_at),
+    handledBy,
+    handledAt:clean(source.handled_at),
+    note:clean(source.handling_note),
   }
 }
