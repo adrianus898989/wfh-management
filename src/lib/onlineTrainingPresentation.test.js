@@ -123,3 +123,18 @@ test('trainer identity migration keeps the resolver bounded and enforces a nonbl
   assert.match(sqlRegression,/current_app_session_is_valid/)
   assert.match(sqlRegression,/online_training_report_summary_required/)
 })
+
+test('trainer identity resolver only returns employees inside the caller online-training scope',()=>{
+  const migration=readFileSync(new URL(
+    '../../supabase/migrations/20260826210354_scope_online_training_trainer_identity_resolver.sql',
+    import.meta.url,
+  ),'utf8')
+  assert.match(migration,/security definer/)
+  assert.match(migration,/set search_path = ''/)
+  assert.match(migration,/current_app_session_is_valid\('admin'\)/)
+  assert.match(migration,/online_training_can_view_module\(\)/)
+  assert.match(migration,/online_training_employee_in_scope\(directory\.employee_id\)/)
+  assert.match(migration,/from public, anon, authenticated/)
+  assert.match(migration,/to authenticated/)
+  assert.doesNotMatch(migration,/grant execute[\s\S]*to (?:public|anon)/i)
+})

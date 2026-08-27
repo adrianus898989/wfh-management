@@ -21,8 +21,12 @@ begin
      or position('online_training_identity_key(employee.employee_no)' in v_resolver) = 0
      or position('online_training_identity_key(employee.full_name)' in v_resolver) = 0
      or position('count(distinct lifecycle.employee_id) = 1' in v_resolver) = 0
+     or position(
+       'online_training_employee_in_scope(directory.employee_id)'
+       in v_resolver
+     ) = 0
      or position('online_training_identity_key' in v_resolver) = 0 then
-    raise exception 'trainer identity resolver lost a guard or exact history lookup';
+    raise exception 'trainer identity resolver lost a session, scope, or exact history lookup guard';
   end if;
   if not has_function_privilege(
     'authenticated',
