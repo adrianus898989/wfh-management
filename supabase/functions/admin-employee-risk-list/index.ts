@@ -1,4 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import {
+  loadEffectiveEmployeeScope,
+} from '../_shared/employeeScope.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -58,46 +61,12 @@ async function permissionAllowed(service: any, current: any, code: string) {
 }
 
 async function scopeInfo(service: any, current: any) {
-  if (current.roleCode === 'founder' || current.access.data_scope === 'all') {
-    return { mode: 'all', teamIds: [], employeeIds: [] }
-  }
-  if (current.access.data_scope === 'assigned_teams') {
-    const [{ data: teams }, { data: employees }] = await Promise.all([
-      service.from('user_scope_teams').select('team_id').eq('auth_user_id', current.userId),
-      service.from('user_scope_employees').select('employee_id').eq('auth_user_id', current.userId),
-    ])
-    return {
-      mode: 'assigned',
-      teamIds: (teams || []).map((row: any) => row.team_id),
-      employeeIds: (employees || []).map((row: any) => row.employee_id),
-    }
-  }
-  if (current.access.data_scope === 'self') {
-    return { mode: 'self', teamIds: [], employeeIds: current.access.employee_id ? [current.access.employee_id] : [] }
-  }
-  if (current.access.data_scope === 'own_team' && current.access.employee_id) {
-    const { data: employee } = await service.from('employees')
-      .select('team_id')
-      .eq('id', current.access.employee_id)
-      .maybeSingle()
-    return { mode: 'own_team', teamIds: employee?.team_id ? [employee.team_id] : [], employeeIds: [] }
-  }
-  return { mode: 'none', teamIds: [], employeeIds: [] }
-}
-
-function applyScope(query: any, scope: any) {
-  if (scope.mode === 'all') return query
-  if (scope.mode === 'assigned') {
-    const clauses: string[] = []
-    if (scope.teamIds.length) clauses.push(`team_id.in.(${scope.teamIds.join(',')})`)
-    if (scope.employeeIds.length) clauses.push(`id.in.(${scope.employeeIds.join(',')})`)
-    return clauses.length
-      ? query.or(clauses.join(','))
-      : query.eq('id', '00000000-0000-0000-0000-000000000000')
-  }
-  if (scope.mode === 'self' && scope.employeeIds.length) return query.in('id', scope.employeeIds)
-  if (scope.mode === 'own_team' && scope.teamIds.length) return query.in('team_id', scope.teamIds)
-  return query.eq('id', '00000000-0000-0000-0000-000000000000')
+  return await loadEffectiveEmployeeScope(
+    service,
+    current.userId,
+    current.access,
+    current.roleCode,
+  )
 }
 
 function basicMissing(employee: any) {
@@ -112,15 +81,105 @@ function basicMissing(employee: any) {
   return missing
 }
 
-async function loadPagedQuery(makeQuery: () => any) {
+const normalizedName = (value: unknown) => text(value).replace(/\s+/g, ' ').toLowerCase()
+
+function groupsOf<T>(items: T[], size = 150) {
+  const groups: T[][] = []
+  for (let offset = 0; offset < items.length; offset += size) groups.push(items.slice(offset, offset + size))
+  return groups
+}
+
+async function loadReferenceRows(service: any, table: string, selection: string, ids: string[]) {
   const rows: any[] = []
-  const pageSize = 1000
-  for (let offset = 0; offset < 50000; offset += pageSize) {
-    const { data, error } = await makeQuery().range(offset, offset + pageSize - 1)
+  for (const group of groupsOf([...new Set(ids.filter(Boolean))])) {
+    const { data, error } = await service.from(table).select(selection).in('id', group)
     if (error) throw error
-    const page = data || []
-    rows.push(...page)
-    if (page.length < pageSize) break
+    rows.push(...(data || []))
+  }
+  return rows
+}
+
+/**
+ * Load the service-only current roster directory, then intersect it with the
+ * central effective employee allow-list before any employee data is queried.
+ * Historical employees.team_id / position_id never participate in this
+ * boundary. Missing employee/team/position mappings fail closed.
+ */
+async function loadCurrentRosterOrganization(service: any, scope: any) {
+  const { data, error } = await service.rpc('admin_scope_current_employee_directory')
+  if (error) throw new Error('SCOPE_SERVICE_UNAVAILABLE')
+
+  const payload = Array.isArray(data) && data.length === 1 && !data[0]?.employee_id
+    ? data[0]
+    : data
+  const effectiveEmployeeIds = scope.mode === 'all' ? null : new Set(scope.employeeIds || [])
+  const byEmployeeId = new Map<string, { employeeId: string, teamId: string, positionId: string }>()
+
+  for (const item of Array.isArray(payload?.employees) ? payload.employees : []) {
+    const employeeId = text(item?.employee_id)
+    const teamId = text(item?.team_id)
+    const positionId = text(item?.position_id)
+    if (!employeeId || !teamId || !positionId || item?.position_unmatched === true) continue
+    if (effectiveEmployeeIds && !effectiveEmployeeIds.has(employeeId)) continue
+    byEmployeeId.set(employeeId, { employeeId, teamId, positionId })
+  }
+
+  const directory = [...byEmployeeId.values()]
+  const [teamRows, positionRows] = await Promise.all([
+    loadReferenceRows(service, 'teams', 'id,name,country,status', directory.map(row => row.teamId)),
+    loadReferenceRows(service, 'positions', 'id,name,code,status', directory.map(row => row.positionId)),
+  ])
+  const teamById = new Map(teamRows
+    .filter((row: any) => text(row.status) === 'active')
+    .map((row: any) => [text(row.id), row]))
+  const positionById = new Map(positionRows
+    .filter((row: any) => text(row.status) === 'active')
+    .map((row: any) => [text(row.id), row]))
+
+  // A dimension may be deleted between the directory RPC and this lookup.
+  // Excluding the affected employee is safer than falling back to stale archive fields.
+  const resolvedDirectory = directory.filter(row => teamById.has(row.teamId) && positionById.has(row.positionId))
+  return {
+    directory: resolvedDirectory,
+    byEmployeeId: new Map(resolvedDirectory.map(row => [row.employeeId, row])),
+    teamById,
+    positionById,
+  }
+}
+
+function currentOrganizationEmployeeIds(organization: any, teamFilter: unknown, positionFilter: unknown) {
+  const requestedTeam = normalizedName(teamFilter)
+  const requestedPosition = normalizedName(positionFilter)
+  return organization.directory
+    .filter((row: any) => {
+      const team = organization.teamById.get(row.teamId)
+      const position = organization.positionById.get(row.positionId)
+      if (requestedTeam && text(team?.id) !== text(teamFilter) && normalizedName(team?.name) !== requestedTeam) return false
+      if (requestedPosition && text(position?.id) !== text(positionFilter) && normalizedName(position?.name) !== requestedPosition) return false
+      return true
+    })
+    .map((row: any) => row.employeeId)
+}
+
+async function loadEmployeesByCurrentIds(currentEmployeeIds: string[], makeQuery: (ids: string[]) => any) {
+  const rows: any[] = []
+  for (const group of groupsOf(currentEmployeeIds)) {
+    const { data, error } = await makeQuery(group)
+    if (error) throw error
+    rows.push(...(data || []))
+  }
+  return rows.sort((a: any, b: any) => text(a.employee_no).localeCompare(text(b.employee_no)))
+}
+
+async function loadRowsByValues(
+  values: string[],
+  makeQuery: (group: string[]) => any,
+) {
+  const rows: any[] = []
+  for (const group of groupsOf([...new Set(values.filter(Boolean))])) {
+    const { data, error } = await makeQuery(group)
+    if (error) throw error
+    rows.push(...(data || []))
   }
   return rows
 }
@@ -140,6 +199,7 @@ Deno.serve(async req => {
     if (body.export === true && !(await permissionAllowed(service, current, 'employee.directory.export'))) throw new Error('没有导出员工资料的权限')
     const canViewEmployeeSensitive = await permissionAllowed(service, current, 'sensitive.employee.view')
     const scope = await scopeInfo(service, current)
+    const organization = await loadCurrentRosterOrganization(service, scope)
     const filters = body.filters || {}
     const risk = text(filters.risk_level || body.risk_level)
     const accountStatus = text(filters.account_status)
@@ -148,27 +208,16 @@ Deno.serve(async req => {
     const requestedSize = Number(body.page_size || 20)
     const pageSize = allowedSizes.includes(requestedSize) ? requestedSize : 20
 
-    let teamIds: string[] = []
-    let positionIds: string[] = []
-    if (text(filters.team)) {
-      const { data } = await service.from('teams').select('id').eq('name', text(filters.team))
-      teamIds = (data || []).map((row: any) => row.id)
-      if (!teamIds.length) return json({ rows: [], total: 0, page, page_size: pageSize, pages: 1 })
-    }
-    if (text(filters.position)) {
-      const { data } = await service.from('positions').select('id').eq('name', text(filters.position))
-      positionIds = (data || []).map((row: any) => row.id)
-      if (!positionIds.length) return json({ rows: [], total: 0, page, page_size: pageSize, pages: 1 })
-    }
+    const currentEmployeeIds = currentOrganizationEmployeeIds(organization, filters.team, filters.position)
+    if (!currentEmployeeIds.length) return json({ rows: [], total: 0, page, page_size: pageSize, pages: 1 })
 
-    const buildEmployeeQuery = () => {
+    const buildEmployeeQuery = (ids: string[]) => {
       let query = service.from('employees').select(`
-        id,employee_no,full_name,country,nationality,employment_type,status,team_id,position_id,
+        id,employee_no,full_name,country,nationality,employment_type,status,
         shift_name,group_name,platform_scope,work_content,work_tg,backend_accounts,hire_date,
         resign_date,leader_name,trainer_name,profile_status,official_id_pending,source_type,
-        source_sheet,created_at,teams:team_id(id,name,country,status),positions:position_id(id,name,code,status)
-      `)
-      query = applyScope(query, scope)
+        source_sheet,created_at
+      `).in('id', ids)
       if (text(filters.employee_no)) query = query.ilike('employee_no', `%${text(filters.employee_no)}%`)
       if (text(filters.full_name)) query = query.ilike('full_name', `%${text(filters.full_name)}%`)
       // Sensitive filters must follow the same authorization rule as the
@@ -176,8 +225,6 @@ Deno.serve(async req => {
       // prevents it from becoming a blind value-existence probe.
       if (canViewEmployeeSensitive && text(filters.work_tg)) query = query.ilike('work_tg', `%${text(filters.work_tg)}%`)
       if (canViewEmployeeSensitive && text(filters.backend_account)) query = query.ilike('backend_accounts', `%${text(filters.backend_account)}%`)
-      if (teamIds.length) query = query.in('team_id', teamIds)
-      if (positionIds.length) query = query.in('position_id', positionIds)
       if (text(filters.country)) query = query.ilike('country', `%${text(filters.country)}%`)
       if (text(filters.status)) query = query.eq('status', filters.status)
       if (text(filters.employment_type)) query = query.ilike('employment_type', `%${text(filters.employment_type)}%`)
@@ -195,14 +242,30 @@ Deno.serve(async req => {
       return query.order('employee_no', { ascending: true })
     }
 
-    const [allEmployees, summaryRows, allAccountRows] = await Promise.all([
-      loadPagedQuery(buildEmployeeQuery),
-      loadPagedQuery(() => service.from('employee_error_summary')
+    const currentEmployees = await loadEmployeesByCurrentIds(currentEmployeeIds, buildEmployeeQuery)
+    const allEmployees = currentEmployees.map((employee: any) => {
+      const current = organization.byEmployeeId.get(text(employee.id))
+      const team = current ? organization.teamById.get(current.teamId) : null
+      const position = current ? organization.positionById.get(current.positionId) : null
+      return {
+        ...employee,
+        team_id: current?.teamId || null,
+        position_id: current?.positionId || null,
+        teams: team || null,
+        positions: position || null,
+      }
+    }).filter((employee: any) => employee.team_id && employee.position_id)
+
+    const employeeNos = allEmployees.map((employee: any) => upper(employee.employee_no)).filter(Boolean)
+    const employeeIds = allEmployees.map((employee: any) => text(employee.id)).filter(Boolean)
+    const [summaryRows, allAccountRows] = await Promise.all([
+      loadRowsByValues(employeeNos, group => service.from('employee_error_summary')
         .select('employee_no,month_error_count,total_error_count,risk_level')
-        .order('employee_no', { ascending: true })),
-      loadPagedQuery(() => service.from('user_access')
+        .in('employee_no', group)),
+      loadRowsByValues(employeeIds, group => service.from('user_access')
         .select('employee_id,employee_portal_enabled,active')
-        .eq('employee_portal_enabled', true)),
+        .eq('employee_portal_enabled', true)
+        .in('employee_id', group)),
     ])
 
     const summaryMap = new Map((summaryRows || []).map((row: any) => [upper(row.employee_no), row]))

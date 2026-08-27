@@ -1,4 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  loadEffectiveEmployeeScope,
+} from "../_shared/employeeScope.ts";
 
 const corsHeaders={
   "Access-Control-Allow-Origin":"*",
@@ -50,47 +53,76 @@ async function callerAndScope(req:Request,service:any){
   const mayViewDirectory=await permissionAllowed(service,userId,access,roleCode,"employee.directory.view");
   const mayViewAnalytics=await permissionAllowed(service,userId,access,roleCode,"employee.analytics.view");
   if(!mayViewDirectory&&!mayViewAnalytics) throw new Error("没有查看员工资料分析的权限");
-  if(role?.code==="founder"||access.data_scope==="all") return {mode:"all",teamIds:[],employeeIds:[]};
-  if(access.data_scope==="assigned_teams"){
-    const [{data:ts},{data:es}]=await Promise.all([
-      service.from("user_scope_teams").select("team_id").eq("auth_user_id",userId),
-      service.from("user_scope_employees").select("employee_id").eq("auth_user_id",userId),
-    ]);
-    return {mode:"assigned",teamIds:(ts||[]).map((x:any)=>x.team_id),employeeIds:(es||[]).map((x:any)=>x.employee_id)};
-  }
-  if(access.data_scope==="self") return {mode:"self",teamIds:[],employeeIds:access.employee_id?[access.employee_id]:[]};
-  if(access.data_scope==="own_team"&&access.employee_id){
-    const {data:me}=await service.from("employees").select("team_id").eq("id",access.employee_id).maybeSingle();
-    return {mode:"own_team",teamIds:me?.team_id?[me.team_id]:[],employeeIds:[]};
-  }
-  return {mode:"none",teamIds:[],employeeIds:[]};
+  return await loadEffectiveEmployeeScope(service,userId,access,roleCode);
 }
-function applyScope(q:any,scope:any){
-  if(scope.mode==="all") return q;
-  if(scope.mode==="assigned"){
-    const clauses:string[]=[];
-    if(scope.teamIds.length) clauses.push(`team_id.in.(${scope.teamIds.join(",")})`);
-    if(scope.employeeIds.length) clauses.push(`id.in.(${scope.employeeIds.join(",")})`);
-    return clauses.length?q.or(clauses.join(",")):q.eq("id","00000000-0000-0000-0000-000000000000");
-  }
-  if(scope.mode==="self"&&scope.employeeIds.length) return q.in("id",scope.employeeIds);
-  if(scope.mode==="own_team"&&scope.teamIds.length) return q.in("team_id",scope.teamIds);
-  return q.eq("id","00000000-0000-0000-0000-000000000000");
-}
-async function allEmployees(service:any,scope:any,includeTest=false){
-  const rows:any[]=[];let offset=0;const batch=1000;
-  while(true){
-    let q=service.from("employees").select("id,employee_no,full_name,status,hire_date,country,nationality,employment_type,work_tg,platform_scope,team_id,position_id,shift_name,updated_at,teams:team_id(name),positions:position_id(name)");
-    q=applyScope(q,scope);
-    const {data,error}=await q.range(offset,offset+batch-1);
+function groupsOf<T>(items:T[],size=150){const groups:T[][]=[];for(let offset=0;offset<items.length;offset+=size)groups.push(items.slice(offset,offset+size));return groups;}
+async function loadReferenceRows(service:any,table:string,selection:string,ids:string[]){
+  const rows:any[]=[];
+  for(const group of groupsOf([...new Set(ids.filter(Boolean))])){
+    const {data,error}=await service.from(table).select(selection).in("id",group);
     if(error) throw error;
     rows.push(...(data||[]));
-    if((data||[]).length<batch) break;
-    offset+=batch;if(offset>20000) break;
   }
+  return rows;
+}
+
+/**
+ * Current organization truth is a service-only roster directory. Intersect it
+ * with the central effective employee allow-list before loading employee rows;
+ * never reconstruct access from employees.team_id / position_id.
+ */
+async function loadCurrentRosterOrganization(service:any,scope:any){
+  const {data,error}=await service.rpc("admin_scope_current_employee_directory");
+  if(error) throw new Error("SCOPE_SERVICE_UNAVAILABLE");
+  const payload=Array.isArray(data)&&data.length===1&&!data[0]?.employee_id?data[0]:data;
+  const effectiveEmployeeIds=scope.mode==="all"?null:new Set(scope.employeeIds||[]);
+  const byEmployeeId=new Map<string,{employeeId:string,teamId:string,positionId:string}>();
+  for(const item of Array.isArray(payload?.employees)?payload.employees:[]){
+    const employeeId=text(item?.employee_id),teamId=text(item?.team_id),positionId=text(item?.position_id);
+    if(!employeeId||!teamId||!positionId||item?.position_unmatched===true) continue;
+    if(effectiveEmployeeIds&&!effectiveEmployeeIds.has(employeeId)) continue;
+    byEmployeeId.set(employeeId,{employeeId,teamId,positionId});
+  }
+  const directory=[...byEmployeeId.values()];
+  const [teamRows,positionRows]=await Promise.all([
+    loadReferenceRows(service,"teams","id,name,status",directory.map(row=>row.teamId)),
+    loadReferenceRows(service,"positions","id,name,status",directory.map(row=>row.positionId)),
+  ]);
+  const teamById=new Map(teamRows.filter((row:any)=>text(row.status)==="active").map((row:any)=>[text(row.id),row]));
+  const positionById=new Map(positionRows.filter((row:any)=>text(row.status)==="active").map((row:any)=>[text(row.id),row]));
+  const resolvedDirectory=directory.filter(row=>teamById.has(row.teamId)&&positionById.has(row.positionId));
+  return {
+    directory:resolvedDirectory,
+    byEmployeeId:new Map(resolvedDirectory.map(row=>[row.employeeId,row])),
+    teamById,
+    positionById,
+  };
+}
+
+async function allEmployees(service:any,organization:any,includeTest=false){
+  const rows:any[]=[];
+  for(const group of groupsOf(organization.directory.map((row:any)=>row.employeeId))){
+    const {data,error}=await service.from("employees")
+      .select("id,employee_no,full_name,status,hire_date,country,nationality,employment_type,work_tg,platform_scope,shift_name,updated_at,source_type")
+      .in("id",group);
+    if(error) throw error;
+    rows.push(...(data||[]));
+  }
+  const currentRows=rows.map((employee:any)=>{
+    const current=organization.byEmployeeId.get(text(employee.id));
+    const team=current?organization.teamById.get(current.teamId):null;
+    const position=current?organization.positionById.get(current.positionId):null;
+    return {
+      ...employee,
+      team_id:current?.teamId||null,
+      position_id:current?.positionId||null,
+      teams:team||null,
+      positions:position||null,
+    };
+  }).filter((employee:any)=>employee.team_id&&employee.position_id);
   // Production KPI remains clean by default. TEST rows are included only when a caller
   // explicitly asks for validation detail (e.g. clicking the 待入职 bucket while testing).
-  return rows.filter((r:any)=>
+  return currentRows.filter((r:any)=>
     !isIgnoredEmployeeNo(r.employee_no) &&
     (includeTest || !isTestEmployeeNo(r.employee_no)) &&
     text(r.status)!=="suspended" &&
@@ -915,12 +947,13 @@ Deno.serve(async(req)=>{
     }
 
     const scope=await callerAndScope(req,service);
+    const organization=await loadCurrentRosterOrganization(service,scope);
     const today=/^\d{4}-\d{2}-\d{2}$/.test(text(body.today))?text(body.today):new Date().toISOString().slice(0,10);
 
     if(text(body.action)==="tenure_details"){
       const bucket=text(body.bucket);
       const includeTest=body.include_test===true;
-      const all=await allEmployees(service,scope,includeTest);
+      const all=await allEmployees(service,organization,includeTest);
       const rows=all
         .filter((x:any)=>x.status==="active"&&tenureKey(x.hire_date,today)===bucket)
         .map((x:any)=>({
@@ -947,7 +980,7 @@ Deno.serve(async(req)=>{
       });
     }
 
-    const all=await allEmployees(service,scope),active=all.filter((x:any)=>x.status==="active");
+    const all=await allEmployees(service,organization),active=all.filter((x:any)=>x.status==="active");
     const positions=new Map<string,number>(),countries=new Map<string,number>(),platforms=new Map<string,number>(),teams=new Map<string,number>(),shifts=new Map<string,number>();
     const tenureCounts:any={
       prepare:0,within_7:0,days_8_14:0,days_15_30:0,days_31_60:0,

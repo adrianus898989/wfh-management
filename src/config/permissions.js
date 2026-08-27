@@ -27,7 +27,7 @@ export const DATA_SCOPES = {
 
 export const DATA_SCOPE_LABELS = {
   all: '全部数据',
-  assigned_teams: '指定团队',
+  assigned_teams: '指定团队 ∩ 岗位 + 员工例外',
   own_team: '自己团队',
   self: '仅本人'
 }

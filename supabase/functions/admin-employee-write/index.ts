@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { loadEffectiveEmployeeScope } from "../_shared/employeeScope.ts";
 
 const corsHeaders={
   "Access-Control-Allow-Origin":"*",
@@ -221,21 +222,19 @@ async function requirePermission(service:any,caller:any,code:string){
   if(!(await permissionAllowed(service,caller,code))) throw new Error("没有执行此操作的权限");
 }
 
+async function callerEffectiveEmployeeIds(service:any,caller:any){
+  if(!caller.__effectiveEmployeeIds){
+    caller.__effectiveEmployeeIds=(async()=>{
+      const scope=await loadEffectiveEmployeeScope(service,caller.userId,caller.access,caller.roleCode);
+      return scope.mode==="all"?null:new Set<string>(scope.employeeIds.map(text).filter(Boolean));
+    })();
+  }
+  return await caller.__effectiveEmployeeIds as Set<string>|null;
+}
+
 async function canAccessEmployee(service:any,caller:any,employee:any){
-  if(caller.roleCode==="founder"||caller.access.data_scope==="all") return true;
-  if(caller.access.data_scope==="self") return Boolean(caller.access.employee_id&&caller.access.employee_id===employee.id);
-  if(caller.access.data_scope==="assigned_teams"){
-    const [{data:ts},{data:es}]=await Promise.all([
-      service.from("user_scope_teams").select("team_id").eq("auth_user_id",caller.userId),
-      service.from("user_scope_employees").select("employee_id").eq("auth_user_id",caller.userId),
-    ]);
-    return (ts||[]).some((x:any)=>x.team_id===employee.team_id)||(es||[]).some((x:any)=>x.employee_id===employee.id);
-  }
-  if(caller.access.data_scope==="own_team"&&caller.access.employee_id){
-    const {data:me}=await service.from("employees").select("team_id").eq("id",caller.access.employee_id).maybeSingle();
-    return Boolean(me?.team_id&&me.team_id===employee.team_id);
-  }
-  return false;
+  const allowed=await callerEffectiveEmployeeIds(service,caller);
+  return allowed===null||allowed.has(text(employee?.id));
 }
 
 async function visibleEmployeeConflict(service:any,caller:any,conflict:any){
@@ -261,54 +260,131 @@ async function fetchAllRows(queryFactory:()=>any,batchSize=750,hardLimit=30000){
 }
 
 async function scopedEmployeeIds(service:any,caller:any){
-  if(caller.roleCode==="founder"||caller.access.data_scope==="all") return null;
-  if(caller.access.data_scope==="self"){
-    return new Set(caller.access.employee_id?[caller.access.employee_id]:[]);
-  }
-  if(caller.access.data_scope==="own_team"&&caller.access.employee_id){
-    const {data:me,error}=await service.from("employees").select("team_id").eq("id",caller.access.employee_id).maybeSingle();
-    if(error) throw error;
-    if(!me?.team_id) return new Set<string>();
-    const rows=await fetchAllRows(()=>service.from("employees").select("id").eq("team_id",me.team_id).order("id"));
-    return new Set(rows.map((row:any)=>row.id));
-  }
-  if(caller.access.data_scope==="assigned_teams"){
-    const [{data:teamRows,error:teamError},{data:employeeRows,error:employeeError}]=await Promise.all([
-      service.from("user_scope_teams").select("team_id").eq("auth_user_id",caller.userId),
-      service.from("user_scope_employees").select("employee_id").eq("auth_user_id",caller.userId),
-    ]);
-    if(teamError) throw teamError;
-    if(employeeError) throw employeeError;
-    const ids=new Set<string>((employeeRows||[]).map((row:any)=>row.employee_id));
-    const teamIds=(teamRows||[]).map((row:any)=>row.team_id).filter(Boolean);
-    if(teamIds.length){
-      const rows=await fetchAllRows(()=>service.from("employees").select("id").in("team_id",teamIds).order("id"));
-      for(const row of rows) ids.add(row.id);
-    }
-    return ids;
-  }
-  return new Set<string>();
+  return await callerEffectiveEmployeeIds(service,caller);
 }
 
-async function assertTargetTeamAllowed(service:any,caller:any,targetTeamId:string,existingEmployee:any=null){
+async function currentScopeDirectory(service:any,caller:any){
+  if(!caller.__currentScopeDirectory){
+    caller.__currentScopeDirectory=(async()=>{
+      const {data,error}=await service.rpc("admin_scope_current_employee_directory");
+      if(error) throw error;
+      return Array.isArray(data?.employees)?data.employees:[];
+    })();
+  }
+  return await caller.__currentScopeDirectory as any[];
+}
+
+async function currentScopeOrganization(service:any,caller:any,employeeId:string){
+  if(!employeeId) return {teamId:"",positionId:""};
+  const directory=await currentScopeDirectory(service,caller);
+  const row=directory.find((item:any)=>text(item?.employee_id)===employeeId);
+  return {teamId:text(row?.team_id),positionId:text(row?.position_id)};
+}
+
+function currentOrganizationCombinationExists(directory:any[],teamId:string,positionId:string){
+  return Boolean(teamId&&positionId&&directory.some((row:any)=>
+    text(row?.team_id)===teamId&&text(row?.position_id)===positionId
+  ));
+}
+
+async function limitedWritablePositionOptions(service:any,caller:any){
+  if(caller.roleCode==="founder"||caller.access.data_scope==="all") return null;
+  if(caller.access.data_scope==="self") return [];
+
+  const directory=await currentScopeDirectory(service,caller);
+  let writableRows:any[]=[];
+
+  if(caller.access.data_scope==="own_team"&&caller.access.employee_id){
+    const callerRow=directory.find((row:any)=>
+      text(row?.employee_id)===text(caller.access.employee_id)
+    );
+    const callerTeamId=text(callerRow?.team_id);
+    writableRows=callerTeamId
+      ? directory.filter((row:any)=>text(row?.team_id)===callerTeamId)
+      : [];
+  }else if(caller.access.data_scope==="assigned_teams"){
+    const [{data:teamFilters,error:teamError},{data:positionFilters,error:positionError}]=await Promise.all([
+      service.from("user_scope_team_filters").select("team_id").eq("auth_user_id",caller.userId),
+      service.from("user_scope_position_filters").select("position_id").eq("auth_user_id",caller.userId),
+    ]);
+    if(teamError) throw teamError;
+    if(positionError) throw positionError;
+    const selectedTeams=new Set((teamFilters||[]).map((row:any)=>text(row.team_id)).filter(Boolean));
+    const selectedPositions=new Set((positionFilters||[]).map((row:any)=>text(row.position_id)).filter(Boolean));
+    writableRows=selectedTeams.size
+      ? directory.filter((row:any)=>
+          selectedTeams.has(text(row?.team_id))&&
+          (selectedPositions.size===0||selectedPositions.has(text(row?.position_id)))
+        )
+      : [];
+  }
+
+  // Explicit employee exceptions are intentionally excluded: they permit
+  // edits to that employee in place, but never grant team/position creation or
+  // transfer authority. Only combinations that exist in the current roster
+  // contribute a write candidate.
+  const positionIds=[...new Set(writableRows.map((row:any)=>text(row?.position_id)).filter(Boolean))];
+  if(!positionIds.length) return [];
+  const {data:positions,error}=await service.from("positions")
+    .select("id,name,status")
+    .in("id",positionIds)
+    .eq("status","active");
+  if(error) throw error;
+  return [...new Set((positions||[]).map((row:any)=>text(row.name)).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,"zh-CN"));
+}
+
+async function assertTargetOrganizationAllowed(service:any,caller:any,targetTeamId:string,targetPositionId:string,existingEmployee:any=null){
   if(caller.roleCode==="founder"||caller.access.data_scope==="all") return;
   if(caller.access.data_scope==="self") throw new Error("仅本人范围不能新增或编辑员工档案");
   if(!targetTeamId) throw new Error("当前管理范围要求员工必须归属可管理团队");
   if(caller.access.data_scope==="own_team"&&caller.access.employee_id){
-    const {data:me,error}=await service.from("employees").select("team_id").eq("id",caller.access.employee_id).maybeSingle();
-    if(error) throw error;
-    if(!me?.team_id||me.team_id!==targetTeamId) throw new Error("不能把员工新增或移动到负责团队之外");
+    const [directory,callerOrganization,existingOrganization,effective]=await Promise.all([
+      currentScopeDirectory(service,caller),
+      currentScopeOrganization(service,caller,caller.access.employee_id),
+      currentScopeOrganization(service,caller,text(existingEmployee?.id)),
+      callerEffectiveEmployeeIds(service,caller),
+    ]);
+    const unchanged=Boolean(existingEmployee?.id&&
+      targetTeamId===(existingOrganization.teamId||text(existingEmployee.team_id))&&
+      targetPositionId===(existingOrganization.positionId||text(existingEmployee.position_id)));
+    const existingInScope=unchanged&&Boolean(effective?.has(text(existingEmployee?.id)));
+    if(existingInScope) return;
+    if(!targetPositionId) throw new Error("当前管理范围要求员工必须归属有效岗位");
+    if(!currentOrganizationCombinationExists(directory,targetTeamId,targetPositionId)){
+      throw new Error("目标团队与岗位已不在当前居家排班范围，不能保存");
+    }
+    if(!callerOrganization.teamId||callerOrganization.teamId!==targetTeamId){
+      throw new Error("不能把员工新增或移动到当前排班负责团队之外");
+    }
     return;
   }
   if(caller.access.data_scope==="assigned_teams"){
-    const [{data:team},{data:explicitEmployee}]=await Promise.all([
-      service.from("user_scope_teams").select("team_id").eq("auth_user_id",caller.userId).eq("team_id",targetTeamId).maybeSingle(),
-      existingEmployee?.id
-        ? service.from("user_scope_employees").select("employee_id").eq("auth_user_id",caller.userId).eq("employee_id",existingEmployee.id).maybeSingle()
-        : Promise.resolve({data:null}),
+    const [directory,existingOrganization,effective,{data:teamFilters,error:teamError},{data:positionFilters,error:positionError}]=await Promise.all([
+      currentScopeDirectory(service,caller),
+      currentScopeOrganization(service,caller,text(existingEmployee?.id)),
+      callerEffectiveEmployeeIds(service,caller),
+      service.from("user_scope_team_filters").select("team_id").eq("auth_user_id",caller.userId),
+      service.from("user_scope_position_filters").select("position_id").eq("auth_user_id",caller.userId),
     ]);
-    const explicitlyAssignedAndUnmoved=Boolean(explicitEmployee?.employee_id&&existingEmployee?.team_id===targetTeamId);
-    if(!team?.team_id&&!explicitlyAssignedAndUnmoved) throw new Error("不能把员工新增或移动到指定范围之外");
+    if(teamError) throw teamError;
+    if(positionError) throw positionError;
+    const unchanged=Boolean(existingEmployee?.id&&
+      targetTeamId===(existingOrganization.teamId||text(existingEmployee.team_id))&&
+      targetPositionId===(existingOrganization.positionId||text(existingEmployee.position_id)));
+    if(unchanged&&effective?.has(text(existingEmployee?.id))) return;
+    const selectedTeams=new Set((teamFilters||[]).map((row:any)=>row.team_id));
+    const selectedPositions=new Set((positionFilters||[]).map((row:any)=>row.position_id));
+    if(!targetPositionId) throw new Error("当前管理范围要求员工必须归属有效岗位");
+    if(!currentOrganizationCombinationExists(directory,targetTeamId,targetPositionId)){
+      throw new Error("目标团队与岗位已不在当前居家排班范围，不能保存");
+    }
+    const baseConfigured=selectedTeams.size>0;
+    const teamAllowed=selectedTeams.has(targetTeamId);
+    const positionAllowed=selectedPositions.size===0||selectedPositions.has(targetPositionId);
+    if(!baseConfigured||!teamAllowed||!positionAllowed){
+      throw new Error("不能把员工新增、移动或调岗到指定团队与岗位组合之外");
+    }
     return;
   }
   throw new Error("当前账号没有员工数据范围");
@@ -320,30 +396,30 @@ export function teamWriteDecision(value:unknown){
   return {provided,teamId:provided?text(patch.team_id):""};
 }
 
-async function resolveTeamForWrite(service:any,caller:any,id:unknown,existingEmployee:any=null){
+async function resolveTeamForWrite(service:any,id:unknown){
   const tid=text(id);
-  if(!tid){
-    await assertTargetTeamAllowed(service,caller,"",existingEmployee);
-    return null;
-  }
-  const {data:team,error}=await service.from("teams").select("id,name").eq("id",tid).maybeSingle();
+  if(!tid) return null;
+  const {data:team,error}=await service.from("teams").select("id,name,status").eq("id",tid).maybeSingle();
   if(error) throw error;
-  if(!team?.id) throw new Error("请选择已经存在且在负责范围内的团队");
-  await assertTargetTeamAllowed(service,caller,team.id,existingEmployee);
+  if(!team?.id||team.status!=="active") throw new Error("请选择已经存在且仍在使用的团队");
   return team;
 }
 
-async function findOrCreatePosition(service:any,id:unknown,name:unknown){
+async function findOrCreatePosition(service:any,id:unknown,name:unknown,allowCreate:boolean){
   const pid=text(id);
   if(pid){
-    const {data:byId,error}=await service.from("positions").select("id,name").eq("id",pid).maybeSingle();
+    const {data:byId,error}=await service.from("positions").select("id,name,status").eq("id",pid).maybeSingle();
     if(error) throw error;
-    if(byId?.id) return byId;
+    if(!byId?.id||byId.status!=="active") throw new Error("请选择已经存在且仍在使用的岗位");
+    return byId;
   }
   const n=text(name);if(!n)return null;
-  const {data:found,error:fe}=await service.from("positions").select("id,name").ilike("name",n).limit(1).maybeSingle();
+  const {data:matches,error:fe}=await service.from("positions")
+    .select("id,name,status").eq("status","active").ilike("name",n).order("id").limit(50);
   if(fe) throw fe;
+  const found=(matches||[]).find((row:any)=>normName(row.name)===normName(n));
   if(found?.id) return found;
+  if(!allowCreate) throw new Error("请选择已经存在且在负责范围内的岗位");
   const {data:created,error:ce}=await service.from("positions").insert({name:n,status:"active"}).select("id,name").single();
   if(ce) throw ce;
   return created;
@@ -393,7 +469,7 @@ async function rollbackUpdate(service:any,before:any,eventSourceKey:string){
 }
 
 async function rollbackCreate(service:any,employeeId:string){
-  for(const table of ["employee_contact_profiles","employee_payment_profiles","employee_compensation_settings","employee_lifecycle_events","user_scope_employees"]){
+  for(const table of ["employee_contact_profiles","employee_payment_profiles","employee_compensation_settings","employee_lifecycle_events"]){
     const {error}=await service.from(table).delete().eq("employee_id",employeeId);
     if(error) throw error;
   }
@@ -810,8 +886,7 @@ async function cancelNewHireAnyState(service:any,caller:any,body:any){
     "employee_payment_profiles",
     "employee_compensation_settings",
     "employee_compensation_legacy",
-    "employee_lifecycle_events",
-    "user_scope_employees"
+    "employee_lifecycle_events"
   ]){
     const {error}=await service.from(table).delete().eq("employee_id",employeeId);
     if(error) throw error;
@@ -873,6 +948,11 @@ export async function handleRequest(req:Request){
         || await permissionAllowed(service,caller,"employee.create")
         || await permissionAllowed(service,caller,"employee.edit");
       if(!canView) throw new Error("没有读取岗位候选的权限");
+
+      const scopedRows=await limitedWritablePositionOptions(service,caller);
+      if(scopedRows!==null){
+        return json({ok:true,rows:scopedRows,scope_filtered:true});
+      }
 
       const sync=await sendSheet({action:"get_master_position_options"});
       if(!sync.ok) throw new Error(`正式 Google Sheet 岗位读取失败：${text(sync.error||sync.body?.error||"unknown")}`);
@@ -946,23 +1026,35 @@ export async function handleRequest(req:Request){
     let team:any=null;
     let position:any=null;
     if(teamProvided){
-      team=await resolveTeamForWrite(service,caller,teamDecision.teamId,before?.employee||null);
-    }else if(create){
-      // Scoped creators still need an explicit, existing team. Global writers may
-      // leave it blank until the authoritative schedule sync assigns the team.
-      await assertTargetTeamAllowed(service,caller,"",null);
+      team=await resolveTeamForWrite(service,teamDecision.teamId);
     }else if(before?.employee?.team_id){
       const {data,error}=await service.from("teams").select("id,name").eq("id",before.employee.team_id).maybeSingle();
       if(error) throw error;
       team=data;
     }
     if(positionProvided){
-      position=await findOrCreatePosition(service,p.position_id,p.position_name);
+      position=await findOrCreatePosition(
+        service,p.position_id,p.position_name,
+        caller.roleCode==="founder"||caller.access.data_scope==="all",
+      );
     }else if(before?.employee?.position_id){
       const {data,error}=await service.from("positions").select("id,name").eq("id",before.employee.position_id).maybeSingle();
       if(error) throw error;
       position=data;
     }
+
+    const currentOrganization=before?.employee?.id
+      ? await currentScopeOrganization(service,caller,before.employee.id)
+      : {teamId:"",positionId:""};
+    const authorizationTeamId=teamProvided||create
+      ? text(team?.id)
+      : currentOrganization.teamId||text(before?.employee?.team_id);
+    const authorizationPositionId=positionProvided||create
+      ? text(position?.id)
+      : currentOrganization.positionId||text(before?.employee?.position_id);
+    await assertTargetOrganizationAllowed(
+      service,caller,authorizationTeamId,authorizationPositionId,before?.employee||null,
+    );
 
     const employeePatch:any={source_sheet:"WFH后台",updated_at:new Date().toISOString()};
     if(create||owns(p,"employee_no")) employeePatch.employee_no=employeeNo;

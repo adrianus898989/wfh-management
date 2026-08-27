@@ -134,13 +134,18 @@ export function adminAlertFollowUpState(row, locale='zh') {
   const latestReader = readers[0]?.account || ''
   const result = clean(source.handling_note)
   const labels = locale === 'en'
-    ? { pending:readers.length ? 'Awaiting confirmation' : 'Not read', confirmed:'Confirmed · awaiting handling', handled:'Handled' }
-    : { pending:readers.length ? '待确认' : '尚未读取', confirmed:'已确认 · 待处理', handled:'已处理' }
+    ? { pending:'Awaiting follow-up', confirmed:'Confirmed · awaiting handling', handled:'Handled' }
+    : { pending:'待跟进', confirmed:'已确认 · 待处理', handled:'已处理' }
+  // A reader only opened the warning. The compact table's account column must
+  // identify the person who actually accepted or completed the follow-up.
+  const followUpAccount = status === 'handled' ? handledBy : status === 'confirmed' ? confirmedBy : ''
   return {
     status,
     label:labels[status],
     reader:latestReader,
-    actor:status === 'handled' ? handledBy : status === 'confirmed' ? confirmedBy : latestReader,
+    actor:followUpAccount,
+    followUpAccount,
+    followUpAt:status === 'handled' ? clean(source.handled_at) : status === 'confirmed' ? clean(source.confirmed_at) : '',
     readers,
     confirmedBy,
     confirmedAt:clean(source.confirmed_at),

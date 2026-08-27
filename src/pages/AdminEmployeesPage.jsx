@@ -62,7 +62,7 @@ const dedupeAnalysisRows = rows => {
 const BASE_ANALYSIS_VIEWS=['总览','团队分析','岗位分析','国家分析','班次分析','离职分析']
 const blankEmployeeFilters=()=>({
   employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',account_status:'',team:'',position:'',country:'',status:'active',
-  employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
+  employment_type:'',shift_name:'',teacher:'',hire_from:'',hire_to:'',
 })
 const EMPLOYEE_EXPORT_PAGE_SIZE=500
 const EMPLOYEE_EXPORT_MAX_PAGES=100
@@ -1248,7 +1248,7 @@ export default function AdminEmployeesPage(){
             full_name:text(normalized.full_name)||'—',
             country:text(normalized.country||normalized.nationality)||'—',
             team:text(normalized.teams?.name)||'—',
-            leader:text(normalized.leader_name)||'—',
+            teacher:text(normalized.online_trainer||normalized.trainer_name)||'—',
             position:text(normalized.positions?.name)||'—',
             shift:text(normalized.shift_name)||'—',
             employment_type:typeName(normalized.employment_type),
@@ -1419,7 +1419,7 @@ export default function AdminEmployeesPage(){
           <label>员工国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="employee-country-filter"/></label>
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
           <label>班次<FilterCombo value={filters.shift_name} options={cleanShiftOptions(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="employee-shift-filter"/></label>
-          <label>组长 / 负责人<FilterCombo value={filters.leader} options={meta.options?.leaders||[]} onChange={v=>setFilters({...filters,leader:v})} placeholder="全部负责人 / 输入搜索" listId="employee-leader-filter"/></label>
+          <label>老师<FilterCombo value={filters.teacher} options={meta.options?.trainers||[]} onChange={v=>setFilters({...filters,teacher:v})} placeholder="全部老师 / 输入搜索" listId="employee-teacher-filter"/></label>
           <label>入职日期起<input type="date" value={filters.hire_from} onChange={e=>setFilters({...filters,hire_from:e.target.value})}/></label>
           <label>入职日期止<input type="date" value={filters.hire_to} onChange={e=>setFilters({...filters,hire_to:e.target.value})}/></label>
         </div>}
@@ -1438,13 +1438,13 @@ export default function AdminEmployeesPage(){
       <div className="data-card">
         {loading&&rows.length===0?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
-            <thead><tr><th>等级</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
+            <thead><tr><th>等级</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>老师</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=>{
               const risk=employeeRiskMeta(r)
               const portalAccount=employeePortalAccountPresentation(r)
               return <tr key={r.id}>
                 <td>{risk?<span className={`employee-risk-badge ${risk.className}`} data-admin-i18n-skip title={locale==='en'?`Total errors: ${Number(r.total_error_count||0)}`:`累计错误 ${Number(r.total_error_count||0)} 笔`}>{risk[locale]||risk.zh}</span>:'—'}</td>
-                <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.leader_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
+                <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.online_trainer||r.trainer_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
                 <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
                 <td><span className={portalAccount.className}>{portalAccount.label}</span></td>
                 <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{portalAccount.canGenerateActivationCode&&(meta.actions?.can_generate_activation_code||canGenerateActivationCode)&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
@@ -2128,7 +2128,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   </div></div>
 }
 
-const TRAINING_ATTENDANCE_LABELS={normal:'正常上班',rest:'公休',leave:'请假',absent:'缺席',transferred:'回家'}
+const TRAINING_ATTENDANCE_LABELS={normal:'正常上班',rest:'公休',not_started:'未入',leave:'请假',absent:'缺席',transferred:'回家'}
 
 function EmployeeTrainerReviewPanel({data,employeeId,loading,error}){
   const rows=employeeTrainerReviewRows(data?.rows||[],employeeId)

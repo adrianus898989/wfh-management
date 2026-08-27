@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { loadEffectiveEmployeeScope } from '../_shared/employeeScope.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -160,51 +161,17 @@ async function employeeNosForIds(service: any, ids: string[]) {
   return rows.map((row: any) => upper(row.employee_no)).filter(Boolean)
 }
 
-async function employeeNosForTeams(service: any, teamIds: string[]) {
-  const rows: any[] = []
-  for (let index = 0; index < teamIds.length; index += 200) {
-    let offset = 0
-    while (offset < 50000) {
-      const { data, error } = await service.from('employees').select('employee_no')
-        .in('team_id', teamIds.slice(index, index + 200)).range(offset, offset + 999)
-      if (error) throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
-      rows.push(...(data || []))
-      if ((data || []).length < 1000) break
-      offset += 1000
-    }
-  }
-  return rows.map((row: any) => upper(row.employee_no)).filter(Boolean)
-}
-
 async function resolveReportScope(service: any, userId: string, access: any, roleCode: string): Promise<ReportScope> {
-  if (roleCode === 'founder' || access.data_scope === 'all') return { mode: 'all', employeeNos: [] }
-  if (access.data_scope === 'self') {
-    const employeeNos = access.employee_id ? await employeeNosForIds(service, [access.employee_id]) : []
-    return { mode: 'limited', employeeNos: [...new Set(employeeNos)] }
-  }
-  if (access.data_scope === 'own_team') {
-    if (!access.employee_id) return { mode: 'limited', employeeNos: [] }
-    const { data: employee, error } = await service.from('employees').select('team_id')
-      .eq('id', access.employee_id).maybeSingle()
-    if (error) throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
-    const employeeNos = employee?.team_id ? await employeeNosForTeams(service, [employee.team_id]) : []
-    return { mode: 'limited', employeeNos: [...new Set(employeeNos)] }
-  }
-  if (access.data_scope === 'assigned_teams') {
-    const [{ data: teams, error: teamError }, { data: employees, error: employeeError }] = await Promise.all([
-      service.from('user_scope_teams').select('team_id').eq('auth_user_id', userId),
-      service.from('user_scope_employees').select('employee_id').eq('auth_user_id', userId),
-    ])
-    if (teamError || employeeError) {
-      throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
+  try {
+    const scope = await loadEffectiveEmployeeScope(service, userId, access, roleCode)
+    if (scope.mode === 'all') return { mode: 'all', employeeNos: [] }
+    return {
+      mode: 'limited',
+      employeeNos: [...new Set(await employeeNosForIds(service, scope.employeeIds))],
     }
-    const [teamNos, directNos] = await Promise.all([
-      employeeNosForTeams(service, (teams || []).map((row: any) => row.team_id).filter(Boolean)),
-      employeeNosForIds(service, (employees || []).map((row: any) => row.employee_id).filter(Boolean)),
-    ])
-    return { mode: 'limited', employeeNos: [...new Set([...teamNos, ...directNos])] }
+  } catch {
+    throw new ReportRequestError(503, 'SCOPE_LOOKUP_UNAVAILABLE', 'scope', '数据范围服务暂时不可用，请稍后重试')
   }
-  return { mode: 'limited', employeeNos: [] }
 }
 
 function applyReportScope(query: any, scope: ReportScope, column = 'employee_id') {

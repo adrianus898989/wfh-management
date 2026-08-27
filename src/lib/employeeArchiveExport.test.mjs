@@ -23,6 +23,7 @@ test('employee archive CSV includes the visible directory fields and an Excel UT
   assert.match(csv, /"'@alice"/)
   assert.ok(EMPLOYEE_ARCHIVE_EXPORT_COLUMNS.some(([key, label]) => key === 'operator_account' && label === '操作人账号'))
   assert.ok(EMPLOYEE_ARCHIVE_EXPORT_COLUMNS.some(([key, label]) => key === 'account_status' && label === '员工端账号'))
+  assert.ok(EMPLOYEE_ARCHIVE_EXPORT_COLUMNS.some(([key, label]) => key === 'teacher' && label === '老师'))
 })
 
 test('employee archive export filename is deterministic and date based', () => {

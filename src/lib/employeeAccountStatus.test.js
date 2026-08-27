@@ -33,9 +33,10 @@ test('employee list endpoints derive opened state from portal mapping, not activ
   }
   assert.match(sources[0], /if \(accountRowsError\) throw accountRowsError/)
   const riskAccountQuery = sources[1].slice(
-    sources[1].indexOf("loadPagedQuery(() => service.from('user_access')"),
+    sources[1].indexOf('loadRowsByValues(employeeIds'),
     sources[1].indexOf('const summaryMap'),
   )
   assert.match(riskAccountQuery, /employee_portal_enabled/)
+  assert.match(riskAccountQuery, /\.in\('employee_id', group\)/)
   assert.doesNotMatch(riskAccountQuery, /\.eq\('active', true\)/)
 })

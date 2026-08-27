@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { loadEffectiveEmployeeScope } from "../_shared/employeeScope.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -235,50 +236,123 @@ async function getCaller(req: Request, service: any) {
 }
 
 async function scopeInfo(service: any, caller: any) {
-  if (caller.roleCode === "founder" || caller.access.data_scope === "all") {
-    return { mode:"all", teamIds:[], employeeIds:[] };
-  }
+  const allMode=caller.roleCode === "founder" || caller.access.data_scope === "all";
+  const [{data:directory,error:directoryError},effective]=await Promise.all([
+    service.rpc("admin_scope_current_employee_directory"),
+    allMode
+      ? Promise.resolve({mode:"all",employeeIds:[]})
+      : loadEffectiveEmployeeScope(service,caller.userId,caller.access,caller.roleCode),
+  ]);
+  if(directoryError) throw directoryError;
+  const currentRows=Array.isArray(directory?.employees)?directory.employees:[];
+  const employeeIds=allMode?[]:effective.employeeIds.map(text).filter(Boolean);
+  const allowed=allMode?null:new Set(employeeIds);
+  const visibleCurrentRows=allowed
+    ? currentRows.filter((row:any)=>allowed.has(text(row.employee_id)))
+    : currentRows;
+  const teamIds=[...new Set(visibleCurrentRows.map((row:any)=>text(row.team_id)).filter(Boolean))];
+  const positionIds=[...new Set(visibleCurrentRows.map((row:any)=>text(row.position_id)).filter(Boolean))];
+  const [teamResult,positionResult]=await Promise.all([
+    teamIds.length
+      ? service.from("teams").select("id,name,country,status").in("id",teamIds)
+      : Promise.resolve({data:[],error:null}),
+    positionIds.length
+      ? service.from("positions").select("id,name,code,status").in("id",positionIds)
+      : Promise.resolve({data:[],error:null}),
+  ]);
+  if(teamResult.error) throw teamResult.error;
+  if(positionResult.error) throw positionResult.error;
+  const teamById=new Map((teamResult.data||[]).map((row:any)=>[text(row.id),row]));
+  const positionById=new Map((positionResult.data||[]).map((row:any)=>[text(row.id),row]));
+  const currentOrganizationByEmployeeId=new Map(visibleCurrentRows.map((row:any)=>[
+    text(row.employee_id),
+    {
+      teamId:text(row.team_id),
+      positionId:text(row.position_id),
+      onlineTrainer:text(row.online_trainer),
+    },
+  ]));
+  return {
+    mode:allMode?"all":caller.access.data_scope==="self"?"self":"limited",
+    teamIds,
+    positionIds,
+    employeeIds,
+    employeeIdSet:allowed,
+    currentOrganizationByEmployeeId,
+    teamById,
+    positionById,
+  };
+}
 
-  if (caller.access.data_scope === "assigned_teams") {
-    const [{ data: ts }, { data: es }] = await Promise.all([
-      service.from("user_scope_teams").select("team_id").eq("auth_user_id", caller.userId),
-      service.from("user_scope_employees").select("employee_id").eq("auth_user_id", caller.userId),
-    ]);
+function overlayCurrentOrganization(employee:any,scope:any){
+  if(!employee?.id) return employee;
+  const organization=scope.currentOrganizationByEmployeeId?.get(text(employee.id));
+  if(organization){
+    // Current roster is authoritative for the online-training teacher too.
+    // Copy the same value into the legacy trainer_name compatibility field so
+    // older UI fallbacks cannot resurrect a stale teacher when roster is blank.
+    const onlineTrainer=organization.onlineTrainer||null;
     return {
-      mode:"assigned",
-      teamIds:(ts || []).map((x:any) => x.team_id),
-      employeeIds:(es || []).map((x:any) => x.employee_id),
+      ...employee,
+      team_id:organization.teamId||null,
+      position_id:organization.positionId||null,
+      teams:scope.teamById?.get(organization.teamId)||null,
+      positions:scope.positionById?.get(organization.positionId)||null,
+      online_trainer:onlineTrainer,
+      trainer_name:onlineTrainer,
+      organization_source:"current_roster",
     };
   }
-
-  if (caller.access.data_scope === "self") {
-    return { mode:"self", teamIds:[], employeeIds:caller.access.employee_id ? [caller.access.employee_id] : [] };
+  // An active row missing from the strict current roster must not present its
+  // historical employee master organization as if it were current. Inactive
+  // archive rows retain their last-known organization for history screens.
+  if(employee.status==="active"){
+    return {
+      ...employee,
+      team_id:null,
+      position_id:null,
+      teams:null,
+      positions:null,
+      online_trainer:null,
+      trainer_name:null,
+      organization_source:"current_roster_unmatched",
+    };
   }
+  // An archive row has no current roster teacher. Keep its last organization
+  // for historical context, but never present a historical trainer as current.
+  return {
+    ...employee,
+    online_trainer:null,
+    trainer_name:null,
+    organization_source:"archive",
+  };
+}
 
-  if (caller.access.data_scope === "own_team" && caller.access.employee_id) {
-    const { data: me } = await service.from("employees").select("team_id").eq("id", caller.access.employee_id).maybeSingle();
-    return { mode:"own_team", teamIds:me?.team_id ? [me.team_id] : [], employeeIds:[] };
+function currentRosterEmployeeIdsForOrganizationFilters(
+  scope:any,teamName:string,positionName:string,teacherName:string,
+){
+  const wantedTeam=text(teamName).toLowerCase();
+  const wantedPosition=text(positionName).toLowerCase();
+  const wantedTeacher=text(teacherName).toLowerCase();
+  if(!wantedTeam&&!wantedPosition&&!wantedTeacher) return null;
+  const ids:string[]=[];
+  for(const [employeeId,organization] of scope.currentOrganizationByEmployeeId||[]){
+    const team=text(scope.teamById?.get(organization.teamId)?.name).toLowerCase();
+    const position=text(scope.positionById?.get(organization.positionId)?.name).toLowerCase();
+    const teacher=text(organization.onlineTrainer).toLowerCase();
+    if(wantedTeam&&team!==wantedTeam) continue;
+    if(wantedPosition&&position!==wantedPosition) continue;
+    if(wantedTeacher&&!teacher.includes(wantedTeacher)) continue;
+    ids.push(employeeId);
   }
-
-  return { mode:"none", teamIds:[], employeeIds:[] };
+  return ids;
 }
 
 function applyScope(query: any, scope: any) {
   if (scope.mode === "all") return query;
-
-  if (scope.mode === "assigned") {
-    const clauses: string[] = [];
-    if (scope.teamIds.length) clauses.push(`team_id.in.(${scope.teamIds.join(",")})`);
-    if (scope.employeeIds.length) clauses.push(`id.in.(${scope.employeeIds.join(",")})`);
-    return clauses.length
-      ? query.or(clauses.join(","))
-      : query.eq("id", "00000000-0000-0000-0000-000000000000");
-  }
-
-  if (scope.mode === "self" && scope.employeeIds.length) return query.in("id",scope.employeeIds);
-
-  if (scope.mode === "own_team" && scope.teamIds.length) return query.in("team_id", scope.teamIds);
-  return query.eq("id", "00000000-0000-0000-0000-000000000000");
+  return scope.employeeIds.length
+    ? query.in("id",scope.employeeIds)
+    : query.eq("id", "00000000-0000-0000-0000-000000000000");
 }
 
 async function requireEmployeeInScope(service:any,scope:any,employeeId:string){
@@ -528,6 +602,7 @@ async function collectEmployeeOptions(service:any, scope:any, includeInactive=fa
     // active employee references them, while the top-level teams/positions
     // payload remains available to the create/edit forms.
     let q=service.from("employees").select([
+      "id","status",
       ...keys,
       "teams:team_id(id,name)",
       "positions:position_id(id,name)",
@@ -539,7 +614,7 @@ async function collectEmployeeOptions(service:any, scope:any, includeInactive=fa
     if(error) throw error;
 
     const rows=data||[];
-    rows.forEach((r:any)=>{
+    rows.map((r:any)=>overlayCurrentOrganization(r,scope)).forEach((r:any)=>{
       keys.forEach(k=>{
         const v=text(r[k]);
         if(v) sets[k].add(v);
@@ -570,11 +645,7 @@ async function collectEmployeeOptions(service:any, scope:any, includeInactive=fa
       ...sets.person_in_charge,
       ...sets.online_leader,
     ])),
-    trainers:sorted(new Set([
-      ...sets.trainer_name,
-      ...sets.on_site_trainer,
-      ...sets.online_trainer,
-    ])),
+    trainers:sorted(sets.online_trainer),
     market_countries:sorted(sets.market_country),
     market_positions:sorted(sets.market_position),
     platforms:sorted(sets.platform_scope),
@@ -588,7 +659,7 @@ function previousMonthSamePeriod(date:string){const d=new Date(`${date}T12:00:00
 function ratioPercent(n:number,d:number){return d>0?Number(((n/d)*100).toFixed(2)):0;}
 function deltaPct(current:number,previous:number){if(previous===0)return current===0?0:100;return Number((((current-previous)/previous)*100).toFixed(1));}
 function eventSnapshotValue(snapshot:any,keys:string[]){for(const k of keys){const v=text(snapshot?.[k]);if(v)return v;}return "";}
-async function fetchAllScopedEmployees(service:any,scope:any){const all:any[]=[];let offset=0;const batch=1000;while(true){let q=service.from("employees").select(`id,employee_no,full_name,status,country,nationality,employment_type,team_id,position_id,shift_name,leader_name,trainer_name,work_tg,backend_accounts,hire_date,resign_date,teams:team_id(id,name),positions:position_id(id,name)`);q=applyScope(q,scope);const {data,error}=await q.range(offset,offset+batch-1);if(error)throw error;const rows=data||[];all.push(...rows);if(rows.length<batch)break;offset+=batch;if(offset>10000)break;}return all;}
+async function fetchAllScopedEmployees(service:any,scope:any){const all:any[]=[];let offset=0;const batch=1000;while(true){let q=service.from("employees").select(`id,employee_no,full_name,status,country,nationality,employment_type,team_id,position_id,shift_name,leader_name,trainer_name,online_trainer,work_tg,backend_accounts,hire_date,resign_date,teams:team_id(id,name),positions:position_id(id,name)`);q=applyScope(q,scope);const {data,error}=await q.range(offset,offset+batch-1);if(error)throw error;const rows=(data||[]).map((row:any)=>overlayCurrentOrganization(row,scope));all.push(...rows);if(rows.length<batch)break;offset+=batch;if(offset>10000)break;}return all;}
 async function fetchLifecycleEvents(service:any,scope:any,employees:any[],kind:"recent"|"resign",startDate=""){
   const columns="employee_id,employee_no,event_type,effective_date,snapshot,reason,created_at,note";
   const fetchPages=async(ids:string[]|null)=>{
@@ -683,21 +754,21 @@ Deno.serve(async (req) => {
       let teamQuery=service.from("teams").select("id,name,country,status").order("name");
       if(scope.mode!=="all"){
         const visibleTeamIds=new Set<string>(scope.teamIds||[]);
-        if((scope.employeeIds||[]).length){
-          const {data:assignedEmployees,error:assignedError}=await service.from("employees")
-            .select("team_id").in("id",scope.employeeIds);
-          if(assignedError) throw assignedError;
-          for(const row of assignedEmployees||[]) if(row.team_id) visibleTeamIds.add(row.team_id);
-        }
         teamQuery=visibleTeamIds.size
           ? teamQuery.in("id",Array.from(visibleTeamIds))
           : teamQuery.eq("id","00000000-0000-0000-0000-000000000000");
+      }
+      let positionQuery=service.from("positions").select("id,name,code,status").order("name");
+      if(scope.mode!=="all"){
+        positionQuery=(scope.positionIds||[]).length
+          ? positionQuery.in("id",scope.positionIds)
+          : positionQuery.eq("id","00000000-0000-0000-0000-000000000000");
       }
       const [
         { data: teams }, { data: positions }, total, active, noTeam, officialPending, options, platformMap,
         canCreateRaw, canEditRaw, canGenerateActivationRaw, canViewEmployeeSensitiveRaw, canEditEmployeeSensitiveRaw, canEditPaymentRaw, canEditCompensationRaw,
       ] = await Promise.all([
-        teamQuery,service.from("positions").select("id,name,code,status").order("name"),countScoped(service,scope),countScoped(service,scope,q=>q.eq("status","active")),countScoped(service,scope,q=>q.eq("status","active").is("team_id",null)),countScoped(service,scope,q=>q.eq("status","active").eq("official_id_pending",true)),collectEmployeeOptions(service,scope),fetchPlatformMapFromSchedule(),
+        teamQuery,positionQuery,countScoped(service,scope),countScoped(service,scope,q=>q.eq("status","active")),countScoped(service,scope,q=>q.eq("status","active").is("team_id",null)),countScoped(service,scope,q=>q.eq("status","active").eq("official_id_pending",true)),collectEmployeeOptions(service,scope),fetchPlatformMapFromSchedule(),
         permissionAllowed(service,caller.access,caller.userId,"employee.create"),
         permissionAllowed(service,caller.access,caller.userId,"employee.edit"),
         permissionAllowed(service,caller.access,caller.userId,"user.activation.generate"),
@@ -1035,23 +1106,25 @@ Deno.serve(async (req) => {
       const from = (page - 1) * pageSize;
       const to = from + pageSize - 1;
       const f = body.filters || {};
-      let teamIds:string[]=[],positionIds:string[]=[];
-      // Combo-box options come from exact current employee dimensions. Exact
-      // lookup avoids selecting retired combined values such as “巴西/印度” when
-      // the user explicitly chose “巴西”.
-      if(text(f.team)){const {data}=await service.from("teams").select("id").eq("name",text(f.team));teamIds=(data||[]).map((x:any)=>x.id);if(!teamIds.length)return json({rows:[],total:0,page,page_size:pageSize,pages:1});}
-      if(text(f.position)){const {data}=await service.from("positions").select("id").eq("name",text(f.position));positionIds=(data||[]).map((x:any)=>x.id);if(!positionIds.length)return json({rows:[],total:0,page,page_size:pageSize,pages:1});}
+      const organizationEmployeeIds=currentRosterEmployeeIdsForOrganizationFilters(
+        scope,text(f.team),text(f.position),text(f.teacher || f.leader),
+      );
+      if(organizationEmployeeIds&&organizationEmployeeIds.length===0){
+        return json({rows:[],total:0,page,page_size:pageSize,pages:1});
+      }
 
       let q = service.from("employees").select(`
         id,employee_no,full_name,country,nationality,employment_type,status,
         team_id,position_id,shift_name,group_name,platform_scope,work_content,
-        work_tg,backend_accounts,hire_date,resign_date,leader_name,trainer_name,
+        work_tg,backend_accounts,hire_date,resign_date,leader_name,trainer_name,online_trainer,
         profile_status,official_id_pending,source_type,source_sheet,created_at,
         teams:team_id(id,name,country,status),
         positions:position_id(id,name,code,status)
       `, { count:"exact" });
 
-      q = applyScope(q, scope);
+      q = organizationEmployeeIds
+        ? q.in("id",organizationEmployeeIds)
+        : applyScope(q, scope);
 
       if (text(f.employee_no)) q = q.ilike("employee_no", `%${text(f.employee_no)}%`);
       if (text(f.full_name)) q = q.ilike("full_name", `%${text(f.full_name)}%`);
@@ -1065,36 +1138,26 @@ Deno.serve(async (req) => {
           `employee_no.ilike.%${k}%`,
           `full_name.ilike.%${k}%`,
           `leader_name.ilike.%${k}%`,
-          `trainer_name.ilike.%${k}%`,
           `platform_scope.ilike.%${k}%`,
         ];
         if(canViewEmployeeSensitive) keywordFields.push(`work_tg.ilike.%${k}%`,`backend_accounts.ilike.%${k}%`);
         q = q.or(keywordFields.join(","));
       }
 
-      if (teamIds.length) q = q.in("team_id",teamIds);
-      if (positionIds.length) q = q.in("position_id",positionIds);
       if (text(f.country)) q = q.ilike("country", `%${text(f.country)}%`);
       if (text(f.status)) q = q.eq("status", f.status);
       if (text(f.employment_type)) q = q.ilike("employment_type", `%${text(f.employment_type)}%`);
       if (text(f.shift_name)) q = q.ilike("shift_name",`%${text(f.shift_name)}%`);
-      if (text(f.leader)) {
-        const manager = text(f.leader).replace(/[%_,()]/g," ").trim();
-        if(manager) q = q.or([
-          `leader_name.ilike.%${manager}%`,
-          `person_in_charge.ilike.%${manager}%`,
-          `online_leader.ilike.%${manager}%`,
-        ].join(","));
-      }
       if (text(f.profile_status)) q = q.eq("profile_status", f.profile_status);
       if (text(f.hire_from)) q = q.gte("hire_date", f.hire_from);
       if (text(f.hire_to)) q = q.lte("hire_date", f.hire_to);
 
-      const { data: rows, count, error } = await q.order("employee_no").range(from,to);
+      const { data: rawRows, count, error } = await q.order("employee_no").range(from,to);
       if (error) throw error;
+      const rows=(rawRows||[]).map((row:any)=>overlayCurrentOrganization(row,scope));
 
-      const ids = (rows || []).map((r:any) => r.id);
-      const employeeNos = (rows || []).map((r:any) => employeeNoKey(r.employee_no)).filter(Boolean);
+      const ids = rows.map((r:any) => r.id);
+      const employeeNos = rows.map((r:any) => employeeNoKey(r.employee_no)).filter(Boolean);
       const emptyRelated = { data:[], error:null };
       const [{ data:pays }, { data:contacts }, { data:accountRows, error:accountRowsError }, { data:errorSummaries, error:errorSummaryError }] = ids.length ? await Promise.all([
         service.from("employee_payment_profiles").select("*").in("employee_id",ids),
@@ -1123,7 +1186,7 @@ Deno.serve(async (req) => {
         portalAccountRows.filter((x:any)=>x.active === true).map((x:any)=>x.employee_id)
       );
 
-      const result = (rows || []).map((r:any) => {
+      const result = rows.map((r:any) => {
         const merged = { ...r, telegram_username:contactMap.get(r.id)?.telegram_username };
         const missing = missingFields(merged,payMap.get(r.id));
         const errorSummary = errorSummaryMap.get(employeeNoKey(r.employee_no));
@@ -1159,9 +1222,10 @@ Deno.serve(async (req) => {
       let q = service.from("employees").select(EMPLOYEE_DETAIL_SELECT).eq("id",employeeId);
       q = applyScope(q,scope);
 
-      const { data:employee, error } = await q.maybeSingle();
+      const { data:rawEmployee, error } = await q.maybeSingle();
       if (error) throw error;
-      if (!employee) return json({ error:"找不到员工或无查看权限" },404);
+      if (!rawEmployee) return json({ error:"找不到员工或无查看权限" },404);
+      const employee=overlayCurrentOrganization(rawEmployee,scope);
 
       const [{ data:contact }, { data:payment }, { data:compensation }, { data:legacyComp }, { data:portalRows }] = await Promise.all([
         service.from("employee_contact_profiles").select(CONTACT_DETAIL_SELECT).eq("employee_id",employeeId).maybeSingle(),
@@ -1519,7 +1583,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "cancel_new_hire") {
-      await requirePermission(service, caller, "employee.delete");const employeeId=text(body.employee_id),confirmNo=text(body.confirm_employee_no);if(!employeeId)throw new Error("缺少 employee_id");await requireEmployeeInScope(service,scope,employeeId);const {data:employee,error:employeeError}=await service.from("employees").select("*").eq("id",employeeId).single();if(employeeError)throw employeeError;if(text(employee.employee_no)!==confirmNo)throw new Error("员工ID确认不一致");if(employee.status!=="active")throw new Error("只有当前在职的新员工可以撤销入职");if(employee.source_type!=="backend")throw new Error("导入的历史员工不能使用撤销入职，请使用正式离职流程");const {data:accessRows,error:accessError}=await service.from("user_access").select("auth_user_id,employee_portal_enabled").eq("employee_id",employeeId);if(accessError)throw accessError;if((accessRows||[]).length)throw new Error("该员工已经存在登录账号/权限记录，请先处理账号后再撤销入职");const sheetResult=await removeEmployeeFromSheet(employee.employee_no,employee.full_name);for(const table of ["employee_contact_profiles","employee_payment_profiles","employee_compensation_settings","employee_compensation_legacy","employee_lifecycle_events","user_scope_employees"]){const {error}=await service.from(table).delete().eq("employee_id",employeeId);if(error)throw error;}const {error:deleteError}=await service.from("employees").delete().eq("id",employeeId);if(deleteError)throw deleteError;return json({ok:true,sheet:sheetResult,sheet_warning:sheetResult?.ok===false?`员工档案已撤销，但 TEST Google Sheet 删除失败：${sheetResult.error||"unknown"}`:null});
+      await requirePermission(service, caller, "employee.delete");const employeeId=text(body.employee_id),confirmNo=text(body.confirm_employee_no);if(!employeeId)throw new Error("缺少 employee_id");await requireEmployeeInScope(service,scope,employeeId);const {data:employee,error:employeeError}=await service.from("employees").select("*").eq("id",employeeId).single();if(employeeError)throw employeeError;if(text(employee.employee_no)!==confirmNo)throw new Error("员工ID确认不一致");if(employee.status!=="active")throw new Error("只有当前在职的新员工可以撤销入职");if(employee.source_type!=="backend")throw new Error("导入的历史员工不能使用撤销入职，请使用正式离职流程");const {data:accessRows,error:accessError}=await service.from("user_access").select("auth_user_id,employee_portal_enabled").eq("employee_id",employeeId);if(accessError)throw accessError;if((accessRows||[]).length)throw new Error("该员工已经存在登录账号/权限记录，请先处理账号后再撤销入职");const sheetResult=await removeEmployeeFromSheet(employee.employee_no,employee.full_name);for(const table of ["employee_contact_profiles","employee_payment_profiles","employee_compensation_settings","employee_compensation_legacy","employee_lifecycle_events"]){const {error}=await service.from(table).delete().eq("employee_id",employeeId);if(error)throw error;}const {error:deleteError}=await service.from("employees").delete().eq("id",employeeId);if(deleteError)throw deleteError;return json({ok:true,sheet:sheetResult,sheet_warning:sheetResult?.ok===false?`员工档案已撤销，但 TEST Google Sheet 删除失败：${sheetResult.error||"unknown"}`:null});
     }
 
     if (action === "update_resignation") {

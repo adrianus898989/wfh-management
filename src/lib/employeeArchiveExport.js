@@ -7,7 +7,7 @@ export const EMPLOYEE_ARCHIVE_EXPORT_COLUMNS = [
   ['full_name', '姓名'],
   ['country', '员工国家'],
   ['team', '团队'],
-  ['leader', '组长'],
+  ['teacher', '老师'],
   ['position', '岗位'],
   ['shift', '班次'],
   ['employment_type', '员工类型'],

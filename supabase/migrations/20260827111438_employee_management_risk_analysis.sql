@@ -215,30 +215,7 @@ begin
     select roster.*
     from roster_joined roster
     where v_all
-      or roster.employee_id=v_current_employee
-      or (
-        v_scope='own_team'
-        and exists(
-          select 1 from caller_roster caller
-          where pg_catalog.lower(pg_catalog.btrim(caller.team_name))
-               =pg_catalog.lower(pg_catalog.btrim(roster.team_name))
-        )
-      )
-      or (
-        v_scope='assigned_teams'
-        and (
-          exists(
-            select 1 from public.user_scope_employees scoped_employee
-            where scoped_employee.auth_user_id=v_user_id
-              and scoped_employee.employee_id=roster.employee_id
-          )
-          or exists(
-            select 1 from public.user_scope_teams scoped_team
-            where scoped_team.auth_user_id=v_user_id
-              and scoped_team.team_id=roster.roster_team_id
-          )
-        )
-      )
+      or public.backend_employee_in_scope(roster.employee_id)
   ), filtered_roster as materialized (
     select roster.*
     from authorized_roster roster

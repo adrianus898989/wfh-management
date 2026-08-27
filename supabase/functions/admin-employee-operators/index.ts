@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { loadEffectiveEmployeeScope } from "../_shared/employeeScope.ts";
 
 const corsHeaders={
   "Access-Control-Allow-Origin":"*",
@@ -38,26 +39,10 @@ async function permissionAllowed(service:any,caller:any,code:string){
 }
 
 async function allowedEmployeeIds(service:any,caller:any,requested:string[]){
-  if(caller.roleCode==="founder"||caller.access.data_scope==="all") return requested;
-  const {data:employees,error}=await service.from("employees").select("id,team_id").in("id",requested);
-  if(error) throw error;
-  if(caller.access.data_scope==="self"){
-    return (employees||[]).filter((x:any)=>text(x.id)===text(caller.access.employee_id)).map((x:any)=>text(x.id));
-  }
-  if(caller.access.data_scope==="assigned_teams"){
-    const [{data:ts},{data:es}]=await Promise.all([
-      service.from("user_scope_teams").select("team_id").eq("auth_user_id",caller.userId),
-      service.from("user_scope_employees").select("employee_id").eq("auth_user_id",caller.userId),
-    ]);
-    const teamSet=new Set((ts||[]).map((x:any)=>text(x.team_id)));
-    const employeeSet=new Set((es||[]).map((x:any)=>text(x.employee_id)));
-    return (employees||[]).filter((x:any)=>teamSet.has(text(x.team_id))||employeeSet.has(text(x.id))).map((x:any)=>text(x.id));
-  }
-  if(caller.access.data_scope==="own_team"&&caller.access.employee_id){
-    const {data:me}=await service.from("employees").select("team_id").eq("id",caller.access.employee_id).maybeSingle();
-    return (employees||[]).filter((x:any)=>text(x.team_id)&&text(x.team_id)===text(me?.team_id)).map((x:any)=>text(x.id));
-  }
-  return [];
+  const scope=await loadEffectiveEmployeeScope(service,caller.userId,caller.access,caller.roleCode);
+  if(scope.mode==="all") return requested;
+  const allowed=new Set(scope.employeeIds);
+  return requested.filter(id=>allowed.has(text(id)));
 }
 
 const genericActor=(v:unknown)=>{

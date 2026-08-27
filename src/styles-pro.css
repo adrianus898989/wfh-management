@@ -1277,6 +1277,7 @@
 .employee-trainer-review-list article>header span{margin-top:3px;color:#77899f;font-size:10px}
 .employee-trainer-review-list article>header em{padding:5px 8px;border-radius:999px;background:#e7f8ef;color:#138057;font-size:10px;font-style:normal;font-weight:850;white-space:nowrap}
 .employee-trainer-review-list article>header em.rest{background:#f0f3f7;color:#6f7e91}
+.employee-trainer-review-list article>header em.not_started{background:#f2ebff;color:#7453c7}
 .employee-trainer-review-list article>header em.leave{background:#fff1db;color:#ad6e09}
 .employee-trainer-review-list article>header em.absent{background:#ffeaea;color:#bd4444}
 .employee-trainer-review-list article>header em.transferred{background:#eaf1ff;color:#3769d2}

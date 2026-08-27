@@ -71,6 +71,7 @@ async function optimiseUpload(file){
 const ATTENDANCE={
   normal:{label:'正常上班',tone:'green'},
   rest:{label:'公休',tone:'gray'},
+  not_started:{label:'未入',tone:'violet'},
   leave:{label:'请假',tone:'amber'},
   absent:{label:'缺席',tone:'red'},
   transferred:{label:'回家',tone:'blue'},
@@ -83,7 +84,7 @@ const REVIEW={pending:'待查看',read:'已阅',needs_changes:'需补充'}
 function historySummary(person,rows,period){
   const reportRows=rows||[]
   const recordedDates=new Set(reportRows.map(row=>text(row.report_date)).filter(Boolean))
-  const statusDates={normal:new Set(),rest:new Set(),leave:new Set(),absent:new Set(),transferred:new Set()}
+  const statusDates={normal:new Set(),rest:new Set(),not_started:new Set(),leave:new Set(),absent:new Set(),transferred:new Set()}
   reportRows.forEach(row=>{
     const member=(row.members||[])[0]
     const date=text(row.report_date)
@@ -100,6 +101,7 @@ function historySummary(person,rows,period){
     missing_days:missingDays,
     normal_count:statusDates.normal.size,
     rest_count:statusDates.rest.size,
+    not_started_count:statusDates.not_started.size,
     leave_count:statusDates.leave.size,
     absent_count:statusDates.absent.size,
     home_count:statusDates.transferred.size,
@@ -129,6 +131,7 @@ function reportWithRoster(draft,rows,trainerName=''){
 function memberFromRoster(row,index=0){
   return {
     employee_id:row.id,employee_no:row.employee_no,employee_name:row.full_name,
+    hire_date:row.hire_date||'',
     position_name:row.position||'',team_name:row.team||'',group_name:row.group||'',
     shift_name:row.shift||'',platform:row.platform||'',leader_name:row.responsible||'',
     trainer_name:row.online_trainer||'',attendance_status:'normal',status_note:'',
@@ -151,6 +154,7 @@ function memberFromReport(row,index){
   const attendance=row.attendance_status==='not_applicable'?'rest':row.attendance_status
   return {
     employee_id:row.employee_id,employee_no:row.employee_no,employee_name:row.employee_name,
+    hire_date:row.hire_date||'',
     position_name:row.position_name||'',team_name:row.team_name||'',group_name:row.group_name||'',
     shift_name:row.shift_name||'',platform:row.platform||'',leader_name:row.leader_name||'',
     trainer_name:row.trainer_name||'',attendance_status:ATTENDANCE[attendance]?attendance:'normal',
@@ -400,7 +404,11 @@ export default function OnlineTrainingPage(){
     if(!editor.members.length)return{message:editor.assignmentMode==='unmatched'?'居家排班表没有找到当前账号负责的线上培训人员':'请选择需要代填的线上培训人员',issues:[]}
     const issues=[]
     editor.members.forEach((member,index)=>{
-      if(member.attendance_status==='normal'&&!text(member.work_details))issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:'未填写当天工作情况'})
+      const hireDate=text(member.hire_date).slice(0,10)
+      if(member.attendance_status==='not_started'&&!hireDate)issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:'员工档案缺少入职日期，不能选择未入'})
+      else if(member.attendance_status==='not_started'&&!editor.draft.report_date)issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:'请先选择报告日期再使用未入'})
+      else if(member.attendance_status==='not_started'&&editor.draft.report_date>=hireDate)issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:`已到入职日期 ${hireDate}，不能选择未入`})
+      else if(member.attendance_status==='normal'&&!text(member.work_details))issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:'未填写当天工作情况'})
       else if(REASON_REQUIRED.has(member.attendance_status)&&!text(member.status_note))issues.push({index,employee_no:member.employee_no,employee_name:member.employee_name,detail:`${ATTENDANCE[member.attendance_status]?.label||'异常状态'}未填写原因`})
     })
     if(issues.length)return{message:`还有 ${issues.length} 名人员的记录未完成，请补齐后再提交`,issues}
@@ -769,8 +777,8 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
         {editor.members.length>0&&<div className="ot-auto-facts">{facts.filter(([,value])=>text(value)).map(([label,value])=><span key={label}><b>{label}</b>{value}</span>)}</div>}
       </section>
 
-      <section className="ot-form-section"><div className="section-title"><div><b>2. 填写组员当天工作情况</b><small>名单已经带入；公休无需原因，请假、缺席、回家必须填写原因</small></div><strong>{editor.members.length} 人</strong></div>
-        {!editor.members.length?<div className={`ot-no-members ${editor.rosterLoading?'loading':''}`}>{editor.rosterLoading?'正在从居家排班表读取该培训负责的人员…':admin?'请选择一名线上培训人员，组员会立即自动出现。':'当前没有可填写的线上培训人员。'}</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} index={index} invalid={invalidIndexes.has(index)} onChange={updateMember} onMetric={updateMetric} onProfile={onProfile}/>)}</div>}
+      <section className="ot-form-section"><div className="section-title"><div><b>2. 填写组员当天工作情况</b><small>名单已经带入；未到入职日期可选“未入”，公休、未入无需原因，请假、缺席、回家必须填写原因</small></div><strong>{editor.members.length} 人</strong></div>
+        {!editor.members.length?<div className={`ot-no-members ${editor.rosterLoading?'loading':''}`}>{editor.rosterLoading?'正在从居家排班表读取该培训负责的人员…':admin?'请选择一名线上培训人员，组员会立即自动出现。':'当前没有可填写的线上培训人员。'}</div>:<div className="ot-member-edit-list">{editor.members.map((member,index)=><MemberEditor key={member.employee_id} member={member} reportDate={d.report_date} index={index} invalid={invalidIndexes.has(index)} onChange={updateMember} onMetric={updateMetric} onProfile={onProfile}/>)}</div>}
       </section>
 
       <section className="ot-form-section"><div className="section-title"><div><b>3. 上传关键图片</b><small>只上传必要证据；系统会自动压缩，列表不预加载大图；最多{MAX_ATTACHMENTS}张</small></div></div>
@@ -793,11 +801,13 @@ function EditorModal({editor,updateDraft,updateMember,updateMetric,assignment,tr
   </div></div>
 }
 
-function MemberEditor({member,index,invalid,onChange,onMetric,onProfile}){
+function MemberEditor({member,reportDate,index,invalid,onChange,onMetric,onProfile}){
   const prompt=positionPrompts(member.position_name),normal=member.attendance_status==='normal',requiresReason=REASON_REQUIRED.has(member.attendance_status)
+  const hireDate=text(member.hire_date).slice(0,10)
+  const canUseNotStarted=Boolean(hireDate&&reportDate&&reportDate<hireDate)
   return <article id={`ot-member-${index}`} className={`ot-member-editor ${invalid?'invalid':''}`}>
     <header><button type="button" className="person" onClick={()=>onProfile(member.employee_id)}><span>{index+1}</span><div><strong>{member.employee_no} · {member.employee_name}</strong><small>{member.position_name||'未填写岗位'} · {member.team_name||'—'} · {member.shift_name||'—'}</small></div></button><em>排班自动带入</em></header>
-    <div className="ot-member-status"><label><span>当日状态</span><select value={member.attendance_status} onChange={e=>onChange(index,'attendance_status',e.target.value)}>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>{requiresReason&&<label className="note"><span>原因 *</span><input value={member.status_note} onChange={e=>onChange(index,'status_note',e.target.value)} placeholder={REASON_PLACEHOLDER[member.attendance_status]}/></label>}</div>
+    <div className="ot-member-status"><label><span>当日状态</span><select value={member.attendance_status} onChange={e=>onChange(index,'attendance_status',e.target.value)}>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} disabled={value==='not_started'&&!canUseNotStarted&&member.attendance_status!==value} key={value}>{item.label}</option>)}</select>{hireDate&&<small>入职日期：{hireDate}{canUseNotStarted?' · 报告日在入职前可选“未入”':''}</small>}</label>{requiresReason&&<label className="note"><span>原因 *</span><input value={member.status_note} onChange={e=>onChange(index,'status_note',e.target.value)} placeholder={REASON_PLACEHOLDER[member.attendance_status]}/></label>}</div>
     {normal&&<div className="ot-member-fields compact">
       <label className="wide"><span>当天工作情况 / 培训评语 *</span><textarea rows="4" value={member.work_details} onChange={e=>onChange(index,'work_details',e.target.value)} placeholder={`${prompt.work}；也可以直接粘贴 Telegram 报告中的完整说明。`}/></label>
       <label className="wide"><span>岗位数据 / 首次响应（选填）</span><input value={member.metrics?.response_time||''} onChange={e=>onMetric(index,e.target.value)} placeholder={prompt.metric}/></label>
@@ -825,7 +835,7 @@ function ViewModal({row,returnToHistory=false,onClose,onProfile,onOpenImage,onEd
     <div className="ot-modal-scroll">
       <div className="ot-view-head"><div className="date"><span>{dateText(row.report_date)}</span><strong>{row.platform||'未填写平台'} · {row.shift_name||'未填写班次'}</strong></div><div><span>提交人</span><strong>{row.author_name||'后台用户'}</strong><small>{row.author_employee_no||'后台账号'} · {timeText(row.created_at)}</small></div></div>
       <div className="ot-view-meta"><span>负责人：{row.leader_name||'—'}</span><span>培训：{row.trainer_name||'—'}</span><span>课程：{row.course_type||'—'}</span><span>人员：{row.members?.length||0}人</span></div>
-      <div className="ot-counts large"><b>排班记录</b><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div>
+      <div className="ot-counts large"><b>排班记录</b><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>未入 {counts.not_started||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div>
       <div className="ot-report-detail-workspace">
         <aside className="ot-member-index"><header><strong>人员列表</strong><span>{row.members?.length||0} 人</span></header><div>{(row.members||[]).map((member,index)=>{const status=ATTENDANCE[member.attendance_status]||ATTENDANCE.normal;const key=text(member.id)||text(member.employee_id)||text(member.employee_no);const active=selectedMember===member;return <button type="button" className={active?'active':''} key={key||index} onClick={()=>setSelectedMemberId(key)}><span>{index+1}</span><div><strong>{member.employee_no||'—'} · {member.employee_name||'未填写姓名'}</strong><small>{member.position_name||'未填写岗位'} · {member.team_name||'未填写团队'}</small></div><em className={status.tone}>{status.label}</em></button>})}</div></aside>
         <section className="ot-selected-member-detail">
@@ -865,7 +875,7 @@ function TrainerHistoryModal({state,onClose,onOpen,onDelete}){
       <div className="ot-trainer-date-filter"><label><span>只看某一天</span><input type="date" value={date} onChange={event=>setDate(event.target.value)}/></label><button type="button" disabled={!date} onClick={()=>setDate('')}>清除日期</button><small>{date?`${dateText(date)} · ${visibleRows.length} 份`:`全部 ${state.rows.length} 份日报`}</small></div>
       {state.loading?<div className="ot-inline-skeleton"><i/><i/><i/></div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!visibleRows.length?<div className="ot-empty small"><h3>{date?'该日没有日报':'当前培训人员尚无日报'}</h3><p>零日报培训人员会保留在列表中。</p></div>:<section className="ot-compact-table-shell in-modal"><table className="ot-compact-table ot-trainer-report-table"><thead><tr><th>日报日期</th><th>日报内容</th><th>提交人</th><th>员工</th><th>状态统计</th><th>操作</th></tr></thead><tbody>{visibleRows.map(row=>{
         const counts=Object.fromEntries(Object.keys(ATTENDANCE).map(key=>[key,(row.members||[]).filter(member=>member.attendance_status===key).length]))
-        return <tr key={row.id}><td data-label="日报日期"><div className="ot-stacked-cell"><strong>{dateText(row.report_date)}</strong><span>{timeText(row.created_at)}</span></div></td><td data-label="日报内容"><div className="ot-stacked-cell"><strong>{row.title||`线上培训日报 · ${row.report_date}`}</strong><span className="summary">{row.report_summary||row.issues_summary||row.next_plan||'已保存当天培训记录'}</span></div></td><td data-label="提交人"><div className="ot-stacked-cell"><strong>{row.author_name||row.trainer_name||'后台账号'}</strong><span>{row.author_employee_no||'—'}</span></div></td><td data-label="员工"><strong>{row.members?.length||0} 名</strong></td><td data-label="状态统计"><div className="ot-status-inline"><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span></div></td><td data-label="操作"><div className="ot-table-actions"><button type="button" onClick={()=>onOpen(row)}>查看</button>{row.can_edit&&<button type="button" className="danger" onClick={()=>onDelete(row)}>删除</button>}</div></td></tr>
+        return <tr key={row.id}><td data-label="日报日期"><div className="ot-stacked-cell"><strong>{dateText(row.report_date)}</strong><span>{timeText(row.created_at)}</span></div></td><td data-label="日报内容"><div className="ot-stacked-cell"><strong>{row.title||`线上培训日报 · ${row.report_date}`}</strong><span className="summary">{row.report_summary||row.issues_summary||row.next_plan||'已保存当天培训记录'}</span></div></td><td data-label="提交人"><div className="ot-stacked-cell"><strong>{row.author_name||row.trainer_name||'后台账号'}</strong><span>{row.author_employee_no||'—'}</span></div></td><td data-label="员工"><strong>{row.members?.length||0} 名</strong></td><td data-label="状态统计"><div className="ot-status-inline"><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>未入 {counts.not_started||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span></div></td><td data-label="操作"><div className="ot-table-actions"><button type="button" onClick={()=>onOpen(row)}>查看</button>{row.can_edit&&<button type="button" className="danger" onClick={()=>onDelete(row)}>删除</button>}</div></td></tr>
       })}</tbody></table></section>}
     </div><footer className="ot-modal-actions"><button className="primary" onClick={onClose}>关闭</button></footer>
   </div></div>
@@ -896,7 +906,7 @@ function HistoryModal({state,onClose,onProfile,onSelectDate,onDelete}){
       <button type="button" disabled={state.loading||!viewingSingleDay} onClick={()=>{setSelectedDate('');setSelectedRowId('');onSelectDate('')}}>返回筛选区间</button>
       <small>当前累计范围：{viewingSingleDay?dateText(state.period.from):baseLabel}</small>
     </form>
-    <div className="ot-history-kpis"><span><small>区间天数</small><b>{summary.period_days}</b></span><span><small>有记录</small><b>{summary.recorded_days}</b></span><span className={summary.missing_days?'warn':''}><small>未记录</small><b>{summary.missing_days}</b></span><span><small>正常</small><b>{summary.normal_count}</b></span><span><small>公休</small><b>{summary.rest_count}</b></span><span><small>请假</small><b>{summary.leave_count}</b></span><span className={summary.absent_count?'danger':''}><small>缺席</small><b>{summary.absent_count}</b></span><span><small>回家</small><b>{summary.home_count}</b></span></div>
+    <div className="ot-history-kpis"><span><small>区间天数</small><b>{summary.period_days}</b></span><span><small>有记录</small><b>{summary.recorded_days}</b></span><span className={summary.missing_days?'warn':''}><small>未记录</small><b>{summary.missing_days}</b></span><span><small>正常</small><b>{summary.normal_count}</b></span><span><small>公休</small><b>{summary.rest_count}</b></span><span><small>未入</small><b>{summary.not_started_count}</b></span><span><small>请假</small><b>{summary.leave_count}</b></span><span className={summary.absent_count?'danger':''}><small>缺席</small><b>{summary.absent_count}</b></span><span><small>回家</small><b>{summary.home_count}</b></span></div>
     {state.loading?<div className="ot-drawer-state">正在读取该员工每天记录…</div>:state.error?<div className="ot-drawer-state error">{state.error}</div>:!state.rows.length?<div className="ot-empty small"><h3>所选日期内暂无该员工记录</h3></div>:<div className="ot-history-workspace">
       <aside className="ot-history-index"><header><strong>日报日期</strong><span>{state.rows.length} 份</span></header><div>{state.rows.map(row=>{const rowMember=(row.members||[])[0]||{};const rowStatus=ATTENDANCE[rowMember.attendance_status]||ATTENDANCE.normal;const active=selectedRow===row;return <button type="button" key={row.id} className={active?'active':''} onClick={()=>setSelectedRowId(row.id)}><div><strong>{dateText(row.report_date)}</strong><small>{rowMember.shift_name||row.shift_name||'未填写班次'} · {rowMember.platform||row.platform||'未填写盘口'}</small></div><em className={rowStatus.tone}>{rowStatus.label}</em><p>{rowMember.status_note||rowMember.work_details||row.report_summary||'已记录当天情况'}</p></button>})}</div></aside>
       <section className="ot-history-selected">

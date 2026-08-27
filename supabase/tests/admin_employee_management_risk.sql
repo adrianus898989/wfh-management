@@ -16,10 +16,9 @@ begin
     raise exception 'management risk RPC lost its session, permission or current-roster guard';
   end if;
 
-  if position('public.user_scope_employees' in v_definition)=0
-     or position('public.user_scope_teams' in v_definition)=0
-     or position('v_scope=''own_team''' in replace(v_definition,' ',''))=0
-     or position('roster.roster_team_id' in v_definition)=0 then
+  if position('public.backend_employee_in_scope(roster.employee_id)' in v_definition)=0
+     or position('public.user_scope_teams' in v_definition)>0
+     or position('v_scope=''own_team''' in replace(v_definition,' ',''))>0 then
     raise exception 'management risk RPC lost its current-roster data-scope boundary';
   end if;
 

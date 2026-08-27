@@ -44,8 +44,9 @@ import {
   fetchPublishedAppReleaseId,
 } from './lib/releaseSession'
 
-const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 3
+const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 6
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
+const SESSION_VERIFICATION_RETRY_MAX_MS = 60 * 1000
 const AUTH_CHECK_DEBOUNCE_MS = 2000
 
 function ReleaseSessionBoundary({ children }) {
@@ -207,21 +208,12 @@ function Protected({ children, mode }) {
         await localSignOut({ release:false, notice:'session_ended', redirect:true })
         return { session:null, error:null }
       }
-      let session = data?.session || null
-      // Re-checking a protected request must not force a token rotation. A
-      // burst of rejected page requests used to launch several refreshes in
-      // succession; the late responses could overwrite browser storage with
-      // an already rotated refresh token. Supabase already auto-refreshes, and
-      // this explicit refresh is only a near-expiry safety net.
-      if (!error && session && Number(session.expires_at || 0) * 1000 - Date.now() < 10 * 60 * 1000) {
-        const refreshed = await supabase.auth.refreshSession(session)
-        if (!refreshed.error && refreshed.data?.session) session = refreshed.data.session
-        else if (terminalAuthError(refreshed.error)) {
-          await localSignOut({ release:false, notice:'session_ended', redirect:true })
-          return { session:null, error:null }
-        }
-      }
-      return { session, error }
+      // The browser client already serializes refresh-token rotation and
+      // refreshes ahead of expiry. Explicitly calling refreshSession here made
+      // every auth callback start another rotation when the project's JWT
+      // lifetime was shorter than the old ten-minute safety window. That
+      // produced refresh/revoke storms and unnecessary permission checks.
+      return { session:data?.session || null, error }
     }
     const checkLease = (method = 'claim') => {
       if (leaseCheckPromise) return leaseCheckPromise
@@ -264,8 +256,8 @@ function Protected({ children, mode }) {
       window.clearTimeout(verificationTimer)
       if (!navigator.onLine) return
       const delay = Math.min(
-        5000,
-        SESSION_VERIFICATION_RETRY_BASE_MS * Math.max(1, verificationFailures.current),
+        SESSION_VERIFICATION_RETRY_MAX_MS,
+        SESSION_VERIFICATION_RETRY_BASE_MS * (2 ** Math.max(0, verificationFailures.current - 1)),
       )
       verificationTimer = window.setTimeout(() => {
         if (alive && navigator.onLine) bootstrap(true)
@@ -274,7 +266,9 @@ function Protected({ children, mode }) {
     const markVerificationFailure = async message => {
       if (!alive) return
       if (!navigator.onLine) {
-        setState(current => ({ ...current, loading:false, error:message }))
+        setState(current => current.session && current.access
+          ? ({ ...current, loading:false, error:'' })
+          : ({ ...current, loading:false, error:message }))
         return
       }
       // A timeout or temporary Edge/RPC outage is not proof that the JWT or
@@ -285,7 +279,13 @@ function Protected({ children, mode }) {
         SESSION_VERIFICATION_FAILURE_BACKOFF_CAP,
         verificationFailures.current + 1,
       )
-      setState(current => ({ ...current, loading:false, error:message }))
+      // Once access was proven, a single timeout must not replace the whole
+      // application with a blocking error page. Keep the last verified view
+      // while retrying. A definitive server reason still reaches
+      // acceptLease/terminalBootstrapReason and signs out immediately.
+      setState(current => current.session && current.access
+        ? ({ ...current, loading:false, error:'' })
+        : ({ ...current, loading:false, error:message }))
       scheduleVerificationRetry()
     }
     const bootstrap = (force = false) => {
@@ -424,6 +424,10 @@ function Protected({ children, mode }) {
     // Auth and the current lease first; bootstrap performs the definitive
     // sign-out only when the current session is actually gone or disabled.
     const onAuthCheck = () => {
+      // A retry timer already owns recovery after a transient verification
+      // failure. Ignore the cascade of 401 responses from page requests until
+      // that backoff fires instead of hammering bootstrap every two seconds.
+      if (verificationFailures.current > 0) return
       const now = Date.now()
       if (now - lastAuthCheckAt < AUTH_CHECK_DEBOUNCE_MS) return
       lastAuthCheckAt = now

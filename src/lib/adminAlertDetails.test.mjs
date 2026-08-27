@@ -24,6 +24,10 @@ const teamColumnsMigration = readFileSync(new URL(
   '../../supabase/migrations/20260827115000_admin_alert_team_and_follow_up_columns.sql',
   import.meta.url,
 ), 'utf8')
+const currentRosterTeamMigration = readFileSync(new URL(
+  '../../supabase/migrations/20260827155000_admin_alert_current_roster_team.sql',
+  import.meta.url,
+), 'utf8')
 
 test('monthly leave exposes the existing category totals and dated evidence', () => {
   const detail = adminAlertAttendanceDetails({
@@ -129,7 +133,7 @@ test('employee warning history uses an exact employee filter and includes resolv
 test('warning read state has explicit localized labels in a dedicated status column', () => {
   assert.deepEqual(adminAlertReadState({ unread:true }, 'zh'), { unread:true, label:'未读' })
   assert.deepEqual(adminAlertReadState({ unread:false }, 'en'), { unread:false, label:'Read' })
-  assert.match(alertCenterComponent, /\? 'Summary' : '预警摘要'\}<\/span><span>\{locale === 'en' \? 'Read status' : '状态'\}<\/span><span>\{locale === 'en' \? 'Follow-up status' : '跟进状态'\}<\/span>/)
+  assert.match(alertCenterComponent, /\? 'Summary' : '预警摘要'\}<\/span><span>\{locale === 'en' \? 'Read status' : '阅读状态'\}<\/span><span>\{locale === 'en' \? 'Follow-up status' : '跟进状态'\}<\/span>/)
   assert.match(alertCenterComponent, /className="admin-alert-table-summary"[^>]*>\{copy\.message\}<\/span>/)
   assert.match(alertCenterComponent, /className="admin-alert-table-read">[\s\S]{0,180}admin-alert-read-state/)
 })
@@ -140,18 +144,22 @@ test('only explicit expand controls toggle rows and employee IDs remain selectab
   assert.match(alertCenterComponent, /className="admin-alert-table-expand"[^>]+onClick=\{\(\) => toggleRow\(row\)\}/)
   assert.match(alertCenterComponent, /className="employee-alert-history-expand"[^>]+onClick=\{\(\) => toggleRow\(row\)\}/)
   assert.match(alertCenterStyles, /admin-alert-employee-id\{[^}]*user-select:text/)
-  assert.match(alertCenterStyles, /grid-template-columns:100px 105px minmax\(130px,.75fr\)[^}]+minmax\(170px,.9fr\) 100px 58px/)
-  assert.match(alertCenterStyles, /admin-alert-record-table\{[^}]*overflow-x:auto/)
+  assert.match(alertCenterStyles, /grid-template-columns:78px 82px minmax\(96px,.72fr\)[^}]+minmax\(105px,.78fr\) 78px 62px/)
+  assert.match(alertCenterStyles, /admin-alert-record-table\{[^}]*overflow-x:hidden/)
+  assert.match(alertCenterStyles, /admin-alert-table-head>span:last-child\{text-align:center\}/)
+  assert.match(alertCenterStyles, /admin-alert-table-expand\{[^}]*justify-content:center/)
+  assert.doesNotMatch(alertCenterStyles, /min-width:1640px/)
 })
 
 test('follow-up state keeps reader, status and result independently addressable', () => {
   const pending = adminAlertFollowUpState({
     readers:[{ auth_user_id:'reader-1', account:'founder', read_at:'2026-08-27T08:00:00Z' }],
   }, 'zh')
-  assert.equal(pending.label, '待确认')
+  assert.equal(pending.label, '待跟进')
   assert.equal(pending.reader, 'founder')
   assert.equal(pending.result, '')
-  assert.equal(pending.actor, 'founder')
+  assert.equal(pending.actor, '')
+  assert.equal(pending.followUpAccount, '')
 
   const handled = adminAlertFollowUpState({
     readers:[{ auth_user_id:'reader-1', account:'founder', read_at:'2026-08-27T08:00:00Z' }],
@@ -163,17 +171,19 @@ test('follow-up state keeps reader, status and result independently addressable'
   assert.equal(handled.label, '已处理')
   assert.equal(handled.reader, 'founder')
   assert.equal(handled.actor, 'manager-b')
+  assert.equal(handled.followUpAccount, 'manager-b')
   assert.equal(handled.note, '排班录入错误，已修正')
   assert.equal(handled.result, '排班录入错误，已修正')
 })
 
-test('warning table places team after name and separates status, result and reader', () => {
+test('warning table places team after name and separates read state from actual follow-up account', () => {
   assert.match(alertCenterComponent, /\? 'Name' : '姓名'\}<\/span><span>\{locale === 'en' \? 'Team' : '团队'\}<\/span>/)
   assert.match(alertCenterComponent, /className="admin-alert-table-team"[^>]*>\{row\.team_name \|\| '—'\}<\/span>/)
   assert.match(alertCenterComponent, /className="admin-alert-table-followup"[\s\S]{0,180}>\{workflow\.label\}<\/small><\/span>/)
   assert.match(alertCenterComponent, /className="admin-alert-table-result"[^>]*>[\s\S]{0,80}\{workflow\.result \|\| '—'\}<\/span>/)
-  assert.match(alertCenterComponent, /className="admin-alert-table-reader"[^>]*>[\s\S]{0,80}\{workflow\.reader \|\| '—'\}<\/span>/)
-  assert.doesNotMatch(alertCenterComponent, /className="admin-alert-table-reader"[^>]*>[\s\S]{0,160}workflow\.label/)
+  assert.match(alertCenterComponent, /\? 'Follow-up account' : '跟进账号'/)
+  assert.match(alertCenterComponent, /className="admin-alert-table-followup-account"[^>]*>[\s\S]{0,100}\{workflow\.followUpAccount \|\| '—'\}<\/span>/)
+  assert.doesNotMatch(alertCenterComponent, /className="admin-alert-table-followup-account"[^>]*>[\s\S]{0,180}workflow\.reader/)
 })
 
 test('follow-up migration keeps private tables and scoped RPC authorization', () => {
@@ -201,6 +211,23 @@ test('team enrichment preserves the granular alert reader security boundary', ()
   assert.match(teamColumnsMigration, /order by item\.ordinality/)
   assert.match(teamColumnsMigration, /revoke all on function public\.admin_alert_center\(jsonb, integer, integer\)[\s\S]{0,120}from public, anon/)
   assert.match(teamColumnsMigration, /grant execute on function public\.admin_alert_center\(jsonb, integer, integer\)[\s\S]{0,100}to authenticated, service_role/)
+  const alertReaderWrapper = teamColumnsMigration.slice(
+    teamColumnsMigration.indexOf('create or replace function public.admin_alert_center'),
+    teamColumnsMigration.indexOf('-- Keep the granular workflow implementation'),
+  )
+  assert.match(alertReaderWrapper, /admin_alert_center_page_v1\([\s\S]{0,100}p_filters/)
+  assert.doesNotMatch(alertReaderWrapper, /from public\.admin_alert_events/)
+  assert.match(followUpMigration, /public\.backend_employee_in_scope\(event\.employee_id\)/)
+})
+
+test('warning team enrichment follows the strict current roster after transfers', () => {
+  assert.match(currentRosterTeamMigration, /scope_private\.current_employee_scope_directory\(\)/)
+  assert.match(currentRosterTeamMigration, /directory\.employee_id::text/)
+  assert.match(currentRosterTeamMigration, /team\.id = directory\.current_team_id/)
+  assert.match(currentRosterTeamMigration, /replace\(v_definition, v_old_join, v_new_join\)/)
+  assert.match(currentRosterTeamMigration, /position\('employee\.team_id' in v_definition\) > 0/)
+  assert.match(currentRosterTeamMigration, /position\('employee\.group_name' in v_definition\) > 0/)
+  assert.match(currentRosterTeamMigration, /admin_alert_team_enrichment_definition_changed/)
 })
 
 test('follow-up wrapper writes an atomic centralized operation log after scoped mutation', () => {

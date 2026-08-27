@@ -1,4 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import {
+  effectiveEmployeeIdSet,
+  loadEffectiveEmployeeScope,
+} from '../_shared/employeeScope.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -78,54 +82,18 @@ async function authorize(req: Request) {
 }
 
 async function loadScope(service: any, caller: any) {
-  if (caller.roleCode === 'founder' || caller.access.data_scope === 'all') {
-    return { mode: 'all', teamIds: new Set<string>(), employeeIds: new Set<string>() }
-  }
-
-  if (caller.access.data_scope === 'assigned_teams') {
-    const [{ data: teams }, { data: employees }] = await Promise.all([
-      service.from('user_scope_teams').select('team_id').eq('auth_user_id', caller.userId),
-      service.from('user_scope_employees').select('employee_id').eq('auth_user_id', caller.userId),
-    ])
-    return {
-      mode: 'assigned_teams',
-      teamIds: new Set((teams || []).map((row: any) => row.team_id)),
-      employeeIds: new Set((employees || []).map((row: any) => row.employee_id)),
-    }
-  }
-
-  if (caller.access.data_scope === 'self') {
-    return {
-      mode: 'self',
-      teamIds: new Set<string>(),
-      employeeIds: new Set(caller.access.employee_id ? [caller.access.employee_id] : []),
-    }
-  }
-
-  if (caller.access.data_scope === 'own_team' && caller.access.employee_id) {
-    const { data: employee } = await service
-      .from('employees')
-      .select('team_id')
-      .eq('id', caller.access.employee_id)
-      .maybeSingle()
-    return {
-      mode: 'own_team',
-      teamIds: new Set(employee?.team_id ? [employee.team_id] : []),
-      employeeIds: new Set<string>(),
-    }
-  }
-
-  return { mode: 'none', teamIds: new Set<string>(), employeeIds: new Set<string>() }
+  const scope = await loadEffectiveEmployeeScope(
+    service,
+    caller.userId,
+    caller.access,
+    caller.roleCode,
+  )
+  return { ...scope, employeeIdSet: effectiveEmployeeIdSet(scope) }
 }
 
 function employeeInScope(employee: any, scope: any) {
   if (scope.mode === 'all') return true
-  if (scope.mode === 'self') return scope.employeeIds.has(employee.id)
-  if (scope.mode === 'own_team') return Boolean(employee.team_id && scope.teamIds.has(employee.team_id))
-  if (scope.mode === 'assigned_teams') {
-    return scope.employeeIds.has(employee.id) || Boolean(employee.team_id && scope.teamIds.has(employee.team_id))
-  }
-  return false
+  return scope.employeeIdSet?.has(employee.id) === true
 }
 
 Deno.serve(async req => {

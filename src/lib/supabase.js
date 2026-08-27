@@ -204,7 +204,13 @@ export const cleanupCandidateAppSession=async accessToken=>{
   if(!configured||!accessToken)return {data:null,error:null}
   let releaseResult={data:null,error:null}
   try{
-    const candidateClient=createClient(url,key,{accessToken:async()=>accessToken})
+    const candidateClient=createClient(url,key,{
+      accessToken:async()=>accessToken,
+      // This short-lived client only releases a candidate login lease. It
+      // must never persist or auto-refresh Auth state alongside the portal's
+      // single long-lived browser client.
+      auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
+    })
     releaseResult=await timedAppSessionRpc(candidateClient,'app_session_release')
   }catch(error){releaseResult={data:null,error}}
 

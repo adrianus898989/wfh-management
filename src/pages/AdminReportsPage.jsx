@@ -105,8 +105,11 @@ async function invokeErrorReport(body,allowSessionRefresh=true){
   if(error){
     const detail=await functionErrorDetail(error,'错误统计读取失败')
     if(detail.status===401&&allowSessionRefresh){
-      const refreshed=await supabase.auth.refreshSession()
-      if(!refreshed.error&&refreshed.data?.session)return invokeErrorReport(body,false)
+      // getSession participates in the browser client's refresh lock. Calling
+      // refreshSession here could rotate the same refresh token concurrently
+      // with the client's automatic refresh and revoke the winning session.
+      const current=await supabase.auth.getSession()
+      if(!current.error&&current.data?.session)return invokeErrorReport(body,false)
     }
     throw new Error(detail.message)
   }
