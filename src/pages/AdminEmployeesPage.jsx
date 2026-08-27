@@ -520,6 +520,7 @@ export default function AdminEmployeesPage(){
   const [managementRiskFilters,setManagementRiskFilters]=useState(blankManagementRiskFilters)
   const [appliedManagementRiskFilters,setAppliedManagementRiskFilters]=useState(blankManagementRiskFilters)
   const [managementRiskDimension,setManagementRiskDimension]=useState('teams')
+  const managementRiskRequestRef=useRef({inFlight:false,sequence:0})
   const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState(blankPeopleFilters)
   const [appliedAnalysisFilters,setAppliedAnalysisFilters]=useState(blankPeopleFilters)
@@ -678,6 +679,9 @@ export default function AdminEmployeesPage(){
 
   const loadManagementRisk=async(nextFilters=appliedManagementRiskFilters)=>{
     if(!canViewManagementRisk) return
+    if(managementRiskRequestRef.current.inFlight) return
+    managementRiskRequestRef.current.inFlight=true
+    const requestId=++managementRiskRequestRef.current.sequence
     setManagementRisk(current=>({...current,loading:true,error:''}))
     try{
       const {data,error}=await supabase.rpc('admin_employee_management_risk',{
@@ -690,9 +694,15 @@ export default function AdminEmployeesPage(){
         p_top_limit:50,
       })
       if(error||data?.error) throw new Error(readableErrorMessage(error||data?.error)||'管理风险分析读取失败')
+      if(requestId!==managementRiskRequestRef.current.sequence) return
       setManagementRisk({...data,loading:false,error:''})
     }catch(e){
+      if(requestId!==managementRiskRequestRef.current.sequence) return
       setManagementRisk(current=>({...current,loading:false,error:employeeRequestError(e,'管理风险分析读取失败，请重试。')}))
+    }finally{
+      if(requestId===managementRiskRequestRef.current.sequence){
+        managementRiskRequestRef.current.inFlight=false
+      }
     }
   }
 

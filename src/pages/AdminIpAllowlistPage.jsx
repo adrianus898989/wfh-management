@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { useAdminAccess } from '../lib/adminAccess'
+import { withAbortTimeout } from '../lib/abortableRequest'
 import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { supabase } from '../lib/supabase'
+
+const IP_ALLOWLIST_REQUEST_TIMEOUT_MS = 15 * 1000
 
 const blankEntry = () => ({
   id: '',
@@ -31,23 +34,38 @@ export default function AdminIpAllowlistPage() {
   const [modal, setModal] = useState(null)
 
   const call = async body => {
-    const result = await supabase.functions.invoke('admin-ip-allowlist', { body })
-    const payload = await readFunctionResponsePayload(result)
-    if (result.error || payload?.error) {
-      throw new Error(payload?.error || result.error?.message || '操作失败')
+    try {
+      const result = await withAbortTimeout(
+        signal => supabase.functions.invoke('admin-ip-allowlist', { body, signal }),
+        IP_ALLOWLIST_REQUEST_TIMEOUT_MS,
+        'IP_ALLOWLIST_TIMEOUT',
+      )
+      const payload = await readFunctionResponsePayload(result)
+      if (result.error || payload?.error) {
+        throw new Error(payload?.error || '白名单服务暂时不可用，请稍后重试')
+      }
+      return payload
+    } catch (requestError) {
+      if (requestError?.code === 'IP_ALLOWLIST_TIMEOUT'
+        || requestError?.message === 'IP_ALLOWLIST_TIMEOUT') {
+        throw new Error(body?.action === 'list'
+          ? '读取白名单超时，请重试'
+          : '保存响应超时；本次操作可能已经完成，请先刷新确认，未生效再重试')
+      }
+      if (requestError instanceof Error) throw requestError
+      throw new Error('白名单服务连接失败，请稍后重试')
     }
-    return payload
   }
 
-  const load = async () => {
-    setLoading(true)
+  const load = async ({ background = false } = {}) => {
+    if (!background) setLoading(true)
     setError('')
     try {
       setSnapshot(await call({ action: 'list' }))
     } catch (loadError) {
       setError(loadError.message)
     } finally {
-      setLoading(false)
+      if (!background) setLoading(false)
     }
   }
 
@@ -58,12 +76,20 @@ export default function AdminIpAllowlistPage() {
     setError('')
     setNotice('')
     try {
-      setSnapshot(await call(body))
+      const response = await call(body)
+      if (response?.settings || Array.isArray(response?.entries)) {
+        setSnapshot(response)
+      } else if (response?.refresh_required) {
+        // Mutation responses stay small so saving is released immediately.
+        // Reload the canonical, permission-checked snapshot in the background.
+        void load({ background: true })
+      }
       setNotice(successMessage)
-      return true
+      return { ok: true, error: '' }
     } catch (mutationError) {
-      setError(mutationError.message)
-      return false
+      const message = mutationError?.message || '保存失败，请稍后重试'
+      setError(message)
+      return { ok: false, error: message }
     } finally {
       setSaving(false)
     }
@@ -105,16 +131,21 @@ export default function AdminIpAllowlistPage() {
       return
     }
     setModal(current => ({ ...current, saving: true, error: '' }))
-    const ok = await mutate({
-      action: modal.mode,
-      id: form.id || undefined,
-      ip_network: form.ip_network,
-      label: form.label,
-      notes: form.notes,
-      enabled: form.enabled,
-    }, modal.mode === 'create' ? '白名单已新增' : '白名单已更新')
-    if (ok) setModal(null)
-    else setModal(current => current ? ({ ...current, saving: false, error: '保存失败，请查看页面提示' }) : current)
+    let outcome = { ok: false, error: '保存失败，请稍后重试' }
+    try {
+      outcome = await mutate({
+        action: modal.mode,
+        id: form.id || undefined,
+        ip_network: form.ip_network,
+        label: form.label,
+        notes: form.notes,
+        enabled: form.enabled,
+      }, modal.mode === 'create' ? '白名单已新增' : '白名单已更新')
+      if (outcome.ok) setModal(null)
+      else setModal(current => current ? ({ ...current, error: outcome.error }) : current)
+    } finally {
+      setModal(current => current ? ({ ...current, saving: false }) : current)
+    }
   }
 
   const toggleEntry = async entry => {
