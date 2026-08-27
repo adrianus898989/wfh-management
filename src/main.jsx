@@ -19,6 +19,7 @@ import './styles-connectivity.css'
 import './styles-attendance.css'
 import './styles-admin-ip-allowlist.css'
 import './styles-admin-root-layout.css'
+import './styles-management-risk.css'
 import { configured } from './lib/supabase'
 
 for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles]')) old.remove()

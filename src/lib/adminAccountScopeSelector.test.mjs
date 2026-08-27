@@ -20,10 +20,11 @@ test('assigned teams and employees expose selected chips, selected-only filters 
   assert.match(usersPage, /clearScopeIds\('employee_ids'\)/)
 })
 
-test('scope selection continues saving database IDs and shows active headcount from bootstrap employees', () => {
+test('scope selection continues saving database IDs and shows current-roster headcount from bootstrap teams', () => {
   assert.match(usersPage, /team_ids:\s*form\.team_ids/)
   assert.match(usersPage, /employee_ids:\s*form\.employee_ids/)
-  assert.match(usersPage, /teamActiveCounts\.get\(team\.id\) \|\| 0\} 人在职/)
+  assert.match(usersPage, /new Map\(teams\.map\(team => \[team\.id, Number\(team\.member_count\) \|\| 0\]\)\)/)
+  assert.match(usersPage, /当前排班 \{teamActiveCounts\.get\(team\.id\) \|\| 0\} 人/)
   assert.match(usersPage, /updateScopeIds\('team_ids', team\.id, event\.target\.checked\)/)
   assert.match(usersPage, /updateScopeIds\('employee_ids', employee\.id, event\.target\.checked\)/)
 })

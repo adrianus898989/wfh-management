@@ -1,7 +1,7 @@
 const checkedStatuses = new Set([400, 401, 403])
 
 const recoverableLeaseFailure = /(?:app[_\s-]*)?session[_\s-]*not[_\s-]*current|not[_\s-]*owner/i
-const terminalAuthFailure = /auth[_\s-]*session[_\s-]*missing|active[_\s-]*elsewhere|staff[_\s-]*account[_\s-]*(?:not[_\s-]*found|missing)|invalid[_\s-]*(?:jwt|token)|jwt[_\s-]*(?:expired|malformed)|refresh[_\s-]*token|(?:auth[_\s-]*)?session[_\s-]*expired|not[_\s-]*authenticated|no[_\s-]*authorization/i
+const terminalAuthFailure = /release[_\s-]*updated|auth[_\s-]*session[_\s-]*missing|active[_\s-]*elsewhere|staff[_\s-]*account[_\s-]*(?:not[_\s-]*found|missing)|invalid[_\s-]*(?:jwt|token)|jwt[_\s-]*(?:expired|malformed)|refresh[_\s-]*token|(?:auth[_\s-]*)?session[_\s-]*expired|not[_\s-]*authenticated|no[_\s-]*authorization/i
 
 /**
  * A five-minute application lease may expire while a valid browser is asleep

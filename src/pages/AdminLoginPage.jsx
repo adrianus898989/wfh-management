@@ -8,6 +8,7 @@ import {
 } from '../lib/supabase'
 import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
+import { registerCurrentAppRelease } from '../lib/releaseSession'
 
 function withTimeout(promise, ms = 25000) {
   let timer
@@ -45,6 +46,8 @@ export default function AdminLoginPage() {
     const notice = consumeAppSessionNotice('admin')
     return notice === 'active_elsewhere'
       ? '当前会话已结束：该账号正在另一浏览器使用'
+      : notice === 'system_updated'
+        ? '系统已更新，请重新登录'
       : notice === 'ip_not_allowed'
         ? '当前会话已结束：当前IP不在后台登录白名单中'
       : notice === 'session_ended'
@@ -95,6 +98,7 @@ export default function AdminLoginPage() {
           : '登录失败，请重试')
       }
 
+      registerCurrentAppRelease('admin')
       if (responseData.mfa_required) {
         touchSessionActivity(true)
         window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}admin/mfa`)

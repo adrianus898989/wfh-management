@@ -1,5 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { decideBackendDataScope, delegatedBackendDataScopeError } from './scope.ts'
+import {
+  decideBackendDataScope,
+  delegatedBackendDataScopeError,
+  partitionCurrentTeamIds,
+} from './scope.ts'
 
 const allowedOrigin = 'https://adrianus898989.github.io'
 
@@ -38,6 +42,10 @@ function cleanString(v: unknown) {
 function cleanStringList(v: unknown) {
   if (!Array.isArray(v)) return []
   return [...new Set(v.map(cleanString).filter(Boolean))]
+}
+
+function normalizeEmployeeNo(v: unknown) {
+  return cleanString(v).toUpperCase().replace(/[^A-Z0-9]/g, '')
 }
 
 function jwtSessionId(authorization: string) {
@@ -252,52 +260,87 @@ Deno.serve(async (req) => {
     async function getScopeContext() {
       if (scopeContextPromise) return scopeContextPromise
       scopeContextPromise = (async () => {
-        const [allEmployees, teamRes, scopeTeamRes, scopeEmployeeRes] = await Promise.all([
+        const [allEmployees, teamRes, currentDirectoryRes, scopeTeamRes, scopeEmployeeRes] = await Promise.all([
           getAllEmployeeRows(),
           admin.from('teams').select('id,name').order('name').limit(5000),
+          admin.rpc('admin_scope_current_team_directory'),
           admin.from('user_scope_teams').select('team_id').eq('auth_user_id', authenticatedUser.id),
           admin.from('user_scope_employees').select('employee_id').eq('auth_user_id', authenticatedUser.id),
         ])
 
         if (teamRes.error) throw teamRes.error
+        if (currentDirectoryRes.error) throw currentDirectoryRes.error
         if (scopeTeamRes.error) throw scopeTeamRes.error
         if (scopeEmployeeRes.error) throw scopeEmployeeRes.error
 
         const allTeams = teamRes.data || []
+        const currentDirectory: any = currentDirectoryRes.data || {}
+        const currentTeams = Array.isArray(currentDirectory.teams) ? currentDirectory.teams : []
+        const currentAssignments = Array.isArray(currentDirectory.employees) ? currentDirectory.employees : []
+        const unmatchedTeamNames = Array.isArray(currentDirectory.unmatched_team_names)
+          ? currentDirectory.unmatched_team_names
+          : []
+        if (!currentTeams.length) throw new Error('当前排班团队目录为空，已停止账号范围授权')
+        if (unmatchedTeamNames.length) throw new Error('当前排班团队尚未完成组织目录匹配，已停止账号范围授权')
+
         const employeeMap = new Map(allEmployees.map((employee: any) => [employee.id, employee]))
         const allTeamIds = new Set(allTeams.map((team: any) => team.id))
+        const currentTeamIds = new Set<string>(currentTeams.map((team: any) => cleanString(team.id)).filter(Boolean))
+        const currentTeamIdByEmployeeNo = new Map<string, string>()
+        for (const assignment of currentAssignments) {
+          const employeeNo = normalizeEmployeeNo(assignment?.employee_no)
+          const teamId = cleanString(assignment?.team_id)
+          if (employeeNo && currentTeamIds.has(teamId)) currentTeamIdByEmployeeNo.set(employeeNo, teamId)
+        }
+        const currentTeamIdByEmployeeId = new Map<string, string>()
+        for (const employee of allEmployees) {
+          const teamId = currentTeamIdByEmployeeNo.get(normalizeEmployeeNo(employee.employee_no))
+          if (teamId) currentTeamIdByEmployeeId.set(employee.id, teamId)
+        }
         const allowedEmployeeIds = new Set<string>()
         const delegableTeamIds = new Set<string>()
 
         if (isFounder || activeCaller.data_scope === 'all') {
           allEmployees.forEach((employee: any) => allowedEmployeeIds.add(employee.id))
-          allTeams.forEach((team: any) => delegableTeamIds.add(team.id))
+          currentTeamIds.forEach(teamId => delegableTeamIds.add(teamId))
         } else if (activeCaller.data_scope === 'self') {
           if (activeCaller.employee_id && employeeMap.has(activeCaller.employee_id)) {
             allowedEmployeeIds.add(activeCaller.employee_id)
           }
         } else if (activeCaller.data_scope === 'own_team') {
           const me: any = activeCaller.employee_id ? employeeMap.get(activeCaller.employee_id) : null
-          if (me?.team_id) {
-            delegableTeamIds.add(me.team_id)
+          const currentTeamId = me ? currentTeamIdByEmployeeId.get(me.id) : ''
+          if (currentTeamId) {
+            delegableTeamIds.add(currentTeamId)
             allEmployees.forEach((employee: any) => {
-              if (employee.team_id === me.team_id) allowedEmployeeIds.add(employee.id)
+              if (currentTeamIdByEmployeeId.get(employee.id) === currentTeamId) allowedEmployeeIds.add(employee.id)
             })
           }
         } else if (activeCaller.data_scope === 'assigned_teams') {
           const assignedTeamIds = new Set((scopeTeamRes.data || []).map((row: any) => row.team_id))
           const assignedEmployeeIds = new Set((scopeEmployeeRes.data || []).map((row: any) => row.employee_id))
           assignedTeamIds.forEach((teamId: string) => {
-            if (allTeamIds.has(teamId)) delegableTeamIds.add(teamId)
+            if (currentTeamIds.has(teamId)) delegableTeamIds.add(teamId)
           })
           allEmployees.forEach((employee: any) => {
-            if (assignedTeamIds.has(employee.team_id) || assignedEmployeeIds.has(employee.id)) {
+            const currentTeamId = currentTeamIdByEmployeeId.get(employee.id)
+            if ((currentTeamId && assignedTeamIds.has(currentTeamId)) || assignedEmployeeIds.has(employee.id)) {
               allowedEmployeeIds.add(employee.id)
             }
           })
         }
 
-        return { allEmployees, allTeams, employeeMap, allTeamIds, allowedEmployeeIds, delegableTeamIds }
+        return {
+          allEmployees,
+          allTeams,
+          currentTeams,
+          employeeMap,
+          allTeamIds,
+          currentTeamIds,
+          currentTeamIdByEmployeeId,
+          allowedEmployeeIds,
+          delegableTeamIds,
+        }
       })()
       return scopeContextPromise
     }
@@ -348,8 +391,9 @@ Deno.serve(async (req) => {
       if (dataScope === 'own_team') {
         if (!employeeId) throw new Error('“自己团队”范围必须关联员工档案')
         const employee: any = scope.employeeMap.get(employeeId)
-        if (!employee?.team_id) throw new Error('关联员工尚未设置团队，不能授予“自己团队”范围')
-        if (!isFounder && !scope.delegableTeamIds.has(employee.team_id)) {
+        const currentTeamId = employee ? scope.currentTeamIdByEmployeeId.get(employee.id) : ''
+        if (!currentTeamId) throw new Error('关联员工不在当前排班或当前组织目录，不能授予“自己团队”范围')
+        if (!isFounder && !scope.delegableTeamIds.has(currentTeamId)) {
           throw new Error('关联员工所在团队超出当前账号可授权范围')
         }
       }
@@ -358,8 +402,12 @@ Deno.serve(async (req) => {
         if (!teamIds.length && !employeeIds.length) {
           throw new Error('指定范围至少选择一个团队或一名员工')
         }
-        const invalidTeam = teamIds.find(teamId =>
-          !scope.allTeamIds.has(teamId) || (!isFounder && !scope.delegableTeamIds.has(teamId))
+        const teamPartition = partitionCurrentTeamIds(teamIds, scope.currentTeamIds)
+        if (teamPartition.staleTeamIds.length) {
+          throw new Error('选择的团队已不在当前排班目录，请刷新后重新选择')
+        }
+        const invalidTeam = teamPartition.currentTeamIds.find(teamId =>
+          !isFounder && !scope.delegableTeamIds.has(teamId)
         )
         if (invalidTeam) throw new Error('选择的团队超出当前账号可授权范围')
 
@@ -422,11 +470,18 @@ Deno.serve(async (req) => {
       const desiredTeams = cleanStringList(teamIds)
       const desiredEmployees = cleanStringList(employeeIds)
       const previous = await readScope(targetAuthUserId)
+      const scope = await getScopeContext()
+      const desiredTeamPartition = partitionCurrentTeamIds(desiredTeams, scope.currentTeamIds)
+      if (desiredTeamPartition.staleTeamIds.length) {
+        throw new Error('选择的团队已不在当前排班目录，请刷新后重新选择')
+      }
+      const previousTeamPartition = partitionCurrentTeamIds(previous.teamIds, scope.currentTeamIds)
+      const safePrevious = { ...previous, teamIds: previousTeamPartition.currentTeamIds }
       const previousTeams = new Set(previous.teamIds)
       const previousEmployees = new Set(previous.employeeIds)
-      const desiredTeamSet = new Set(desiredTeams)
+      const desiredTeamSet = new Set(desiredTeamPartition.currentTeamIds)
       const desiredEmployeeSet = new Set(desiredEmployees)
-      const teamsToAdd = desiredTeams.filter(teamId => !previousTeams.has(teamId))
+      const teamsToAdd = desiredTeamPartition.currentTeamIds.filter(teamId => !previousTeams.has(teamId))
       const employeesToAdd = desiredEmployees.filter(employeeId => !previousEmployees.has(employeeId))
       const teamsToDelete = previous.teamIds.filter(teamId => !desiredTeamSet.has(teamId))
       const employeesToDelete = previous.employeeIds.filter(employeeId => !desiredEmployeeSet.has(employeeId))
@@ -445,7 +500,8 @@ Deno.serve(async (req) => {
           if (error) throw error
         }
 
-        // Destructive removals are deliberately last. On any failure, restore the exact previous mapping.
+        // Destructive removals are deliberately last. On any failure, restore
+        // previous current grants; historical grants stay removed.
         if (teamsToDelete.length) {
           const { error } = await admin.from('user_scope_teams')
             .delete().eq('auth_user_id', targetAuthUserId).in('team_id', teamsToDelete)
@@ -458,7 +514,7 @@ Deno.serve(async (req) => {
         }
       } catch (error) {
         try {
-          await restoreScope(targetAuthUserId, previous)
+          await restoreScope(targetAuthUserId, safePrevious)
         } catch (rollbackError) {
           console.error('scope rollback failed', rollbackError)
           throw new Error('管理范围保存失败且自动回滚未完整完成，请立即联系 Founder 检查该账号')
@@ -466,7 +522,7 @@ Deno.serve(async (req) => {
         throw error
       }
 
-      return previous
+      return safePrevious
     }
 
     async function getTargetAccount(targetAuthUserId: string) {
@@ -850,8 +906,14 @@ Deno.serve(async (req) => {
       }
 
       const teams = mayViewAccounts
-        ? scope.allTeams.filter((team: any) => isFounder || scope.delegableTeamIds.has(team.id))
+        ? scope.currentTeams.filter((team: any) => isFounder || scope.delegableTeamIds.has(team.id))
         : []
+      const visibleScopeTeamRows = (scopeTeamRes.data || [])
+        .filter((row: any) => manageableAccountIds.has(row.auth_user_id))
+      const currentScopeTeams = visibleScopeTeamRows
+        .filter((row: any) => scope.currentTeamIds.has(row.team_id))
+      const staleScopeTeams = visibleScopeTeamRows
+        .filter((row: any) => !scope.currentTeamIds.has(row.team_id))
 
       return json(req, {
         ok: true,
@@ -869,7 +931,8 @@ Deno.serve(async (req) => {
         role_permissions: mayManageRoles ? rpRes.data || [] : [],
         teams,
         positions: positionRes.data || [],
-        scope_teams: (scopeTeamRes.data || []).filter((row: any) => manageableAccountIds.has(row.auth_user_id)),
+        scope_teams: currentScopeTeams,
+        stale_scope_teams: staleScopeTeams,
         scope_employees: (scopeEmployeeRes.data || []).filter((row: any) => manageableAccountIds.has(row.auth_user_id)),
       })
     }
@@ -1221,8 +1284,19 @@ Deno.serve(async (req) => {
         const b = [...new Set(right)].sort()
         return a.length === b.length && a.every((value, index) => value === b[index])
       }
+      const scope = await getScopeContext()
+      const previousCurrentTeamIds = partitionCurrentTeamIds(
+        previousScope.teamIds,
+        scope.currentTeamIds,
+      ).currentTeamIds
+      // A failed account-row update may restore current grants, but must never
+      // resurrect historical team grants that saveScope has just removed.
+      const previousRestorableScope = {
+        ...previousScope,
+        teamIds: previousCurrentTeamIds,
+      }
       const assignedScopeChanged = dataScope === 'assigned_teams' && (
-        !sameIds(previousScope.teamIds, teamIds) || !sameIds(previousScope.employeeIds, employeeIds)
+        !sameIds(previousCurrentTeamIds, teamIds) || !sameIds(previousScope.employeeIds, employeeIds)
       )
       const scopeChanged = cleanString(current.employee_id) !== cleanString(employeeId) ||
         cleanString(current.data_scope) !== dataScope || assignedScopeChanged
@@ -1251,7 +1325,7 @@ Deno.serve(async (req) => {
       if (error) {
         if (dataScope === 'assigned_teams') {
           try {
-            await restoreScope(target, previousScope!)
+            await restoreScope(target, previousRestorableScope)
           } catch (rollbackError) {
             console.error('account update scope rollback failed', rollbackError)
             return json(req, { error: '账号保存失败且管理范围自动回滚未完整完成，请立即联系 Founder 检查该账号' }, 500)

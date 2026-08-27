@@ -20,6 +20,7 @@ jobs:
     env:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+      VITE_APP_RELEASE_ID: ${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +30,7 @@ jobs:
           node-version: 20
 
       - run: npm install
+      - run: npm run test:frontend-regressions
       - run: npm run build
 
       - name: Copy GitHub Pages SPA fallback
@@ -49,3 +51,22 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Optionally invalidate sessions in the database
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APP_RELEASE_ID: ${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}
+        run: |
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::notice::SUPABASE_SERVICE_ROLE_KEY is not configured; browser release.json enforcement remains active."
+            exit 0
+          fi
+          test -n "$SUPABASE_URL"
+          curl --fail-with-body --retry 3 --retry-all-errors \
+            --request POST \
+            --header "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            --header "Content-Type: application/json" \
+            --data "{\"p_release_id\":\"$APP_RELEASE_ID\"}" \
+            "$SUPABASE_URL/rest/v1/rpc/app_release_advance"

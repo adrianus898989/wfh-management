@@ -60,6 +60,7 @@ const en = {
   'auth.sessionTakeoverFailed': 'Unable to replace the previous session. Please try signing in again.',
   'auth.sessionEndedElsewhere': 'Your session ended because this account is active in another browser.',
   'auth.sessionEnded': 'This sign-in session has ended. Please sign in again.',
+  'auth.systemUpdated': 'The system has been updated. Please sign in again.',
   'register.unavailable': 'Registration is temporarily unavailable',
   'register.completeRequirements': 'Please complete all password requirements',
   'register.failed': 'Registration failed. Check your activation code.',
@@ -272,6 +273,7 @@ const en = {
 }
 
 const zh = {
+  'auth.systemUpdated':'系统已更新，请重新登录',
   'auth.loginTimeout':'登录超时，请重试','auth.invalidRequest':'请求格式不正确',
   'language.choose':'语言','common.loading':'读取中…','common.retry':'重新验证','common.close':'关闭','common.hide':'隐藏','common.view':'查看','common.previous':'上一页','common.next':'下一页','common.page':'第 {page} / {pages} 页','common.totalItems':'共 {count} 条','common.noData':'暂无数据','common.notSet':'未设置','common.points':'{count} 分','common.times':'{count} 次',
   'auth.readFailed':'登录状态读取失败，请检查网络后重试。','auth.accessFailed':'权限验证暂时失败，请重试。登录状态仍为你保留。','auth.connectionUnstable':'连接暂时不稳定','auth.unavailable':'暂时无法连接','auth.staffLogin':'WFH 登录','auth.staffLoginSubtitle':'安全进入个人工作台','auth.email':'邮箱','auth.password':'密码','auth.show':'显示','auth.signingIn':'登录中...','auth.signIn':'登录','auth.firstTime':'首次使用？','auth.activate':'激活账号','auth.loginUnavailable':'暂时无法登录','auth.invalidEmail':'邮箱格式不正确','auth.emailNotFound':'邮箱不存在','auth.accountNotFound':'账号不存在','auth.passwordRequired':'请输入密码','auth.passwordIncorrect':'密码错误','auth.tooManyAttempts':'尝试次数过多，请稍后重试','auth.invalidCredentials':'邮箱或密码错误','auth.loginFailed':'登录失败，请重试','auth.accountUnavailable':'账号不可用','auth.sessionCheckFailed':'无法验证当前浏览器会话，请稍后重试。','auth.sessionActiveElsewhere':'该账号已在另一浏览器登录，请先退出原会话后重试。','auth.sessionTakeoverFailed':'旧会话接管未完成，请重新登录；成功后旧设备会自动退出。','auth.sessionEndedElsewhere':'当前会话已结束：该账号正在另一浏览器使用。','auth.sessionEnded':'登录会话已失效，请重新登录。',
@@ -293,6 +295,7 @@ const zh = {
 
 const vi = {
   ...en,
+  'auth.systemUpdated':'Hệ thống đã được cập nhật. Vui lòng đăng nhập lại.',
   'adjustments.recordTitle':'Tiêu đề','adjustments.date':'Ngày','adjustments.type':'Loại','adjustments.amount':'Số tiền','adjustments.reason':'Lý do','adjustments.bonus':'Thưởng','adjustments.deduction':'Khấu trừ','adjustments.loadFailed':'Không thể tải lịch sử thưởng và khấu trừ.',
   'auth.loginTimeout':'Đăng nhập hết thời gian. Vui lòng thử lại.','auth.invalidRequest':'Định dạng yêu cầu không hợp lệ',
   'language.choose':'Ngôn ngữ','common.loading':'Đang tải…','common.retry':'Thử lại','common.close':'Đóng','common.hide':'Ẩn','common.view':'Xem','common.previous':'Trang trước','common.next':'Trang sau','common.page':'Trang {page} / {pages}','common.totalItems':'Tổng {count} mục','common.noData':'Chưa có dữ liệu','common.notSet':'Chưa thiết lập','common.points':'{count} điểm','common.times':'{count} lần',
@@ -314,6 +317,7 @@ const vi = {
 
 const id = {
   ...en,
+  'auth.systemUpdated':'Sistem telah diperbarui. Silakan masuk kembali.',
   'adjustments.recordTitle':'Judul','adjustments.date':'Tanggal','adjustments.type':'Jenis','adjustments.amount':'Jumlah','adjustments.reason':'Alasan','adjustments.bonus':'Penghargaan','adjustments.deduction':'Potongan','adjustments.loadFailed':'Gagal memuat catatan penghargaan dan potongan.',
   'auth.loginTimeout':'Waktu masuk habis. Silakan coba lagi.','auth.invalidRequest':'Format permintaan tidak valid',
   'language.choose':'Bahasa','common.loading':'Memuat…','common.retry':'Coba lagi','common.close':'Tutup','common.hide':'Sembunyikan','common.view':'Lihat','common.previous':'Sebelumnya','common.next':'Berikutnya','common.page':'Halaman {page} / {pages}','common.totalItems':'Total {count} data','common.noData':'Belum ada data','common.notSet':'Belum diatur','common.points':'{count} poin','common.times':'{count} kali',

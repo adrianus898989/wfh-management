@@ -12,6 +12,7 @@ test('expired application leases recover before signing out', () => {
 })
 
 test('definitive auth revocation remains terminal', () => {
+  assert.equal(classifySessionFailure(403, 'release_updated').terminal, true)
   assert.equal(classifySessionFailure(401, 'auth_session_missing').terminal, true)
   assert.equal(classifySessionFailure(401, 'active_elsewhere').terminal, true)
   assert.equal(classifySessionFailure(400, 'Invalid Refresh Token').terminal, true)

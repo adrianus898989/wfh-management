@@ -17,6 +17,8 @@ import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { employeeArchiveCsv, employeeArchiveExportFilename } from '../lib/employeeArchiveExport'
 import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
 import { employeeTrainerReviewRows } from '../lib/onlineTrainingPresentation'
+import { managementRiskDatePreset } from '../lib/managementRiskPresentation'
+import ManagementRiskPanel from '../components/ManagementRiskPanel'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -57,7 +59,7 @@ const dedupeAnalysisRows = rows => {
   }
   return Array.from(map.values())
 }
-const analysisViews=['总览','团队分析','岗位分析','国家分析','班次分析','离职分析']
+const BASE_ANALYSIS_VIEWS=['总览','团队分析','岗位分析','国家分析','班次分析','离职分析']
 const blankEmployeeFilters=()=>({
   employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',account_status:'',team:'',position:'',country:'',status:'active',
   employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
@@ -65,6 +67,9 @@ const blankEmployeeFilters=()=>({
 const EMPLOYEE_EXPORT_PAGE_SIZE=500
 const EMPLOYEE_EXPORT_MAX_PAGES=100
 const blankPeopleFilters=()=>({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
+const blankManagementRiskFilters=()=>({
+  ...managementRiskDatePreset('30d'),team:'',group:'',manager:'',manager_role:'',employee_search:'',
+})
 const blankResignationAnalyticsFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 const blankHistoryFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 const hasFilterValues=filters=>Object.values(filters||{}).some(value=>text(value))
@@ -436,6 +441,7 @@ export default function AdminEmployeesPage(){
   const canViewResignations=adminAccess.hasPermission('employee.resignations.view')
   const canExportEmployees=adminAccess.hasPermission('employee.directory.export')
   const canViewAnalytics=adminAccess.hasPermission('employee.analytics.view')
+  const canViewManagementRisk=canViewAnalytics&&adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_MANAGEMENT_RISK_VIEW)
   const canViewAudit=adminAccess.hasPermission('employee.change_history.view')
   const canViewSensitiveEmployees=adminAccess.hasPermission(PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW)
   const canGenerateActivationCode=adminAccess.hasPermission(PERMISSIONS.USER_ACTIVATION_GENERATE)
@@ -502,12 +508,17 @@ export default function AdminEmployeesPage(){
   const [peopleAnalytics,setPeopleAnalytics]=useState({
     loading:true,error:'',kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[],
   })
+  const [managementRisk,setManagementRisk]=useState({loading:false,error:'',organization:{teams:[],groups:[],managers:[]},repeat_employees:[],common_issues:[],trend:[],options:{teams:[],groups:[],managers:[]}})
+  const [managementRiskFilters,setManagementRiskFilters]=useState(blankManagementRiskFilters)
+  const [appliedManagementRiskFilters,setAppliedManagementRiskFilters]=useState(blankManagementRiskFilters)
+  const [managementRiskDimension,setManagementRiskDimension]=useState('teams')
   const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState(blankPeopleFilters)
   const [appliedAnalysisFilters,setAppliedAnalysisFilters]=useState(blankPeopleFilters)
   const [analysisDetail,setAnalysisDetail]=useState(null)
   const [analysisDetailLoading,setAnalysisDetailLoading]=useState(false)
   const [analysisView,setAnalysisView]=useState(requestedTab==='团队管理'?'团队分析':requestedTab==='岗位管理'?'岗位分析':'总览')
+  const analysisViews=useMemo(()=>canViewManagementRisk?[...BASE_ANALYSIS_VIEWS,'管理风险']:BASE_ANALYSIS_VIEWS,[canViewManagementRisk])
   const [resignationAnalytics,setResignationAnalytics]=useState({loading:true,error:'',kpis:{},trend:[],teams:[],positions:[],countries:[],shifts:[]})
   const [resignationAnalyticsFilters,setResignationAnalyticsFilters]=useState(blankResignationAnalyticsFilters)
   const [appliedResignationAnalyticsFilters,setAppliedResignationAnalyticsFilters]=useState(blankResignationAnalyticsFilters)
@@ -647,6 +658,26 @@ export default function AdminEmployeesPage(){
     }
   }
 
+  const loadManagementRisk=async(nextFilters=appliedManagementRiskFilters)=>{
+    if(!canViewManagementRisk) return
+    setManagementRisk(current=>({...current,loading:true,error:''}))
+    try{
+      const {data,error}=await supabase.rpc('admin_employee_management_risk',{
+        p_date_from:nextFilters.date_from||null,
+        p_date_to:nextFilters.date_to||null,
+        p_filters:{
+          team:nextFilters.team||'',group:nextFilters.group||'',manager:nextFilters.manager||'',
+          manager_role:nextFilters.manager_role||'',employee_search:nextFilters.employee_search||'',
+        },
+        p_top_limit:50,
+      })
+      if(error||data?.error) throw new Error(readableErrorMessage(error||data?.error)||'管理风险分析读取失败')
+      setManagementRisk({...data,loading:false,error:''})
+    }catch(e){
+      setManagementRisk(current=>({...current,loading:false,error:employeeRequestError(e,'管理风险分析读取失败，请重试。')}))
+    }
+  }
+
   const loadResignationAnalytics=async(nextFilters=appliedResignationAnalyticsFilters)=>{
     setResignationAnalytics(v=>({...v,loading:true,error:''}))
     try{
@@ -726,10 +757,13 @@ export default function AdminEmployeesPage(){
       if(canViewEmployees||canViewAnalytics) jobs.push(loadArchiveStats(true))
       if(canViewEmployees&&tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
       if(canViewAnalytics&&tab==='人员分析'){
-        jobs.push(loadPeopleAnalytics(appliedAnalysisFilters))
-        // The default resignation data is identical to the default people
-        // analytics payload and is populated by loadPeopleAnalytics above.
-        if(hasFilterValues(appliedResignationAnalyticsFilters)) jobs.push(loadResignationAnalytics(appliedResignationAnalyticsFilters))
+        if(analysisView==='管理风险'&&canViewManagementRisk) jobs.push(loadManagementRisk(appliedManagementRiskFilters))
+        else{
+          jobs.push(loadPeopleAnalytics(appliedAnalysisFilters))
+          // The default resignation data is identical to the default people
+          // analytics payload and is populated by loadPeopleAnalytics above.
+          if(hasFilterValues(appliedResignationAnalyticsFilters)) jobs.push(loadResignationAnalytics(appliedResignationAnalyticsFilters))
+        }
       }
       if(canViewResignations&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
       if(canViewAudit&&tab==='操作日志'&&auditSubview==='employment') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
@@ -804,9 +838,13 @@ export default function AdminEmployeesPage(){
 
   useEffect(()=>{
     if(!canViewAnalytics||tab!=='人员分析') return
-    const t=setTimeout(()=>loadPeopleAnalytics(appliedAnalysisFilters),80)
+    const t=setTimeout(()=>analysisView==='管理风险'&&canViewManagementRisk?loadManagementRisk(appliedManagementRiskFilters):loadPeopleAnalytics(appliedAnalysisFilters),80)
     return()=>clearTimeout(t)
   },[tab,canViewAnalytics])
+
+  useEffect(()=>{
+    if(analysisView==='管理风险'&&!canViewManagementRisk) setAnalysisView('总览')
+  },[analysisView,canViewManagementRisk])
 
   useEffect(()=>{
     const handler=e=>{
@@ -1278,9 +1316,34 @@ export default function AdminEmployeesPage(){
     setAppliedAnalysisFilters(next)
     loadPeopleAnalytics(next)
   }
+  const applyManagementRiskFilters=()=>{
+    const next={...managementRiskFilters}
+    if(next.date_from&&next.date_to&&next.date_from>next.date_to){
+      setManagementRisk(current=>({...current,error:'分析开始日期不能晚于结束日期。'}))
+      return
+    }
+    setAppliedManagementRiskFilters(next)
+    loadManagementRisk(next)
+  }
+  const resetManagementRiskFilters=()=>{
+    const next=blankManagementRiskFilters()
+    setManagementRiskFilters(next)
+    setAppliedManagementRiskFilters(next)
+    loadManagementRisk(next)
+  }
+  const setManagementRiskRange=preset=>{
+    const next={...managementRiskFilters,...managementRiskDatePreset(preset)}
+    setManagementRiskFilters(next)
+    setAppliedManagementRiskFilters(next)
+    loadManagementRisk(next)
+  }
   const changeAnalysisView=view=>{
     const next={...blankPeopleFilters(),date_from:analysisFilters.date_from,date_to:analysisFilters.date_to}
     setAnalysisView(view)
+    if(view==='管理风险'){
+      if(canViewManagementRisk) loadManagementRisk(appliedManagementRiskFilters)
+      return
+    }
     setAnalysisFilters(next)
     setAppliedAnalysisFilters(next)
     if(view!=='离职分析') loadPeopleAnalytics(next)
@@ -1408,9 +1471,9 @@ export default function AdminEmployeesPage(){
         {analysisViews.map(x=><button type="button" key={x} className={analysisView===x?'active':''} onClick={()=>changeAnalysisView(x)}>{x}</button>)}
       </div>
 
-      {(analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error)&&<div className="employee-inline-sync-note is-error" role="alert"><span>{analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error}</span><button type="button" onClick={()=>analysisView==='离职分析'?loadResignationAnalytics(appliedResignationAnalyticsFilters):loadPeopleAnalytics(appliedAnalysisFilters)}>重新读取</button></div>}
+      {(analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error)&&<div className="employee-inline-sync-note is-error" role="alert"><span>{analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error}</span><button type="button" onClick={()=>analysisView==='管理风险'?loadManagementRisk(appliedManagementRiskFilters):analysisView==='离职分析'?loadResignationAnalytics(appliedResignationAnalyticsFilters):loadPeopleAnalytics(appliedAnalysisFilters)}>重新读取</button></div>}
 
-      {analysisView!=='离职分析'&&<div className="analytics-filter-panel v24-analytics-filter-panel">
+      {!['离职分析','管理风险'].includes(analysisView)&&<div className="analytics-filter-panel v24-analytics-filter-panel">
         <div className={`people-filter-grid view-${analysisView}`}>
           {analysisView==='总览'&&<><label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.employee_no} onChange={e=>setAnalysisFilters({...analysisFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label><label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.full_name} onChange={e=>setAnalysisFilters({...analysisFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>{canViewSensitiveEmployees&&<label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.work_tg} onChange={e=>setAnalysisFilters({...analysisFilters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>}</>}
           {['总览','团队分析','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={meta.options?.teams||[]} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>}
@@ -1480,6 +1543,18 @@ export default function AdminEmployeesPage(){
         onQuery={applyResignationAnalyticsFilters}
         onReset={resetResignationAnalyticsFilters}
         onOpen={args=>openAnalysisDetail({...args,filters:appliedResignationAnalyticsFilters})}
+      />}
+
+      {analysisView==='管理风险'&&canViewManagementRisk&&<ManagementRiskPanel
+        data={managementRisk}
+        filters={managementRiskFilters}
+        setFilters={setManagementRiskFilters}
+        dimension={managementRiskDimension}
+        setDimension={setManagementRiskDimension}
+        onQuery={applyManagementRiskFilters}
+        onReset={resetManagementRiskFilters}
+        onRange={setManagementRiskRange}
+        onOpenEmployee={row=>openDetail({id:row.employee_id,employee_no:row.employee_no,full_name:row.full_name})}
       />}
     </>}
     {visibleTab==='人员分析'&&analysisView==='团队分析'&&<>

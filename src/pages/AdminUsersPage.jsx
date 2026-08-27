@@ -168,6 +168,7 @@ export default function AdminUsersPage() {
   const rolePermissions = data?.role_permissions || []
   const teams = data?.teams || []
   const scopeTeams = data?.scope_teams || []
+  const staleScopeTeams = data?.stale_scope_teams || []
   const scopeEmployees = data?.scope_employees || []
 
   useEffect(() => {
@@ -239,10 +240,14 @@ export default function AdminUsersPage() {
 
   const openEdit = (a) => {
     const role = getRole(a)
+    const removedStaleTeamIds = staleScopeTeams
+      .filter(x => x.auth_user_id === a.auth_user_id)
+      .map(x => x.team_id)
     setAccountModal({
       mode: 'edit',
       error: '',
       saving: false,
+      removedStaleTeamIds,
       form: {
         auth_user_id: a.auth_user_id,
         employee_id: a.employee_id || '',
@@ -484,11 +489,7 @@ export default function AdminUsersPage() {
   const scopeEmployeeIdSet = new Set(scopeEmployeeIds)
   const scopeTeamQuery = String(accountModal?.form?.scope_team_search || '').trim().toLowerCase()
   const scopeEmployeeQuery = String(accountModal?.form?.scope_employee_search || '').trim().toLowerCase()
-  const teamActiveCounts = employees.reduce((counts, employee) => {
-    if (!employee.team_id) return counts
-    counts.set(employee.team_id, (counts.get(employee.team_id) || 0) + 1)
-    return counts
-  }, new Map())
+  const teamActiveCounts = new Map(teams.map(team => [team.id, Number(team.member_count) || 0]))
   const selectedScopeTeams = scopeTeamIds.map(id => teams.find(team => team.id === id) || { id, name: `团队 ${id}` })
   const selectedScopeEmployees = scopeEmployeeIds.map(id => employees.find(employee => employee.id === id) || { id, employee_no: '未知员工', full_name: id })
   const visibleScopeTeams = teams.filter(team => {
@@ -559,6 +560,7 @@ export default function AdminUsersPage() {
         .access-searchbar{display:grid;grid-template-columns:minmax(240px,420px) auto auto auto;align-items:center;justify-content:start;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
         .account-modal{width:min(880px,94vw);max-height:min(820px,90vh);display:flex;flex-direction:column;overflow:hidden}.account-modal .modal-head{flex:0 0 auto}.account-modal .account-modal-body{overflow:auto;padding:2px 3px 8px}.account-modal .modal-actions{flex:0 0 auto;position:sticky;bottom:0;background:#fff;border-top:1px solid #edf1f5;padding-top:12px;margin-top:6px;z-index:2}
         .account-session-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.account-session-note strong{flex:0 0 auto;color:#3564c8}.account-session-note span{min-width:0}
+        .scope-current-team-note{grid-column:1/-1;display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border:1px solid #d7e6df;border-radius:9px;background:#f3faf6;color:#557365;font-size:10px;line-height:1.55}.scope-current-team-note strong{flex:0 0 auto;color:#28734f}.scope-current-team-note.warning{border-color:#ecd8ae;background:#fff9ed;color:#826a3c}.scope-current-team-note.warning strong{color:#9a681f}.scope-current-team-note+.scope-columns{margin-top:10px}
         .scope-panel{grid-column:1/-1;border:1px solid #dbe4f0;border-radius:12px;padding:12px;background:#f7f9fc}.scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}.scope-column{min-width:0;overflow:hidden;border:1px solid #dfe7f1;border-radius:11px;background:#fff}.scope-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 11px 7px}.scope-column-head strong{color:#2d425e;font-size:13px}.scope-column-head span{padding:3px 7px;border-radius:999px;background:#edf3ff;color:#4168bd;font-size:9px;font-weight:850}.scope-column-tools{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:0 9px 8px}.form-grid .scope-column-tools .scope-search{min-width:0;width:100%;height:34px;margin:0;padding:0 9px}.scope-filter-button,.scope-clear-button{height:34px;border:1px solid #d7e1ed;border-radius:8px;background:#fff;padding:0 8px;color:#60738b;font-size:9px;font-weight:800;white-space:nowrap;cursor:pointer}.scope-filter-button.active{border-color:#bdd0f4;background:#edf3ff;color:#2f62cd}.scope-clear-button{color:#a45555}.scope-clear-button:disabled{opacity:.4;cursor:not-allowed}.scope-selected-list{display:flex;max-height:68px;gap:5px;flex-wrap:wrap;overflow:auto;margin:0 9px 8px;padding:7px;border:1px solid #e4eaf2;border-radius:8px;background:#f8fafc}.scope-chip{display:inline-flex;min-width:0;align-items:center;gap:5px;max-width:100%;padding:4px 7px;border:1px solid #d6e1f0;border-radius:999px;background:#fff;color:#3c5879;font-size:9px}.scope-chip span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.scope-chip button{display:grid;width:16px;height:16px;flex:0 0 auto;place-items:center;border:0;border-radius:50%;background:#eef2f7;color:#7b899b;line-height:1;cursor:pointer}.scope-chip button:disabled{cursor:not-allowed;opacity:.45}.scope-selection-empty{margin:0 9px 8px;padding:7px;border:1px dashed #dce4ee;border-radius:8px;background:#fafbfd;color:#95a1b1;font-size:9px;text-align:center}.check-list{height:186px;overflow:auto;border-width:1px 0 0;border-style:solid;border-color:#e5ebf2;background:#fff;padding:5px}.check-list label{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:8px;align-items:center;min-height:36px;padding:6px 7px;border-radius:7px;color:#46566d;font-size:11px;cursor:pointer}.check-list label:hover{background:#f4f7fc}.check-list label.scope-row-selected{background:#f0f5ff}.check-list label>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.check-list label>small{color:#8897a9;font-size:8px;white-space:nowrap}.form-grid .scope-panel input.scope-check[type="checkbox"]{width:16px!important;height:16px!important;min-width:16px;margin:0!important;padding:0!important;border-radius:4px;box-shadow:none;accent-color:#3568da}.form-grid .scope-panel input.scope-check[type="checkbox"]:focus{box-shadow:0 0 0 3px rgba(53,104,218,.1)}
         .permissions-modal-mask{padding:clamp(10px,2vw,24px)}.role-modal{display:flex;width:min(1180px,calc(100vw - 36px));height:min(860px,calc(100dvh - 36px));max-height:none;flex-direction:column;overflow:hidden;padding:0;border-radius:18px;background:#f5f7fa}.role-modal .role-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto;margin:0;padding:17px 20px;border-bottom:1px solid #dfe6ef;background:#fff}.role-modal-heading{display:flex;align-items:center;gap:11px}.role-modal-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:11px;background:#eaf1ff;color:#3265da;font-weight:900}.role-modal-head h2{margin:0 0 4px;color:#203754;font-size:19px}.role-modal-head p{margin:0;color:#7c8ba0;font-size:12px}.role-modal-head>button{width:34px;height:34px;flex:0 0 auto;border:0;border-radius:9px;background:#f0f3f7;color:#748297;font-size:21px;cursor:pointer}.role-modal-head>button:hover{background:#e9edf3;color:#344b67}
         .role-modal-body{min-height:0;overflow:auto;padding:16px 18px 24px;overscroll-behavior:contain;scrollbar-gutter:stable}.role-modal .page-error{margin-bottom:12px}.role-identity-panel{display:grid;grid-template-columns:minmax(260px,1fr) auto;align-items:end;gap:18px;margin-bottom:12px;padding:14px 15px;border:1px solid #dfe6ef;border-radius:12px;background:#fff}.role-name-field{display:flex;flex-direction:column;gap:6px;color:#5e718a;font-size:11px;font-weight:850}.role-name-field input{width:100%;height:39px;border:1px solid #d3deea;border-radius:9px;padding:0 11px;color:#2e4561;outline:none}.role-name-field input:focus{border-color:#4b76dc;box-shadow:0 0 0 3px rgba(75,118,220,.09)}.role-name-field input:disabled{background:#f3f5f8;color:#728196}.role-selection-summary{display:flex;gap:8px}.role-selection-summary div{min-width:108px;padding:9px 11px;border-radius:9px;background:#f4f7fb}.role-selection-summary strong,.role-selection-summary small{display:block}.role-selection-summary strong{color:#2d5fce;font-size:17px}.role-selection-summary small{margin-top:2px;color:#8391a4;font-size:10px}
@@ -797,6 +799,12 @@ export default function AdminUsersPage() {
 
               {accountModal.form.data_scope === 'assigned_teams' && (
                 <div className="scope-panel">
+                  <div className={`scope-current-team-note ${(accountModal.removedStaleTeamIds || []).length ? 'warning' : ''}`}>
+                    <strong>{(accountModal.removedStaleTeamIds || []).length ? '已自动清理' : '当前团队口径'}</strong>
+                    <span>{(accountModal.removedStaleTeamIds || []).length
+                      ? `本账号有 ${accountModal.removedStaleTeamIds.length} 个旧名、已移除或当前无排班成员的历史团队，已从本次选择中剔除；保存后不会恢复。`
+                      : '团队清单只读取当前居家排班 / 当前组织目录；旧名、已移除或当前无排班成员的历史团队不会显示，服务端也不会接受保存。'}</span>
+                  </div>
                   <div className="scope-columns">
                     <div className="scope-column">
                       <div className="scope-column-head"><strong>团队</strong><span>已选 {scopeTeamIds.length}</span></div>
@@ -814,7 +822,7 @@ export default function AdminUsersPage() {
                             disabled={!scopeCanEdit}
                             checked={scopeTeamIdSet.has(team.id)}
                             onChange={event => updateScopeIds('team_ids', team.id, event.target.checked)}
-                          /><span title={team.name}>{team.name}</span><small>{teamActiveCounts.get(team.id) || 0} 人在职</small></label>
+                          /><span title={team.name}>{team.name}</span><small>当前排班 {teamActiveCounts.get(team.id) || 0} 人</small></label>
                         ))}
                       </div>
                     </div>

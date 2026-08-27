@@ -49,6 +49,7 @@ export const PERMISSIONS = {
   EMPLOYEE_RESIGNATIONS_REACTIVATE: 'employee.resignations.reactivate',
   EMPLOYEE_CHANGE_HISTORY_VIEW: 'employee.change_history.view',
   EMPLOYEE_ANALYTICS_VIEW: 'employee.analytics.view',
+  EMPLOYEE_MANAGEMENT_RISK_VIEW: 'employee.management_risk.view',
   EMPLOYEE_CREATE: 'employee.create',
   EMPLOYEE_EDIT: 'employee.edit',
   EMPLOYEE_RESIGN: 'employee.resign',
@@ -392,6 +393,7 @@ export const PERMISSION_GROUPS = [
     items: [
       [PERMISSIONS.EMPLOYEE_VIEW, '查看员工'],
       [PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW, '查看人员分析'],
+      [PERMISSIONS.EMPLOYEE_MANAGEMENT_RISK_VIEW, '查看管理风险分析'],
       [PERMISSIONS.EMPLOYEE_CREATE, '新增员工'],
       [PERMISSIONS.EMPLOYEE_EDIT, '编辑员工'],
       [PERMISSIONS.EMPLOYEE_RESIGN, '办理离职'],

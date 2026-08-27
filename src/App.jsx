@@ -36,10 +36,105 @@ import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 import { StaffI18nProvider, useStaffLocale } from './lib/staffI18n'
 import { AdminI18nProvider } from './lib/adminI18n'
+import {
+  APP_RELEASE_ID,
+  APP_RELEASE_POLL_MS,
+  clearRegisteredAppRelease,
+  currentAppReleaseIsRegistered,
+  fetchPublishedAppReleaseId,
+} from './lib/releaseSession'
 
 const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 3
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
 const AUTH_CHECK_DEBOUNCE_MS = 2000
+
+function ReleaseSessionBoundary({ children }) {
+  const location = useLocation()
+  const portal = location.pathname === '/admin' || location.pathname.startsWith('/admin/')
+    ? 'admin'
+    : 'staff'
+  const [ready, setReady] = useState(false)
+  const terminating = useRef(false)
+
+  useEffect(() => {
+    let alive = true
+    let manifestCheckPromise = null
+
+    if (!configured) {
+      setReady(true)
+      return () => { alive = false }
+    }
+
+    setReady(false)
+    const replaceWithLogin = () => {
+      const base = new URL(import.meta.env.BASE_URL || '/', window.location.origin)
+      window.location.replace(new URL(`${portal}/login`, base).href)
+    }
+    const terminateForRelease = async () => {
+      if (terminating.current) return
+      terminating.current = true
+      setAppSessionNotice('system_updated', portal)
+      clearRegisteredAppRelease(portal)
+      await discardLocalAppSession()
+      if (alive) replaceWithLogin()
+    }
+    const verifyStoredRelease = async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession()
+        if (!alive) return
+        if (!error && data?.session && !currentAppReleaseIsRegistered(portal)) {
+          await terminateForRelease()
+          return
+        }
+      } catch (_) {
+        // Session bootstrap below owns transient Auth/storage error handling.
+      } finally {
+        if (alive && !terminating.current) setReady(true)
+      }
+    }
+    const checkPublishedRelease = () => {
+      if (!alive || manifestCheckPromise || !navigator.onLine || terminating.current) {
+        return manifestCheckPromise
+      }
+      manifestCheckPromise = (async () => {
+        const publishedReleaseId = await fetchPublishedAppReleaseId()
+        if (!alive || !publishedReleaseId || publishedReleaseId === APP_RELEASE_ID) return
+        try {
+          const { data, error } = await supabase.auth.getSession()
+          if (!error && data?.session) await terminateForRelease()
+        } catch (_) {
+          // Never convert a transient Auth/storage read into a destructive logout.
+        }
+      })().finally(() => { manifestCheckPromise = null })
+      return manifestCheckPromise
+    }
+
+    void verifyStoredRelease().then(() => checkPublishedRelease())
+    const manifestTimer = window.setInterval(checkPublishedRelease, APP_RELEASE_POLL_MS)
+    const onVisible = () => { if (!document.hidden) checkPublishedRelease() }
+    const onFocus = () => checkPublishedRelease()
+    const onOnline = () => checkPublishedRelease()
+    const onReleaseRegistered = event => {
+      if (event?.detail?.portal === portal) checkPublishedRelease()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('wfh:app-release-registered', onReleaseRegistered)
+
+    return () => {
+      alive = false
+      window.clearInterval(manifestTimer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('wfh:app-release-registered', onReleaseRegistered)
+    }
+  }, [portal])
+
+  if (!ready) return <div className="center-screen">Loading...</div>
+  return children
+}
 
 function Protected({ children, mode }) {
   const location = useLocation()
@@ -93,12 +188,14 @@ function Protected({ children, mode }) {
       'staff_account_not_found',
       'staff_account_missing',
       'ip_not_allowed',
+      'release_updated',
     ].includes(reason)
     const terminalBootstrapReason = reason => [
       'auth_session_missing',
       'access_missing',
       'staff_account_not_found',
       'staff_account_missing',
+      'release_updated',
     ].includes(reason)
     const freshSession = async () => {
       if (isSessionIdleExpired()) {
@@ -147,8 +244,10 @@ function Protected({ children, mode }) {
         if (!terminalLeaseReason(reason)) return false
         await localSignOut({
           release:false,
-          notice:mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
-            ? 'account_not_found'
+          notice:reason==='release_updated'
+            ? 'system_updated'
+            : mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
+              ? 'account_not_found'
             : mode==='admin' && reason==='ip_not_allowed'
               ? 'ip_not_allowed'
             : reason==='active_elsewhere'||reason==='not_owner'
@@ -226,8 +325,10 @@ function Protected({ children, mode }) {
           }
           await localSignOut({
             release:false,
-            notice:mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
-              ? 'account_not_found'
+            notice:reason==='release_updated'
+              ? 'system_updated'
+              : mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
+                ? 'account_not_found'
               : reason === 'auth_session_missing' ? 'session_ended' : '',
             redirect:true,
           })
@@ -395,5 +496,5 @@ function AppRoutes() {
 }
 
 export default function App() {
-  return <AdminI18nProvider><StaffI18nProvider><AppRoutes /></StaffI18nProvider></AdminI18nProvider>
+  return <AdminI18nProvider><StaffI18nProvider><ReleaseSessionBoundary><AppRoutes /></ReleaseSessionBoundary></StaffI18nProvider></AdminI18nProvider>
 }

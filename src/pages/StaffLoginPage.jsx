@@ -9,6 +9,7 @@ import {
 } from '../lib/supabase'
 import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
+import { registerCurrentAppRelease } from '../lib/releaseSession'
 
 function withTimeout(promise, ms = 25000) {
   let timer
@@ -74,6 +75,7 @@ export default function StaffLoginPage() {
         return setError(t('auth.loginFailed','登录失败，请重试'))
       }
 
+      registerCurrentAppRelease('staff')
       touchSessionActivity(true)
       // admin-login already verifies active staff-portal access and atomically
       // claims the candidate session. Protected revalidates through the narrow
@@ -141,6 +143,8 @@ export default function StaffLoginPage() {
           {(error || sessionNotice) && <div className="login-error" role="alert">{error || (
             sessionNotice === 'active_elsewhere'
               ? t('auth.sessionEndedElsewhere','Your session ended because this account is active in another browser.')
+              : sessionNotice === 'system_updated'
+                ? t('auth.systemUpdated','The system has been updated. Please sign in again.')
               : sessionNotice === 'account_not_found'
                 ? t('auth.accountNotFound','Account does not exist')
               : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.')

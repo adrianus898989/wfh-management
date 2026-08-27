@@ -13,6 +13,37 @@ export type BackendDataScopeDecision =
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
+const cleanList = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(clean).filter(Boolean))];
+};
+
+export type CurrentTeamIdPartition = {
+  currentTeamIds: string[];
+  staleTeamIds: string[];
+};
+
+/**
+ * Split an account's requested/persisted team IDs against the current roster
+ * directory. Historical IDs are never silently treated as current grants.
+ */
+export function partitionCurrentTeamIds(
+  teamIds: unknown,
+  allowedCurrentTeamIds: Iterable<unknown>,
+): CurrentTeamIdPartition {
+  const allowed = new Set(
+    [...allowedCurrentTeamIds].map(clean).filter(Boolean),
+  );
+  const currentTeamIds: string[] = [];
+  const staleTeamIds: string[] = [];
+
+  for (const teamId of cleanList(teamIds)) {
+    (allowed.has(teamId) ? currentTeamIds : staleTeamIds).push(teamId);
+  }
+
+  return { currentTeamIds, staleTeamIds };
+}
+
 /**
  * Preserve the administrator's explicit scope selection. Employee linkage is
  * only a prerequisite for the two scopes whose meaning depends on that link;
