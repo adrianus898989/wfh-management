@@ -302,9 +302,11 @@ function Protected({ children, mode }) {
     const onOnline = () => recover()
     const onFocus = () => recover()
     const onActivity = () => touchSessionActivity()
-    const onAuthCheck = event => event?.detail?.terminal
-      ? localSignOut({ release:false, notice:'session_ended', redirect:true })
-      : recover(true)
+    // Edge responses can arrive after a token refresh or a new login.  Never
+    // let one late response destroy the newer valid browser session.  Re-read
+    // Auth and the current lease first; bootstrap performs the definitive
+    // sign-out only when the current session is actually gone or disabled.
+    const onAuthCheck = () => recover(true)
     const heartbeatTimer = window.setInterval(heartbeat, APP_SESSION_HEARTBEAT_MS)
     const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut({ release:true, redirect:true }) }, 60*1000)
     document.addEventListener('visibilitychange', onVisible)

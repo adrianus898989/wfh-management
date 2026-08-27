@@ -152,6 +152,10 @@ export default function StaffExamPage() {
   const resultRequest = useRef(0)
 
   const load = async () => {
+    // A refresh or a retained route must always return to an explicit choice.
+    // Never carry the first/previous platform and position into a new visit.
+    setSelectedPlatform('')
+    setSelectedExamKey('')
     setLoading(true)
     const { data, error: requestError } = await supabase.rpc('staff_exam_home')
     if (requestError) setError(msg(requestError))

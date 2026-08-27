@@ -13,7 +13,7 @@ import { useAdminI18n } from '../lib/adminI18n'
 import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 import { employeePortalAccountPresentation } from '../lib/employeeAccountStatus'
-import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
 import { employeeTrainerReviewRows } from '../lib/onlineTrainingPresentation'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
@@ -28,7 +28,7 @@ const EMPLOYEE_TAB_PERMISSIONS = {
 
 const text = v => String(v ?? '').trim()
 const employeeRequestError = (error, fallback) => {
-  const raw=text(error?.message||error)
+  const raw=readableErrorMessage(error)
   if(!raw||raw==='操作失败'||/^edge function returned a non-2xx status code$/i.test(raw)) return fallback
   return raw
 }
@@ -460,7 +460,7 @@ export default function AdminEmployeesPage(){
   const [rows,setRows]=useState([])
   const [total,setTotal]=useState(0)
   const [page,setPage]=useState(1)
-  const [pageSize,setPageSizeState]=useState(()=>Number(localStorage.getItem('wfh_employee_page_size'))||20)
+  const [pageSize,setPageSizeState]=useState(20)
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [refreshing,setRefreshing]=useState(false)
@@ -663,7 +663,9 @@ export default function AdminEmployeesPage(){
         }
       }))
       setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))
-    }catch(e){ if(!silent) setError(e.message) }
+    }catch(e){
+      if(!silent) setError(employeeRequestError(e,rows.length?'员工档案刷新失败，已保留当前列表，请稍后重试。':'员工档案读取失败，请稍后重试。'))
+    }
     finally{ if(!silent) setLoading(false) }
   }
 
@@ -801,7 +803,6 @@ export default function AdminEmployeesPage(){
   }
 
   const setPageSize=n=>{
-    localStorage.setItem('wfh_employee_page_size',String(n))
     setPageSizeState(n); setPage(1); loadList(1,n,{nextFilters:appliedFilters})
   }
   const setHistoryPageSize=n=>{
@@ -1262,7 +1263,7 @@ export default function AdminEmployeesPage(){
 
       {activationError&&<div className="page-error" style={{marginBottom:12}}>{activationError}</div>}
       <div className="data-card">
-        {loading?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
+        {loading&&rows.length===0?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
             <thead><tr><th>等级</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>组长</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
             <tbody>{rows.map(r=>{

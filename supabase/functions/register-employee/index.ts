@@ -75,6 +75,13 @@ Deno.serve(async req => {
     })
     if (accessError) {
       await admin.auth.admin.deleteUser(authUserId)
+      console.error('[register-employee] user_access insert failed', {
+        code: accessError.code,
+        employee_id: employee.id,
+      })
+      if (accessError.code === '23505') {
+        return json({ error: '此员工ID或邮箱已经开通过员工前端账号' }, 409)
+      }
       return json({ error: '账号绑定失败，请重新注册' }, 500)
     }
 

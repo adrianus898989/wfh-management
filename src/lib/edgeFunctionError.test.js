@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { edgeFunctionErrorMessage } from './edgeFunctionError.js'
+import { edgeFunctionErrorMessage, readableErrorMessage } from './edgeFunctionError.js'
 
 test('uses an Edge Function response body instead of the generic SDK message', async () => {
   const context = new Response(JSON.stringify({ error:'分析查询暂时超时，请重试' }), {
@@ -35,4 +35,17 @@ test('falls back to a useful SDK message and hides the generic non-2xx placehold
     fallback:'人员数据读取失败',
   }), '人员数据读取失败')
   assert.equal(await edgeFunctionErrorMessage({ fallback:'人员数据读取失败' }), '人员数据读取失败')
+})
+
+test('extracts nested object errors without ever exposing [object Object]', async () => {
+  assert.equal(readableErrorMessage({ error:{ code:'EMPLOYEE_LIST_FAILED', message:'员工档案暂时不可用' } }), '员工档案暂时不可用')
+  assert.equal(readableErrorMessage({ message:{ details:'请稍后重新查询' } }), '请稍后重新查询')
+  assert.equal(readableErrorMessage({ error:{ code:'EMPLOYEE_LIST_FAILED' } }), '')
+  assert.equal(readableErrorMessage('[object Object]'), '')
+
+  assert.equal(await edgeFunctionErrorMessage({
+    data:{ error:{ code:'EMPLOYEE_LIST_FAILED' } },
+    error:{ message:{ code:'FUNCTION_ERROR' } },
+    fallback:'员工档案读取失败，请稍后重试。',
+  }), '员工档案读取失败，请稍后重试。')
 })

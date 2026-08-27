@@ -34,6 +34,18 @@ test('archive filters use lightweight metadata and expose the Edge response body
   assert.doesNotMatch(page, /data\?\.error\|\|error\?\.message\|\|'操作失败'/)
 })
 
+test('employee archive starts at 20 rows and keeps loaded rows visible during a failed refresh', () => {
+  assert.match(page, /const \[pageSize,setPageSizeState\]=useState\(20\)/)
+  assert.doesNotMatch(page, /wfh_employee_page_size/)
+
+  const listStart = page.indexOf('const loadList=async')
+  const listEnd = page.indexOf('const loadHistory=async', listStart)
+  const listSource = page.slice(listStart, listEnd)
+  assert.match(listSource, /setError\(employeeRequestError\(e,rows\.length\?'员工档案刷新失败，已保留当前列表，请稍后重试。':'员工档案读取失败，请稍后重试。'\)\)/)
+  assert.doesNotMatch(listSource, /setRows\(\[\]\)/)
+  assert.match(page, /loading&&rows\.length===0\?<div className="empty-state">读取中\.\.\.<\/div>/)
+})
+
 test('employee Edge Function failures identify the action in logs and responses', () => {
   assert.match(edgeFunction, /let requestAction = "unknown"/)
   assert.match(edgeFunction, /requestAction = action/)

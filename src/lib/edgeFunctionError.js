@@ -1,9 +1,32 @@
 const text = value => String(value ?? '').trim()
 const GENERIC_EDGE_FUNCTION_ERROR = /^edge function returned a non-2xx status code$/i
+const OBJECT_STRING = /^\[object (?:Object|Array)\]$/i
+
+export function readableErrorMessage(value, seen = new Set()) {
+  if (typeof value === 'string' || typeof value === 'number') {
+    const message = text(value)
+    return OBJECT_STRING.test(message) ? '' : message
+  }
+  if (!value || typeof value !== 'object' || seen.has(value)) return ''
+
+  seen.add(value)
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const message = readableErrorMessage(item, seen)
+      if (message) return message
+    }
+    return ''
+  }
+
+  for (const key of ['error','message','msg','details','detail','hint']) {
+    const message = readableErrorMessage(value[key], seen)
+    if (message) return message
+  }
+  return ''
+}
 
 function bodyMessage(body) {
-  if (!body || typeof body !== 'object') return ''
-  return text(body.error || body.message || body.msg || body.details)
+  return readableErrorMessage(body)
 }
 
 async function responseBody(response) {
@@ -38,6 +61,6 @@ export async function edgeFunctionErrorMessage({ data, error, fallback = '请求
   const contextual = bodyMessage(await responseBody(error?.context))
   if (contextual) return contextual
 
-  const sdkMessage = text(error?.message)
+  const sdkMessage = readableErrorMessage(error?.message)
   return sdkMessage && !GENERIC_EDGE_FUNCTION_ERROR.test(sdkMessage) ? sdkMessage : fallback
 }
