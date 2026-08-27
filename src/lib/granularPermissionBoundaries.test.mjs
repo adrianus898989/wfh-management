@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const migration = await readFile(new URL('../../supabase/migrations/20260827113000_granular_admin_page_permissions.sql', import.meta.url), 'utf8')
 const payroll = await readFile(new URL('../../supabase/migrations/20260827113100_payroll_page_permission_boundaries.sql', import.meta.url), 'utf8')
+const payrollCorrections = await readFile(new URL('../../supabase/migrations/20260827140000_payroll_batch_correction_workflow.sql', import.meta.url), 'utf8')
 const training = await readFile(new URL('../../supabase/migrations/20260827113200_online_training_page_permission_boundaries.sql', import.meta.url), 'utf8')
 const adjustmentAlignment = await readFile(new URL('../../supabase/migrations/20260827113300_adjustment_edit_permission_alignment.sql', import.meta.url), 'utf8')
 const accounts = await readFile(new URL('../../supabase/functions/admin-accounts/index.ts', import.meta.url), 'utf8')
@@ -126,6 +127,47 @@ test('payroll UI opens import details safely and only navigates to permitted tar
   assert.match(payrollPage, /supabase\.rpc\('admin_payroll_import_history_page',\{p_batch_id:batch\.id\}\)/)
   assert.match(payrollPage, /hasPermission\(PERMISSIONS\.PAYROLL_PENDING_VIEW\)[\s\S]+setTabState\('待发布'\)/)
   assert.match(payrollPage, /hasPermission\(PERMISSIONS\.PAYROLL_PUBLISHED_VIEW\)[\s\S]+setTabState\('已发布'\)/)
+})
+
+test('payroll correction lifecycle is recoverable, guarded and fully audited', () => {
+  for (const column of ['updated_by','updated_by_name','voided_at','voided_by_name','void_reason','voided_prior_status','correction_of_batch_id']) {
+    assert.ok(payrollCorrections.includes(`add column if not exists ${column}`), `missing payroll batch column ${column}`)
+  }
+  for (const rpc of [
+    'admin_payroll_update_batch','admin_payroll_delete','admin_payroll_void_batch',
+    'admin_payroll_restore_batch','admin_payroll_clone_correction',
+  ]) {
+    const start=payrollCorrections.indexOf(`function public.${rpc}`)
+    assert.notEqual(start,-1,`missing ${rpc}`)
+    const body=payrollCorrections.slice(start,start+9000)
+    assert.match(body,/current_app_session_is_valid\('admin'\)/)
+    assert.match(body,/admin_payroll_has_full_scope\(\)[\s\S]{0,80}payroll_all_scope_required/)
+  }
+  assert.doesNotMatch(payrollCorrections,/delete from public\.payroll_batches/)
+  assert.match(payrollCorrections,/admin_payroll_update_batch[\s\S]+v_before\.status not in \('draft','archived'\)[\s\S]+title = btrim\(p_title\),notes =/)
+  assert.match(payrollCorrections,/admin_payroll_delete[\s\S]+set status = 'archived'[\s\S]+voided_prior_status = 'draft'/)
+  assert.match(payrollCorrections,/admin_payroll_restore_batch[\s\S]+v_restore_status[\s\S]+voided_at = null/)
+  assert.match(payrollCorrections,/admin_payroll_clone_correction[\s\S]+correction_of_batch_id[\s\S]+insert into public\.payroll_payslips/)
+  for (const action of ['update_batch','void_batch','restore_batch','clone_correction','correction_draft_created','auto_archive']) {
+    assert.ok(payrollCorrections.includes(`'${action}'`), `missing payroll audit action ${action}`)
+  }
+})
+
+test('payroll readers expose actor snapshots and explain archived or missing publication state', () => {
+  assert.match(payrollCorrections,/admin_payroll_actor_name[\s\S]+login_username[\s\S]+login_email/)
+  assert.match(payrollCorrections,/admin_payroll_batch_metadata[\s\S]+created_by_name[\s\S]+updated_by_name[\s\S]+published_by_name/)
+  assert.match(payrollCorrections,/admin_payroll_enrich_page[\s\S]+admin_payroll_granular_page/)
+  assert.match(payrollCorrections,/当前无有效发布批次，最近批次已删除\/作废/)
+  assert.match(payrollCorrections,/已归档表示同月份新批次发布后自动替代旧批次/)
+  assert.match(payrollPage,/上传 \{batch\.created_by_name\|\|'—'\}[\s\S]+编辑 \{batch\.updated_by_name\|\|'—'\}/)
+  assert.match(payrollPage,/selected\?\.published_by_name/)
+  assert.match(payrollPage,/admin_payroll_update_batch/)
+  assert.match(payrollPage,/admin_payroll_void_batch/)
+  assert.match(payrollPage,/admin_payroll_restore_batch/)
+  assert.match(payrollPage,/admin_payroll_clone_correction/)
+  assert.match(payrollPage,/\['draft','archived'\]\.includes\(selected\.status\)[\s\S]+保存名称\/备注/)
+  assert.match(payrollPage,/已发布批次保持只读；请复制为纠正草稿/)
+  assert.match(payrollPage,/当前无有效发布批次，最近批次已删除\/归档/)
 })
 
 test('training and employee mutations enforce current page permissions', () => {

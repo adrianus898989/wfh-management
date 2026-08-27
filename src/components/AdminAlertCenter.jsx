@@ -71,7 +71,7 @@ const alertErrorMessage = (error, locale, fallback) => {
     permission_denied: { zh:'当前账号没有查看这些预警的权限。', en:'This account cannot view these warnings.' },
     alert_not_found_or_out_of_scope: { zh:'预警不存在或已不在当前管理范围内。', en:'The warning is unavailable or outside your scope.' },
     invalid_alert_action: { zh:'不支持这个预警处理操作。', en:'This warning action is not supported.' },
-    handling_note_required: { zh:'标记已处理前，请填写情况原因及处理说明。', en:'Enter the cause and handling note before marking this warning handled.' },
+    handling_note_required: { zh:'标记已处理前，请填写跟进结果。', en:'Enter the follow-up result before marking this warning handled.' },
     handling_note_too_long: { zh:'处理说明不能超过 2000 个字符。', en:'The handling note cannot exceed 2,000 characters.' },
     alert_confirmation_required: { zh:'请先确认跟进，再标记为已处理。', en:'Confirm the follow-up before marking it handled.' },
   }
@@ -172,7 +172,7 @@ function AlertFollowUpPanel({ row, locale, onUpdated }) {
   const submit = async action => {
     if (!onUpdated || busy) return
     if (action === 'handle' && !clean(note)) {
-      setError(locale === 'en' ? 'Enter the cause and handling note first.' : '请先填写情况原因及处理说明。')
+      setError(locale === 'en' ? 'Enter the follow-up result first.' : '请先填写跟进结果。')
       return
     }
     setBusy(true)
@@ -203,11 +203,11 @@ function AlertFollowUpPanel({ row, locale, onUpdated }) {
         ? <span><b>{workflow.handledBy}</b><time>{formatTime(workflow.handledAt, locale)}</time></span>
         : <span>{locale === 'en' ? 'Not handled' : '尚未处理'}</span>}</div>
     </div>
-    {workflow.status === 'handled' && !onUpdated && <div className="admin-alert-follow-up-note"><strong>{locale === 'en' ? 'Cause / handling note' : '情况原因及处理说明'}</strong><p>{workflow.note || '—'}</p></div>}
+    {workflow.status === 'handled' && !onUpdated && <div className="admin-alert-follow-up-note"><strong>{locale === 'en' ? 'Follow-up result' : '跟进结果'}</strong><p>{workflow.result || '—'}</p></div>}
     {onUpdated && workflow.status === 'pending' && <div className="admin-alert-follow-up-actions"><p>{locale === 'en' ? 'Confirm that someone has taken ownership of this warning.' : '确认后表示已有账号接手跟进此预警。'}</p><button type="button" onClick={() => submit('confirm')} disabled={busy}>{busy ? (locale === 'en' ? 'Saving…' : '保存中…') : (locale === 'en' ? 'Confirm follow-up' : '确认跟进')}</button></div>}
     {onUpdated && workflow.status !== 'pending' && <div className="admin-alert-follow-up-editor">
-      <label><span>{locale === 'en' ? 'Cause and handling note' : '情况原因及处理说明'} <b>*</b></span><textarea value={note} maxLength={2000} onChange={event => setNote(event.target.value)} placeholder={locale === 'en' ? 'Explain why this happened and what was done…' : '填写为什么会发生、核实结果和处理方式…'} /></label>
-      <div><small>{clean(note).length}/2000</small><button type="button" onClick={() => submit('handle')} disabled={busy}>{busy ? (locale === 'en' ? 'Saving…' : '保存中…') : workflow.status === 'handled' ? (locale === 'en' ? 'Update handling note' : '更新处理说明') : (locale === 'en' ? 'Mark handled' : '标记已处理')}</button></div>
+      <label><span>{locale === 'en' ? 'Follow-up result' : '跟进结果'} <b>*</b></span><textarea value={note} maxLength={2000} onChange={event => setNote(event.target.value)} placeholder={locale === 'en' ? 'Record the verified cause, result and action taken…' : '填写核实原因、跟进结果和处理方式…'} /></label>
+      <div><small>{clean(note).length}/2000</small><button type="button" onClick={() => submit('handle')} disabled={busy}>{busy ? (locale === 'en' ? 'Saving…' : '保存中…') : workflow.status === 'handled' ? (locale === 'en' ? 'Update result' : '更新跟进结果') : (locale === 'en' ? 'Mark handled' : '标记已处理')}</button></div>
     </div>}
     {error && <p className="admin-alert-follow-up-error">{error}</p>}
   </section>
@@ -578,7 +578,7 @@ export function AdminAlertRecordsPage() {
     {state.error && <div className="page-error employee-notice">{state.error}</div>}
     <div className="admin-alert-record-table" ref={recordsRef}>
       <div className="admin-alert-table-head" aria-hidden="true">
-        <span>{locale === 'en' ? 'Hire date' : '入职日期'}</span><span>{locale === 'en' ? 'Employee ID' : '员工 ID'}</span><span>{locale === 'en' ? 'Name' : '姓名'}</span><span>{locale === 'en' ? 'Warning type' : '预警类型'}</span><span>{locale === 'en' ? 'Level' : '级别'}</span><span>{locale === 'en' ? 'Updated' : '更新时间'}</span><span>{locale === 'en' ? 'Summary' : '预警摘要'}</span><span>{locale === 'en' ? 'Read status' : '状态'}</span><span>{locale === 'en' ? 'Reader / follow-up' : '读取 / 跟进'}</span><span>{locale === 'en' ? 'Details' : '详情'}</span>
+        <span>{locale === 'en' ? 'Hire date' : '入职日期'}</span><span>{locale === 'en' ? 'Employee ID' : '员工 ID'}</span><span>{locale === 'en' ? 'Name' : '姓名'}</span><span>{locale === 'en' ? 'Team' : '团队'}</span><span>{locale === 'en' ? 'Warning type' : '预警类型'}</span><span>{locale === 'en' ? 'Level' : '级别'}</span><span>{locale === 'en' ? 'Updated' : '更新时间'}</span><span>{locale === 'en' ? 'Summary' : '预警摘要'}</span><span>{locale === 'en' ? 'Read status' : '状态'}</span><span>{locale === 'en' ? 'Follow-up status' : '跟进状态'}</span><span>{locale === 'en' ? 'Follow-up result' : '跟进结果'}</span><span>{locale === 'en' ? 'Reader' : '读取账号'}</span><span>{locale === 'en' ? 'Details' : '详情'}</span>
       </div>
       {state.loading && !state.rows.length ? <div className="admin-alert-table-loading" aria-label={locale === 'en' ? 'Loading warning records' : '正在读取预警记录'}>{[0,1,2,3].map(item => <span key={item} />)}</div>
         : !state.rows.length ? <div className="empty-state">{locale === 'en' ? 'No matching warnings.' : '暂无符合条件的预警记录。'}</div>
@@ -593,12 +593,15 @@ export function AdminAlertRecordsPage() {
                 <span data-label={locale === 'en' ? 'Hire date' : '入职日期'} data-admin-i18n-skip>{adminAlertEmployeeHireDate(row)}</span>
                 <strong className="admin-alert-employee-id" data-label={locale === 'en' ? 'Employee ID' : '员工 ID'} data-admin-i18n-skip>{row.employee_no || '—'}</strong>
                 <span data-label={locale === 'en' ? 'Name' : '姓名'} data-admin-i18n-skip>{row.employee_name || '—'}</span>
+                <span data-label={locale === 'en' ? 'Team' : '团队'} className="admin-alert-table-team" data-admin-i18n-skip>{row.team_name || '—'}</span>
                 <span data-label={locale === 'en' ? 'Warning type' : '预警类型'} className="admin-alert-table-type"><i className={`admin-alert-category-dot ${meta.tone}`} />{meta[locale] || eventName(row, locale)}</span>
                 <span data-label={locale === 'en' ? 'Level' : '级别'}><i className={`admin-alert-severity ${row.severity}`}>{severityName(row, locale)}</i>{!row.is_active && <i className="admin-alert-resolved">{locale === 'en' ? 'Resolved' : '已解除'}</i>}</span>
                 <time data-label={locale === 'en' ? 'Updated' : '更新时间'} data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</time>
                 <span data-label={locale === 'en' ? 'Summary' : '预警摘要'} className="admin-alert-table-summary" data-admin-i18n-skip>{copy.message}</span>
                 <span data-label={locale === 'en' ? 'Read status' : '状态'} className="admin-alert-table-read"><b className={`admin-alert-read-state ${readState.unread ? 'unread' : 'read'}`}>{readState.label}</b></span>
-                <span data-label={locale === 'en' ? 'Reader / follow-up' : '读取 / 跟进'} className="admin-alert-table-followup" data-admin-i18n-skip><strong>{workflow.actor || '—'}</strong><small className={workflow.status}>{workflow.label}</small></span>
+                <span data-label={locale === 'en' ? 'Follow-up status' : '跟进状态'} className="admin-alert-table-followup" data-admin-i18n-skip><small className={workflow.status}>{workflow.label}</small></span>
+                <span data-label={locale === 'en' ? 'Follow-up result' : '跟进结果'} className="admin-alert-table-result" data-admin-i18n-skip title={workflow.result || undefined}>{workflow.result || '—'}</span>
+                <span data-label={locale === 'en' ? 'Reader' : '读取账号'} className="admin-alert-table-reader" data-admin-i18n-skip title={workflow.reader || undefined}>{workflow.reader || '—'}</span>
                 <button type="button" className="admin-alert-table-expand" aria-expanded={expanded} onClick={() => toggleRow(row)}>{expanded ? (locale === 'en' ? 'Collapse' : '收起') : (locale === 'en' ? 'Open' : '展开')}<i aria-hidden="true">⌄</i></button>
               </div>
               {expanded && <div className="admin-alert-expanded-panel">

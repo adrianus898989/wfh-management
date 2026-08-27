@@ -1,9 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {readFileSync} from 'node:fs'
 import { ADMIN_TAB_SLUGS, adminLocalPageTabs, adminNavigation, adminPagePresentation, adminRouteAccess, adminSectionItems, adminTabSlug, canonicalAdminTab, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from './navigation.js'
+import {ADMIN_PAGE_DESCRIPTIONS} from './pageDescriptions.js'
 
 const visibleItems = adminNavigation.flatMap(entry => entry.children || [entry])
 const group = id => adminNavigation.find(entry => entry.id === id)
+const appSource=readFileSync(new URL('../App.jsx',import.meta.url),'utf8')
+const manualSource=readFileSync(new URL('../pages/AdminManualPage.jsx',import.meta.url),'utf8')
+const activityLogSource=readFileSync(new URL('../pages/AdminActivityLogPage.jsx',import.meta.url),'utf8')
+const manualStyles=readFileSync(new URL('../styles-admin-manual.css',import.meta.url),'utf8')
+const topbarSource=readFileSync(new URL('../components/AdminTopbar.jsx',import.meta.url),'utf8')
+const pageDescriptionSource=readFileSync(new URL('./pageDescriptions.js',import.meta.url),'utf8')
 
 test('admin sidebar uses the requested top-level order and names', () => {
   assert.deepEqual(adminNavigation.map(entry => entry.label), [
@@ -104,7 +112,21 @@ test('page-level module navigation includes every authorized child across page r
 
   const attendance = adminSectionItems('/admin/training', '?tab=%E9%A2%98%E5%BA%93')
   assert.equal(attendance.section?.id, 'attendance_exams')
-  assert.equal(attendance.items.length, 11)
+  assert.equal(attendance.items.length, 12)
+})
+
+test('employee order handling statistics is restored under attendance and keeps its independent permission', () => {
+  const item = group('attendance_exams').children.find(entry => entry.label === '员工订单处理统计')
+  assert.deepEqual(item, {
+    label:'员工订单处理统计',
+    to:'/admin/reports?tab=statistics',
+    pagePermission:'report_statistics',
+    permissions:['report.statistics.view'],
+  })
+  const route = requestedAdminRoute('/admin/reports', '?tab=statistics')
+  assert.equal(route?.groupId, 'attendance_exams')
+  assert.deepEqual(route?.permissions, ['report.statistics.view'])
+  assert.equal(adminPagePresentation('/admin/reports', '统计').itemLabel, '员工订单处理统计')
 })
 
 test('staff navigation is organized into four modules with stable query-tab matching', () => {
@@ -130,6 +152,56 @@ test('backend IP allowlist has a dedicated guarded route and permission', () => 
   assert.equal(route?.groupId, 'account_usage')
   assert.deepEqual(route?.permissions, ['account.ip_allowlist.view'])
   assert.equal(requestedAdminRoute('/admin/ip-allowlist', '?tab=anything'), null)
+})
+
+test('backend manual is the final account page and is guarded by the active backend session instead of a role checkbox', () => {
+  const accountItems=group('account_usage').children
+  assert.deepEqual(accountItems.at(-1), {
+    label:'后台功能用途手册',
+    to:'/admin/manual',
+    backendOnly:true,
+  })
+  const route=requestedAdminRoute('/admin/manual','')
+  assert.equal(route?.groupId,'account_usage')
+  assert.equal(route?.backendOnly,true)
+  assert.equal(route?.permissions,undefined)
+  assert.equal(requestedAdminRoute('/admin/manual','?tab=anything'),null)
+  assert.match(appSource,/path="\/admin\/manual"[\s\S]{0,180}<AdminManualPage/)
+  assert.match(topbarSource,/<Link className="admin-topbar-help" to="\/admin\/manual"/)
+})
+
+test('centralized backend activity log sits between roles and the manual with an independent permission',()=>{
+  const accountItems=group('account_usage').children
+  const roleIndex=accountItems.findIndex(item=>item.label==='后台角色权限')
+  assert.deepEqual(accountItems[roleIndex+1],{
+    label:'后台操作日志',to:'/admin/activity-log',pagePermission:'activity_log',permissions:['account.activity_log.view'],
+  })
+  assert.equal(accountItems[roleIndex+2]?.label,'后台功能用途手册')
+  const route=requestedAdminRoute('/admin/activity-log','')
+  assert.equal(route?.groupId,'account_usage')
+  assert.deepEqual(route?.permissions,['account.activity_log.view'])
+  assert.match(appSource,/path="\/admin\/activity-log"[\s\S]{0,180}<AdminActivityLogPage/)
+  assert.match(activityLogSource,/admin_activity_log_search/)
+})
+
+test('manual dynamically documents every navigation page without embedding recovery credentials', () => {
+  for (const item of visibleItems) {
+    const detail=ADMIN_PAGE_DESCRIPTIONS[item.label]
+    assert.ok(detail, `missing manual detail for ${item.label}`)
+    assert.ok(detail.purpose)
+    assert.ok(detail.dataSources.length)
+    assert.ok(detail.filters.length)
+    assert.ok(detail.buttons.length)
+    assert.ok(detail.logs)
+    assert.ok(detail.risks)
+  }
+  assert.match(manualSource,/adminNavigation\.map\(section=>/)
+  assert.match(manualSource,/rawPages\.filter\(allowed\)/)
+  assert.match(manualSource,/access\.hasAllPermissions/)
+  assert.match(manualSource,/access\.hasAnyPermission/)
+  assert.match(manualSource,/permissionCodes:pagePermissionCodes\(item\)/)
+  assert.match(manualStyles,/\.admin-manual-page-card/)
+  assert.doesNotMatch(`${manualSource}\n${pageDescriptionSource}`,/(?:FOUNDER_(?:RECOVERY|SECRET|KEY)|recovery[_-]?key\s*[:=]\s*['"]|恢复密钥\s*[:：])/i)
 })
 
 test('page chrome uses the new menu labels without changing canonical route tabs', () => {

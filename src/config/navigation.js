@@ -119,6 +119,7 @@ const ACCESS = {
   ipAllowlist: adminPageAccess('ip_allowlist'),
   staffAccounts: adminPageAccess('staff_accounts'),
   roles: adminPageAccess('roles'),
+  activityLog: adminPageAccess('activity_log'),
   accountUsage: adminPageAccess('assets'),
 }
 
@@ -146,6 +147,7 @@ export const adminNavigation = [
       item('停电/断网记录', tab('/admin/employees', '停电 / 断网记录'), ACCESS.connectivity),
       item('日考勤打卡记录表', tab('/admin/schedule', '考勤记录'), ACCESS.attendanceRecords),
       item('请假审批记录表', tab('/admin/schedule', '请假审批'), ACCESS.leave),
+      item('员工订单处理统计', tab('/admin/reports', '统计'), ACCESS.reportStatistics),
       item('错误记录统计报表', tab('/admin/reports', '错误统计'), ACCESS.reportErrors),
       item('线上培训日报记录表', tab('/admin/daily', '线上培训报告'), ACCESS.onlineTraining),
       item('考试汇总表', '/admin/training', ACCESS.exam),
@@ -177,6 +179,11 @@ export const adminNavigation = [
       item('后台账号', '/admin/users', ACCESS.backendAccounts),
       item('后台登入IP白名单', '/admin/ip-allowlist', ACCESS.ipAllowlist),
       item('后台角色权限', tab('/admin/users', 'roles'), ACCESS.roles),
+      item('后台操作日志', '/admin/activity-log', ACCESS.activityLog),
+      // The manual contains no business data and is intentionally available
+      // to every authenticated, active backend account. Protected + AppLayout
+      // still enforce the backend session, MFA and enabled-account checks.
+      item('后台功能用途手册', '/admin/manual', { backendOnly:true }),
     ],
   },
 ]
@@ -204,7 +211,7 @@ export const adminRouteAccess = [
   route(tab('/admin/reports', '人员'), ACCESS.reportPeople, 'workforce'),
   route(tab('/admin/reports', '排班表'), ACCESS.reportLegacySchedule, 'workforce'),
   route(tab('/admin/reports', '盘口人数'), ACCESS.reportPlatform, 'workforce'),
-  route(tab('/admin/reports', '统计'), ACCESS.reportStatistics, 'workforce'),
+  route(tab('/admin/reports', '统计'), ACCESS.reportStatistics, 'attendance_exams'),
   route(tab('/admin/reports', '错误统计'), ACCESS.reportErrors, 'attendance_exams'),
 
   route('/admin/schedule', ACCESS.schedule, 'workforce'),
@@ -238,6 +245,8 @@ export const adminRouteAccess = [
   route(tab('/admin/users', 'staff'), ACCESS.staffAccounts, 'account_usage'),
   route(tab('/admin/users', 'roles'), ACCESS.roles, 'account_usage'),
   route('/admin/ip-allowlist', ACCESS.ipAllowlist, 'account_usage'),
+  route('/admin/activity-log', ACCESS.activityLog, 'account_usage'),
+  route('/admin/manual', { backendOnly:true }, 'account_usage'),
 
   route('/admin/work-execution', ACCESS.eventTracking, 'work_execution'),
   route(tab('/admin/work-execution', 'daily-inspection'), ACCESS.dailyInspection, 'work_execution'),

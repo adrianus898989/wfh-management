@@ -19,6 +19,21 @@ const AUTH_STORAGE_KEY=`wfh-${portal}-auth-token`
 const SESSION_ACTIVITY_KEY=`wfh_${portal}_session_last_activity`
 const SESSION_NOTICE_KEY=`wfh_${portal}_session_notice`
 let lastActivityWrite=0
+let authCheckQueued=false
+let lastAuthCheckDispatchAt=0
+const AUTH_CHECK_DISPATCH_DEBOUNCE_MS=1000
+
+const requestAuthCheck=detail=>{
+  if(typeof window==='undefined')return
+  const now=Date.now()
+  if(authCheckQueued||now-lastAuthCheckDispatchAt<AUTH_CHECK_DISPATCH_DEBOUNCE_MS)return
+  authCheckQueued=true
+  window.queueMicrotask(()=>{
+    authCheckQueued=false
+    lastAuthCheckDispatchAt=Date.now()
+    window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail}))
+  })
+}
 
 export const touchSessionActivity=(force=false)=>{
   if(typeof window==='undefined')return
@@ -63,7 +78,7 @@ const authenticatedFetch=async(input,init)=>{
     try{body=await response.clone().text()}catch(_){body=''}
     const failure=classifySessionFailure(response.status,body)
     if(failure.shouldCheck){
-      window.dispatchEvent(new CustomEvent('wfh:auth-check-needed',{detail:{terminal:failure.terminal,reason:failure.reason}}))
+      requestAuthCheck({terminal:failure.terminal,reason:failure.reason})
     }
   }
   return response

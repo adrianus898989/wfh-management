@@ -3,15 +3,11 @@ import {createPortal} from 'react-dom'
 import {supabase} from '../lib/supabase'
 import {adminPagePresentation} from '../config/navigation'
 import {
-  onlineTrainingIdentityKey,
   onlineTrainingReportMatchesTrainer,
-  onlineTrainingReportTrainerName,
 } from '../lib/onlineTrainingIdentity'
 import {
   employeeTrainingTableRow,
-  mergeTrainerIdentityDirectory,
   selectedTrainingHistoryRow,
-  trainerIdentityCandidates,
   trainerTrainingTableRow,
 } from '../lib/onlineTrainingPresentation'
 import {businessTodayRange} from '../lib/adminQueryDefaults'
@@ -49,7 +45,6 @@ const removeStoredPaths=async paths=>{
   }catch(error){return error}
 }
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
-const identityKey=onlineTrainingIdentityKey
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
 const defaultFilters=()=>{const range=businessTodayRange();return{...EMPTY_FILTERS,from:range.date_from,to:range.date_to}}
@@ -84,96 +79,6 @@ const ATTENDANCE_OPTIONS=Object.entries(ATTENDANCE)
 const REASON_REQUIRED=new Set(['leave','absent','transferred'])
 const REASON_PLACEHOLDER={leave:'填写请假原因',absent:'填写缺席原因',transferred:'填写回家原因'}
 const REVIEW={pending:'待查看',read:'已阅',needs_changes:'需补充'}
-
-function groupTrainerPeople(people,reports=null){
-  const grouped=new Map()
-  ;(people||[]).forEach(person=>{
-    const trainerName=text(person.trainer_name)||'未填写线上培训'
-    const trainerKey=identityKey(trainerName)||`missing:${trainerName}`
-    const current=grouped.get(trainerKey)||{
-      trainer_key:trainerKey,trainer_name:trainerName,trainer_employee_no:'',trainer_hire_date:'',report_count:0,recorded_days:0,
-      employee_count:0,last_report_date:null,normal_count:0,rest_count:0,leave_count:0,
-      absent_count:0,home_count:0,team_names:[],group_names:[],position_names:[],
-      shift_names:[],platforms:[],period_from:null,period_to:null,
-    }
-    current.employee_count+=1
-    current.report_count+=Number(person.report_count||0)
-    current.recorded_days+=Number(person.recorded_days||0)
-    current.normal_count+=Number(person.normal_count||0)
-    current.rest_count+=Number(person.rest_count||0)
-    current.leave_count+=Number(person.leave_count||0)
-    current.absent_count+=Number(person.absent_count||0)
-    current.home_count+=Number(person.home_count||0)
-    if(person.last_report_date&&(!current.last_report_date||person.last_report_date>current.last_report_date))current.last_report_date=person.last_report_date
-    if(person.period_from&&(!current.period_from||person.period_from<current.period_from))current.period_from=person.period_from
-    if(person.period_to&&(!current.period_to||person.period_to>current.period_to))current.period_to=person.period_to
-    current.team_names.push(person.team_name)
-    current.group_names.push(person.group_name)
-    current.position_names.push(person.position_name)
-    current.shift_names.push(person.shift_name)
-    current.platforms.push(person.platform)
-    grouped.set(trainerKey,current)
-  })
-  // `online_training_search_people` is employee-centred: the same daily
-  // report is counted once for every member.  Trainer cards need the number
-  // of submitted reports, so replace those derived totals with distinct
-  // report rows when the report archive was supplied.  Keeping the roster
-  // map first is what preserves trainers who currently have zero reports.
-  if(Array.isArray(reports)){
-    grouped.forEach(current=>Object.assign(current,{
-      report_count:0,recorded_days:0,last_report_date:null,normal_count:0,
-      rest_count:0,leave_count:0,absent_count:0,home_count:0,
-      _report_ids:new Set(),_report_dates:new Set(),_member_ids:new Set(),
-    }))
-    ;(reports||[]).forEach(report=>{
-      const trainerName=onlineTrainingReportTrainerName(report)||'未填写线上培训'
-      const trainerKey=identityKey(trainerName)||`missing:${trainerName}`
-      const current=grouped.get(trainerKey)||{
-        trainer_key:trainerKey,trainer_name:trainerName,trainer_employee_no:'',trainer_hire_date:'',report_count:0,recorded_days:0,
-        employee_count:0,last_report_date:null,normal_count:0,rest_count:0,leave_count:0,
-        absent_count:0,home_count:0,team_names:[],group_names:[],position_names:[],
-        shift_names:[],platforms:[],period_from:null,period_to:null,
-        _report_ids:new Set(),_report_dates:new Set(),_member_ids:new Set(),
-      }
-      if(!current._report_ids)current._report_ids=new Set()
-      if(!current._report_dates)current._report_dates=new Set()
-      if(!current._member_ids)current._member_ids=new Set()
-      // A report author is safe to show as the trainer identity only when the
-      // normalized author name exactly matches this trainer group. Never copy
-      // an employee/member ID into the trainer row merely to fill the column.
-      if(identityKey(report.author_name)===trainerKey&&!current.trainer_employee_no){
-        current.trainer_employee_no=text(report.author_employee_no)
-      }
-      const reportId=text(report.id)||`${report.report_date}:${report.created_at}:${trainerKey}`
-      current._report_ids.add(reportId)
-      if(report.report_date)current._report_dates.add(report.report_date)
-      if(report.report_date&&(!current.last_report_date||report.report_date>current.last_report_date))current.last_report_date=report.report_date
-      ;(report.members||[]).forEach(member=>{
-        const memberKey=text(member.employee_id)||text(member.employee_no)||text(member.employee_name)
-        if(memberKey)current._member_ids.add(memberKey)
-        const status=member.attendance_status
-        if(status==='normal')current.normal_count+=1
-        else if(status==='rest')current.rest_count+=1
-        else if(status==='leave')current.leave_count+=1
-        else if(status==='absent')current.absent_count+=1
-        else if(status==='transferred')current.home_count+=1
-      })
-      grouped.set(trainerKey,current)
-    })
-    grouped.forEach(current=>{
-      current.report_count=current._report_ids?.size||0
-      current.recorded_days=current._report_dates?.size||0
-      if(!current.employee_count)current.employee_count=current._member_ids?.size||0
-    })
-  }
-  return [...grouped.values()].map(item=>({...item,
-    team_names:uniq(item.team_names),group_names:uniq(item.group_names),position_names:uniq(item.position_names),
-    shift_names:uniq(item.shift_names),platforms:uniq(item.platforms),
-  })).map(({_report_ids,_report_dates,_member_ids,...item})=>item).sort((a,b)=>{
-    if(a.last_report_date!==b.last_report_date)return text(b.last_report_date).localeCompare(text(a.last_report_date))
-    return a.trainer_name.localeCompare(b.trainer_name,'zh-CN')
-  })
-}
 
 function historySummary(person,rows,period){
   const reportRows=rows||[]
@@ -299,6 +204,7 @@ export default function OnlineTrainingPage(){
   const [saving,setSaving]=useState(false)
   const [viewing,setViewing]=useState(null)
   const [deleteTarget,setDeleteTarget]=useState(null)
+  const [deleteError,setDeleteError]=useState('')
   const [profile,setProfile]=useState(null)
   const [history,setHistory]=useState(null)
   const [trainerHistory,setTrainerHistory]=useState(null)
@@ -357,48 +263,16 @@ export default function OnlineTrainingPage(){
     const requestedMode=mode
     if(silent)setSearching(true);else setLoading(true)
     try{
-      const first=await readCall('online_training_search_people',{
-        p_filters:filters,p_page:requestedMode==='reports'?1:nextPage,p_page_size:requestedMode==='reports'?RPC_PAGE_SIZE:PEOPLE_PAGE_SIZE,
-      })
-      let data=first
-      if(requestedMode==='reports'){
-        const people=[...(first?.rows||[])]
-        const pages=Math.max(1,Number(first?.pages||1))
-        const remaining=Array.from({length:Math.max(0,pages-1)},(_,index)=>index+2)
-        for(let index=0;index<remaining.length;index+=6){
-          const batch=await Promise.all(remaining.slice(index,index+6).map(next=>readCall('online_training_search_people',{
-            p_filters:filters,p_page:next,p_page_size:RPC_PAGE_SIZE,
-          })))
-          batch.forEach(next=>people.push(...(next?.rows||[])))
-        }
-        const firstReports=await readCall('online_training_search_reports',{
-          p_filters:filters,p_page:1,p_page_size:RPC_PAGE_SIZE,
-        })
-        const reports=[...(firstReports?.rows||[])]
-        const reportPages=Math.max(1,Number(firstReports?.pages||1))
-        const remainingReportPages=Array.from({length:Math.max(0,reportPages-1)},(_,index)=>index+2)
-        for(let index=0;index<remainingReportPages.length;index+=6){
-          const batch=await Promise.all(remainingReportPages.slice(index,index+6).map(next=>readCall('online_training_search_reports',{
-            p_filters:filters,p_page:next,p_page_size:RPC_PAGE_SIZE,
-          })))
-          batch.forEach(next=>reports.push(...(next?.rows||[])))
-        }
-        const groupedTrainers=groupTrainerPeople(people,reports)
-        const candidates=trainerIdentityCandidates(groupedTrainers)
-        const directory=candidates.length
-          ?await readCall('online_training_resolve_trainer_identities',{p_candidates:candidates})
-          :[]
-        const trainers=mergeTrainerIdentityDirectory(groupedTrainers,directory)
-        const trainerPages=Math.max(1,Math.ceil(trainers.length/TRAINER_PAGE_SIZE))
-        const safePage=Math.min(Math.max(1,nextPage),trainerPages)
-        const start=(safePage-1)*TRAINER_PAGE_SIZE
-        data={...first,rows:trainers.slice(start,start+TRAINER_PAGE_SIZE),total:trainers.length,
-          page:safePage,pages:trainerPages,report_total:trainers.reduce((sum,row)=>sum+row.report_count,0)}
-        if(safePage!==nextPage)setPage(safePage)
-      }
+      const data=await readCall(
+        requestedMode==='reports'?'online_training_search_trainers':'online_training_search_people',{
+          p_filters:filters,p_page:nextPage,p_page_size:requestedMode==='reports'?TRAINER_PAGE_SIZE:PEOPLE_PAGE_SIZE,
+        },
+      )
       const rows=data?.rows||[]
       if(requestId!==listRequestRef.current)return
-      setResult({...data,rows,report_total:data?.report_total??rows.reduce((sum,row)=>sum+Number(row.report_count||0),0)})
+      const safePage=Math.max(1,Number(data?.page||nextPage))
+      setResult({...data,rows,report_total:Number(data?.report_total||0)})
+      if(safePage!==nextPage)setPage(safePage)
       setError('')
     }catch(err){
       if(requestId===listRequestRef.current)setError(readableError(err,'线上培训记录读取失败'))
@@ -586,17 +460,32 @@ export default function OnlineTrainingPage(){
 
   const archiveReport=async()=>{
     if(!deleteTarget)return
+    const target=deleteTarget
     const openTrainer=trainerHistory?.trainer
+    const deletingViewedReport=Boolean(viewing?.id&&viewing.id===target.id)
     setSaving(true)
+    setDeleteError('')
     try{
-      await call('online_training_archive_report',{p_report_id:deleteTarget.id})
+      await call('online_training_archive_report',{p_report_id:target.id})
+      if(deletingViewedReport)closeViewer()
       setDeleteTarget(null)
+      setDeleteError('')
       if(history?.person)await loadHistory(history.person,history.period,history.basePeriod)
       if(openTrainer)await loadTrainerHistory(openTrainer)
       await loadList({silent:true})
     }
-    catch(err){setError(err.message||'报告删除失败')}
+    catch(err){setDeleteError(readableError(err,'报告删除失败'))}
     finally{setSaving(false)}
+  }
+
+  const requestDelete=row=>{
+    setDeleteError('')
+    setDeleteTarget(row)
+  }
+
+  const cancelDelete=()=>{
+    setDeleteError('')
+    setDeleteTarget(null)
   }
 
   const reviewReport=async(status,note)=>{
@@ -696,9 +585,8 @@ export default function OnlineTrainingPage(){
         batch.forEach(next=>rows.push(...(next?.rows||[])))
       }
       const exact=rows.filter(row=>onlineTrainingReportMatchesTrainer(row,trainer.trainer_key))
-      const hydrated=await hydrateAttachments(exact)
       if(requestId!==trainerHistoryRequestRef.current)return
-      setTrainerHistory({trainer,loading:false,rows:hydrated,error:''})
+      setTrainerHistory({trainer,loading:false,rows:exact,error:''})
     }catch(err){
       if(requestId!==trainerHistoryRequestRef.current)return
       setTrainerHistory({trainer,loading:false,rows:[],error:readableError(err,'培训日报读取失败')})
@@ -809,12 +697,12 @@ export default function OnlineTrainingPage(){
       assignment={bootstrap.auto_assignment||{}} trainerOptions={bootstrap.manager_options||[]} onSelectTrainer={selectAdminTrainer}
       rosterSyncedAt={bootstrap.roster_synced_at} pendingFiles={pendingFiles} onFiles={addFiles} onRemovePending={removePending}
       onRemoveExisting={removeExisting} onOpenImage={setLightbox} onProfile={openProfile} onClose={closeEditor} onSave={saveReport} saving={saving}/></OverlayPortal>} 
-    {trainerHistory&&<OverlayPortal><TrainerHistoryModal state={trainerHistory} onClose={closeTrainerHistory} onOpen={openView} onDelete={setDeleteTarget}/></OverlayPortal>}
-    {viewing&&<OverlayPortal><ViewModal row={viewing} returnToHistory={Boolean(trainerHistory)} onClose={closeViewer} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{const source=viewing;closeViewer();closeTrainerHistory();openEdit(source)}} onDelete={()=>{const source=viewing;closeViewer();setDeleteTarget(source)}} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>}
-    {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} onCancel={()=>setDeleteTarget(null)} onConfirm={archiveReport}/></OverlayPortal>}
+    {trainerHistory&&<OverlayPortal><TrainerHistoryModal state={trainerHistory} onClose={closeTrainerHistory} onOpen={openView} onDelete={requestDelete}/></OverlayPortal>}
+    {viewing&&<OverlayPortal><ViewModal row={viewing} returnToHistory={Boolean(trainerHistory)} onClose={closeViewer} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{const source=viewing;closeViewer();closeTrainerHistory();openEdit(source)}} onDelete={()=>requestDelete(viewing)} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>}
+    {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} error={deleteError} onCancel={cancelDelete} onConfirm={archiveReport}/></OverlayPortal>}
     {profile&&!profile.error&&<EmployeeDrawer detail={profile.detail||{employee:{}}} loading={profile.loading} readOnly onClose={closeProfile}/>}
     {profile?.error&&<OverlayPortal><ProfileErrorDrawer state={profile} onClose={closeProfile}/></OverlayPortal>}
-    {history&&<OverlayPortal><HistoryModal state={history} onClose={closeHistory} onProfile={openProfile} onSelectDate={selectHistoryDate} onDelete={row=>{closeHistory();setDeleteTarget(row)}}/></OverlayPortal>}
+    {history&&<OverlayPortal><HistoryModal state={history} onClose={closeHistory} onProfile={openProfile} onSelectDate={selectHistoryDate} onDelete={requestDelete}/></OverlayPortal>}
     {lightbox&&<OverlayPortal><div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div></OverlayPortal>}
   </div>
 }
@@ -1022,6 +910,6 @@ function HistoryModal({state,onClose,onProfile,onSelectDate,onDelete}){
   </div><footer className="ot-modal-actions"><button className="primary" onClick={onClose}>关闭</button></footer></div></div>
 }
 
-function ConfirmModal({saving,title,onCancel,onConfirm}){
-  return <div className="ot-backdrop"><div className="ot-confirm"><span>删</span><h3>确定删除这份日报？</h3><p>“{title}”会归档并从正常列表移除，操作日志仍然保留。</p><div><button onClick={onCancel} disabled={saving}>取消</button><button className="danger" onClick={onConfirm} disabled={saving}>{saving?'处理中…':'确认删除'}</button></div></div></div>
+function ConfirmModal({saving,title,error,onCancel,onConfirm}){
+  return <div className="ot-backdrop ot-confirm-backdrop"><div className="ot-confirm" role="dialog" aria-modal="true" aria-labelledby="ot-delete-title"><span>删</span><h3 id="ot-delete-title">确定删除这份日报？</h3><p>“{title}”会归档并从正常列表移除，操作日志仍然保留。</p>{error&&<p className="ot-confirm-error" role="alert">{error}</p>}<div><button onClick={onCancel} disabled={saving}>取消</button><button className="danger" onClick={onConfirm} disabled={saving}>{saving?'处理中…':'确认删除'}</button></div></div></div>
 }

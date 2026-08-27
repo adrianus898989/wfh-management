@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import {
   configured,
   consumeAppSessionNotice,
@@ -52,12 +52,18 @@ export default function AdminLoginPage() {
         : ''
   })
   const [loading, setLoading] = useState(false)
+  const submitInFlight = useRef(false)
 
   const submit = async (e) => {
     e.preventDefault()
+    if (submitInFlight.current) return
+    submitInFlight.current = true
     setError('')
 
-    if (!configured) return setError('暂时无法登录')
+    if (!configured) {
+      submitInFlight.current = false
+      return setError('暂时无法登录')
+    }
 
     setLoading(true)
     try {
@@ -102,6 +108,7 @@ export default function AdminLoginPage() {
         ? '登录服务响应超时，请稍后重试'
         : '登录服务暂不可用，请稍后重试')
     } finally {
+      submitInFlight.current = false
       setLoading(false)
     }
   }

@@ -55,6 +55,7 @@ test('latest menu pages expose their supported granular operations', () => {
   )
   assert.ok(codes('修改工资信息记录').has(PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW))
   assert.ok(codes('修改工资信息记录').has(PERMISSIONS.PAYROLL_CHANGE_HISTORY_REVIEW))
+  assert.deepEqual([...codes('后台操作日志')],[PERMISSIONS.ACCOUNT_ACTIVITY_LOG_VIEW])
 })
 
 test('English sidebar tabs keep the same granular action permissions', () => {
@@ -75,7 +76,7 @@ test('English sidebar tabs keep the same granular action permissions', () => {
   assert.ok(!codes('后台角色权限').has(PERMISSIONS.ROLE_MANAGE))
 })
 
-test('all 33 current pages have a unique view code and no shared pending checkbox', () => {
+test('all configurable pages have a unique view code and the backend manual needs no checkbox', () => {
   const futurePermission = {
     id: 'future-permission',
     code: 'future_feature.archive',
@@ -93,10 +94,14 @@ test('all 33 current pages have a unique view code and no shared pending checkbo
   assert.equal(pendingCodes.size, 0)
   assert.ok(sections.find(section => section.key === 'system_supplement')?.pages[0].items.some(item => item.code === futurePermission.code))
   const currentPages=sections.filter(section=>section.key!=='system_supplement').flatMap(section=>section.pages)
-  const viewCodes=currentPages.map(page=>page.items.find(item=>item.actionKey==='view')?.code)
-  assert.equal(currentPages.length,33)
+  const manual=currentPages.find(page=>page.label==='后台功能用途手册')
+  const configurablePages=currentPages.filter(page=>page!==manual)
+  const viewCodes=configurablePages.map(page=>page.items.find(item=>item.actionKey==='view')?.code)
+  assert.equal(currentPages.length,36)
+  assert.equal(manual?.items.length,0)
+  assert.match(manual?.description||'',/所有已启用后台账号/)
   assert.ok(viewCodes.every(Boolean))
-  assert.equal(new Set(viewCodes).size,33)
+  assert.equal(new Set(viewCodes).size,35)
   assert.equal(uniquePermissionIds(visibleItems).length, visibleItems.length)
 })
 
@@ -111,7 +116,8 @@ test('every latest sidebar child page remains visible with selectable permission
       (navigationSection.children || [navigationSection]).map(page => page.label),
     )
     for (const page of permissionSection.pages) {
-      assert.ok(page.items.length > 0, `${page.label} must expose a real permission`)
+      if(page.label==='后台功能用途手册')assert.equal(page.items.length,0)
+      else assert.ok(page.items.length > 0, `${page.label} must expose a real permission`)
       assert.equal(page.pendingCodes.length,0)
     }
   }

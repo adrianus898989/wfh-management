@@ -129,7 +129,7 @@ export default function AdminIpAllowlistPage() {
 
   const recoveryCommand = "select session_private.founder_recover_admin_ip_allowlist('DISABLE ADMIN IP ALLOWLIST');"
 
-  return <div className="module-page ip-allowlist-page">
+  return <div className="content-page ip-allowlist-page">
     <div className="page-toolbar">
       <div>
         <div className="module-kicker">ACCESS CONTROL · TRUSTED NETWORKS</div>

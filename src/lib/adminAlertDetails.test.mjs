@@ -20,6 +20,10 @@ const followUpMigration = readFileSync(new URL(
   '../../supabase/migrations/20260827073000_admin_alert_follow_up_workflow.sql',
   import.meta.url,
 ), 'utf8')
+const teamColumnsMigration = readFileSync(new URL(
+  '../../supabase/migrations/20260827115000_admin_alert_team_and_follow_up_columns.sql',
+  import.meta.url,
+), 'utf8')
 
 test('monthly leave exposes the existing category totals and dated evidence', () => {
   const detail = adminAlertAttendanceDetails({
@@ -125,7 +129,7 @@ test('employee warning history uses an exact employee filter and includes resolv
 test('warning read state has explicit localized labels in a dedicated status column', () => {
   assert.deepEqual(adminAlertReadState({ unread:true }, 'zh'), { unread:true, label:'未读' })
   assert.deepEqual(adminAlertReadState({ unread:false }, 'en'), { unread:false, label:'Read' })
-  assert.match(alertCenterComponent, /\? 'Summary' : '预警摘要'\}<\/span><span>\{locale === 'en' \? 'Read status' : '状态'\}<\/span>/)
+  assert.match(alertCenterComponent, /\? 'Summary' : '预警摘要'\}<\/span><span>\{locale === 'en' \? 'Read status' : '状态'\}<\/span><span>\{locale === 'en' \? 'Follow-up status' : '跟进状态'\}<\/span>/)
   assert.match(alertCenterComponent, /className="admin-alert-table-summary"[^>]*>\{copy\.message\}<\/span>/)
   assert.match(alertCenterComponent, /className="admin-alert-table-read">[\s\S]{0,180}admin-alert-read-state/)
 })
@@ -136,14 +140,17 @@ test('only explicit expand controls toggle rows and employee IDs remain selectab
   assert.match(alertCenterComponent, /className="admin-alert-table-expand"[^>]+onClick=\{\(\) => toggleRow\(row\)\}/)
   assert.match(alertCenterComponent, /className="employee-alert-history-expand"[^>]+onClick=\{\(\) => toggleRow\(row\)\}/)
   assert.match(alertCenterStyles, /admin-alert-employee-id\{[^}]*user-select:text/)
-  assert.match(alertCenterStyles, /grid-template-columns:108px 116px minmax\(145px,.75fr\) 145px 90px 145px minmax\(230px,1.4fr\) 72px 118px 62px/)
+  assert.match(alertCenterStyles, /grid-template-columns:100px 105px minmax\(130px,.75fr\)[^}]+minmax\(170px,.9fr\) 100px 58px/)
+  assert.match(alertCenterStyles, /admin-alert-record-table\{[^}]*overflow-x:auto/)
 })
 
-test('follow-up state reports reader, confirmation, handler and required note', () => {
+test('follow-up state keeps reader, status and result independently addressable', () => {
   const pending = adminAlertFollowUpState({
     readers:[{ auth_user_id:'reader-1', account:'founder', read_at:'2026-08-27T08:00:00Z' }],
   }, 'zh')
   assert.equal(pending.label, '待确认')
+  assert.equal(pending.reader, 'founder')
+  assert.equal(pending.result, '')
   assert.equal(pending.actor, 'founder')
 
   const handled = adminAlertFollowUpState({
@@ -154,8 +161,19 @@ test('follow-up state reports reader, confirmation, handler and required note', 
     },
   }, 'zh')
   assert.equal(handled.label, '已处理')
+  assert.equal(handled.reader, 'founder')
   assert.equal(handled.actor, 'manager-b')
   assert.equal(handled.note, '排班录入错误，已修正')
+  assert.equal(handled.result, '排班录入错误，已修正')
+})
+
+test('warning table places team after name and separates status, result and reader', () => {
+  assert.match(alertCenterComponent, /\? 'Name' : '姓名'\}<\/span><span>\{locale === 'en' \? 'Team' : '团队'\}<\/span>/)
+  assert.match(alertCenterComponent, /className="admin-alert-table-team"[^>]*>\{row\.team_name \|\| '—'\}<\/span>/)
+  assert.match(alertCenterComponent, /className="admin-alert-table-followup"[\s\S]{0,180}>\{workflow\.label\}<\/small><\/span>/)
+  assert.match(alertCenterComponent, /className="admin-alert-table-result"[^>]*>[\s\S]{0,80}\{workflow\.result \|\| '—'\}<\/span>/)
+  assert.match(alertCenterComponent, /className="admin-alert-table-reader"[^>]*>[\s\S]{0,80}\{workflow\.reader \|\| '—'\}<\/span>/)
+  assert.doesNotMatch(alertCenterComponent, /className="admin-alert-table-reader"[^>]*>[\s\S]{0,160}workflow\.label/)
 })
 
 test('follow-up migration keeps private tables and scoped RPC authorization', () => {
@@ -169,6 +187,33 @@ test('follow-up migration keeps private tables and scoped RPC authorization', ()
   assert.match(followUpMigration, /'readers', coalesce/)
   assert.match(followUpMigration, /'follow_up', coalesce/)
   assert.match(followUpMigration, /advisory locks are re-entrant for the owning session/)
+})
+
+test('team enrichment preserves the granular alert reader security boundary', () => {
+  assert.match(teamColumnsMigration, /auth\.uid\(\) is null[\s\S]{0,80}not_authenticated/)
+  assert.match(teamColumnsMigration, /current_app_session_is_valid\('admin'\)/)
+  assert.match(teamColumnsMigration, /has_permission\('alert\.view'\)/)
+  assert.match(teamColumnsMigration, /caller_can_view_alert_type\('payout_change'\)/)
+  assert.match(teamColumnsMigration, /admin_alert_center_page_v1\([\s\S]{0,100}p_filters/)
+  assert.match(teamColumnsMigration, /jsonb_array_elements\([\s\S]{0,120}v_result->'rows'/)
+  assert.match(teamColumnsMigration, /left join public\.employees employee[\s\S]{0,160}left join public\.teams team/)
+  assert.match(teamColumnsMigration, /'team_name',[\s\S]{0,180}team\.name[\s\S]{0,120}employee\.group_name/)
+  assert.match(teamColumnsMigration, /order by item\.ordinality/)
+  assert.match(teamColumnsMigration, /revoke all on function public\.admin_alert_center\(jsonb, integer, integer\)[\s\S]{0,120}from public, anon/)
+  assert.match(teamColumnsMigration, /grant execute on function public\.admin_alert_center\(jsonb, integer, integer\)[\s\S]{0,100}to authenticated, service_role/)
+})
+
+test('follow-up wrapper writes an atomic centralized operation log after scoped mutation', () => {
+  assert.match(teamColumnsMigration, /create or replace function public\.admin_alert_update_follow_up\(/)
+  assert.match(teamColumnsMigration, /current_app_session_is_valid\('admin'\)/)
+  assert.match(teamColumnsMigration, /has_permission\('alert\.follow_up'\)/)
+  assert.match(teamColumnsMigration, /v_result := public\.admin_alert_update_follow_up_page_v1\([\s\S]{0,900}insert into public\.audit_logs/)
+  assert.match(teamColumnsMigration, /actor_user_id,employee_id,module,action,record_id/)
+  assert.match(teamColumnsMigration, /'alerts'[\s\S]{0,120}'follow_up_confirm'[\s\S]{0,80}'follow_up_handle'/)
+  assert.match(teamColumnsMigration, /'actor',v_actor_name[\s\S]{0,120}'result_summary',v_result_summary/)
+  assert.match(teamColumnsMigration, /left\(coalesce\([\s\S]{0,180}handling_note[\s\S]{0,160}\),500\)/)
+  const wrapper=teamColumnsMigration.slice(teamColumnsMigration.indexOf('create or replace function public.admin_alert_update_follow_up'))
+  assert.doesNotMatch(wrapper,/exception\s+when/)
 })
 
 test('employee warning history keeps the existing session, type permission, and employee scope guards', () => {

@@ -132,18 +132,21 @@ export function adminAlertFollowUpState(row, locale='zh') {
   const confirmedBy = clean(source.confirmed_by_name)
   const handledBy = clean(source.handled_by_name)
   const latestReader = readers[0]?.account || ''
+  const result = clean(source.handling_note)
   const labels = locale === 'en'
     ? { pending:readers.length ? 'Awaiting confirmation' : 'Not read', confirmed:'Confirmed · awaiting handling', handled:'Handled' }
     : { pending:readers.length ? '待确认' : '尚未读取', confirmed:'已确认 · 待处理', handled:'已处理' }
   return {
     status,
     label:labels[status],
+    reader:latestReader,
     actor:status === 'handled' ? handledBy : status === 'confirmed' ? confirmedBy : latestReader,
     readers,
     confirmedBy,
     confirmedAt:clean(source.confirmed_at),
     handledBy,
     handledAt:clean(source.handled_at),
-    note:clean(source.handling_note),
+    note:result,
+    result,
   }
 }

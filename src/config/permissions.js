@@ -191,6 +191,7 @@ export const PERMISSIONS = {
   ROLE_MANAGE: 'role.manage',
   ROLE_VIEW: 'role.view',
   ROLE_AUDIT_VIEW: 'role.audit.view',
+  ACCOUNT_ACTIVITY_LOG_VIEW: 'account.activity_log.view',
   SCOPE_MANAGE: 'scope.manage',
 
   // 预警中心（读取、已读与人工跟进互相独立）
@@ -476,6 +477,7 @@ export const PERMISSION_GROUPS = [
       [PERMISSIONS.ACCOUNT_IP_ALLOWLIST_VIEW, '查看后台登录 IP 白名单'],
       [PERMISSIONS.ACCOUNT_IP_ALLOWLIST_MANAGE, '管理后台登录 IP 白名单'],
       [PERMISSIONS.ROLE_MANAGE, '管理角色与权限'],
+      [PERMISSIONS.ACCOUNT_ACTIVITY_LOG_VIEW, '查看后台操作日志'],
       [PERMISSIONS.SCOPE_MANAGE, '管理账号数据范围'],
       [PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW, '查看员工敏感资料'],
       [PERMISSIONS.SENSITIVE_EMPLOYEE_EDIT, '编辑员工敏感资料'],

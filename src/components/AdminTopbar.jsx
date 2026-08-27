@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAdminI18n } from '../lib/adminI18n'
 import { AdminAlertBell } from './AdminAlertCenter'
@@ -150,6 +151,7 @@ export default function AdminTopbar({ access }) {
         </section>}
       </div>}
 
+      <Link className="admin-topbar-help" to="/admin/manual" aria-label={locale === 'en' ? 'Backend feature manual' : '后台功能用途手册'} title={locale === 'en' ? 'Backend feature manual' : '后台功能用途手册'}><span aria-hidden="true">?</span><b>{locale === 'en' ? 'Manual' : '功能手册'}</b></Link>
       <div className="admin-topbar-alert"><AdminAlertBell access={access} /></div>
       <div className="admin-topbar-account" title={login}>
         <span aria-hidden="true">{accountName.slice(0,1).toUpperCase()}</span>

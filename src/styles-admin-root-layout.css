@@ -1,0 +1,60 @@
+/* Shared root alignment for admin pages that historically owned custom shells. */
+.content-page.exam-page {
+  width: 100%;
+  max-width: 1760px;
+  margin: 0 auto;
+  padding: 28px 30px 38px;
+}
+
+/* Keep this checkbox independent from the generic full-width modal input rule. */
+.ip-entry-enabled {
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid #e1e8f1;
+  border-radius: 10px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.ip-entry-modal .ip-entry-enabled input[type='checkbox'] {
+  display: inline-grid;
+  flex: 0 0 18px;
+  place-content: center;
+  width: 18px !important;
+  height: 18px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  appearance: none;
+  border: 1px solid #b9c7d8 !important;
+  border-radius: 5px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.ip-entry-modal .ip-entry-enabled input[type='checkbox']::after {
+  content: '✓';
+  color: #fff;
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1;
+  transform: scale(0);
+}
+
+.ip-entry-modal .ip-entry-enabled input[type='checkbox']:checked {
+  border-color: #2f6fe4 !important;
+  background: #2f6fe4 !important;
+}
+
+.ip-entry-modal .ip-entry-enabled input[type='checkbox']:checked::after {
+  transform: scale(1);
+}
+
+.ip-entry-modal .ip-entry-enabled input[type='checkbox']:focus-visible {
+  outline: 3px solid rgba(47, 111, 228, .18);
+  outline-offset: 2px;
+}
+
+@media (max-width: 620px) {
+  .content-page.exam-page { padding: 14px; }
+}

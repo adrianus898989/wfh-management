@@ -49,6 +49,7 @@ export const ADMIN_PAGE_PERMISSIONS = Object.freeze({
   // Role mutations remain Founder-only by design; do not render a checkbox
   // that a non-Founder can select but the server must reject.
   roles: { view:PERMISSIONS.ROLE_VIEW, actions:[PERMISSIONS.ROLE_AUDIT_VIEW] },
+  activity_log: { view:PERMISSIONS.ACCOUNT_ACTIVITY_LOG_VIEW, actions:[] },
 })
 
 export function adminPageAccess(pagePermission) {

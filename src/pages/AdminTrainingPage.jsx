@@ -140,7 +140,7 @@ export default function AdminTrainingPage(){
   const sectionTitle=pageChrome.active.sectionLabel||'考试管理'
   const refresh=()=>['考试记录','人工批改'].includes(tab)?loadSessions():load()
 
-  return <div className="exam-page">
+  return <div className="content-page exam-page">
     <header className="exam-head"><div><small>ATTENDANCE · EXAMS · REWARDS</small><h1>{sectionTitle}</h1><p>{pageChrome.active.itemLabel||tab}</p></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {data?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${legacySourcePaused?'':'success'}`} title={legacySync.last_success_at?`最后同步：${fmt(legacySync.last_success_at)}`:''}>{legacySyncLabel}</span><button onClick={refresh}>刷新</button></div></header>
     {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <AdminModuleNav />

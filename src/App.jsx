@@ -30,6 +30,8 @@ import StaffExamPage from './pages/StaffExamPage'
 import AdminPayrollPage from './pages/AdminPayrollPage'
 import StaffPayrollPage from './pages/StaffPayrollPage'
 import AdminPlanningPage from './pages/AdminPlanningPage'
+import AdminManualPage from './pages/AdminManualPage'
+import AdminActivityLogPage from './pages/AdminActivityLogPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 import { StaffI18nProvider, useStaffLocale } from './lib/staffI18n'
@@ -37,6 +39,7 @@ import { AdminI18nProvider } from './lib/adminI18n'
 
 const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 3
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
+const AUTH_CHECK_DEBOUNCE_MS = 2000
 
 function Protected({ children, mode }) {
   const location = useLocation()
@@ -57,6 +60,7 @@ function Protected({ children, mode }) {
     let redirectAfterSignOut = false
     let leaseOwned = false
     let leaseEligible = false
+    let lastAuthCheckAt = 0
     const sessionCheckMessage = mode==='staff'
       ? t('auth.sessionCheckFailed','无法验证当前浏览器会话，请稍后重试。')
       : '无法验证当前浏览器会话，请稍后重试。'
@@ -96,7 +100,7 @@ function Protected({ children, mode }) {
       'staff_account_not_found',
       'staff_account_missing',
     ].includes(reason)
-    const freshSession = async (force = false) => {
+    const freshSession = async () => {
       if (isSessionIdleExpired()) {
         await localSignOut({ release:true, redirect:true })
         return { session:null, error:null }
@@ -107,7 +111,12 @@ function Protected({ children, mode }) {
         return { session:null, error:null }
       }
       let session = data?.session || null
-      if (!error && session && (force || Number(session.expires_at || 0) * 1000 - Date.now() < 10 * 60 * 1000)) {
+      // Re-checking a protected request must not force a token rotation. A
+      // burst of rejected page requests used to launch several refreshes in
+      // succession; the late responses could overwrite browser storage with
+      // an already rotated refresh token. Supabase already auto-refreshes, and
+      // this explicit refresh is only a near-expiry safety net.
+      if (!error && session && Number(session.expires_at || 0) * 1000 - Date.now() < 10 * 60 * 1000) {
         const refreshed = await supabase.auth.refreshSession(session)
         if (!refreshed.error && refreshed.data?.session) session = refreshed.data.session
         else if (terminalAuthError(refreshed.error)) {
@@ -183,7 +192,7 @@ function Protected({ children, mode }) {
     const bootstrap = (force = false) => {
       if (bootstrapPromise) return bootstrapPromise
       bootstrapPromise = (async () => {
-        const { session, error: sessionError } = await freshSession(force)
+        const { session, error: sessionError } = await freshSession()
         if (sessionError) {
           await markVerificationFailure(mode==='staff'?t('auth.readFailed','登录状态读取失败，请检查网络后重试。'):'登录状态读取失败，请检查网络后重试。')
           return
@@ -313,7 +322,12 @@ function Protected({ children, mode }) {
     // let one late response destroy the newer valid browser session.  Re-read
     // Auth and the current lease first; bootstrap performs the definitive
     // sign-out only when the current session is actually gone or disabled.
-    const onAuthCheck = () => recover(true)
+    const onAuthCheck = () => {
+      const now = Date.now()
+      if (now - lastAuthCheckAt < AUTH_CHECK_DEBOUNCE_MS) return
+      lastAuthCheckAt = now
+      recover()
+    }
     const heartbeatTimer = window.setInterval(heartbeat, APP_SESSION_HEARTBEAT_MS)
     const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut({ release:true, redirect:true }) }, 60*1000)
     document.addEventListener('visibilitychange', onVisible)
@@ -367,6 +381,8 @@ function AppRoutes() {
     <Route path="/admin/ip-allowlist" element={<Protected mode="admin"><AppLayout mode="admin"><AdminIpAllowlistPage /></AppLayout></Protected>} />
     <Route path="/admin/work-execution" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="work-execution" /></AppLayout></Protected>} />
     <Route path="/admin/account-usage" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="account-usage" /></AppLayout></Protected>} />
+    <Route path="/admin/activity-log" element={<Protected mode="admin"><AppLayout mode="admin"><AdminActivityLogPage /></AppLayout></Protected>} />
+    <Route path="/admin/manual" element={<Protected mode="admin"><AppLayout mode="admin"><AdminManualPage /></AppLayout></Protected>} />
     <Route path="/staff" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome /></AppLayout></Protected>} />
     <Route path="/staff/rewards" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome mode="rewards" /></AppLayout></Protected>} />
     <Route path="/staff/schedule" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.schedule','我的排班')} /></AppLayout></Protected>} />
