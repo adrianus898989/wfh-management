@@ -18,6 +18,7 @@ import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunct
 import { employeeTrainerReviewRows } from '../lib/onlineTrainingPresentation'
 import { managementRiskDatePreset } from '../lib/managementRiskPresentation'
 import ManagementRiskPanel from '../components/ManagementRiskPanel'
+import { withAbortTimeout } from '../lib/abortableRequest'
 import { employeeProfileMetricSeed, mergeEmployeeDetailRefresh, withEmployeeDetailTimeout } from '../lib/employeeDrawerState'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
@@ -70,6 +71,7 @@ const blankEmployeeFilters=()=>({
 })
 const EMPLOYEE_EXPORT_PAGE_SIZE=500
 const EMPLOYEE_EXPORT_MAX_PAGES=100
+const MANAGEMENT_RISK_REQUEST_TIMEOUT_MS=12*1000
 const blankPeopleFilters=()=>({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
 const blankManagementRiskFilters=()=>({
   ...managementRiskDatePreset('30d'),team:'',group:'',manager:'',manager_role:'',employee_search:'',
@@ -520,7 +522,7 @@ export default function AdminEmployeesPage(){
   const [managementRiskFilters,setManagementRiskFilters]=useState(blankManagementRiskFilters)
   const [appliedManagementRiskFilters,setAppliedManagementRiskFilters]=useState(blankManagementRiskFilters)
   const [managementRiskDimension,setManagementRiskDimension]=useState('teams')
-  const managementRiskRequestRef=useRef({inFlight:false,sequence:0})
+  const managementRiskRequestRef=useRef({inFlight:null,activeFilterKey:'',pendingFilters:null})
   const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState(blankPeopleFilters)
   const [appliedAnalysisFilters,setAppliedAnalysisFilters]=useState(blankPeopleFilters)
@@ -677,33 +679,70 @@ export default function AdminEmployeesPage(){
     }
   }
 
-  const loadManagementRisk=async(nextFilters=appliedManagementRiskFilters)=>{
-    if(!canViewManagementRisk) return
-    if(managementRiskRequestRef.current.inFlight) return
-    managementRiskRequestRef.current.inFlight=true
-    const requestId=++managementRiskRequestRef.current.sequence
-    setManagementRisk(current=>({...current,loading:true,error:''}))
-    try{
-      const {data,error}=await supabase.rpc('admin_employee_management_risk',{
-        p_date_from:nextFilters.date_from||null,
-        p_date_to:nextFilters.date_to||null,
-        p_filters:{
-          team:nextFilters.team||'',group:nextFilters.group||'',manager:nextFilters.manager||'',
-          manager_role:nextFilters.manager_role||'',employee_search:nextFilters.employee_search||'',
-        },
-        p_top_limit:50,
-      })
-      if(error||data?.error) throw new Error(readableErrorMessage(error||data?.error)||'管理风险分析读取失败')
-      if(requestId!==managementRiskRequestRef.current.sequence) return
-      setManagementRisk({...data,loading:false,error:''})
-    }catch(e){
-      if(requestId!==managementRiskRequestRef.current.sequence) return
-      setManagementRisk(current=>({...current,loading:false,error:employeeRequestError(e,'管理风险分析读取失败，请重试。')}))
-    }finally{
-      if(requestId===managementRiskRequestRef.current.sequence){
-        managementRiskRequestRef.current.inFlight=false
+  const loadManagementRisk=(nextFilters=appliedManagementRiskFilters)=>{
+    if(!canViewManagementRisk) return Promise.resolve()
+    const requestState=managementRiskRequestRef.current
+    const requestedFilters={...blankManagementRiskFilters(),...(nextFilters||{})}
+    const requestedFilterKey=JSON.stringify(requestedFilters)
+
+    if(requestState.inFlight){
+      // Keep only the latest explicit request. If the user returns to the
+      // currently running filters, its response is already the desired one.
+      requestState.pendingFilters=requestedFilterKey===requestState.activeFilterKey
+        ? null
+        : requestedFilters
+      return requestState.inFlight
+    }
+
+    const drainRequests=async()=>{
+      let activeFilters=requestedFilters
+      while(activeFilters){
+        requestState.activeFilterKey=JSON.stringify(activeFilters)
+        requestState.pendingFilters=null
+        // "Applied" means the RPC really started; queued filters must not be
+        // shown as applied while an older response is still in flight.
+        setAppliedManagementRiskFilters(activeFilters)
+        setManagementRisk(current=>({...current,loading:true,error:''}))
+
+        let responseData=null
+        let responseError=''
+        try{
+          const {data,error}=await withAbortTimeout(
+            signal=>supabase.rpc('admin_employee_management_risk',{
+              p_date_from:activeFilters.date_from||null,
+              p_date_to:activeFilters.date_to||null,
+              p_filters:{
+                team:activeFilters.team||'',group:activeFilters.group||'',manager:activeFilters.manager||'',
+                manager_role:activeFilters.manager_role||'',employee_search:activeFilters.employee_search||'',
+              },
+              p_top_limit:50,
+            }).abortSignal(signal),
+            MANAGEMENT_RISK_REQUEST_TIMEOUT_MS,
+            'MANAGEMENT_RISK_TIMEOUT',
+          )
+          if(error||data?.error) throw new Error(readableErrorMessage(error||data?.error)||'管理风险分析读取失败')
+          responseData=data
+        }catch(e){
+          responseError=e?.code==='MANAGEMENT_RISK_TIMEOUT'||e?.message==='MANAGEMENT_RISK_TIMEOUT'
+            ? '管理风险分析读取超过12秒，已停止本次请求；筛选条件已保留，请手动重试。'
+            : employeeRequestError(e,'管理风险分析读取失败，请重试。')
+        }
+
+        const pendingFilters=requestState.pendingFilters
+        if(!pendingFilters){
+          if(responseError) setManagementRisk(current=>({...current,loading:false,error:responseError}))
+          else setManagementRisk({...responseData,loading:false,error:''})
+        }
+        activeFilters=pendingFilters
       }
     }
+
+    requestState.inFlight=drainRequests().finally(()=>{
+      requestState.inFlight=null
+      requestState.activeFilterKey=''
+      requestState.pendingFilters=null
+    })
+    return requestState.inFlight
   }
 
   const loadResignationAnalytics=async(nextFilters=appliedResignationAnalyticsFilters)=>{
@@ -1373,19 +1412,16 @@ export default function AdminEmployeesPage(){
       setManagementRisk(current=>({...current,error:'分析开始日期不能晚于结束日期。'}))
       return
     }
-    setAppliedManagementRiskFilters(next)
     loadManagementRisk(next)
   }
   const resetManagementRiskFilters=()=>{
     const next=blankManagementRiskFilters()
     setManagementRiskFilters(next)
-    setAppliedManagementRiskFilters(next)
     loadManagementRisk(next)
   }
   const setManagementRiskRange=preset=>{
     const next={...managementRiskFilters,...managementRiskDatePreset(preset)}
     setManagementRiskFilters(next)
-    setAppliedManagementRiskFilters(next)
     loadManagementRisk(next)
   }
   const changeAnalysisView=view=>{
