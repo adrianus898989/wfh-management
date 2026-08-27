@@ -33,6 +33,10 @@ const errorFrequencyMigration = readFileSync(new URL(
   '../../supabase/migrations/20260827165000_admin_alert_error_frequency_thresholds.sql',
   import.meta.url,
 ), 'utf8')
+const stableAlertRestoreMigration = readFileSync(new URL(
+  '../../supabase/migrations/20260827200500_restore_stable_alerts.sql',
+  import.meta.url,
+), 'utf8')
 
 test('monthly leave exposes the existing category totals and dated evidence', () => {
   const detail = adminAlertAttendanceDetails({
@@ -144,8 +148,29 @@ test('error-frequency migration is server-authoritative, deduplicated and scope-
   assert.match(errorFrequencyMigration, /not exists \([\s\S]{0,220}newer\.record_key = error\.record_key/)
   assert.match(errorFrequencyMigration, /'error_spike:' \|\| frequency\.employee_id::text/)
   assert.match(errorFrequencyMigration, /revoke all on function alerts_private\.error_frequency_candidates\(date\)[\s\S]{0,80}from public, anon, authenticated/)
-  assert.match(alertCenterComponent, /1 天 5 笔、3 天 5 笔或 7 天 10 笔错误/)
+  assert.match(alertCenterComponent, /3 天内错误记录达到 6 笔/)
+  assert.doesNotMatch(alertCenterComponent, /1 天 5 笔、3 天 5 笔或 7 天 10 笔错误/)
   assert.match(alertCenterComponent, /<AlertErrorFrequencyDetails row=\{row\} locale=\{locale\}\/>/)
+})
+
+test('alert bell is on-demand and cannot create a background polling storm', () => {
+  const bell = alertCenterComponent.slice(
+    alertCenterComponent.indexOf('export function AdminAlertBell'),
+    alertCenterComponent.indexOf('export function EmployeeAlertHistoryPanel'),
+  )
+  assert.doesNotMatch(bell, /setInterval\(/)
+  assert.doesNotMatch(bell, /addEventListener\('focus'/)
+  assert.match(bell, /onClick=\{\(\) => \{ setOpen\(value => !value\); if \(!open\) load\(\{ quiet:true \}\) \}\}/)
+})
+
+test('stable alert restore rolls back experimental thresholds and keeps refresh manual', () => {
+  assert.match(stableAlertRestoreMigration, /count\(distinct error\.record_key\) >= 6/)
+  assert.match(stableAlertRestoreMigration, /replace\([\s\S]{0,180}v_experimental_block[\s\S]{0,80}v_previous_block/)
+  assert.match(stableAlertRestoreMigration, /cron\.unschedule\(jobid\)/)
+  assert.doesNotMatch(stableAlertRestoreMigration, /cron\.schedule\(/)
+  assert.match(stableAlertRestoreMigration, /admin_alert_center_page_v1/)
+  assert.match(stableAlertRestoreMigration, /current_app_session_is_valid\('admin'\)/)
+  assert.match(stableAlertRestoreMigration, /scope_private\.current_employee_scope_directory\(\)/)
 })
 
 test('alert table resolves the employee hire date from current and compatible payload fields', () => {

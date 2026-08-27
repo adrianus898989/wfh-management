@@ -39,7 +39,7 @@ const ALERT_RULE_COPY = {
   consecutive_rest: { zh:'连续公休达到 2 天。', en:'At least 2 consecutive public rest days.' },
   weekly_absence: { zh:'7 天内缺席达到 2 天。', en:'At least 2 absence days within 7 days.' },
   monthly_leave: { zh:'本月休假超过 5 天；半天按 0.5 天，回家不计。', en:'More than 5 leave days this month; half days count as 0.5 and home leave is excluded.' },
-  error_spike: { zh:'任一条件达到即预警：1 天 5 笔、3 天 5 笔或 7 天 10 笔错误。', en:'Alerts at 5 errors in 1 day, 5 in 3 days, or 10 in 7 days.' },
+  error_spike: { zh:'3 天内错误记录达到 6 笔。', en:'At least 6 error records within 3 days.' },
   deduction_frequency: { zh:'7 天内扣款达到 4 次。', en:'At least 4 deductions within 7 days.' },
   exam_failed: { zh:'最近一次已评分考试未达到及格线。', en:'The latest graded exam did not reach the pass score.' },
 }
@@ -92,10 +92,7 @@ function alertCopy(row, locale) {
     case 'payout_change': return row?.payload?.fulfillment_status === 'mismatch'
       ? { title:'Approved payment details do not match', message:`${name}'s saved payment details differ from the approved request.` }
       : { title:'Payment details awaiting review', message:`${name} submitted a payment-details change.` }
-    case 'error_spike': {
-      const days = numeric(row?.payload?.days) || 3
-      return { title:'Error-frequency warning', message:`${name} has ${count} error records in the last ${days} ${days === 1 ? 'day' : 'days'}.` }
-    }
+    case 'error_spike': return { title:'Three-day error warning', message:`${name} has ${count} error records in the last 3 days.` }
     case 'deduction_frequency': return { title:'Seven-day deduction warning', message:`${name} received ${count} deductions in the last 7 days.` }
     case 'late_timeout_frequency': return { title:'Late / timeout frequency warning', message:`${name} has ${count} late or timeout-related deductions in the last 7 days.` }
     case 'consecutive_rest': return { title:'Consecutive rest-day warning', message:`${name} is marked for ${count} consecutive public rest days.` }
@@ -254,18 +251,16 @@ export function AdminAlertBell({ access }) {
 
   useEffect(() => {
     if (!enabled) return undefined
-    load()
-    const timer = window.setInterval(() => load({ quiet:true }), 60000)
-    const refresh = () => load({ quiet:true })
-    window.addEventListener('focus', refresh)
+    // The alert reader is intentionally on-demand. Mount/focus/minute polling
+    // across several admin tabs can multiply one slow database call into a
+    // request storm that starves login and ordinary page traffic.
+    const refresh = () => { if (open) load({ quiet:true }) }
     window.addEventListener('wfh-admin-alerts-changed', refresh)
     return () => {
       requestRef.current += 1
-      window.clearInterval(timer)
-      window.removeEventListener('focus', refresh)
       window.removeEventListener('wfh-admin-alerts-changed', refresh)
     }
-  }, [enabled, locale])
+  }, [enabled, locale, open])
 
   useEffect(() => {
     if (!open) return undefined
