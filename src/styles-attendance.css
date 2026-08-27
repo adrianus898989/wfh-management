@@ -222,3 +222,22 @@
   .employee-attendance-source{align-items:flex-start;flex-direction:column}.employee-attendance-source span{flex:auto}
   .schedule-overview{grid-template-columns:1fr 1fr}
 }
+.schedule-identity-warning{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  margin:0 0 12px;
+  padding:12px 14px;
+  border:1px solid #f0cf7a;
+  border-radius:12px;
+  background:#fff9e8;
+  color:#78510a;
+}
+.schedule-identity-warning strong{display:block;font-size:13px;color:#694300}
+.schedule-identity-warning p{margin:4px 0 0;font-size:11px;line-height:1.55}
+.schedule-identity-warning p b{color:#b24d18}
+.schedule-identity-warning button{flex:0 0 auto;white-space:nowrap}
+.schedule-identity-warning.source-incomplete{border-color:#efb0a8;background:#fff2f0;color:#8e352d}
+.schedule-identity-warning.source-incomplete strong{color:#8e2f27}
+@media(max-width:760px){.schedule-identity-warning{align-items:flex-start;flex-direction:column}.schedule-identity-warning button{width:100%}}

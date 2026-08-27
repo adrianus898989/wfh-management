@@ -11,8 +11,8 @@ import { PAYROLL_CURRENCY_OPTIONS, payrollCurrencyLabel } from '../lib/payrollCu
 import { payrollBatchIdentity, payrollMatchState, summarizePayrollRows } from '../lib/payrollImportState'
 import { supabase } from '../lib/supabase'
 
-const PAYOUT_CHANGE_VIEW='payroll.payout_change.view'
-const PAYOUT_CHANGE_REVIEW='payroll.payout_change.review'
+const PAYOUT_CHANGE_VIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW
+const PAYOUT_CHANGE_REVIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_REVIEW
 const PAYMENT_CHANGE_TABS=new Set(['收款资料审核','申请记录'])
 const TABS = ['工资导入','待发布','已发布','导入记录','收款资料审核','申请记录']
 const PAYROLL_SUMMARY_ONLY_BATCH_ID=0
@@ -175,12 +175,12 @@ export default function AdminPayrollPage(){
   const routeTab=params.get('tab')
   const urlTab=canonicalAdminTab('/admin/payroll',routeTab)
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
-    if(value==='收款资料审核')return access.hasPermission(PAYOUT_CHANGE_REVIEW)
-    if(value==='申请记录')return access.hasAnyPermission([PAYOUT_CHANGE_VIEW,PAYOUT_CHANGE_REVIEW])
-    if(!access.hasPermission(PERMISSIONS.PAYROLL_VIEW))return false
-    if(value==='工资导入')return access.hasPermission(PERMISSIONS.PAYROLL_EDIT)
-    if(value==='待发布')return access.hasAnyPermission([PERMISSIONS.PAYROLL_APPROVE,PERMISSIONS.PAYROLL_PUBLISH])
-    return true
+    if(value==='收款资料审核')return access.hasPermission(PAYOUT_CHANGE_VIEW)&&access.hasPermission(PAYOUT_CHANGE_REVIEW)
+    if(value==='申请记录')return access.hasPermission(PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW)
+    if(value==='工资导入'||value==='导入记录')return access.hasPermission(PERMISSIONS.PAYROLL_IMPORT_HISTORY_VIEW)
+    if(value==='待发布')return access.hasPermission(PERMISSIONS.PAYROLL_PENDING_VIEW)
+    if(value==='已发布')return access.hasPermission(PERMISSIONS.PAYROLL_PUBLISHED_VIEW)
+    return false
   })
   const [tab,setTabState]=useState(TABS.includes(urlTab)?urlTab:TABS[0])
   const [state,setState]=useState({loading:true,error:'',data:null})
@@ -214,7 +214,8 @@ export default function AdminPayrollPage(){
     }
     setState(current=>({...current,loading:true,error:''}))
     try{
-      let response=await supabase.rpc('admin_payroll_home',{p_batch_id:selected===null||selected===undefined?null:selected})
+      const homeRpc=targetTab==='待发布'?'admin_payroll_pending_page':targetTab==='已发布'?'admin_payroll_published_page':'admin_payroll_import_history_page'
+      let response=await supabase.rpc(homeRpc,{p_batch_id:selected===null||selected===undefined?null:selected})
       if(requestId!==loadRequestRef.current)return
       if(response.error)throw response.error
       let data=response.data||null
@@ -222,7 +223,7 @@ export default function AdminPayrollPage(){
       if(wantedStatus&&data?.selected_batch?.status!==wantedStatus){
         const target=(data?.batches||[]).find(batch=>batch.status===wantedStatus)
         if(target&&Number(data?.selected_batch?.id)!==Number(target.id)){
-          response=await supabase.rpc('admin_payroll_home',{p_batch_id:target.id})
+          response=await supabase.rpc(homeRpc,{p_batch_id:target.id})
           if(requestId!==loadRequestRef.current)return
           if(response.error)throw response.error
           data=response.data||null
@@ -280,8 +281,12 @@ export default function AdminPayrollPage(){
     const resignedText=Number(data.resigned||0)>0?`，其中离职员工 ${data.resigned} 人`:''
     setMessage(`导入完成：${data.rows} 人，已识别 ${data.matched} 人${resignedText}，未匹配 ${data.unmatched} 人。`)
     setBatchId(data.batch_id);setFileState({file:null,rows:[],error:'',loading:false});if(fileRef.current)fileRef.current.value=''
-    await load(data.batch_id,'待发布')
-    setTabState('待发布');setParams(adminTabParams('/admin/payroll','待发布'))
+    if(access.hasPermission(PERMISSIONS.PAYROLL_PENDING_VIEW)){
+      await load(data.batch_id,'待发布')
+      setTabState('待发布');setParams(adminTabParams('/admin/payroll','待发布'))
+    }else{
+      await load(PAYROLL_SUMMARY_ONLY_BATCH_ID,'导入记录')
+    }
   }
 
   const publish=async id=>{
@@ -291,7 +296,11 @@ export default function AdminPayrollPage(){
     if(error){setMessage(`发布失败：${error.message}`);return}
     const excluded=Number(data.excluded_rows||0)
     setMessage(`已发布 ${data.rows} 份工资单${excluded?`，另有 ${excluded} 份离职、停用或未匹配记录仅保留在后台`:''}。`)
-    await load(id,'已发布');setTabState('已发布');setParams(adminTabParams('/admin/payroll','已发布'))
+    if(access.hasPermission(PERMISSIONS.PAYROLL_PUBLISHED_VIEW)){
+      await load(id,'已发布');setTabState('已发布');setParams(adminTabParams('/admin/payroll','已发布'))
+    }else{
+      await load(null,'待发布')
+    }
   }
 
   const deleteBatch=async batch=>{
@@ -387,7 +396,14 @@ export default function AdminPayrollPage(){
 
   const pageChrome=adminLocalPageTabs('/admin/payroll',visibleTabs,tab)
   const sectionTitle=pageChrome.active.sectionLabel||'工资统计'
-  const uploadWorkspace=access.hasPermission(PERMISSIONS.PAYROLL_EDIT)?<PayrollUploadWorkspace
+  const canMutateWholePayroll=access.founder||access.dataScope==='all'
+  const hasWholePayrollAction=access.hasAnyPermission([
+    PERMISSIONS.PAYROLL_IMPORT_HISTORY_EDIT,
+    PERMISSIONS.PAYROLL_PENDING_EDIT,
+    PERMISSIONS.PAYROLL_PENDING_APPROVE,
+    PERMISSIONS.PAYROLL_PENDING_PUBLISH,
+  ])
+  const uploadWorkspace=canMutateWholePayroll&&access.hasPermission(PERMISSIONS.PAYROLL_IMPORT_HISTORY_EDIT)?<PayrollUploadWorkspace
     fileRef={fileRef}
     fileState={fileState}
     form={form}
@@ -401,6 +417,7 @@ export default function AdminPayrollPage(){
     <div className="payroll-page-head"><div><small>PAYROLL REPORTS</small><h1>{adminT(sectionTitle)}</h1>{pageChrome.active.itemLabel&&<p>{adminT(pageChrome.active.itemLabel)}</p>}</div>{!PAYMENT_CHANGE_TABS.has(tab)&&<button className="payroll-refresh" disabled={access.loading||!tab} onClick={()=>load(tab==='工资导入'||tab==='导入记录'?PAYROLL_SUMMARY_ONLY_BATCH_ID:batchId)}>{adminT('刷新资料')}</button>}</div>
     {state.error&&<div className="payroll-alert error">{state.error}</div>}
     {message&&<div className="payroll-alert">{message}</div>}
+    {!canMutateWholePayroll&&hasWholePayrollAction&&<div className="payroll-alert">当前账号为有限员工范围；可查看范围内工资，但导入、删除、审核和发布整批工资仅限“全部数据”范围账号。</div>}
     <AdminModuleNav />
 
     {access.loading?<div className="payroll-empty-small">{adminT('正在读取页面权限…')}</div>:!tab?<div className="payroll-alert error">{adminT('当前账号没有工资中心页面权限。')}</div>:PAYMENT_CHANGE_TABS.has(tab)?<AdminPayoutChangeWorkspace mode={tab==='收款资料审核'?'pending':'history'} canReview={access.hasPermission(PAYOUT_CHANGE_REVIEW)}/>:tab==='工资导入'?uploadWorkspace:tab==='导入记录'?<>
@@ -413,7 +430,7 @@ export default function AdminPayrollPage(){
         </button>):<div className="payroll-empty-small">暂无对应工资批次</div>}
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
-        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&(visibleSelected.status!=='published'||state.data?.permissions?.publish)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
+        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&access.hasPermission(PERMISSIONS.PAYROLL_PENDING_PUBLISH)&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&access.hasPermission(PERMISSIONS.PAYROLL_PENDING_EDIT)&&(visibleSelected.status!=='published'||state.data?.permissions?.publish)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
         <div className="payroll-summary-grid"><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职 / 试用</span><strong>{rowStateCounts.active}</strong><small>在职与试用</small></button><button type="button" className={rowFilter==='suspended'?'active':''} onClick={()=>setRowFilter('suspended')}><span>停用员工</span><strong>{rowStateCounts.suspended}</strong><small>停用 / inactive</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{rowStateCounts.resigned}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{rowStateCounts.total} 人 · {payrollCurrencyLabel(visibleSelected.currency)}</small></div></div>
         <div className="payroll-record-filters">
           <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
@@ -503,7 +520,7 @@ function PayrollImportHistory({batches,onOpenEmployee}){
     resetFilters()
     setPanel({batch,selected:batch,rows:[],loading:true,error:''})
     try{
-      const {data,error}=await supabase.rpc('admin_payroll_home',{p_batch_id:batch.id})
+      const {data,error}=await supabase.rpc('admin_payroll_import_history_page',{p_batch_id:batch.id})
       if(requestRef.current!==requestId)return
       if(error){
         setPanel({batch,selected:batch,rows:[],loading:false,error:error.message||'批次记录读取失败'})

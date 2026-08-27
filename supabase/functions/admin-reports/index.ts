@@ -42,6 +42,25 @@ async function getChunkedSnapshot(service:any,source:string){const {data,error}=
 async function syncState(service:any){const {data}=await service.from('report_sheet_snapshots').select('source,row_count,synced_at,note').order('source');const out:any={};(data||[]).forEach((x:any)=>out[x.source]=x);return out}
 function normalizeRoster(raw:any[]){return raw.map((r:any,i:number)=>({key:`roster-${i+2}`,source_row:i+2,responsible:pick(r,['负责人','負責人','Owner']),onsite_trainer:pick(r,['现场培训','現場培訓','Onsite Training']),online_leader:pick(r,['线上组长','線上組長','Online Leader','组长','組長']),online_trainer:pick(r,['线上培训','線上培訓','Online Training']),group:pick(r,['组别','組別','Group']),team:pick(r,['团队','團隊','Team']),name:pick(r,['姓名','员工姓名','員工姓名','Name']),employee_id:pick(r,['ID','员工ID','員工ID']).toUpperCase(),shift:pick(r,['班次','Shift']),country:pick(r,['国家','國家','Country']),position:pick(r,['岗位','崗位','Position']),platform:pick(r,['盘口','盤口','ID WORKFOLIO','Workfolio','盘口ID']),work_content:pick(r,['工作内容','工作內容','Work Content','Job Content','Content'])})).filter(r=>validName(r.name))}
 async function loadRoster(service:any){const snap=await getSnapshot(service,'居家排班表/填表',Number.POSITIVE_INFINITY);if(!snap)throw new Error('员工资料尚未同步到 Supabase，请稍后刷新');return snap.map((r:any,i:number)=>({...r,key:r.key||`roster-${r.source_row||i+2}`}))}
+async function loadScopedRoster(service:any,scope:ReportScope){const loaded=await loadRoster(service);return(scope.mode==='all'?loaded:loaded.filter((row:any)=>scope.employeeNos.has(upper(row.employee_id)))).map((row:any)=>({...row,employee_id:upper(row.employee_id)}))}
+function fullRosterRow(row:any){return{key:text(row.key),responsible:text(row.responsible),onsite_trainer:text(row.onsite_trainer),online_leader:text(row.online_leader),online_trainer:text(row.online_trainer),group:text(row.group),team:text(row.team),name:text(row.name),employee_id:upper(row.employee_id),shift:text(row.shift),country:text(row.country),position:text(row.position),platform:text(row.platform),work_content:text(row.work_content)}}
+function platformRosterRow(row:any){return{key:text(row.key),team:text(row.team),name:text(row.name),employee_id:upper(row.employee_id),shift:text(row.shift),country:text(row.country),position:text(row.position),platform:text(row.platform)}}
+function statisticsRosterRow(row:any){return{key:text(row.key),responsible:text(row.responsible),onsite_trainer:text(row.onsite_trainer),online_leader:text(row.online_leader),online_trainer:text(row.online_trainer),group:text(row.group),team:text(row.team),name:text(row.name),employee_id:upper(row.employee_id),country:text(row.country),position:text(row.position),platform:text(row.platform)}}
+function rosterOptions(rows:any[],keys:string[]){const options:any={};if(keys.includes('shifts'))options.shifts=uniq(rows.map(row=>row.shift)).sort();if(keys.includes('teams'))options.teams=uniq(rows.map(row=>row.team)).sort();if(keys.includes('groups'))options.groups=uniq(rows.map(row=>row.group)).sort();if(keys.includes('positions'))options.positions=uniq(rows.map(row=>row.position)).sort();if(keys.includes('countries'))options.countries=uniq(rows.map(row=>row.country)).sort();if(keys.includes('platforms'))options.platforms=uniq(rows.map(row=>row.platform)).sort();if(keys.includes('supervisors'))options.supervisors=uniq(rows.flatMap(row=>[row.responsible,row.onsite_trainer,row.online_leader,row.online_trainer])).sort();return options}
+async function rosterPage(service:any,scope:ReportScope,page:'people'|'legacy_schedule'|'platform'|'statistics_context'){
+  const [scoped,states]=await Promise.all([loadScopedRoster(service,scope),syncState(service)])
+  if(page==='platform'){
+    const roster=scoped.map(platformRosterRow)
+    return{updated_at:new Date().toISOString(),sync_state:states,roster,options:rosterOptions(roster,['shifts','teams','positions','countries','platforms'])}
+  }
+  if(page==='statistics_context'){
+    const roster=scoped.map(statisticsRosterRow)
+    return{updated_at:new Date().toISOString(),sync_state:states,roster,options:rosterOptions(roster,['teams','groups','positions','countries','platforms','supervisors'])}
+  }
+  const roster=scoped.map(fullRosterRow)
+  const optionKeys=page==='people'?['teams','groups','positions','countries','supervisors']:['shifts','teams','groups','positions']
+  return{updated_at:new Date().toISOString(),sync_state:states,roster,options:rosterOptions(roster,optionKeys)}
+}
 function splitAccounts(raw:any){return text(raw).split(/[\/,;、\s]+/).map(a=>a.replace(/^[^0-9a-zA-Z]+|[^0-9a-zA-Z]+$/g,'').trim().toLowerCase()).filter(Boolean)}
 async function loadAccountDirectory(service:any){const normalized=await getSnapshot(service,'居家排班表/账号',Number.POSITIVE_INFINITY);if(!normalized)throw new Error('员工账号资料尚未同步到 Supabase，请稍后刷新');const byId=new Map<string,any>(),accountToId=new Map<string,string>(),idToAccounts=new Map<string,string[]>();normalized.forEach((x:any)=>{byId.set(x.employee_id,x);const accounts=uniq([...splitAccounts(x.backend_accounts),lower(x.employee_id)]);idToAccounts.set(x.employee_id,accounts);accounts.forEach(acc=>{if(!accountToId.has(acc))accountToId.set(acc,x.employee_id)})});return {byId,accountToId,idToAccounts}}
 function normalizeOrders(raw:any[]){const m=new Map<string,any>();raw.forEach((r:any)=>{const d=normalizeDate(pick(r,['日期','date','Date'])),a=lower(pick(r,['后台账号','後台賬號','account']));if(!d||!a)return;const key=`${d}|${a}`,cur=m.get(key)||{date:d,account:a,processed:0,rejected:0};cur.processed+=asNumber(pick(r,['已处理','已處理','processed']));cur.rejected+=asNumber(pick(r,['驳回','駁回','reject','rejected']));m.set(key,cur)});return [...m.values()].sort((a,b)=>a.date.localeCompare(b.date))}
@@ -95,7 +114,7 @@ function normalizeErrors(raw:any[]){return raw.map((r:any,i:number)=>({key:`err-
 async function loadAllErrors(service:any){const chunks=await getChunkedSnapshot(service,'效率表/员工错误');if(chunks?.length)return normalizeErrors(chunks);const snap=await getSnapshot(service,'效率表/员工错误',Number.POSITIVE_INFINITY);if(snap)return normalizeErrors(snap);throw new Error('错误统计尚未同步到 Supabase，请稍后刷新')}
 function mapOrdersToEmployees(allOrders:any[],directory:any,rosterById:Map<string,any>){const out:any[]=[];allOrders.forEach(o=>{const id=directory.accountToId.get(o.account)||'';if(id&&rosterById.has(id))out.push({...o,employee_id:id})});return out}
 function between(date:string,from:string,to:string){if(!date)return false;if(from&&date<from)return false;if(to&&date>to)return false;return true}
-async function buildContext(service:any,scope:ReportScope){const [loadedRoster,directory]=await Promise.all([loadRoster(service),loadAccountDirectory(service)]);const roster=scope.mode==='all'?loadedRoster:loadedRoster.filter((r:any)=>scope.employeeNos.has(upper(r.employee_id)));const enriched=roster.map((r:any)=>({...r,employee_id:upper(r.employee_id),hire_date:r.employee_id?(directory.byId.get(upper(r.employee_id))?.hire_date||''):''}));const rosterById=new Map<string,any>(enriched.filter((r:any)=>r.employee_id).map((r:any):[string,any]=>[r.employee_id,r]));return {roster:enriched,directory,rosterById}}
+async function buildContext(service:any,scope:ReportScope){const [roster,directory]=await Promise.all([loadScopedRoster(service,scope),loadAccountDirectory(service)]);const enriched=roster.map((r:any)=>({...r,hire_date:r.employee_id?(directory.byId.get(r.employee_id)?.hire_date||''):''}));const rosterById=new Map<string,any>(enriched.filter((r:any)=>r.employee_id).map((r:any):[string,any]=>[r.employee_id,r]));return {roster:enriched,directory,rosterById}}
 async function overviewOrderMetrics(service:any,ctx:any){
   const allowedIds=new Set<string>(ctx.rosterById.keys())
   const accounts=uniq([...allowedIds].flatMap(id=>ctx.directory.idToAccounts.get(id)||[])).map(lower)
@@ -207,7 +226,7 @@ async function errors(service:any,body:any,scope:ReportScope){
   const options={error_types:values('error_type'),qc_people:values('qc_person'),shifts:values('shift'),teams:values('team'),groups:values('group_name'),positions:values('position'),countries:values('country'),managers:uniq((optionRows||[]).flatMap((row:any)=>text(row.manager_search).split('|'))).sort(),platforms:values('platform')}
   return{updated_at:new Date().toISOString(),source:'supabase_error_rows_indexed',from:from||'',to:to||'',available_from:dates[0]||'',available_to:dates.at(-1)||'',total:Number(count||0),rows:rows||[],options,sync_state:await syncState(service)}
 }
-async function authorize(req:Request){
+async function authorize(req:Request,permissionCode:string){
   const auth=req.headers.get('Authorization')||''
   if(!auth.startsWith('Bearer '))throw new Error('UNAUTHORIZED')
   const client=createClient(Deno.env.get('SUPABASE_URL')||'',Deno.env.get('SUPABASE_ANON_KEY')||'',{global:{headers:{Authorization:auth}}})
@@ -220,7 +239,35 @@ async function authorize(req:Request){
   if(!access?.active||!access?.backend_enabled)throw new Error('FORBIDDEN')
   const {data:role,error:roleError}=await service.from('roles').select('code').eq('id',access.role_id).maybeSingle()
   if(roleError)throw new Error('PERMISSION_SERVICE_UNAVAILABLE')
-  if(role?.code!=='founder'&&!(await permissionAllowed(service,user.id,access.role_id,'report.view')))throw new Error('REPORT_VIEW_DENIED')
+  if(role?.code!=='founder'&&!(await permissionAllowed(service,user.id,access.role_id,permissionCode)))throw new Error('REPORT_VIEW_DENIED')
   return{service,scope:await resolveReportScope(service,user.id,access,text(role?.code))}
 }
-Deno.serve(async req=>{if(req.method==='OPTIONS')return new Response('ok',{headers:corsHeaders});if(req.method!=='POST')return json({error:'仅支持 POST 请求'},405);let action='overview';try{const {service,scope}=await authorize(req);const body=await req.json().catch(()=>({}));action=text(body.action)||'overview';if(action==='overview')return json(await overview(service,scope));if(action==='orders'||action==='efficiency')return json(await orders(service,body,scope));if(action==='errors')return json(await errors(service,body,scope));return json({error:'未知操作'},400)}catch(e){const msg=e instanceof Error?e.message:String(e);if(msg==='UNAUTHORIZED'||msg==='SESSION_NOT_CURRENT')return json({error:msg==='SESSION_NOT_CURRENT'?'此账号已在其他设备登录或会话已过期，请重新登录':'登录已失效，请重新登录'},401);if(msg==='FORBIDDEN')return json({error:'当前账号没有后台访问权限'},403);if(msg==='REPORT_VIEW_DENIED')return json({error:'当前账号没有统计报表查看权限'},403);if(['SESSION_SERVICE_UNAVAILABLE','ACCESS_SERVICE_UNAVAILABLE','PERMISSION_SERVICE_UNAVAILABLE','SCOPE_SERVICE_UNAVAILABLE'].includes(msg))return json({error:'权限或会话服务暂时不可用，请稍后重试'},503);console.error(`[admin-reports] action=${action}`,e);return json({error:msg||'统计数据读取失败'},500)}})
+Deno.serve(async req=>{
+  if(req.method==='OPTIONS')return new Response('ok',{headers:corsHeaders})
+  if(req.method!=='POST')return json({error:'仅支持 POST 请求'},405)
+  let action='overview'
+  try{
+    const body=await req.json().catch(()=>({}))
+    action=text(body.action)||'overview'
+    const permissionByAction:Record<string,string>={overview:'report.overview.view',people:'report.people.view',legacy_schedule:'report.legacy_schedule.view',platform:'report.platform.view',statistics_context:'report.statistics.view',orders:'report.statistics.view',efficiency:'report.statistics.view',errors:'report.errors.view'}
+    const required=permissionByAction[action]
+    if(!required)return json({error:'未知操作'},400)
+    const {service,scope}=await authorize(req,required)
+    if(action==='overview')return json(await overview(service,scope))
+    if(action==='people')return json(await rosterPage(service,scope,'people'))
+    if(action==='legacy_schedule')return json(await rosterPage(service,scope,'legacy_schedule'))
+    if(action==='platform')return json(await rosterPage(service,scope,'platform'))
+    if(action==='statistics_context')return json(await rosterPage(service,scope,'statistics_context'))
+    if(action==='orders'||action==='efficiency')return json(await orders(service,body,scope))
+    if(action==='errors')return json(await errors(service,body,scope))
+    return json({error:'未知操作'},400)
+  }catch(e){
+    const msg=e instanceof Error?e.message:String(e)
+    if(msg==='UNAUTHORIZED'||msg==='SESSION_NOT_CURRENT')return json({error:msg==='SESSION_NOT_CURRENT'?'此账号已在其他设备登录或会话已过期，请重新登录':'登录已失效，请重新登录'},401)
+    if(msg==='FORBIDDEN')return json({error:'当前账号没有后台访问权限'},403)
+    if(msg==='REPORT_VIEW_DENIED')return json({error:'当前账号没有当前报表页面权限'},403)
+    if(['SESSION_SERVICE_UNAVAILABLE','ACCESS_SERVICE_UNAVAILABLE','PERMISSION_SERVICE_UNAVAILABLE','SCOPE_SERVICE_UNAVAILABLE'].includes(msg))return json({error:'权限或会话服务暂时不可用，请稍后重试'},503)
+    console.error(`[admin-reports] action=${action}`,e)
+    return json({error:msg||'统计数据读取失败'},500)
+  }
+})

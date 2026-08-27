@@ -44,10 +44,11 @@ export default function AdminTrainingPage(){
   const requestedRouteTab=params.get('tab')
   const requestedTab=canonicalAdminTab('/admin/training',requestedRouteTab)
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
-    if(!access.hasPermission(PERMISSIONS.EXAM_VIEW))return false
-    if(value==='题库')return access.hasPermission(PERMISSIONS.EXAM_MANAGE)
-    if(value==='人工批改')return access.hasPermission(PERMISSIONS.EXAM_GRADE)
-    return true
+    if(value==='考试概览')return access.hasPermission(PERMISSIONS.EXAM_OVERVIEW_VIEW)
+    if(value==='考试记录')return access.hasPermission(PERMISSIONS.EXAM_RECORDS_VIEW)
+    if(value==='题库')return access.hasPermission(PERMISSIONS.EXAM_QUESTION_BANK_VIEW)
+    if(value==='人工批改')return access.hasPermission(PERMISSIONS.EXAM_GRADING_VIEW)
+    return false
   })
   const tab=access.loading?(TABS.includes(requestedTab)?requestedTab:TABS[0]):(visibleTabs.includes(requestedTab)?requestedTab:(visibleTabs[0]||''))
   const [draft,setDraft]=useState({search:'',team:'',position:''})
@@ -70,15 +71,19 @@ export default function AdminTrainingPage(){
   const [employeeDetail,setEmployeeDetail]=useState(null)
   const [employeeDetailLoading,setEmployeeDetailLoading]=useState(false)
   const [deleteSession,setDeleteSession]=useState(null)
-  const canDeleteSessions=access.hasAllPermissions([PERMISSIONS.EXAM_VIEW,PERMISSIONS.EXAM_DELETE])
-  const canGrade=access.hasAllPermissions([PERMISSIONS.EXAM_VIEW,PERMISSIONS.EXAM_GRADE])
+  const canDeleteSessions=access.hasPermission(PERMISSIONS.EXAM_RECORDS_DELETE)
+  const canGrade=access.hasPermission(PERMISSIONS.EXAM_GRADING_GRADE)
+  const canManageQuestions=access.hasPermission(PERMISSIONS.EXAM_QUESTION_BANK_MANAGE)
+  const canDeleteQuestions=access.hasPermission(PERMISSIONS.EXAM_QUESTION_BANK_DELETE)
+  const canViewEmployeeDirectory=access.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)
 
   const load=async()=>{
     setLoading(true);setError('')
+    const questionBank=tab==='题库'
     const [dashboard,analytics,legacy]=await Promise.all([
-      supabase.rpc('admin_exam_dashboard',{p_search:filters.search,p_team:filters.team,p_position:filters.position,p_page:page,p_page_size:pageSize}),
-      supabase.rpc('admin_exam_analytics_v3'),
-      supabase.rpc('admin_legacy_exam_overview')
+      supabase.rpc(questionBank?'admin_exam_question_bank_dashboard':'admin_exam_overview_dashboard',{p_search:filters.search,p_team:filters.team,p_position:filters.position,p_page:page,p_page_size:pageSize}),
+      questionBank?Promise.resolve({data:{},error:null}):supabase.rpc('admin_exam_overview_analytics'),
+      questionBank?Promise.resolve({data:{},error:null}):supabase.rpc('admin_exam_overview_legacy')
     ])
     if(dashboard.error||analytics.error||legacy.error)setError(message(dashboard.error||analytics.error||legacy.error)); else {
       const current=dashboard.data||{},old=legacy.data||{},currentCounts=current.counts||{},oldCounts=old.counts||{}
@@ -87,12 +92,12 @@ export default function AdminTrainingPage(){
     }
     setLoading(false)
   }
-  useEffect(()=>{if(!access.loading&&access.hasPermission(PERMISSIONS.EXAM_VIEW))load()},[access.loading,access.founder,access.permissionKey,filters,page,pageSize])
+  useEffect(()=>{if(!access.loading&&['考试概览','题库'].includes(tab))load()},[access.loading,access.founder,access.permissionKey,tab,filters,page,pageSize])
   const loadSessions=async()=>{
     if(access.loading||!['考试记录','人工批改'].includes(tab))return
     setSessionLoading(true);setError('')
     const forcedStatus=tab==='人工批改'?'pending':sessionFilters.status
-    const {data:result,error:e}=await supabase.rpc('admin_exam_sessions_search_v3',{p_employee_no:sessionFilters.employeeNo,p_employee_name:sessionFilters.employeeName,p_exam:sessionFilters.exam,p_team:sessionFilters.team,p_position:sessionFilters.position,p_status:forcedStatus,p_grader:sessionFilters.grader,p_source:sessionFilters.source,p_date_from:sessionFilters.dateFrom||null,p_date_to:sessionFilters.dateTo||null,p_page:sessionPage,p_page_size:sessionPageSize})
+    const {data:result,error:e}=await supabase.rpc(tab==='人工批改'?'admin_exam_grading_search':'admin_exam_records_search',{p_employee_no:sessionFilters.employeeNo,p_employee_name:sessionFilters.employeeName,p_exam:sessionFilters.exam,p_team:sessionFilters.team,p_position:sessionFilters.position,p_status:forcedStatus,p_grader:sessionFilters.grader,p_source:sessionFilters.source,p_date_from:sessionFilters.dateFrom||null,p_date_to:sessionFilters.dateTo||null,p_page:sessionPage,p_page_size:sessionPageSize})
     if(e)setError(message(e));else setSessionData(result||{rows:[],total:0})
     setSessionLoading(false)
   }
@@ -120,7 +125,7 @@ export default function AdminTrainingPage(){
     setTab('考试记录');setSessionDraft(next);setSessionFilters(next);setSessionPage(1)
   }
   const openEmployee=async s=>{
-    if(!s.employee_id)return
+    if(!canViewEmployeeDirectory||!s.employee_id)return
     setEmployeeDetail({employee:{id:s.employee_id,employee_no:s.employee_no,full_name:s.employee_name},missing_fields:[]})
     setEmployeeDetailLoading(true);setError('')
     const {data:detail,error:e}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:s.employee_id}})
@@ -133,9 +138,10 @@ export default function AdminTrainingPage(){
   const legacySyncLabel=legacySourcePaused?'旧考试 · 历史已保留（源暂停）':'旧考试 · 已存本库'
   const pageChrome=adminLocalPageTabs('/admin/training',visibleTabs,tab)
   const sectionTitle=pageChrome.active.sectionLabel||'考试管理'
+  const refresh=()=>['考试记录','人工批改'].includes(tab)?loadSessions():load()
 
   return <div className="exam-page">
-    <header className="exam-head"><div><small>ATTENDANCE · EXAMS · REWARDS</small><h1>{sectionTitle}</h1><p>{pageChrome.active.itemLabel||tab}</p></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {data?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${legacySourcePaused?'':'success'}`} title={legacySync.last_success_at?`最后同步：${fmt(legacySync.last_success_at)}`:''}>{legacySyncLabel}</span><button onClick={load}>刷新</button></div></header>
+    <header className="exam-head"><div><small>ATTENDANCE · EXAMS · REWARDS</small><h1>{sectionTitle}</h1><p>{pageChrome.active.itemLabel||tab}</p></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {data?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${legacySourcePaused?'':'success'}`} title={legacySync.last_success_at?`最后同步：${fmt(legacySync.last_success_at)}`:''}>{legacySyncLabel}</span><button onClick={refresh}>刷新</button></div></header>
     {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <AdminModuleNav />
 
@@ -147,18 +153,18 @@ export default function AdminTrainingPage(){
     )}
     {tab==='题库'&&<>
       <FilterBar draft={draft} setDraft={setDraft} data={data} onApply={apply} onReset={reset}/>
-      <section className="exam-panel"><div className="exam-section-title"><div><h2>考试题库</h2></div><button className="primary" onClick={()=>setQuestion({...blankQuestion,team_name:draft.team,position_name:draft.position})}>＋ 新增题目</button></div>
-      <QuestionTable data={data} loading={loading} page={page} setPage={setPage} pageSize={pageSize} setPageSize={x=>{setPage(1);setPageSize(x)}} onView={setQuestionView} onEdit={setQuestion} onChanged={load} setError={setError}/></section>
+      <section className="exam-panel"><div className="exam-section-title"><div><h2>考试题库</h2></div>{canManageQuestions&&<button className="primary" onClick={()=>setQuestion({...blankQuestion,team_name:draft.team,position_name:draft.position})}>＋ 新增题目</button>}</div>
+      <QuestionTable data={data} loading={loading} page={page} setPage={setPage} pageSize={pageSize} setPageSize={x=>{setPage(1);setPageSize(x)}} onView={setQuestionView} onEdit={canManageQuestions?setQuestion:null} canDelete={canDeleteQuestions} onChanged={load} setError={setError}/></section>
     </>}
-    {['考试记录','人工批改'].includes(tab)&&<SessionFilterBar draft={sessionDraft} setDraft={setSessionDraft} data={data} tab={tab} onApply={applySessions} onReset={resetSessions}/>}
-    {tab==='考试记录'&&<Sessions rows={sessionData.rows||[]} total={sessionData.total||0} page={sessionPage} pageSize={sessionPageSize} setPage={setSessionPage} setPageSize={x=>{setSessionPage(1);setSessionPageSize(x)}} loading={sessionLoading} onEmployee={showEmployeeRecords} onEmployeeArchive={openEmployee} onOpen={open=>setGrading({session:open,detail:null})} canDelete={canDeleteSessions} onDelete={setDeleteSession}/>}
-    {tab==='人工批改'&&<Sessions rows={sessionData.rows||[]} total={sessionData.total||0} page={sessionPage} pageSize={sessionPageSize} setPage={setSessionPage} setPageSize={x=>{setSessionPage(1);setSessionPageSize(x)}} loading={sessionLoading} onEmployee={showEmployeeRecords} onEmployeeArchive={openEmployee} onOpen={open=>setGrading({session:open,detail:null})} grading/>}
+    {['考试记录','人工批改'].includes(tab)&&<SessionFilterBar draft={sessionDraft} setDraft={setSessionDraft} data={sessionData} tab={tab} onApply={applySessions} onReset={resetSessions}/>}
+    {tab==='考试记录'&&<Sessions rows={sessionData.rows||[]} total={sessionData.total||0} page={sessionPage} pageSize={sessionPageSize} setPage={setSessionPage} setPageSize={x=>{setSessionPage(1);setSessionPageSize(x)}} loading={sessionLoading} onEmployee={showEmployeeRecords} onEmployeeArchive={canViewEmployeeDirectory?openEmployee:null} onOpen={open=>setGrading({session:open,detail:null})} canDelete={canDeleteSessions} onDelete={setDeleteSession}/>}
+    {tab==='人工批改'&&<Sessions rows={sessionData.rows||[]} total={sessionData.total||0} page={sessionPage} pageSize={sessionPageSize} setPage={setSessionPage} setPageSize={x=>{setSessionPage(1);setSessionPageSize(x)}} loading={sessionLoading} onEmployee={showEmployeeRecords} onEmployeeArchive={canViewEmployeeDirectory?openEmployee:null} onOpen={open=>setGrading({session:open,detail:null})} grading/>}
     {question&&<QuestionModal value={question} series={data?.series||[]} teams={data?.teams||[]} positions={data?.positions||[]} onClose={()=>setQuestion(null)} onSaved={()=>{setQuestion(null);load()}}/>}
-    {questionView&&<QuestionView value={questionView} onClose={()=>setQuestionView(null)} onEdit={()=>{setQuestion(questionView);setQuestionView(null)}}/>}
+    {questionView&&<QuestionView value={questionView} onClose={()=>setQuestionView(null)} onEdit={canManageQuestions?()=>{setQuestion(questionView);setQuestionView(null)}:null}/>}
     {grading&&(
-      <GradeModal session={grading.session} forceReadOnly={!canGrade} onClose={()=>setGrading(null)} onChanged={()=>{load();loadSessions()}}/>
+      <GradeModal session={grading.session} permissionPage={tab==='人工批改'?'grading':'records'} forceReadOnly={!canGrade} onClose={()=>setGrading(null)} onChanged={loadSessions}/>
     )}
-    {deleteSession&&<DeleteSessionModal session={deleteSession} onClose={()=>setDeleteSession(null)} onDeleted={async()=>{setDeleteSession(null);await Promise.all([load(),loadSessions()])}}/>}
+    {deleteSession&&<DeleteSessionModal session={deleteSession} onClose={()=>setDeleteSession(null)} onDeleted={async()=>{setDeleteSession(null);await loadSessions()}}/>}
     {employeeDetail&&<EmployeeDrawer detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>setEmployeeDetail(null)}/>}
   </div>
 }
@@ -217,10 +223,10 @@ function SessionFilterBar({draft,setDraft,data,tab,onApply,onReset}){
   return <section className="exam-session-filter compact"><label><span>员工ID</span><input value={draft.employeeNo} onChange={e=>setDraft({...draft,employeeNo:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="输入员工ID"/></label><label><span>姓名</span><input value={draft.employeeName} onChange={e=>setDraft({...draft,employeeName:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="输入姓名"/></label><label className="wide"><span>考试名称</span><input value={draft.exam} onChange={e=>setDraft({...draft,exam:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="输入考试名称"/></label><label><span>记录来源</span><select value={draft.source} onChange={e=>setDraft({...draft,source:e.target.value})}><option value="">全部来源</option><option value="current">本系统</option><option value="legacy">旧考试</option></select></label><label><span>团队</span><select value={draft.team} onChange={e=>setDraft({...draft,team:e.target.value})}><option value="">全部团队</option>{(data?.teams||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>岗位</span><select value={draft.position} onChange={e=>setDraft({...draft,position:e.target.value})}><option value="">全部岗位</option>{(data?.positions||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>评分人</span><input value={draft.grader} onChange={e=>setDraft({...draft,grader:e.target.value})} placeholder="用户名 / 邮箱"/></label><label><span>状态</span>{fixedStatus?<input value={fixedStatus} disabled/>:<select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option value="">全部状态</option><option value="in_progress">答题中</option><option value="pending">待批改</option><option value="graded">已完成</option><option value="expired">已过期</option></select>}</label><label><span>完成日期起</span><input type="date" value={draft.dateFrom} onChange={e=>setDraft({...draft,dateFrom:e.target.value})}/></label><label><span>完成日期止</span><input type="date" value={draft.dateTo} onChange={e=>setDraft({...draft,dateTo:e.target.value})}/></label><div className="exam-filter-actions"><button className="primary" onClick={onApply}>查询</button><button onClick={onReset}>重置</button></div></section>
 }
 
-function QuestionTable({data,loading,page,setPage,pageSize,setPageSize,onView,onEdit,onChanged,setError}){
+function QuestionTable({data,loading,page,setPage,pageSize,setPageSize,onView,onEdit,canDelete=false,onChanged,setError}){
   const rows=data?.questions||[],pages=Math.max(1,Math.ceil((data?.total||0)/(data?.page_size||pageSize)))
   const deleteQuestion=async q=>{if(!confirm(`确认删除题目 ${q.external_key}？\n历史考试仍会保留题目快照，Google 表格将在双向同步接通后删除对应行。`))return;const {error}=await supabase.rpc('admin_exam_delete_question',{p_question_id:q.id});if(error)return setError(message(error));onChanged()}
-  return <>{loading?<div className="exam-empty">正在读取题库…</div>:!rows.length?<div className="exam-empty">没有符合条件的题目</div>:<div className="exam-table-wrap exam-question-wrap"><table className="exam-table exam-question-table"><thead><tr><th>题目ID</th><th>题库范围</th><th>三语题干</th><th>规格</th><th>同步</th><th>操作</th></tr></thead><tbody>{rows.map(q=><tr key={q.id}><td><button className="exam-id-link" onClick={()=>onView(q)}>{q.external_key}</button></td><td className="exam-question-scope"><strong title={q.team_name}>{q.team_name||'—'}</strong><span title={q.position_name}>{q.position_name||'—'}</span>{q.series_name&&<small title={q.series_name}>{q.series_name}</small>}</td><QuestionSummaryCell question={q} onOpen={()=>onView(q)}/><td className="exam-question-spec"><b>{q.points} 分</b><span>难度 {q.difficulty}</span>{(q.image_urls?.length||0)>0&&<small>{q.image_urls.length} 张图</small>}</td><td><span className={`sync-${q.sync_status}`}>{q.sync_status==='synced'?'已同步':'待回写'}</span></td><td><div className="exam-row-actions"><button onClick={()=>onEdit(q)}>编辑</button><button className="danger" onClick={()=>deleteQuestion(q)}>删除</button></div></td></tr>)}</tbody></table></div>}<ExamPagination page={page} pages={pages} total={data?.total||0} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize} noun="题"/></>
+  return <>{loading?<div className="exam-empty">正在读取题库…</div>:!rows.length?<div className="exam-empty">没有符合条件的题目</div>:<div className="exam-table-wrap exam-question-wrap"><table className="exam-table exam-question-table"><thead><tr><th>题目ID</th><th>题库范围</th><th>三语题干</th><th>规格</th><th>同步</th><th>操作</th></tr></thead><tbody>{rows.map(q=><tr key={q.id}><td><button className="exam-id-link" onClick={()=>onView(q)}>{q.external_key}</button></td><td className="exam-question-scope"><strong title={q.team_name}>{q.team_name||'—'}</strong><span title={q.position_name}>{q.position_name||'—'}</span>{q.series_name&&<small title={q.series_name}>{q.series_name}</small>}</td><QuestionSummaryCell question={q} onOpen={()=>onView(q)}/><td className="exam-question-spec"><b>{q.points} 分</b><span>难度 {q.difficulty}</span>{(q.image_urls?.length||0)>0&&<small>{q.image_urls.length} 张图</small>}</td><td><span className={`sync-${q.sync_status}`}>{q.sync_status==='synced'?'已同步':'待回写'}</span></td><td><div className="exam-row-actions">{onEdit&&<button onClick={()=>onEdit(q)}>编辑</button>}{canDelete&&<button className="danger" onClick={()=>deleteQuestion(q)}>删除</button>}</div></td></tr>)}</tbody></table></div>}<ExamPagination page={page} pages={pages} total={data?.total||0} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize} noun="题"/></>
 }
 
 const pageNumbers=(page,pages)=>{if(pages<=7)return Array.from({length:pages},(_,i)=>i+1);const out=[1],start=Math.max(2,page-1),end=Math.min(pages-1,page+1);if(start>2)out.push('…');for(let i=start;i<=end;i++)out.push(i);if(end<pages-1)out.push('…');out.push(pages);return out}
@@ -237,7 +243,7 @@ function ExamPagination({page,pages,total,pageSize,loading,onPage,onPageSize,nou
   return <div className="table-pagination professional-pagination exam-compact-pagination"><div className="pagination-summary"><strong>共 {total} {noun}</strong><span>{from}–{to}</span></div><div className="pagination-main"><label className="pagination-size-control"><select value={pageSize} onChange={e=>{onPage(1);onPageSize(Number(e.target.value))}}>{[20,30,50,100].map(n=><option key={n} value={n}>{n} 条 / 页</option>)}</select></label><button disabled={page<=1||loading} onClick={()=>go(1)}>首页</button><button disabled={page<=1||loading} onClick={()=>go(page-1)}>上一页</button><div className="pagination-number-list">{pageNumbers(page,pages).map((n,i)=>n==='…'?<span key={`dots-${i}`} className="pager-dots">…</span>:<button key={n} className={n===page?'active':''} disabled={loading} onClick={()=>go(n)}>{n}</button>)}</div><button disabled={page>=pages||loading} onClick={()=>go(page+1)}>下一页</button><button disabled={page>=pages||loading} onClick={()=>go(pages)}>尾页</button><span className="pagination-page-count">共 {pages} 页</span><label className="pagination-jump">前往<input value={jump} inputMode="numeric" onChange={e=>setJump(e.target.value.replace(/\D/g,''))} onKeyDown={e=>{if(e.key==='Enter'&&jump)go(jump)}}/>页<button type="button" disabled={!jump||loading} onClick={()=>go(jump)}>确定</button></label></div></div>
 }
 
-function QuestionView({value,onClose,onEdit}){return <Modal title={`${value.external_key} · 三语题目`} onClose={onClose} wide><div className="question-detail"><div className="question-detail-meta"><span>盘口 <b>{value.series_name}</b></span><span>团队 <b>{value.team_name}</b></span><span>岗位 <b>{value.position_name}</b></span><span>分数 <b>{value.points}</b></span><span>难度 <b>{value.difficulty}</b></span></div><LanguageBlock tag="EN" title="英文" text={value.question_en}/><LanguageBlock tag="中" title="中文" text={value.question_zh}/><LanguageBlock tag="VI" title="越南文" text={value.question_vi}/><ExamImageGallery urls={value.image_urls} className="detail"/></div><footer><button onClick={onClose}>关闭</button><button className="primary" onClick={onEdit}>编辑题目</button></footer></Modal>}
+function QuestionView({value,onClose,onEdit}){return <Modal title={`${value.external_key} · 三语题目`} onClose={onClose} wide><div className="question-detail"><div className="question-detail-meta"><span>盘口 <b>{value.series_name}</b></span><span>团队 <b>{value.team_name}</b></span><span>岗位 <b>{value.position_name}</b></span><span>分数 <b>{value.points}</b></span><span>难度 <b>{value.difficulty}</b></span></div><LanguageBlock tag="EN" title="英文" text={value.question_en}/><LanguageBlock tag="中" title="中文" text={value.question_zh}/><LanguageBlock tag="VI" title="越南文" text={value.question_vi}/><ExamImageGallery urls={value.image_urls} className="detail"/></div><footer><button onClick={onClose}>关闭</button>{onEdit&&<button className="primary" onClick={onEdit}>编辑题目</button>}</footer></Modal>}
 function LanguageBlock({tag,title,text}){return <section className="question-language-block"><span>{tag}</span><div><b>{title}</b><p>{text||'未填写'}</p></div></section>}
 
 function Assignments({data,onNew,onEdit,onPreview,onChanged,setError}){
@@ -248,7 +254,7 @@ function Assignments({data,onNew,onEdit,onPreview,onChanged,setError}){
 function Sessions({rows,onOpen,onEmployee,onEmployeeArchive,onDelete,canDelete=false,compact=false,grading=false,loading=false,total=0,page=1,pageSize=30,setPage,setPageSize}){
   if(compact)return rows.length?<>{rows.map(s=><button className="exam-line exam-recent-line" key={`${s.source_system||'current'}-${s.id}`} onClick={()=>onEmployee?.(s)}><div><strong>{s.employee_name} · {s.title} {s.source_system==='legacy'&&<em className="exam-source-badge legacy">旧考试</em>}</strong><small>第 {s.attempt_no} 次 · {fmt(s.submitted_at||s.started_at)}</small><small className="exam-recent-result">{s.status==='graded'?`${score(s.earned_score)}/${score(s.total_score)} · ${breakdown(s)}`:statusText(s.status)}</small></div><span>{s.status==='graded'?(s.passed?'通过':'未通过'):statusText(s.status)}</span></button>)}</>:<div className="exam-empty compact">暂时没有考试记录</div>
   const pages=Math.max(1,Math.ceil(total/pageSize))
-  return <section className="exam-panel"><div className="exam-section-title"><div><h2>{grading?'待人工批改':'员工考试记录与成绩'}</h2><p>本系统与旧考试统一查询；旧考试为只读记录。</p></div><span className="exam-total-pill">共 {total} 条</span></div>{loading?<div className="exam-empty">正在查询考试记录…</div>:!rows.length?<div className="exam-empty">{grading?'当前没有待批改考试':'没有符合条件的考试记录'}</div>:<div className="exam-table-wrap exam-session-wrap"><table className="exam-table exam-session-table"><thead><tr><th>来源</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>考试</th><th>次数</th><th>开始作答时间</th><th>完成作答时间</th><th>评分完成时间</th><th>得分</th><th>答题结果</th><th>评分人</th><th>状态</th><th>操作</th></tr></thead><tbody>{rows.map(s=><tr key={`${s.source_system||'current'}-${s.id}`}><td><span className={`exam-source-badge ${s.source_system==='legacy'?'legacy':'current'}`}>{s.source_label||'本系统'}</span></td><td>{s.employee_id?<button className="exam-record-id" onClick={()=>onEmployeeArchive?.(s)}>{s.employee_no}</button>:<span>{s.employee_no}</span>}</td><td><CompactRecordName session={s} onFilter={onEmployee}/></td><td>{s.team_name||'—'}<br/><small>{s.position_name||'—'}</small></td><td className="exam-record-title" title={s.title}>{s.title}</td><td><b>第 {s.attempt_no} 次</b></td><td>{fmt(s.started_at)}</td><td>{fmt(s.submitted_at)}</td><td>{fmt(s.graded_at)}</td><td><b>{s.percentage==null?'—':`${score(s.earned_score)}/${score(s.total_score)}`}</b>{s.percentage!=null&&<small className="exam-record-percent">{score(s.percentage)}%</small>}</td><td><span className={`exam-record-breakdown ${s.answer_detail_available?'has-detail':'summary-only'}`}>{breakdown(s)}</span></td><td>{s.grader_name||'—'}</td><td><span className={`result-chip ${s.status==='graded'?(s.passed?'pass':'fail'):'pending'}`}>{statusText(s.status)}</span></td><td><div className="exam-row-actions">{onOpen&&<button onClick={()=>onOpen(s)}>{s.read_only?'查看详情':grading?'开始批改':'查看答卷'}</button>}{canDelete&&s.source_system!=='legacy'&&!s.read_only&&<button className="danger" onClick={()=>onDelete?.(s)}>删除本系统记录</button>}</div></td></tr>)}</tbody></table></div>}{setPage&&<ExamPagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize}/>}</section>
+  return <section className="exam-panel"><div className="exam-section-title"><div><h2>{grading?'待人工批改':'员工考试记录与成绩'}</h2><p>本系统与旧考试统一查询；旧考试为只读记录。</p></div><span className="exam-total-pill">共 {total} 条</span></div>{loading?<div className="exam-empty">正在查询考试记录…</div>:!rows.length?<div className="exam-empty">{grading?'当前没有待批改考试':'没有符合条件的考试记录'}</div>:<div className="exam-table-wrap exam-session-wrap"><table className="exam-table exam-session-table"><thead><tr><th>来源</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>考试</th><th>次数</th><th>开始作答时间</th><th>完成作答时间</th><th>评分完成时间</th><th>得分</th><th>答题结果</th><th>评分人</th><th>状态</th><th>操作</th></tr></thead><tbody>{rows.map(s=><tr key={`${s.source_system||'current'}-${s.id}`}><td><span className={`exam-source-badge ${s.source_system==='legacy'?'legacy':'current'}`}>{s.source_label||'本系统'}</span></td><td>{s.employee_id&&onEmployeeArchive?<button className="exam-record-id" onClick={()=>onEmployeeArchive(s)}>{s.employee_no}</button>:<span>{s.employee_no}</span>}</td><td><CompactRecordName session={s} onFilter={onEmployee}/></td><td>{s.team_name||'—'}<br/><small>{s.position_name||'—'}</small></td><td className="exam-record-title" title={s.title}>{s.title}</td><td><b>第 {s.attempt_no} 次</b></td><td>{fmt(s.started_at)}</td><td>{fmt(s.submitted_at)}</td><td>{fmt(s.graded_at)}</td><td><b>{s.percentage==null?'—':`${score(s.earned_score)}/${score(s.total_score)}`}</b>{s.percentage!=null&&<small className="exam-record-percent">{score(s.percentage)}%</small>}</td><td><span className={`exam-record-breakdown ${s.answer_detail_available?'has-detail':'summary-only'}`}>{breakdown(s)}</span></td><td>{s.grader_name||'—'}</td><td><span className={`result-chip ${s.status==='graded'?(s.passed?'pass':'fail'):'pending'}`}>{statusText(s.status)}</span></td><td><div className="exam-row-actions">{onOpen&&<button onClick={()=>onOpen(s)}>{s.read_only?'查看详情':grading?'开始批改':'查看答卷'}</button>}{canDelete&&s.source_system!=='legacy'&&!s.read_only&&<button className="danger" onClick={()=>onDelete?.(s)}>删除本系统记录</button>}</div></td></tr>)}</tbody></table></div>}{setPage&&<ExamPagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize}/>}</section>
 }
 
 function CompactRecordName({session,onFilter}){
@@ -300,11 +306,11 @@ function EmployeeExamHistory({employee,onClose,onOpen}){
   </Modal>
 }
 
-function GradeModal({session,forceReadOnly=false,onClose,onChanged}){
+function GradeModal({session,forceReadOnly=false,permissionPage='records',onClose,onChanged}){
   const [detail,setDetail]=useState(null),[error,setError]=useState(''),[drafts,setDrafts]=useState({}),[busy,setBusy]=useState('')
   const sourceReadOnly=session.source_system==='legacy'||session.read_only
   const readOnly=sourceReadOnly||forceReadOnly
-  const load=async()=>{const rpc=sourceReadOnly?'admin_legacy_exam_session_detail':'admin_exam_session_detail';const {data,error:e}=await supabase.rpc(rpc,{p_session_id:session.id});if(e)setError(message(e));else{setDetail(data);setDrafts(Object.fromEntries((data?.answers||[]).map(a=>[a.answer_id,{score:a.awarded_score??'',feedback:a.grader_feedback||''}])))} }
+  const load=async()=>{const prefix=permissionPage==='grading'?'admin_exam_grading':'admin_exam_records';const rpc=sourceReadOnly?`${prefix}_legacy_detail`:`${prefix}_session_detail`;const {data,error:e}=await supabase.rpc(rpc,{p_session_id:session.id});if(e)setError(message(e));else{setDetail(data);setDrafts(Object.fromEntries((data?.answers||[]).map(a=>[a.answer_id,{score:a.awarded_score??'',feedback:a.grader_feedback||''}])))} }
   useEffect(()=>{load()},[])
   const grade=async(a,status,score)=>{setBusy(a.answer_id);const feedback=drafts[a.answer_id]?.feedback||'';const {error:e}=await supabase.rpc('admin_exam_grade_answer',{p_answer_id:a.answer_id,p_status:status,p_score:score,p_feedback:feedback});setBusy('');if(e)return setError(message(e));await load();onChanged()}
   const s=detail?.session||session,answers=detail?.answers||[]

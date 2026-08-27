@@ -67,7 +67,11 @@ async function authorize(req: Request) {
     .eq('auth_user_id', userId)
     .maybeSingle()
   if (accessError || !access?.active || !access?.backend_enabled) throw new Error('FORBIDDEN')
-  if (!(await permissionAllowed(service, access, userId, 'employee.view'))) throw new Error('FORBIDDEN')
+  const allowed = await Promise.all([
+    'employee.directory.view',
+    'employee.analytics.view',
+  ].map(code => permissionAllowed(service, access, userId, code)))
+  if (!allowed.some(Boolean)) throw new Error('FORBIDDEN')
 
   const { data: role } = await service.from('roles').select('code').eq('id', access.role_id).maybeSingle()
   return { service, userId, access, roleCode: role?.code || '' }

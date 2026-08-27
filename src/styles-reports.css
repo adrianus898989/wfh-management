@@ -87,3 +87,30 @@
   .reports-page .rp-filter-actions{width:100%;flex-wrap:wrap}
   .reports-page .rp-filter-actions>button{flex:1}
 }
+
+/* Error statistics: give the descriptive field room and keep utility columns compact. */
+.reports-page .rp-errors-table[data-native-errors-v2723]{min-width:1626px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(1){width:64px!important;min-width:64px!important;max-width:64px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(2){width:104px!important;min-width:104px!important;max-width:104px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(3){width:150px!important;min-width:150px!important;max-width:150px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(4){width:58px!important;min-width:58px!important;max-width:58px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(5){width:112px!important;min-width:112px!important;max-width:112px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(6){width:108px!important;min-width:108px!important;max-width:108px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(7){width:84px!important;min-width:84px!important;max-width:84px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(8){width:280px!important;min-width:280px!important;max-width:280px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(9){width:52px!important;min-width:52px!important;max-width:52px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(10){width:96px!important;min-width:96px!important;max-width:96px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(11){width:118px!important;min-width:118px!important;max-width:118px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(12){width:104px!important;min-width:104px!important;max-width:104px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(13){width:94px!important;min-width:94px!important;max-width:94px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(14){width:118px!important;min-width:118px!important;max-width:118px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] :is(th,td):nth-child(15){width:86px!important;min-width:86px!important;max-width:86px!important}
+.reports-page .rp-errors-table[data-native-errors-v2723] td:nth-child(8),
+.reports-page .rp-errors-table[data-native-errors-v2723] td:nth-child(8) .rp-cell-clamp{
+  overflow:visible!important;
+  text-overflow:clip!important;
+  white-space:normal!important;
+  overflow-wrap:anywhere!important;
+  word-break:break-word!important;
+  line-height:1.45!important;
+}

@@ -1,7 +1,25 @@
 import { adminNavigation, adminTabSlug, canonicalAdminTab } from './navigation.js'
-import { PERMISSIONS } from './permissions.js'
+import { adminPagePermissionCodes } from './adminPagePermissions.js'
 
 const unique = values => [...new Set(values.filter(Boolean))]
+
+// These codes remain stored as private implementation dependencies while the
+// corresponding RPCs are migrated. They are synchronized by admin-accounts
+// and must not reappear as confusing global checkboxes in the page editor.
+const LEGACY_IMPLEMENTATION_CODES = new Set([
+  'employee.view','employee.resign','employee.reactivate','audit.view',
+  'schedule.view','attendance.view','attendance.edit','leave.approve',
+  'report.view','report.edit','export.general',
+  'online_training.view','online_training.submit','online_training.review','online_training.manage',
+  'exam.view','exam.manage','exam.grade','exam.delete',
+  'adjustment.view','adjustment.create','adjustment.approve','adjustment.page.approve',
+  'daily_work.submit','daily_work.manage',
+  'payroll.view','payroll.edit','payroll.approve','payroll.publish','payroll.export','payroll.rule.edit','payroll.payout_change.view','payroll.payout_change.review',
+  'user.view','account.view','account.mfa_reset',
+  // Global role mutation is Founder-only and must never appear as a
+  // delegable checkbox in the supplemental bucket.
+  'role.manage',
+])
 
 const targetKey = to => {
   const url = new URL(to, 'https://wfh.local')
@@ -11,81 +29,10 @@ const targetKey = to => {
   return `${url.pathname}?tab=${adminTabSlug(url.pathname, canonicalTab)}`
 }
 
-const pageKey = (pathname, canonicalTab) =>
-  `${pathname}?tab=${adminTabSlug(pathname, canonicalTab)}`
-
 const permissionCodesFromAccess = item => unique([
   ...(item.allPermissions || []),
   ...(item.permissions || []),
 ])
-
-// The sidebar access object defines the minimum permission required to enter a
-// page. These additions expose the page's available write actions in the role
-// editor without changing any route guard or database authorization rule.
-const PAGE_ACTION_CODES = {
-  '/admin/employees': [
-    PERMISSIONS.EMPLOYEE_CREATE,
-    PERMISSIONS.EMPLOYEE_EDIT,
-    PERMISSIONS.EMPLOYEE_RESIGN,
-    PERMISSIONS.EMPLOYEE_REACTIVATE,
-    PERMISSIONS.EMPLOYEE_DELETE,
-    PERMISSIONS.EMPLOYEE_COMPENSATION_EDIT,
-    PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW,
-    PERMISSIONS.SENSITIVE_EMPLOYEE_EDIT,
-  ],
-  [pageKey('/admin/employees', '人员分析')]: [PERMISSIONS.TEAM_VIEW, PERMISSIONS.TEAM_EDIT],
-  [pageKey('/admin/employees', '离职记录')]: [
-    PERMISSIONS.EMPLOYEE_RESIGN,
-    PERMISSIONS.EMPLOYEE_REACTIVATE,
-  ],
-  [pageKey('/admin/employees', '停电 / 断网记录')]: [
-    PERMISSIONS.CONNECTIVITY_CREATE,
-    PERMISSIONS.CONNECTIVITY_EDIT,
-    PERMISSIONS.CONNECTIVITY_DELETE,
-  ],
-  '/admin/reports': [PERMISSIONS.EXPORT_GENERAL],
-  [pageKey('/admin/reports', '人员')]: [PERMISSIONS.EXPORT_GENERAL],
-  [pageKey('/admin/reports', '盘口人数')]: [PERMISSIONS.EXPORT_GENERAL],
-  [pageKey('/admin/reports', '错误统计')]: [PERMISSIONS.REPORT_EDIT, PERMISSIONS.EXPORT_GENERAL],
-  '/admin/schedule': [PERMISSIONS.SCHEDULE_EDIT],
-  [pageKey('/admin/schedule', '出勤表')]: [PERMISSIONS.ATTENDANCE_EDIT, PERMISSIONS.EXPORT_GENERAL],
-  [pageKey('/admin/schedule', '考勤记录')]: [PERMISSIONS.ATTENDANCE_EDIT, PERMISSIONS.EXPORT_GENERAL],
-  [pageKey('/admin/schedule', '请假审批')]: [PERMISSIONS.ATTENDANCE_EDIT],
-  [pageKey('/admin/schedule', '奖金 / 扣款')]: [
-    PERMISSIONS.ADJUSTMENT_CREATE,
-    PERMISSIONS.ADJUSTMENT_APPROVE,
-    PERMISSIONS.EXPORT_GENERAL,
-  ],
-  '/admin/training': [PERMISSIONS.EXPORT_GENERAL],
-  [pageKey('/admin/training', '考试记录')]: [PERMISSIONS.EXAM_DELETE, PERMISSIONS.EXPORT_GENERAL],
-  [pageKey('/admin/training', '题库')]: [PERMISSIONS.EXAM_DELETE],
-  '/admin/work-execution': [PERMISSIONS.REPORT_EDIT],
-  [pageKey('/admin/work-execution', 'daily-inspection')]: [PERMISSIONS.REPORT_EDIT],
-  [pageKey('/admin/work-execution', 'quality-inspection')]: [PERMISSIONS.REPORT_EDIT],
-  [pageKey('/admin/payroll', '待发布')]: [
-    PERMISSIONS.PAYROLL_EDIT,
-    PERMISSIONS.PAYROLL_APPROVE,
-    PERMISSIONS.PAYROLL_PUBLISH,
-    PERMISSIONS.PAYROLL_RULE_EDIT,
-  ],
-  [pageKey('/admin/payroll', '已发布')]: [PERMISSIONS.PAYROLL_EXPORT],
-  [pageKey('/admin/payroll', '导入记录')]: [PERMISSIONS.PAYROLL_EDIT],
-  [pageKey('/admin/payroll', '申请记录')]: [
-    PERMISSIONS.SENSITIVE_PAYMENT_VIEW,
-    PERMISSIONS.SENSITIVE_PAYMENT_EDIT,
-    PERMISSIONS.SENSITIVE_PAYMENT_APPROVE,
-    PERMISSIONS.SENSITIVE_PAYOUT_VIEW,
-    PERMISSIONS.SENSITIVE_PAYOUT_EDIT,
-    PERMISSIONS.SENSITIVE_PAYOUT_APPROVE,
-  ],
-  [pageKey('/admin/users', 'staff')]: [
-    PERMISSIONS.USER_MANAGE,
-    PERMISSIONS.USER_DISABLE_EMPLOYEE,
-    PERMISSIONS.USER_ACTIVATION_GENERATE,
-    PERMISSIONS.USER_EMAIL_CHANGE,
-  ],
-  [pageKey('/admin/users', 'roles')]: [PERMISSIONS.SCOPE_MANAGE, PERMISSIONS.AUDIT_VIEW],
-}
 
 // Permission ids created before the current menu were commonly reused by
 // several child pages.  Those ids are not independently enforceable: changing
@@ -125,7 +72,7 @@ const PAGE_DESCRIPTIONS = {
   '人工批改': '查看考试并进行人工批改',
   '考试记录表': '查看、删除及导出考试记录',
   '题库表': '查看、管理及删除题库内容',
-  '奖惩表': '查看、新增、审批及导出奖金扣款记录',
+  '奖惩表': '查看、新增、编辑及导出奖金扣款记录',
   '事件跟踪表': '查看、提交及管理事件跟踪记录',
   '每日巡视项目日报记录表': '查看、提交及管理巡视日报',
   '质检日报记录表': '查看、提交及管理质检日报',
@@ -135,9 +82,9 @@ const PAGE_DESCRIPTIONS = {
   '修改工资信息记录': '查看、审批及维护工资收款资料修改申请',
   '公司提供资产': '查看公司提供的硬件、软件与账号资产',
   '员工前端账号': '查看、创建、停用及维护员工前端账号',
-  '后台账号': '查看、新增、编辑、停用及删除后台账号',
+  '后台账号': '查看、新增、编辑、停用、删除及设置数据范围',
   '后台登入IP白名单': '管理后台登录允许的 IPv4 / IPv6 网络及强制开关',
-  '后台角色权限': '管理角色权限、数据范围及权限变更日志',
+  '后台角色权限': '查看角色权限及权限变更日志；角色修改固定由 Founder 执行',
 }
 
 const PERMISSION_ACTION_ORDER = [
@@ -166,10 +113,9 @@ const navigationPermissionPages = () => adminNavigation.flatMap(section => {
       section,
       page,
       key,
-      codes: unique([
-        ...permissionCodesFromAccess(page),
-        ...(PAGE_ACTION_CODES[key] || []),
-      ]),
+      codes: unique(adminPagePermissionCodes(page.pagePermission).length
+        ? adminPagePermissionCodes(page.pagePermission)
+        : permissionCodesFromAccess(page)),
     }
   })
 })
@@ -228,7 +174,7 @@ export function buildRolePermissionSections(permissions = []) {
   })
 
   const unassigned = sortPermissionItems(permissions
-    .filter(permission => !assignedCodes.has(permission.code) && !sharedCodes.has(permission.code))
+    .filter(permission => !assignedCodes.has(permission.code) && !sharedCodes.has(permission.code) && !LEGACY_IMPLEMENTATION_CODES.has(permission.code))
     .map(permission => ({ ...permission, actionKey: actionKey(permission.code) })))
 
   if (unassigned.length) {

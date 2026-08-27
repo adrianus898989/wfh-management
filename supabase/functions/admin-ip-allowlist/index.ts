@@ -216,14 +216,18 @@ export async function handleRequest(req: Request) {
       return json(req, { error: '当前账号没有后台权限' }, 403)
     }
 
-    const access = await effectivePermissions(admin, caller)
-    if (!access.founder && !access.permissions.includes('account.ip_allowlist.manage')) {
-      return json(req, { error: '当前账号没有管理后台登录IP白名单的权限' }, 403)
-    }
-
     let body: Record<string, any>
     try { body = await req.json() } catch { body = {} }
     const action = text(body.action || 'list').toLowerCase()
+    const access = await effectivePermissions(admin, caller)
+    const requiredPermission = action === 'list'
+      ? 'account.ip_allowlist.view'
+      : 'account.ip_allowlist.manage'
+    if (!access.founder && !access.permissions.includes(requiredPermission)) {
+      return json(req, { error: action === 'list'
+        ? '当前账号没有查看后台登录IP白名单的权限'
+        : '当前账号没有管理后台登录IP白名单的权限' }, 403)
+    }
 
     if (action === 'list') return json(req, await snapshot(admin, clientIp))
 

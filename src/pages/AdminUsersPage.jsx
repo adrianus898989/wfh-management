@@ -31,6 +31,8 @@ const blankAccount = () => ({
   employee_ids: [],
   scope_team_search: '',
   scope_employee_search: '',
+  scope_team_selected_only: false,
+  scope_employee_selected_only: false,
 })
 
 const blankStaffAccount = () => ({
@@ -137,13 +139,13 @@ export default function AdminUsersPage() {
   const callerFounder = sharedAccess.founder || data?.caller?.is_founder
   const callerPermissions = new Set(data?.caller?.permissions || [])
   const callerCan = code => Boolean(callerFounder || sharedAccess.hasPermission(code) || callerPermissions.has('*') || callerPermissions.has(code))
-  const backendPermissionCodes = ['user.view','account.view','account.create','account.edit','account.disable','account.delete','account.reset_password','account.otp_toggle','account.mfa_reset']
-  const staffPermissionCodes = ['user.view','user.account.create','user.account.disable','user.account.delete','user.password.reset','account.mfa_reset']
+  const backendPermissionCodes = ['backend_account.view']
+  const staffPermissionCodes = ['staff_account.view']
   const tabAllowed = key => key === 'backend'
     ? backendPermissionCodes.some(callerCan)
     : key === 'staff'
       ? staffPermissionCodes.some(callerCan)
-      : callerCan('role.manage')
+      : callerCan('role.view')
   const visibleTabs = sharedAccess.loading && !data ? [] : USER_TABS.filter(tabAllowed)
   const canCreateBackend = callerCan('account.create')
   const canEditBackend = callerCan('account.edit')
@@ -151,7 +153,8 @@ export default function AdminUsersPage() {
   const canDeleteBackend = callerCan('account.delete')
   const canResetBackendPassword = callerCan('account.reset_password')
   const canToggleOtp = callerCan('account.otp_toggle')
-  const canResetMfa = callerCan('account.mfa_reset')
+  const canResetBackendMfa = callerCan('backend_account.mfa_reset')
+  const canResetStaffMfa = callerCan('staff_account.mfa_reset')
   const canManageScope = callerCan('scope.manage')
   const canCreateStaff = callerCan('user.account.create')
   const canToggleStaff = callerCan('user.account.disable')
@@ -253,6 +256,8 @@ export default function AdminUsersPage() {
         employee_ids: scopeEmployees.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.employee_id),
         scope_team_search: '',
         scope_employee_search: '',
+        scope_team_selected_only: false,
+        scope_employee_selected_only: false,
       }
     })
   }
@@ -472,6 +477,45 @@ export default function AdminUsersPage() {
   const accountEmployeeMatches = accountEmployeeQuery
     ? employees.filter(emp => `${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(accountEmployeeQuery)).slice(0, 8)
     : []
+  const scopeCanEdit = accountModal?.mode !== 'edit' || canManageScope
+  const scopeTeamIds = accountModal?.form?.team_ids || []
+  const scopeEmployeeIds = accountModal?.form?.employee_ids || []
+  const scopeTeamIdSet = new Set(scopeTeamIds)
+  const scopeEmployeeIdSet = new Set(scopeEmployeeIds)
+  const scopeTeamQuery = String(accountModal?.form?.scope_team_search || '').trim().toLowerCase()
+  const scopeEmployeeQuery = String(accountModal?.form?.scope_employee_search || '').trim().toLowerCase()
+  const teamActiveCounts = employees.reduce((counts, employee) => {
+    if (!employee.team_id) return counts
+    counts.set(employee.team_id, (counts.get(employee.team_id) || 0) + 1)
+    return counts
+  }, new Map())
+  const selectedScopeTeams = scopeTeamIds.map(id => teams.find(team => team.id === id) || { id, name: `团队 ${id}` })
+  const selectedScopeEmployees = scopeEmployeeIds.map(id => employees.find(employee => employee.id === id) || { id, employee_no: '未知员工', full_name: id })
+  const visibleScopeTeams = teams.filter(team => {
+    if (accountModal?.form?.scope_team_selected_only && !scopeTeamIdSet.has(team.id)) return false
+    return !scopeTeamQuery || String(team.name || '').toLowerCase().includes(scopeTeamQuery)
+  })
+  const matchingScopeEmployees = employees.filter(employee => {
+    if (accountModal?.form?.scope_employee_selected_only && !scopeEmployeeIdSet.has(employee.id)) return false
+    return !scopeEmployeeQuery || `${employee.employee_no} ${employee.full_name}`.toLowerCase().includes(scopeEmployeeQuery)
+  })
+  const visibleScopeEmployees = accountModal?.form?.scope_employee_selected_only
+    ? matchingScopeEmployees
+    : matchingScopeEmployees.slice(0, 100)
+
+  const updateScopeIds = (key, id, checked) => {
+    setAccountModal(current => {
+      if (!current || !scopeCanEdit) return current
+      const ids = current.form[key] || []
+      const next = checked ? [...new Set([...ids, id])] : ids.filter(value => value !== id)
+      return { ...current, error: '', form: { ...current.form, [key]: next } }
+    })
+  }
+
+  const clearScopeIds = key => {
+    if (!scopeCanEdit) return
+    setAccountModal(current => current ? ({ ...current, error: '', form: { ...current.form, [key]: [] } }) : current)
+  }
 
   const updatePermissionSelection = (permissionIds, checked) => {
     if (!callerFounder) return
@@ -512,12 +556,10 @@ export default function AdminUsersPage() {
         .role-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.role-card-title{display:flex;align-items:center;gap:10px;min-width:0}.role-avatar{display:grid;place-items:center;width:38px;height:38px;flex:0 0 auto;border-radius:10px;background:#edf3ff;color:#3465d5;font-size:14px;font-weight:900}.role-card h3{overflow:hidden;margin:0;color:#253b58;font-size:15px;white-space:nowrap;text-overflow:ellipsis}.role-card-title small{display:block;margin-top:4px;color:#8996a8;font-size:10px}.role-lock{display:inline-flex;align-items:center;padding:4px 7px;border-radius:999px;background:#edf8f2;color:#20805a;font-size:9px;font-weight:850}
         .role-permission-summary{margin-top:16px}.role-permission-summary>div:first-child{display:flex;align-items:center;justify-content:space-between;color:#697b92;font-size:10px}.role-permission-summary strong{color:#315fc8;font-size:11px}.role-progress{height:6px;margin:7px 0 10px;overflow:hidden;border-radius:999px;background:#edf1f6}.role-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#3971df,#765ce1)}.role-module-tags{display:flex;min-height:24px;gap:5px;flex-wrap:wrap}.role-module-tags span{padding:4px 7px;border-radius:6px;background:#f2f5f9;color:#60728a;font-size:9px}.role-module-tags span.more{background:#edf2ff;color:#3f67c5}.role-module-tags small{padding-top:4px;color:#9aa6b5;font-size:9px}
         .role-card-actions{display:flex;gap:7px;margin-top:auto;padding-top:14px}.role-card-actions button{height:34px;border:1px solid #d5dfeb;background:#fff;border-radius:8px;padding:0 11px;color:#486078;font-size:11px;font-weight:800;cursor:pointer}.role-card-actions button.primary{border-color:#d3dfff;background:#f1f5ff;color:#2d61d3}.role-card-actions button.danger{margin-left:auto;color:#b85050}
-        .access-searchbar{display:grid;grid-template-columns:minmax(300px,1fr) auto auto auto;align-items:center;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
-        .account-modal{width:min(760px,94vw);max-height:min(760px,88vh);display:flex;flex-direction:column;overflow:hidden}.account-modal .modal-head{flex:0 0 auto}.account-modal .account-modal-body{overflow:auto;padding:2px 3px 8px}.account-modal .modal-actions{flex:0 0 auto;position:sticky;bottom:0;background:#fff;border-top:1px solid #edf1f5;padding-top:12px;margin-top:6px;z-index:2}
+        .access-searchbar{display:grid;grid-template-columns:minmax(240px,420px) auto auto auto;align-items:center;justify-content:start;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar input{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
+        .account-modal{width:min(880px,94vw);max-height:min(820px,90vh);display:flex;flex-direction:column;overflow:hidden}.account-modal .modal-head{flex:0 0 auto}.account-modal .account-modal-body{overflow:auto;padding:2px 3px 8px}.account-modal .modal-actions{flex:0 0 auto;position:sticky;bottom:0;background:#fff;border-top:1px solid #edf1f5;padding-top:12px;margin-top:6px;z-index:2}
         .account-session-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.account-session-note strong{flex:0 0 auto;color:#3564c8}.account-session-note span{min-width:0}
-        .scope-panel{grid-column:1/-1;border:1px solid #e3e9f1;border-radius:11px;padding:12px;background:#fafbfd}
-        .scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.scope-column-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}.scope-column-head span{font-size:10px;color:#5873a1}.scope-search{width:100%;height:36px!important;margin-bottom:7px}.check-list{max-height:180px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px;background:#fff;padding:8px}
-        .check-list label{display:flex;gap:8px;align-items:center;padding:7px 5px;font-size:12px;color:#46566d}
+        .scope-panel{grid-column:1/-1;border:1px solid #dbe4f0;border-radius:12px;padding:12px;background:#f7f9fc}.scope-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}.scope-column{min-width:0;overflow:hidden;border:1px solid #dfe7f1;border-radius:11px;background:#fff}.scope-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 11px 7px}.scope-column-head strong{color:#2d425e;font-size:13px}.scope-column-head span{padding:3px 7px;border-radius:999px;background:#edf3ff;color:#4168bd;font-size:9px;font-weight:850}.scope-column-tools{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:0 9px 8px}.form-grid .scope-column-tools .scope-search{min-width:0;width:100%;height:34px;margin:0;padding:0 9px}.scope-filter-button,.scope-clear-button{height:34px;border:1px solid #d7e1ed;border-radius:8px;background:#fff;padding:0 8px;color:#60738b;font-size:9px;font-weight:800;white-space:nowrap;cursor:pointer}.scope-filter-button.active{border-color:#bdd0f4;background:#edf3ff;color:#2f62cd}.scope-clear-button{color:#a45555}.scope-clear-button:disabled{opacity:.4;cursor:not-allowed}.scope-selected-list{display:flex;max-height:68px;gap:5px;flex-wrap:wrap;overflow:auto;margin:0 9px 8px;padding:7px;border:1px solid #e4eaf2;border-radius:8px;background:#f8fafc}.scope-chip{display:inline-flex;min-width:0;align-items:center;gap:5px;max-width:100%;padding:4px 7px;border:1px solid #d6e1f0;border-radius:999px;background:#fff;color:#3c5879;font-size:9px}.scope-chip span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.scope-chip button{display:grid;width:16px;height:16px;flex:0 0 auto;place-items:center;border:0;border-radius:50%;background:#eef2f7;color:#7b899b;line-height:1;cursor:pointer}.scope-chip button:disabled{cursor:not-allowed;opacity:.45}.scope-selection-empty{margin:0 9px 8px;padding:7px;border:1px dashed #dce4ee;border-radius:8px;background:#fafbfd;color:#95a1b1;font-size:9px;text-align:center}.check-list{height:186px;overflow:auto;border-width:1px 0 0;border-style:solid;border-color:#e5ebf2;background:#fff;padding:5px}.check-list label{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:8px;align-items:center;min-height:36px;padding:6px 7px;border-radius:7px;color:#46566d;font-size:11px;cursor:pointer}.check-list label:hover{background:#f4f7fc}.check-list label.scope-row-selected{background:#f0f5ff}.check-list label>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.check-list label>small{color:#8897a9;font-size:8px;white-space:nowrap}.form-grid .scope-panel input.scope-check[type="checkbox"]{width:16px!important;height:16px!important;min-width:16px;margin:0!important;padding:0!important;border-radius:4px;box-shadow:none;accent-color:#3568da}.form-grid .scope-panel input.scope-check[type="checkbox"]:focus{box-shadow:0 0 0 3px rgba(53,104,218,.1)}
         .permissions-modal-mask{padding:clamp(10px,2vw,24px)}.role-modal{display:flex;width:min(1180px,calc(100vw - 36px));height:min(860px,calc(100dvh - 36px));max-height:none;flex-direction:column;overflow:hidden;padding:0;border-radius:18px;background:#f5f7fa}.role-modal .role-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto;margin:0;padding:17px 20px;border-bottom:1px solid #dfe6ef;background:#fff}.role-modal-heading{display:flex;align-items:center;gap:11px}.role-modal-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:11px;background:#eaf1ff;color:#3265da;font-weight:900}.role-modal-head h2{margin:0 0 4px;color:#203754;font-size:19px}.role-modal-head p{margin:0;color:#7c8ba0;font-size:12px}.role-modal-head>button{width:34px;height:34px;flex:0 0 auto;border:0;border-radius:9px;background:#f0f3f7;color:#748297;font-size:21px;cursor:pointer}.role-modal-head>button:hover{background:#e9edf3;color:#344b67}
         .role-modal-body{min-height:0;overflow:auto;padding:16px 18px 24px;overscroll-behavior:contain;scrollbar-gutter:stable}.role-modal .page-error{margin-bottom:12px}.role-identity-panel{display:grid;grid-template-columns:minmax(260px,1fr) auto;align-items:end;gap:18px;margin-bottom:12px;padding:14px 15px;border:1px solid #dfe6ef;border-radius:12px;background:#fff}.role-name-field{display:flex;flex-direction:column;gap:6px;color:#5e718a;font-size:11px;font-weight:850}.role-name-field input{width:100%;height:39px;border:1px solid #d3deea;border-radius:9px;padding:0 11px;color:#2e4561;outline:none}.role-name-field input:focus{border-color:#4b76dc;box-shadow:0 0 0 3px rgba(75,118,220,.09)}.role-name-field input:disabled{background:#f3f5f8;color:#728196}.role-selection-summary{display:flex;gap:8px}.role-selection-summary div{min-width:108px;padding:9px 11px;border-radius:9px;background:#f4f7fb}.role-selection-summary strong,.role-selection-summary small{display:block}.role-selection-summary strong{color:#2d5fce;font-size:17px}.role-selection-summary small{margin-top:2px;color:#8391a4;font-size:10px}
         .permission-guidance{display:flex;align-items:flex-start;gap:8px;margin:-2px 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.permission-guidance strong{flex:0 0 auto;color:#3564c8}.permission-toolbar{position:sticky;top:-16px;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding:11px 12px;border:1px solid #dce5ef;border-radius:11px;background:rgba(255,255,255,.96);box-shadow:0 5px 16px rgba(31,51,79,.05);backdrop-filter:blur(8px)}.permission-search{display:flex;align-items:center;min-width:260px;max-width:520px;flex:1;height:39px;border:1px solid #d3deea;border-radius:9px;background:#fff;padding:0 10px}.permission-search span{margin-right:7px;color:#91a0b3}.permission-search input{min-width:0;flex:1;height:35px;border:0;background:transparent;color:#344b67;outline:none}.permission-toolbar-actions{display:flex;gap:7px}.permission-toolbar-actions button{height:35px;border:1px solid #d3deea;border-radius:8px;background:#fff;padding:0 10px;color:#51677f;font-size:11px;font-weight:800;cursor:pointer}.permission-toolbar-actions button:hover{border-color:#b9cae2;background:#f7f9fc}.permission-toolbar-actions button:disabled{opacity:.5;cursor:not-allowed}.founder-permission-note{display:flex;align-items:flex-start;gap:9px;margin-bottom:12px;padding:11px 13px;border:1px solid #cce7d9;border-radius:10px;background:#f1fbf6;color:#34775b;font-size:11px;line-height:1.55}.founder-permission-note strong{flex:0 0 auto}
@@ -528,7 +570,7 @@ export default function AdminUsersPage() {
         .employee-search-results{grid-column:1/-1;max-height:235px;overflow:auto;border:1px solid #dce5ef;border-radius:10px;background:#fff;padding:5px}.employee-search-option{width:100%;display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;border:0;border-bottom:1px solid #edf1f5;background:#fff;padding:10px;text-align:left;cursor:pointer}.employee-search-option:hover{background:#f3f7ff}.employee-search-option:last-child{border-bottom:0}.employee-search-option strong{color:#24415f}.employee-search-option small{color:#738198}.employee-search-option span{font-size:11px;color:#376ac5}.linked-employee{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #bfe6d0;background:#f0fbf5;border-radius:9px;color:#18784a;font-size:12px}.linked-employee button{border:0;background:transparent;color:#b34b4b;cursor:pointer}
         .account-batch-builder{margin:13px 0 3px;padding:12px;border:1px solid #dce5f0;border-radius:12px;background:#f7f9fc}.account-batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.account-batch-toolbar strong,.account-batch-toolbar small{display:block}.account-batch-toolbar strong{color:#29425f;font-size:13px}.account-batch-toolbar small{margin-top:3px;color:#7f8da0;font-size:10px}.account-batch-toolbar button{height:36px;white-space:nowrap}.account-batch-empty{margin-top:10px;padding:12px;border:1px dashed #d5dfeb;border-radius:9px;background:#fff;color:#8a97a9;font-size:11px;text-align:center}.account-batch-list{display:flex;max-height:210px;flex-direction:column;gap:6px;margin-top:10px;overflow:auto}.account-batch-row{display:grid;grid-template-columns:25px minmax(0,1fr) auto;align-items:center;gap:9px;padding:9px 10px;border:1px solid #e0e7f0;border-radius:9px;background:#fff}.account-batch-row>span{display:grid;width:23px;height:23px;place-items:center;border-radius:7px;background:#edf3ff;color:#3567d1;font-size:10px;font-weight:900}.account-batch-row strong,.account-batch-row small,.account-batch-row em{display:block}.account-batch-row strong{color:#2e4561;font-size:12px}.account-batch-row small{overflow:hidden;margin-top:3px;color:#7e8b9d;font-size:10px;white-space:nowrap;text-overflow:ellipsis}.account-batch-row em{margin-top:3px;color:#bd4343;font-size:10px;font-style:normal}.account-batch-row>button{border:0;background:transparent;color:#b64a4a;font-size:10px;cursor:pointer}.account-batch-row.failed{border-color:#efc4c4;background:#fff8f8}
         @media(max-width:1100px){.role-list{grid-template-columns:repeat(2,minmax(0,1fr))}.roles-toolbar{align-items:stretch;flex-direction:column}.role-search{max-width:none}.create-role-row{min-width:0}.permission-page-grid{grid-template-columns:1fr}}
-        @media(max-width:700px){.roles-overview{align-items:flex-start;flex-direction:column}.roles-overview-stats{width:100%}.roles-overview-stats div{min-width:0;flex:1}.role-list{grid-template-columns:1fr}.role-search,.create-role-row{min-width:0;width:100%}.create-role-row{flex-direction:column}.permissions-modal-mask{padding:6px}.role-modal{width:calc(100vw - 12px);height:calc(100dvh - 12px);border-radius:13px}.role-identity-panel{grid-template-columns:1fr}.role-selection-summary div{flex:1}.permission-toolbar{align-items:stretch;flex-direction:column}.permission-search{min-width:0;width:100%}.permission-toolbar-actions{display:grid;grid-template-columns:1fr 1fr}.role-modal>.modal-actions{align-items:stretch;flex-direction:column}.role-modal-actions-buttons{display:grid;grid-template-columns:1fr 1fr}.scope-columns{grid-template-columns:1fr}.access-searchbar{grid-template-columns:1fr 1fr}.access-searchbar input{grid-column:1/-1}.employee-search-option{grid-template-columns:95px 1fr}.account-batch-toolbar{align-items:stretch;flex-direction:column}.account-batch-row{grid-template-columns:23px minmax(0,1fr) auto}}
+        @media(max-width:700px){.roles-overview{align-items:flex-start;flex-direction:column}.roles-overview-stats{width:100%}.roles-overview-stats div{min-width:0;flex:1}.role-list{grid-template-columns:1fr}.role-search,.create-role-row{min-width:0;width:100%}.create-role-row{flex-direction:column}.permissions-modal-mask{padding:6px}.role-modal{width:calc(100vw - 12px);height:calc(100dvh - 12px);border-radius:13px}.role-identity-panel{grid-template-columns:1fr}.role-selection-summary div{flex:1}.permission-toolbar{align-items:stretch;flex-direction:column}.permission-search{min-width:0;width:100%}.permission-toolbar-actions{display:grid;grid-template-columns:1fr 1fr}.role-modal>.modal-actions{align-items:stretch;flex-direction:column}.role-modal-actions-buttons{display:grid;grid-template-columns:1fr 1fr}.scope-columns{grid-template-columns:1fr}.scope-column-tools{grid-template-columns:minmax(0,1fr) auto}.scope-clear-button{grid-column:2}.access-searchbar{grid-template-columns:1fr 1fr}.access-searchbar input{grid-column:1/-1}.employee-search-option{grid-template-columns:95px 1fr}.account-batch-toolbar{align-items:stretch;flex-direction:column}.account-batch-row{grid-template-columns:23px minmax(0,1fr) auto}}
       `}</style>
 
       <div className="page-toolbar">
@@ -578,7 +620,7 @@ export default function AdminUsersPage() {
                       <td><div className="access-grid-actions">
                         {!founder && canEditBackend && <button disabled={deleting} onClick={() => openEdit(a)}>{adminT('编辑')}</button>}
                         {canResetBackendPassword && <button disabled={deleting} onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
-                        {canResetMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
+                        {canResetBackendMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
                         {!founder && canToggleBackend && <button disabled={deleting} onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
                         {!founder && canDeleteBackend && <button disabled={deleting} className="danger" onClick={() => deleteAccount(a, 'backend')}>{adminT(deleting ? '删除中…' : '删除账号')}</button>}
                       </div></td>
@@ -606,7 +648,7 @@ export default function AdminUsersPage() {
                   <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                   <td><div className="access-grid-actions">
                     {canResetStaffPassword && <button disabled={deleting} onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
-                    {canResetMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
+                    {canResetStaffMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
                     {canToggleStaff && <button disabled={deleting} onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
                     {canDeleteStaff && <button disabled={deleting} className="danger" onClick={() => deleteAccount(a, 'staff')}>{adminT(deleting ? '删除中…' : '删除登录账号')}</button>}
                   </div></td>
@@ -756,24 +798,46 @@ export default function AdminUsersPage() {
               {accountModal.form.data_scope === 'assigned_teams' && (
                 <div className="scope-panel">
                   <div className="scope-columns">
-                    <div><div className="scope-column-head"><strong>团队</strong><span>已选 {accountModal.form.team_ids.length}</span></div><input className="scope-search" disabled={accountModal.mode === 'edit' && !canManageScope} placeholder="搜索团队" value={accountModal.form.scope_team_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_team_search:e.target.value}}))}/><div className="check-list">
-                      {teams.length === 0 ? <div className="empty-state">暂无团队</div> : teams.filter(t=>String(t.name||'').toLowerCase().includes(accountModal.form.scope_team_search.toLowerCase())).map(t => (
-                        <label key={t.id}><input type="checkbox"
-                          disabled={accountModal.mode === 'edit' && !canManageScope}
-                          checked={accountModal.form.team_ids.includes(t.id)}
-                          onChange={e => setAccountModal(x => ({...x,form:{...x.form,team_ids:e.target.checked?[...x.form.team_ids,t.id]:x.form.team_ids.filter(id=>id!==t.id)}}))}
-                        />{t.name}</label>
-                      ))}
-                    </div></div>
-                    <div><div className="scope-column-head"><strong>指定员工</strong><span>已选 {accountModal.form.employee_ids.length}</span></div><input className="scope-search" disabled={accountModal.mode === 'edit' && !canManageScope} placeholder="搜索员工ID或姓名" value={accountModal.form.scope_employee_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_search:e.target.value}}))}/><div className="check-list">
-                      {employees.length === 0 ? <div className="empty-state">暂无员工</div> : employees.filter(emp=>`${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(accountModal.form.scope_employee_search.toLowerCase())).slice(0,100).map(emp => (
-                        <label key={emp.id}><input type="checkbox"
-                          disabled={accountModal.mode === 'edit' && !canManageScope}
-                          checked={accountModal.form.employee_ids.includes(emp.id)}
-                          onChange={e => setAccountModal(x => ({...x,form:{...x.form,employee_ids:e.target.checked?[...x.form.employee_ids,emp.id]:x.form.employee_ids.filter(id=>id!==emp.id)}}))}
-                        />{emp.employee_no} · {emp.full_name}</label>
-                      ))}
-                    </div></div>
+                    <div className="scope-column">
+                      <div className="scope-column-head"><strong>团队</strong><span>已选 {scopeTeamIds.length}</span></div>
+                      <div className="scope-column-tools">
+                        <input className="scope-search" placeholder="搜索团队" value={accountModal.form.scope_team_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_team_search:e.target.value}}))}/>
+                        <button type="button" className={`scope-filter-button ${accountModal.form.scope_team_selected_only ? 'active' : ''}`} onClick={()=>setAccountModal(x=>({...x,form:{...x.form,scope_team_selected_only:!x.form.scope_team_selected_only}}))}>只看已选</button>
+                        <button type="button" className="scope-clear-button" disabled={!scopeCanEdit || scopeTeamIds.length === 0} onClick={()=>clearScopeIds('team_ids')}>清空</button>
+                      </div>
+                      {selectedScopeTeams.length > 0 ? <div className="scope-selected-list" aria-label="已选团队">
+                        {selectedScopeTeams.map(team => <span className="scope-chip" key={team.id}><span title={team.name}>{team.name}</span><button type="button" aria-label={`移除团队 ${team.name}`} disabled={!scopeCanEdit} onClick={()=>updateScopeIds('team_ids', team.id, false)}>×</button></span>)}
+                      </div> : <div className="scope-selection-empty">尚未选择团队</div>}
+                      <div className="check-list">
+                        {teams.length === 0 ? <div className="empty-state">暂无团队</div> : visibleScopeTeams.length === 0 ? <div className="empty-state">没有匹配的团队</div> : visibleScopeTeams.map(team => (
+                          <label className={scopeTeamIdSet.has(team.id) ? 'scope-row-selected' : ''} key={team.id}><input className="scope-check" type="checkbox"
+                            disabled={!scopeCanEdit}
+                            checked={scopeTeamIdSet.has(team.id)}
+                            onChange={event => updateScopeIds('team_ids', team.id, event.target.checked)}
+                          /><span title={team.name}>{team.name}</span><small>{teamActiveCounts.get(team.id) || 0} 人在职</small></label>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="scope-column">
+                      <div className="scope-column-head"><strong>指定员工</strong><span>已选 {scopeEmployeeIds.length}</span></div>
+                      <div className="scope-column-tools">
+                        <input className="scope-search" placeholder="搜索员工ID或姓名" value={accountModal.form.scope_employee_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_search:e.target.value}}))}/>
+                        <button type="button" className={`scope-filter-button ${accountModal.form.scope_employee_selected_only ? 'active' : ''}`} onClick={()=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_selected_only:!x.form.scope_employee_selected_only}}))}>只看已选</button>
+                        <button type="button" className="scope-clear-button" disabled={!scopeCanEdit || scopeEmployeeIds.length === 0} onClick={()=>clearScopeIds('employee_ids')}>清空</button>
+                      </div>
+                      {selectedScopeEmployees.length > 0 ? <div className="scope-selected-list" aria-label="已选员工">
+                        {selectedScopeEmployees.map(employee => <span className="scope-chip" key={employee.id}><span title={`${employee.employee_no} · ${employee.full_name}`}>{employee.employee_no} · {employee.full_name}</span><button type="button" aria-label={`移除员工 ${employee.employee_no}`} disabled={!scopeCanEdit} onClick={()=>updateScopeIds('employee_ids', employee.id, false)}>×</button></span>)}
+                      </div> : <div className="scope-selection-empty">尚未选择指定员工</div>}
+                      <div className="check-list">
+                        {employees.length === 0 ? <div className="empty-state">暂无员工</div> : visibleScopeEmployees.length === 0 ? <div className="empty-state">没有匹配的员工</div> : visibleScopeEmployees.map(employee => (
+                          <label className={scopeEmployeeIdSet.has(employee.id) ? 'scope-row-selected' : ''} key={employee.id}><input className="scope-check" type="checkbox"
+                            disabled={!scopeCanEdit}
+                            checked={scopeEmployeeIdSet.has(employee.id)}
+                            onChange={event => updateScopeIds('employee_ids', employee.id, event.target.checked)}
+                          /><span title={`${employee.employee_no} · ${employee.full_name}`}>{employee.employee_no} · {employee.full_name}</span><small>{employee.teams?.name || '未分团队'}</small></label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -873,7 +937,7 @@ export default function AdminUsersPage() {
                 </div>
               </div>
 
-              <div className="permission-guidance"><strong>授权说明</strong><span>模块和子页面与当前左侧菜单保持一致。只有真正按单页执行的权限可以勾选；旧系统中被多个子页共用的权限会显示为“待拆分”且只读，保留角色原有状态，不会伪装成独立授权。</span></div>
+              <div className="permission-guidance"><strong>授权说明</strong><span>模块和子页面与当前左侧菜单保持一致；每个页面的查看、新增、编辑、审批、导出或删除权限均为独立授权。Founder 固定拥有全部权限，其他角色按勾选结果生效。</span></div>
 
               <div className="permission-toolbar">
                 <label className="permission-search"><span>⌕</span>

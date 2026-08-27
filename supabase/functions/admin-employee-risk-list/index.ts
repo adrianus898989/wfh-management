@@ -135,9 +135,11 @@ Deno.serve(async req => {
       { auth: { persistSession: false } },
     )
     const current = await caller(req, service)
-    if (!(await permissionAllowed(service, current, 'employee.view'))) throw new Error('没有查看员工资料的权限')
-    const scope = await scopeInfo(service, current)
     const body = await req.json().catch(() => ({}))
+    if (!(await permissionAllowed(service, current, 'employee.directory.view'))) throw new Error('没有查看员工资料的权限')
+    if (body.export === true && !(await permissionAllowed(service, current, 'employee.directory.export'))) throw new Error('没有导出员工资料的权限')
+    const canViewEmployeeSensitive = await permissionAllowed(service, current, 'sensitive.employee.view')
+    const scope = await scopeInfo(service, current)
     const filters = body.filters || {}
     const risk = text(filters.risk_level || body.risk_level)
     const accountStatus = text(filters.account_status)
@@ -149,12 +151,12 @@ Deno.serve(async req => {
     let teamIds: string[] = []
     let positionIds: string[] = []
     if (text(filters.team)) {
-      const { data } = await service.from('teams').select('id').ilike('name', `%${text(filters.team)}%`)
+      const { data } = await service.from('teams').select('id').eq('name', text(filters.team))
       teamIds = (data || []).map((row: any) => row.id)
       if (!teamIds.length) return json({ rows: [], total: 0, page, page_size: pageSize, pages: 1 })
     }
     if (text(filters.position)) {
-      const { data } = await service.from('positions').select('id').ilike('name', `%${text(filters.position)}%`)
+      const { data } = await service.from('positions').select('id').eq('name', text(filters.position))
       positionIds = (data || []).map((row: any) => row.id)
       if (!positionIds.length) return json({ rows: [], total: 0, page, page_size: pageSize, pages: 1 })
     }
@@ -169,15 +171,25 @@ Deno.serve(async req => {
       query = applyScope(query, scope)
       if (text(filters.employee_no)) query = query.ilike('employee_no', `%${text(filters.employee_no)}%`)
       if (text(filters.full_name)) query = query.ilike('full_name', `%${text(filters.full_name)}%`)
-      if (text(filters.work_tg)) query = query.ilike('work_tg', `%${text(filters.work_tg)}%`)
-      if (text(filters.backend_account)) query = query.ilike('backend_accounts', `%${text(filters.backend_account)}%`)
+      // Sensitive filters must follow the same authorization rule as the
+      // regular employee-list endpoint. Ignoring an unauthorized filter also
+      // prevents it from becoming a blind value-existence probe.
+      if (canViewEmployeeSensitive && text(filters.work_tg)) query = query.ilike('work_tg', `%${text(filters.work_tg)}%`)
+      if (canViewEmployeeSensitive && text(filters.backend_account)) query = query.ilike('backend_accounts', `%${text(filters.backend_account)}%`)
       if (teamIds.length) query = query.in('team_id', teamIds)
       if (positionIds.length) query = query.in('position_id', positionIds)
       if (text(filters.country)) query = query.ilike('country', `%${text(filters.country)}%`)
       if (text(filters.status)) query = query.eq('status', filters.status)
       if (text(filters.employment_type)) query = query.ilike('employment_type', `%${text(filters.employment_type)}%`)
       if (text(filters.shift_name)) query = query.ilike('shift_name', `%${text(filters.shift_name)}%`)
-      if (text(filters.leader)) query = query.ilike('leader_name', `%${text(filters.leader)}%`)
+      if (text(filters.leader)) {
+        const manager = text(filters.leader).replace(/[%_,()]/g, ' ').trim()
+        if (manager) query = query.or([
+          `leader_name.ilike.%${manager}%`,
+          `person_in_charge.ilike.%${manager}%`,
+          `online_leader.ilike.%${manager}%`,
+        ].join(','))
+      }
       if (text(filters.hire_from)) query = query.gte('hire_date', filters.hire_from)
       if (text(filters.hire_to)) query = query.lte('hire_date', filters.hire_to)
       return query.order('employee_no', { ascending: true })
@@ -226,6 +238,8 @@ Deno.serve(async req => {
         const totalErrorCount = Number(summary?.total_error_count || 0)
         return {
           ...employee,
+          work_tg: canViewEmployeeSensitive ? employee.work_tg : (employee.work_tg ? '****' : null),
+          backend_accounts: canViewEmployeeSensitive ? employee.backend_accounts : (employee.backend_accounts ? '****' : null),
           month_error_count: Number(summary?.month_error_count || 0),
           total_error_count: totalErrorCount,
           // Always derive the list grade from the same thresholds used by filtering.

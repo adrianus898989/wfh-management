@@ -115,10 +115,13 @@ export default function AdminAttendancePage(){
   const requestedRouteTab=params.get('tab')
   const requestedTab=canonicalAdminTab('/admin/schedule',requestedRouteTab)
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
-    if(value==='排班表')return access.hasPermission(PERMISSIONS.SCHEDULE_VIEW)
-    if(value==='请假审批')return access.hasAllPermissions([PERMISSIONS.ATTENDANCE_VIEW,PERMISSIONS.LEAVE_APPROVE])
-    if(value==='奖金 / 扣款')return access.hasPermission(PERMISSIONS.ADJUSTMENT_VIEW)
-    return access.hasPermission(PERMISSIONS.ATTENDANCE_VIEW)
+    if(value==='排班表')return access.hasPermission(PERMISSIONS.SCHEDULE_ROSTER_VIEW)
+    if(value==='出勤表')return access.hasPermission(PERMISSIONS.ATTENDANCE_MONTHLY_VIEW)
+    if(value==='今日考勤')return access.hasPermission(PERMISSIONS.ATTENDANCE_TODAY_VIEW)
+    if(value==='考勤记录')return access.hasPermission(PERMISSIONS.ATTENDANCE_RECORDS_VIEW)
+    if(value==='请假审批')return access.hasPermission(PERMISSIONS.ATTENDANCE_LEAVE_VIEW)
+    if(value==='奖金 / 扣款')return access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)
+    return false
   })
   const tab=access.loading?(TABS.includes(requestedTab)?requestedTab:TABS[0]):(visibleTabs.includes(requestedTab)?requestedTab:(visibleTabs[0]||''))
   const [draft,setDraft]=useState(()=>tabFilters(tab))
@@ -156,7 +159,8 @@ export default function AdminAttendancePage(){
       const filters={...applied,full_name:applied.employee_name,status:applied.employee_status,scope:tabScope(tab),page,page_size:pageSize}
       if(tab==='今日考勤')filters.date_from=filters.date_to=todayIso()
       if(tab==='请假审批'&&!filters.event_kind)filters.event_kind='leave'
-      const {data,error}=await supabase.rpc('admin_attendance_home',{p_filters:filters})
+      const rpcName=tab==='今日考勤'?'admin_attendance_today_page':tab==='考勤记录'?'admin_attendance_records_page':tab==='请假审批'?'admin_attendance_leave_page':'admin_adjustment_page'
+      const {data,error}=await supabase.rpc(rpcName,{p_filters:filters})
       if(!alive)return
       if(error)setState(current=>({loading:false,error:message(error),data:current.data}))
       else{
@@ -184,7 +188,7 @@ export default function AdminAttendancePage(){
     setDraft(next);setApplied(next);setPage(1);setRefreshKey(value=>value+1)
   }
   const openEmployee=async row=>{
-    if(!row.employee_id)return
+    if(!canViewEmployeeDirectory||!row.employee_id)return
     const sequence=++employeeRequest.current
     setEmployeeError('')
     setEmployeeDetail({employee:{id:row.employee_id,employee_no:row.employee_no,full_name:row.full_name,status:row.employee_status,teams:{name:row.team_name},positions:{name:row.position_name}},missing_fields:[]})
@@ -202,8 +206,9 @@ export default function AdminAttendancePage(){
   const pageChrome=adminLocalPageTabs('/admin/schedule',visibleTabs,tab)
   const sectionTitle=pageChrome.active.sectionLabel||'排班与考勤'
   const pageTitle=pageChrome.active.itemLabel||tab
-  const canCreateAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_CREATE)
-  const canEditAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_APPROVE)
+  const canViewEmployeeDirectory=access.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)
+  const canCreateAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_CREATE)
+  const canEditAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_EDIT)
 
   return <div className="content-page attendance-page">
     <header className="attendance-page-head">
@@ -230,7 +235,7 @@ export default function AdminAttendancePage(){
       <AttendanceFilters tab={tab} draft={draft} setDraft={setDraft} options={options} advanced={advanced} setAdvanced={setAdvanced} loading={state.loading} sync={syncMeta(data)} onQuery={query} onReset={reset}/>
       {state.error&&<div className="attendance-error" role="alert"><span>考勤数据读取失败：{state.error}</span><button type="button" onClick={()=>setRefreshKey(value=>value+1)}>重试</button></div>}
       <AttendanceSummary scope={tabScope(tab)} summary={data.summary||{}} total={Number(data.total||0)}/>
-      <AttendanceTable rows={rows} scope={tabScope(tab)} loading={state.loading} hasData={Boolean(state.data)} onEmployee={openEmployee} onDetail={setRecordDetail} canEditAdjustment={canEditAdjustment} onEditAdjustment={row=>setAdjustmentEditor({mode:'edit',row})}/>
+      <AttendanceTable rows={rows} scope={tabScope(tab)} loading={state.loading} hasData={Boolean(state.data)} onEmployee={canViewEmployeeDirectory?openEmployee:null} onDetail={setRecordDetail} canEditAdjustment={canEditAdjustment} onEditAdjustment={row=>setAdjustmentEditor({mode:'edit',row})}/>
       <Pagination page={Number(data.page||page)} pages={Math.max(1,Number(data.pages||1))} total={Number(data.total||0)} pageSize={Number(data.page_size||pageSize)} loading={state.loading} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>
     </>}
 
@@ -292,7 +297,7 @@ function AttendanceTable({rows,scope,loading,hasData,onEmployee,onDetail,canEdit
       <tbody>{rows.map((row,index)=>{const sync=adjustmentSyncState(row);return <tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <td className={adjustment?'attendance-adjustment-date-cell':''}><div className="attendance-event-cell"><strong>{row.event_date||'—'}</strong>{!adjustment&&<span className={`attendance-kind kind-${text(row.event_kind).toLowerCase()}`}>{attendanceKindLabel(row.event_kind)}</span>}{!adjustment&&row.is_mirror&&<em>镜像</em>}</div></td>
         <td><span className="attendance-hire-date">{text(row.hire_date).slice(0,10)||'—'}</span></td>
-        {adjustment?<><td><div className="attendance-employee-cell">{row.employee_id?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||'未匹配'}</strong>}<span>{row.full_name||'—'}</span></div></td><td><div className="attendance-stack"><strong>{employeeTypeLabel(row)}</strong><span>{row.country||'—'}</span></div></td></>:<><td className="attendance-employee-id-cell">{row.employee_id?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||'未匹配'}</strong>}</td><td className="attendance-name-cell">{row.full_name||'—'}</td><td>{employeeTypeLabel(row)}</td><td>{row.country||'—'}</td></>}
+        {adjustment?<><td><div className="attendance-employee-cell">{row.employee_id&&onEmployee?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||(row.employee_id?'未编号':'未匹配')}</strong>}<span>{row.full_name||'—'}</span></div></td><td><div className="attendance-stack"><strong>{employeeTypeLabel(row)}</strong><span>{row.country||'—'}</span></div></td></>:<><td className="attendance-employee-id-cell">{row.employee_id&&onEmployee?<button type="button" onClick={()=>onEmployee(row)}>{row.employee_no||'未编号'}</button>:<strong>{row.employee_no||(row.employee_id?'未编号':'未匹配')}</strong>}</td><td className="attendance-name-cell">{row.full_name||'—'}</td><td>{employeeTypeLabel(row)}</td><td>{row.country||'—'}</td></>}
         <td><div className="attendance-status-stack"><span className={`attendance-employee-status ${text(row.employee_status).toLowerCase()}`}>{employeeStatusLabel(row.employee_status)}</span>{row.needs_review&&<span className="attendance-review-badge" title="员工身份尚未唯一确认，需要人工核对员工ID或姓名">待核对</span>}</div></td>
         {adjustment?<td><div className="attendance-stack"><strong>{row.team_name||'—'}</strong><span>{row.position_name||'—'}</span></div></td>:<><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td></>}
         {adjustment&&<td className="attendance-adjustment-category-cell"><span className="attendance-adjustment-category" title={adjustmentCategory(row)}>{adjustmentCategory(row)}</span></td>}
@@ -416,7 +421,7 @@ function SchedulePane(){
   const [applied,setApplied]=useState(blank)
   const [refreshKey,setRefreshKey]=useState(0)
   const [selected,setSelected]=useState(null)
-  const [state,setState]=useState({loading:true,error:'',rows:[],options:{},sync:syncMeta({})})
+  const [state,setState]=useState({loading:true,error:'',rows:[],options:{},summary:{},identityIssues:{},sourceQuality:{},sync:syncMeta({})})
   useEffect(()=>{
     let alive=true
     const load=async()=>{
@@ -452,7 +457,16 @@ function SchedulePane(){
             work_mode:row.work_mode||row.source_group||profile.work_mode||profile.source_group||employeeWorkMode({...profile,...row}),
           }
         })
-        setState({loading:false,error:'',rows,options:payload.options||payload.filters||{},sync:syncMeta({...payload,refreshed_at:payload.refreshed_at||refreshedAt})})
+        setState({
+          loading:false,
+          error:'',
+          rows,
+          options:payload.options||payload.filters||{},
+          summary:payload.summary||{},
+          identityIssues:payload.identity_issues||{},
+          sourceQuality:payload.source_quality||{},
+          sync:syncMeta({...payload,refreshed_at:payload.refreshed_at||refreshedAt}),
+        })
       }
     }
     load()
@@ -505,6 +519,10 @@ function SchedulePane(){
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
   const apply=()=>setApplied({...draft})
   const reset=()=>{const next=blank();setDraft(next);setApplied(next)}
+  const missingEmployeeIds=state.identityIssues?.missing_employee_id||[]
+  const unmatchedEmployees=state.identityIssues?.unmatched_employee||[]
+  const sourceIncomplete=state.sourceQuality?.healthy===false
+  const showUnmatched=()=>{const next={...blank(),employee_status:'unmatched'};setDraft(next);setApplied(next)}
   return <>
     <section className="schedule-overview"><div><span>早班 / 白班</span><strong>{counts.day}</strong></div><div><span>中班</span><strong>{counts.mid}</strong></div><div><span>晚班 / 夜班</span><strong>{counts.night}</strong></div><div><span>其他 / 未设置</span><strong>{counts.other}</strong></div></section>
     <section className="attendance-filter-card schedule-search-card">
@@ -526,6 +544,8 @@ function SchedulePane(){
       </div>
       <div className="attendance-filter-foot"><SyncIndicator sync={state.sync}/><span>页面查询 Supabase；Google 排班变更由同步任务写入后在此刷新。</span></div>
     </section>
+    {!state.loading&&sourceIncomplete&&<section className="schedule-identity-warning source-incomplete" role="alert"><div><strong>Google 排班本次读取不完整</strong><p>当前快照只有 <b>{state.sourceQuality.current_count||0}</b> 人，近期完整值为 <b>{state.sourceQuality.recent_good_peak||0}</b> 人。已启用完整性保护，不会用这份不完整资料回填负责人；请等 Google 表格加载完成后再刷新。</p></div><button type="button" className="secondary-action" onClick={()=>setRefreshKey(value=>value+1)}>重新检查</button></section>}
+    {!state.loading&&!sourceIncomplete&&(missingEmployeeIds.length>0||unmatchedEmployees.length>0)&&<section className="schedule-identity-warning" role="status"><div><strong>排班资料需要核对</strong><p>{missingEmployeeIds.length>0?<><b>{missingEmployeeIds.length} 人没有员工 ID</b>：{missingEmployeeIds.slice(0,4).map(item=>`${item.full_name||'未命名'}（Google 第 ${item.source_row||'—'} 行）`).join('、')}{missingEmployeeIds.length>4?`，另 ${missingEmployeeIds.length-4} 人`:''}。</>:null}{unmatchedEmployees.length>missingEmployeeIds.length?` 另有 ${unmatchedEmployees.length-missingEmployeeIds.length} 人有 ID 但未匹配员工档案。`:''}补齐 ID 或员工档案后，人数就能持续保持一致。</p></div><button type="button" className="secondary-action" onClick={showUnmatched}>只看未匹配（{unmatchedEmployees.length}）</button></section>}
     {state.error&&<div className="attendance-error"><span>排班读取失败：{state.error}</span><button type="button" onClick={()=>setRefreshKey(value=>value+1)}>重试</button></div>}
     <section className="attendance-table-card schedule-matrix-card"><header><div><h2>团队 × 班次</h2><p>每格显示总人数与前 6 名，点击格子查看该团队该班次的完整名单。</p></div><span>{state.loading?'读取中…':`${visibleRows.length} 人 · ${matrix.length} 个团队`}</span></header>{state.loading&&!state.rows.length?<div className="attendance-table-state">正在读取排班…</div>:!matrix.length?<div className="attendance-table-state">暂无符合条件的排班员工</div>:<div className="schedule-team-matrix-scroll"><div className="schedule-team-matrix"><div className="schedule-team-row head"><div>团队</div><div>早班 / 白班</div><div>中班</div><div>晚班 / 夜班</div><div>其他 / 未设置</div></div>{matrix.map(teamRow=><div className="schedule-team-row" key={teamRow.team}><div className="schedule-team-name"><strong title={teamRow.team}>{teamRow.team}</strong><span>{teamRow.day.length+teamRow.mid.length+teamRow.night.length+teamRow.other.length} 人</span></div>{['day','mid','night','other'].map(tone=><button type="button" className={`schedule-team-cell ${tone}`} key={tone} onClick={()=>setSelected({team:teamRow.team,tone,people:teamRow[tone]})} disabled={!teamRow[tone].length}><strong>{teamRow[tone].length}<small>人</small></strong><span title={teamRow[tone].map(person=>person.full_name||person.employee_no).join('、')}>{teamRow[tone].slice(0,6).map(person=>person.full_name||person.employee_no).join('、')||'无人排班'}</span>{teamRow[tone].length>6&&<em>另有 {teamRow[tone].length-6} 人</em>}</button>)}</div>)}</div></div>}
       {state.loading&&state.rows.length>0&&<div className="attendance-loading-overlay">正在更新排班…</div>}
@@ -685,7 +705,7 @@ function AttendanceMatrixOverview({overview,month}){
 }
 
 async function fetchAttendanceMonth(month,filters={}){
-  const {data,error}=await supabase.rpc('admin_attendance_monthly',{p_filters:{month,...filters}})
+  const {data,error}=await supabase.rpc('admin_attendance_monthly_page',{p_filters:{month,...filters}})
   if(error)throw error
   return data||{rows:[],options:{}}
 }

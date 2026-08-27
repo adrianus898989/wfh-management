@@ -309,6 +309,12 @@ Deno.serve(async (req) => {
       )
     }
 
+    function employeeWithoutSensitiveContact(employee: any) {
+      if (!employee) return null
+      const { work_tg: _workTg, ...safeEmployee } = employee
+      return safeEmployee
+    }
+
     async function requireEmployeeInScope(employeeId: string) {
       const scope = await getScopeContext()
       const employee = scope.employeeMap.get(employeeId)
@@ -522,7 +528,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'online_presence') {
-      if (!can('account.view') && !can('user.view') && !can('employee.view')) {
+      if (!can('backend_account.view') && !can('staff_account.view') && !can('employee.directory.view')) {
         return json(req, { error:'无在线账号查看权限' }, 403)
       }
       const nowIso = new Date().toISOString()
@@ -651,10 +657,10 @@ Deno.serve(async (req) => {
 
     if (action === 'dashboard') {
       if (!can('dashboard.view')) return json(req, { error: '无后台首页权限' }, 403)
-      const mayViewEmployees = can('employee.view')
-      const mayViewStaffCoverage = can('user.view') || can('account.view') ||
+      const mayViewEmployees = can('employee.directory.view')
+      const mayViewStaffCoverage = can('staff_account.view') || can('backend_account.view') ||
         can('user.activation.generate') || can('user.account.create')
-      const mayViewBackendAccounts = can('user.view') || can('account.view') ||
+      const mayViewBackendAccounts = can('backend_account.view') ||
         can('account.create') || can('account.edit')
       const scopedEmployees = (mayViewEmployees || mayViewStaffCoverage)
         ? await getScopedEmployees(false)
@@ -711,7 +717,7 @@ Deno.serve(async (req) => {
           is_founder: isFounder,
           permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
         },
-        employees,
+        employees: employees.map(employeeWithoutSensitiveContact),
         account_summary: accountSummary,
         dashboard_access: {
           employee_metrics: mayViewEmployees,
@@ -722,7 +728,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'company_assets') {
-      if (!can('user.view')) return json(req, { error: '无公司资产查看权限' }, 403)
+      if (!can('asset.view')) return json(req, { error: '无公司资产查看权限' }, 403)
       const employees = (await getScopedEmployees(true))
         .filter((employee: any) => {
           const employeeNo = cleanString(employee.employee_no).toUpperCase()
@@ -743,22 +749,15 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'bootstrap') {
-      const backendActionPermissions = [
-        'user.view', 'account.view', 'account.create', 'account.edit',
-        'account.delete', 'account.disable', 'account.mfa_reset',
-        'account.otp_toggle', 'account.reset_password',
-      ]
-      const staffActionPermissions = [
-        'user.view', 'user.account.create', 'user.account.delete',
-        'user.account.disable', 'user.password.reset', 'account.mfa_reset',
-      ]
-      const mayViewBackendAccounts = backendActionPermissions.some(code => can(code))
-      const mayViewStaffAccounts = staffActionPermissions.some(code => can(code))
+      // Page actions never imply the right to read the page dataset. This also
+      // makes malformed roles with a lone edit/delete checkbox fail closed.
+      const mayViewBackendAccounts = can('backend_account.view')
+      const mayViewStaffAccounts = can('staff_account.view')
       const mayViewAccounts = mayViewBackendAccounts || mayViewStaffAccounts
-      if (!mayViewAccounts && !can('role.manage')) {
+      if (!mayViewAccounts && !can('role.view')) {
         return json(req, { error: '无账号与权限查看权限' }, 403)
       }
-      const mayManageRoles = can('role.manage')
+      const mayManageRoles = can('role.view')
       const mayCreateAccounts = can('account.create')
       const scope = await getScopeContext()
       const employees = mayViewAccounts ? await getScopedEmployees(true) : []
@@ -824,7 +823,9 @@ Deno.serve(async (req) => {
       }
       const decorate = (x: any) => ({
         ...x,
-        employee: x.employee_id ? scope.employeeMap.get(x.employee_id) || null : null,
+        employee: x.employee_id
+          ? employeeWithoutSensitiveContact(scope.employeeMap.get(x.employee_id))
+          : null,
       })
 
       const backendAccounts = (mayViewBackendAccounts ? manageableAccounts : [])
@@ -860,7 +861,7 @@ Deno.serve(async (req) => {
           is_founder: isFounder,
           permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
         },
-        employees,
+        employees: employees.map(employeeWithoutSensitiveContact),
         backend_accounts: backendAccounts,
         employee_accounts: employeeAccounts,
         roles,
@@ -936,7 +937,7 @@ Deno.serve(async (req) => {
     if (action === 'save_role_permissions') {
       if (!isFounder) return json(req, { error: '只有 Founder 可以修改全局角色权限' }, 403)
       const roleId = cleanString(body.role_id)
-      const permissionIds = cleanStringList(body.permission_ids)
+      let permissionIds = cleanStringList(body.permission_ids)
 
       const { data: role } = await admin.from('roles')
         .select('id,code,system_locked')
@@ -947,11 +948,55 @@ Deno.serve(async (req) => {
 
       if (permissionIds.length) {
         const { data: validPermissions, error: permissionError } = await admin.from('permissions')
-          .select('id').in('id', permissionIds)
+          .select('id,code').in('id', permissionIds)
         if (permissionError) return json(req, { error: permissionError.message }, 400)
         const validIds = new Set((validPermissions || []).map((permission: any) => permission.id))
         if (permissionIds.some(permissionId => !validIds.has(permissionId))) {
           return json(req, { error: '包含不存在的权限项目' }, 400)
+        }
+
+        // Never trust hidden legacy ids echoed by a stale or crafted client.
+        // Rebuild them only from the selected current-page permissions below,
+        // so clearing the new checkbox also clears its private dependency.
+        const hiddenLegacyCodes = new Set([
+          'employee.view','employee.resign','employee.reactivate','audit.view',
+          'schedule.view','attendance.view','attendance.edit','leave.approve',
+          'report.view','report.edit','export.general',
+          'online_training.view','online_training.submit','online_training.review','online_training.manage',
+          'exam.view','exam.manage','exam.grade','exam.delete',
+          'adjustment.view','adjustment.create','adjustment.approve','daily_work.submit','daily_work.manage',
+          'payroll.view','payroll.edit','payroll.approve','payroll.publish','payroll.export','payroll.rule.edit','payroll.payout_change.view','payroll.payout_change.review',
+          'user.view','account.view','account.mfa_reset',
+        ])
+        const visiblePermissions = (validPermissions || []).filter((permission: any) => !hiddenLegacyCodes.has(cleanString(permission.code)))
+        permissionIds = visiblePermissions.map((permission: any) => permission.id)
+
+        // Granular page wrappers reuse proven legacy implementations behind a
+        // revoked public entrypoint. Keep the implementation dependency hidden
+        // and synchronized whenever Founder saves the visible page checkboxes.
+        const legacyDependencies = new Set<string>()
+        for (const permission of visiblePermissions) {
+          const code = cleanString(permission.code)
+          const add = (...codes: string[]) => codes.forEach(item => legacyDependencies.add(item))
+          if (code.startsWith('work.event.')) add(code.endsWith('.submit') ? 'daily_work.submit' : code.endsWith('.manage') ? 'daily_work.manage' : code.endsWith('.edit') ? 'report.edit' : 'report.view')
+          else if (code.startsWith('work.daily_inspection.')) add(code.endsWith('.edit') ? 'report.edit' : 'daily_work.manage')
+          else if (code.startsWith('work.quality_inspection.')) add('report.edit')
+          // Payroll readers and mutations are bridged directly to their new
+          // page codes. Never restore broad payroll.* grants here: those old
+          // grants also unlock unrelated legacy RPCs.
+          // Alert internals are bridged directly to the new type permissions;
+          // selecting an alert never restores an unrelated legacy page grant.
+          else if (code === 'asset.view' || code === 'staff_account.view') add('user.view')
+          else if (code === 'backend_account.view') add('account.view')
+          else if (code.endsWith('_account.mfa_reset')) add('account.mfa_reset')
+          else if (code === 'role.view') { /* role reads are enforced directly */ }
+          else if (code === 'role.audit.view') add('audit.view')
+        }
+        if (legacyDependencies.size) {
+          const { data: dependencyRows, error: dependencyError } = await admin.from('permissions')
+            .select('id').in('code', [...legacyDependencies])
+          if (dependencyError) return json(req, { error: dependencyError.message }, 400)
+          permissionIds = [...new Set([...permissionIds,...(dependencyRows || []).map((row: any) => row.id)])]
         }
       }
 
@@ -1407,14 +1452,16 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'reset_mfa') {
-      if (!can('account.mfa_reset')) return json(req, { error: '无重置OTP权限' }, 403)
       const target = cleanString(body.auth_user_id)
 
+      let targetAccount: any
       try {
-        await getTargetAccount(target)
+        targetAccount = await getTargetAccount(target)
       } catch (error) {
         return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
       }
+      const resetPermission = targetAccount.backend_enabled ? 'backend_account.mfa_reset' : 'staff_account.mfa_reset'
+      if (!can(resetPermission)) return json(req, { error: '无重置OTP权限' }, 403)
 
       const { data: factors, error: listError } = await admin.auth.admin.mfa.listFactors({ userId: target })
       if (listError) return json(req, { error: listError.message }, 400)

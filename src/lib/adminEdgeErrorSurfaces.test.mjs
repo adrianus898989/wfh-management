@@ -14,6 +14,8 @@ const [
   alertCenter,
   stableErrorUi,
   main,
+  reportStyles,
+  stableStyles,
 ] = await Promise.all([
   source('../pages/AdminEmployeesPage.jsx'),
   source('../pages/PortalPage.jsx'),
@@ -24,6 +26,8 @@ const [
   source('../components/AdminAlertCenter.jsx'),
   source('../stableErrorUiEnhancer.js'),
   source('../main.jsx'),
+  source('../styles-reports.css'),
+  source('../stable-layout-hotfix.css'),
 ])
 
 test('employee initial loads and activation-code errors use the shared Edge response formatter', () => {
@@ -53,9 +57,20 @@ test('admin page-level Edge loaders never pass the generic SDK message to their 
   assert.match(dashboard, /edgeFunctionErrorMessage\(\{ data, error, fallback:'Dashboard 读取失败，请重试' \}\)/)
   assert.match(companyAssets, /edgeFunctionErrorMessage\(\{ data, error:requestError, fallback:'公司资产资料读取失败' \}\)/)
   assert.match(reports, /edgeFunctionErrorMessage\(\{data,error,fallback:'统计数据读取失败'\}\)/)
+  assert.match(reports, /const payloadMessage=payload\?reportErrorMessage\(payload,''\):''/)
+  assert.match(reports, /const message=reportErrorMessage\(data,'错误统计读取失败'\)/)
+  assert.doesNotMatch(reports, /new Error\(`\$\{data\.error\}/)
   assert.match(reports, /edgeFunctionErrorMessage\(\{data:found\.data,error:found\.error,fallback:'员工读取失败'\}\)/)
   assert.match(training, /edgeFunctionErrorMessage\(\{data:detail,error:e,fallback:'员工档案读取失败'\}\)/)
   assert.match(onlineTraining, /edgeFunctionErrorMessage\(\{data,error:edgeError,fallback:'员工完整档案读取失败'\}\)/)
+})
+
+test('error statistics prioritizes the complete error type and compacts status and score columns', () => {
+  assert.match(reportStyles, /nth-child\(8\)\{width:280px!important/)
+  assert.match(reportStyles, /nth-child\(4\)\{width:58px!important/)
+  assert.match(reportStyles, /nth-child\(9\)\{width:52px!important/)
+  assert.match(reportStyles, /td:nth-child\(8\) \.rp-cell-clamp[\s\S]*white-space:normal!important/)
+  assert.match(stableStyles, /\.wfh-error-type-cell \*[\s\S]*white-space:normal!important/)
 })
 
 test('the active legacy error-history enhancer formats Edge failures before writing text', () => {

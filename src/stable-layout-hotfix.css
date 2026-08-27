@@ -120,3 +120,20 @@
 .resignation-unmatched-bell{height:32px;min-width:54px;padding:0 10px;border:1px solid #f1c76f;border-radius:999px;background:#fff8e7;color:#9a6200;font-size:12px;font-weight:800;cursor:default}
 .resignation-unmatched-bell strong{margin-left:4px}
 .analytics-detail-table .event-date-cell{min-width:90px}
+
+/* Legacy error-table fallback follows the native table's full-text type column. */
+.rp-errors-table .wfh-error-type-head,.rp-errors-table .wfh-error-type-cell{
+  width:280px!important;
+  max-width:280px!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  white-space:normal!important;
+}
+.rp-errors-table .wfh-error-type-cell *{
+  display:block!important;
+  max-width:100%!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  white-space:normal!important;
+  overflow-wrap:anywhere!important;
+}

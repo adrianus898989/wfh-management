@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-import { adjustmentCategory, adjustmentReason } from './adjustmentPresentation.js'
+import { adjustmentCategory, adjustmentReason, adjustmentTitle } from './adjustmentPresentation.js'
 
 test('奖金 / 扣款原因优先读取 Google 备注，旧 reason 仅作回退', () => {
   assert.equal(adjustmentReason({ note: '上班迟到 22 分钟', reason: 'Google/后台录入奖金/扣款' }), '上班迟到 22 分钟')
@@ -14,6 +14,13 @@ test('奖惩类型优先读取同步协议 category，并兼容 reason 和旧奖
   assert.equal(adjustmentCategory({ raw_values:{ category:'迟到 / 超时' }, reason:'旧值' }), '迟到 / 超时')
   assert.equal(adjustmentCategory({ reason:'服务质量' }), '服务质量')
   assert.equal(adjustmentCategory({ event_kind:'deduction' }), '扣款')
+})
+
+test('员工端奖惩标题优先用明确标题，再兼容同步类型和旧记录', () => {
+  assert.equal(adjustmentTitle({ title:'月度服务之星', reason:'服务质量' }), '月度服务之星')
+  assert.equal(adjustmentTitle({ raw_values:{ category:'迟到 / 超时' }, reason:'旧值' }), '迟到 / 超时')
+  assert.equal(adjustmentTitle({ reason:'服务质量', note:'客户表扬' }), '服务质量')
+  assert.equal(adjustmentTitle({ event_kind:'deduction' }), '扣款记录')
 })
 
 test('后台编辑仍把用户填写的原因写入 note payload', async () => {
@@ -42,8 +49,20 @@ test('员工档案与员工端同时展示独立类型和备注原因', async ()
   ])
   assert.match(archiveSource, /<small>类型<\/small><strong>\{adjustmentCategory\(row\)\}<\/strong>/)
   assert.match(archiveSource, /row=>adjustmentCategory\(row\)/)
-  assert.match(staffSource, /adjustments\.category[\s\S]*adjustmentCategory\(row\)/)
+  assert.match(staffSource, /adjustments\.recordTitle[\s\S]*adjustmentTitle\(row\)/)
+  assert.match(staffSource, /adjustments\.date[\s\S]*adjustments\.type[\s\S]*adjustments\.amount[\s\S]*adjustments\.reason/)
   assert.match(staffSource, /adjustmentReason\(row\)/)
+})
+
+test('员工端刷新错误格式化对象信息并保留已经显示的数据', async () => {
+  const source = await readFile(new URL('../pages/PortalPage.jsx', import.meta.url), 'utf8')
+  assert.match(source, /const portalErrorMessage = \(error, fallback\)[\s\S]*readableErrorMessage\(error\)/)
+  assert.match(source, /setActivity\(current => activityError[\s\S]*\{ \.\.\.current, loading: false, error:/)
+  assert.match(source, /setSelfAttendance\(current => attendanceError[\s\S]*\{ \.\.\.current, loading: false, error:/)
+  assert.match(source, /setAdjustmentHistory\(current => loadError[\s\S]*\{ \.\.\.current, loading:false, error:/)
+  assert.match(source, /if \(loading && !data\)/)
+  assert.doesNotMatch(source, /activityError\.message \|\|/)
+  assert.doesNotMatch(source, /attendanceError\.message \|\|/)
 })
 
 test('forward SQL correction preserves revision checks and requires category for the PH nine-column layout', async () => {

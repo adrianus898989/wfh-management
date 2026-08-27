@@ -4,11 +4,15 @@ import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
 import { useStaffLocale } from '../lib/staffI18n'
 import { useAdminI18n } from '../lib/adminI18n'
-import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentation'
-import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import { adjustmentReason, adjustmentTitle } from '../lib/adjustmentPresentation'
+import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
 
 const activeStatuses = ['active', 'probation', '在职', '试用']
 const text = v => String(v ?? '').trim()
+const portalErrorMessage = (error, fallback) => {
+  const message = readableErrorMessage(error)
+  return !message || message === '操作失败' ? fallback : message
+}
 
 const currentStaffShift = (profile = {}, schedule = {}, fallback) => {
   const liveShift = text(
@@ -221,7 +225,7 @@ function DashboardAccessLimited({ summary, access }) {
       {access?.backend_account_metrics && <Kpi label="有效后台账号" value={Number(summary?.backend_accounts || 0)} hint="当前管理范围" icon="管" tone="violet" />}
     </div>}
     <DashboardCard title="数据权限说明" meta="按角色授权" className="dashboard-access-card">
-      <div className="dashboard-access-copy"><span>权</span><div><strong>当前角色未获员工数据查看权限</strong><p>首页不会用 0 模拟员工总数或人员分布。勾选“查看员工（employee.view）”后，这里会显示范围内的实时员工、团队、岗位及人员变化数据。</p></div></div>
+      <div className="dashboard-access-copy"><span>权</span><div><strong>当前角色未获员工数据查看权限</strong><p>首页不会用 0 模拟员工总数或人员分布。勾选“查看员工档案查询表（employee.directory.view）”后，这里会显示范围内的实时员工、团队、岗位及人员变化数据。</p></div></div>
     </DashboardCard>
   </div>
 }
@@ -440,13 +444,13 @@ export const StaffHome = ({ mode = 'profile' }) => {
       supabase.rpc('staff_activity_home'),
       supabase.rpc('staff_attendance_home', { p_month: staffMonthValue() }),
     ])
-    if (loadError) setError(loadError.message || t('portal.profileLoadFailed', 'Failed to load profile'))
+    if (loadError) setError(portalErrorMessage(loadError, t('portal.profileLoadFailed', 'Failed to load profile')))
     else setData(result)
-    setActivity(activityError
-      ? { loading: false, error: activityError.message || t('portal.activityLoadFailed', 'Failed to load attendance and connectivity records'), data: null }
+    setActivity(current => activityError
+      ? { ...current, loading: false, error: portalErrorMessage(activityError, t('portal.activityLoadFailed', 'Failed to load attendance and connectivity records')) }
       : { loading: false, error: '', data: activityResult || null })
-    setSelfAttendance(attendanceError
-      ? { loading: false, error: attendanceError.message || t('portal.activityLoadFailed', 'Failed to load attendance records'), data: null }
+    setSelfAttendance(current => attendanceError
+      ? { ...current, loading: false, error: portalErrorMessage(attendanceError, t('portal.activityLoadFailed', 'Failed to load attendance records')) }
       : { loading: false, error: '', data: attendanceResult || null })
     setLoading(false)
   }
@@ -463,7 +467,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
       setErrorsLoading(true)
       const { data: result, error: loadError } = await supabase.rpc('staff_portal_errors', { p_page: errorPage, p_page_size: 20 })
       if (!alive) return
-      if (loadError) setError(loadError.message || t('portal.errorHistoryLoadFailed', 'Failed to load error records'))
+      if (loadError) setError(portalErrorMessage(loadError, t('portal.errorHistoryLoadFailed', 'Failed to load error records')))
       else setErrorHistory(result || { rows: [], total: 0, page: 1, pages: 1 })
       setErrorsLoading(false)
     })()
@@ -476,14 +480,14 @@ export const StaffHome = ({ mode = 'profile' }) => {
       setAdjustmentHistory(current => ({ ...current, loading:true, error:'' }))
       const { data: result, error: loadError } = await supabase.rpc('staff_own_adjustment_history', { p_page:1, p_page_size:100 })
       if (!alive) return
-      setAdjustmentHistory(loadError
-        ? { loading:false, error:loadError.message || t('adjustments.loadFailed', 'Failed to load reward and deduction records.'), data:null }
+      setAdjustmentHistory(current => loadError
+        ? { ...current, loading:false, error:portalErrorMessage(loadError, t('adjustments.loadFailed', 'Failed to load reward and deduction records.')) }
         : { loading:false, error:'', data:result || { rows:[], total:0, page:1, pages:1 } })
     })()
     return () => { alive = false }
   }, [activeSection, t])
 
-  if (loading) return <div className="staff-portal-page"><div className="staff-portal-loading">{t('portal.loadingProfile', 'Loading profile…')}</div></div>
+  if (loading && !data) return <div className="staff-portal-page"><div className="staff-portal-loading">{t('portal.loadingProfile', 'Loading profile…')}</div></div>
 
   const p = data?.profile || {}
   const pay = data?.payment || {}
@@ -503,7 +507,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
     setRevealLoading(field)
     setError('')
     const { data: value, error: revealError } = await supabase.rpc('staff_portal_reveal_payment', { p_field: field })
-    if (revealError) setError(revealError.message || t('portal.sensitiveLoadFailed', 'Failed to load protected information'))
+    if (revealError) setError(portalErrorMessage(revealError, t('portal.sensitiveLoadFailed', 'Failed to load protected information')))
     else setRevealed(current => ({ ...current, [field]: value || '—' }))
     setRevealLoading('')
   }
@@ -526,7 +530,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
     setExamDetailLoading(true)
     setExamDetailError('')
     const { data: result, error: detailError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: row.id })
-    if (detailError) setExamDetailError(detailError.message || t('portal.examDetailLoadFailed', 'Failed to load exam detail'))
+    if (detailError) setExamDetailError(portalErrorMessage(detailError, t('portal.examDetailLoadFailed', 'Failed to load exam detail')))
     else setExamDetail(result)
     setExamDetailLoading(false)
   }
@@ -587,9 +591,11 @@ function StaffAdjustmentPanel({ state, t, locale }) {
       const deduction = ['deduction', 'penalty'].includes(kind) || amount < 0
       const currency = String(row.currency || '').trim()
       return <article key={row.id || `${row.event_date || row.date}-${index}`}>
-        <div><time>{staffDate(row.event_date || row.date)}</time><span className={deduction ? 'deduction' : 'bonus'}>{deduction ? t('adjustments.deduction', 'Deduction') : t('adjustments.bonus', 'Reward')}</span></div>
-        <strong className={deduction ? 'deduction' : 'bonus'}>{currency ? `${currency} ` : ''}{amount > 0 ? '+' : ''}{amount.toLocaleString(localeCode(locale), { maximumFractionDigits:2 })}</strong>
-        <p><b className="staff-adjustment-category">{t('adjustments.category', 'Type')}: {adjustmentCategory(row)}</b>{adjustmentReason(row)}</p>
+        <div className="staff-adjustment-field staff-adjustment-title"><small>{t('adjustments.recordTitle', 'Title')}</small><strong>{adjustmentTitle(row)}</strong></div>
+        <div className="staff-adjustment-field"><small>{t('adjustments.date', 'Date')}</small><time>{staffDate(row.event_date || row.date)}</time></div>
+        <div className="staff-adjustment-field"><small>{t('adjustments.type', 'Type')}</small><span className={deduction ? 'deduction' : 'bonus'}>{deduction ? t('adjustments.deduction', 'Deduction') : t('adjustments.bonus', 'Reward')}</span></div>
+        <div className="staff-adjustment-field"><small>{t('adjustments.amount', 'Amount')}</small><strong className={deduction ? 'deduction' : 'bonus'}>{currency ? `${currency} ` : ''}{amount > 0 ? '+' : ''}{amount.toLocaleString(localeCode(locale), { maximumFractionDigits:2 })}</strong></div>
+        <div className="staff-adjustment-field staff-adjustment-reason"><small>{t('adjustments.reason', 'Reason')}</small><p>{adjustmentReason(row)}</p></div>
       </article>
     })}</div> : <div className="staff-history-empty">{t('adjustments.none', 'No reward or deduction records are linked to your employee ID.')}</div>}
   </section>

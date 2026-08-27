@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAdminI18n } from '../lib/adminI18n'
 import { AdminAlertBell } from './AdminAlertCenter'
+import { PERMISSIONS } from '../config/permissions'
 import '../styles-admin-topbar.css'
 
 const emptyPresence = {
@@ -43,7 +44,11 @@ export default function AdminTopbar({ access }) {
   const [section, setSection] = useState('admin')
   const [presence, setPresence] = useState(emptyPresence)
   const enabled = Boolean(access && !access.loading && !access.error)
-  const canPresence = Boolean(access?.founder || access?.permissions?.includes('*') || ['account.view', 'user.view', 'employee.view'].some(code => access?.permissions?.includes(code)))
+  const canPresence = Boolean(access?.founder || access?.permissions?.includes('*') || [
+    PERMISSIONS.BACKEND_ACCOUNT_VIEW,
+    PERMISSIONS.STAFF_ACCOUNT_VIEW,
+    PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW,
+  ].some(code => access?.permissions?.includes(code)))
 
   const load = async ({ quiet=false } = {}) => {
     if (!enabled || !canPresence) return

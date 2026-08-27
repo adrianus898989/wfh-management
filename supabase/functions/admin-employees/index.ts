@@ -316,6 +316,17 @@ async function requirePermission(service: any, caller: any, code: string) {
   if (!allowed) throw new Error("没有执行此操作的权限");
   return true;
 }
+async function requireAnyPermission(service: any, caller: any, codes: string[]) {
+  if (caller.roleCode === "founder") return true;
+  for (const code of codes) {
+    if (await permissionAllowed(service, caller.access, caller.userId, code)) return true;
+  }
+  throw new Error("没有执行此操作的权限");
+}
+async function permissionAllowedAny(service:any,access:any,userId:string,codes:string[]){
+  for(const code of codes) if(await permissionAllowed(service,access,userId,code)) return true;
+  return false;
+}
 
 type PlatformRef = { platform:string; country:string; series:string };
 
@@ -495,20 +506,34 @@ function sheetPayload(bundle: any, action: string, extra: any = {}) {
 }
 
 
-async function collectEmployeeOptions(service:any, scope:any) {
+async function collectEmployeeOptions(service:any, scope:any, includeInactive=false) {
   const keys = [
     "country","nationality","employment_type","shift_name","group_name",
-    "leader_name","trainer_name","market_country","market_position","platform_scope"
+    "leader_name","trainer_name","market_country","market_position","platform_scope",
+    "person_in_charge","on_site_trainer","online_leader","online_trainer"
   ];
 
   const sets:Record<string,Set<string>> = {};
   keys.forEach(k => sets[k]=new Set<string>());
+  sets.teams=new Set<string>();
+  sets.positions=new Set<string>();
 
   let offset=0;
   const batch=1000;
 
   while(true){
-    let q=service.from("employees").select(keys.join(","));
+    // Filter controls are a live projection of the current employee archive,
+    // not a dump of historical dimension/master rows.  In particular this
+    // keeps retired combined teams/countries out of the controls as soon as no
+    // active employee references them, while the top-level teams/positions
+    // payload remains available to the create/edit forms.
+    let q=service.from("employees").select([
+      ...keys,
+      "teams:team_id(id,name)",
+      "positions:position_id(id,name)",
+    ].join(","))
+      .or("source_type.is.null,source_type.neq.google_deleted");
+    if(!includeInactive) q=q.eq("status","active");
     q=applyScope(q,scope);
     const {data,error}=await q.range(offset,offset+batch-1);
     if(error) throw error;
@@ -519,6 +544,10 @@ async function collectEmployeeOptions(service:any, scope:any) {
         const v=text(r[k]);
         if(v) sets[k].add(v);
       });
+      const team=text(r.teams?.name);
+      const position=text(r.positions?.name);
+      if(team) sets.teams.add(team);
+      if(position) sets.positions.add(position);
     });
 
     if(rows.length<batch) break;
@@ -529,13 +558,23 @@ async function collectEmployeeOptions(service:any, scope:any) {
   const sorted=(s:Set<string>)=>Array.from(s).sort((a,b)=>a.localeCompare(b,"zh-CN"));
 
   return {
+    teams:sorted(sets.teams),
+    positions:sorted(sets.positions),
     countries:sorted(sets.country),
     nationalities:sorted(sets.nationality),
     employment_types:sorted(sets.employment_type),
     shifts:sorted(sets.shift_name),
     groups:sorted(sets.group_name),
-    leaders:sorted(sets.leader_name),
-    trainers:sorted(sets.trainer_name),
+    leaders:sorted(new Set([
+      ...sets.leader_name,
+      ...sets.person_in_charge,
+      ...sets.online_leader,
+    ])),
+    trainers:sorted(new Set([
+      ...sets.trainer_name,
+      ...sets.on_site_trainer,
+      ...sets.online_trainer,
+    ])),
     market_countries:sorted(sets.market_country),
     market_positions:sorted(sets.market_position),
     platforms:sorted(sets.platform_scope),
@@ -609,7 +648,30 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const action = text(body.action || "list");
     requestAction = action;
-    await requirePermission(service,caller,"employee.view");
+    if (action === "analytics" || action === "analytics_event_details") {
+      await requirePermission(service, caller, "employee.analytics.view");
+    } else if (action === "history_list") {
+      await requirePermission(service, caller, "employee.resignations.view");
+    } else if (action === "filter_options") {
+      await requireAnyPermission(service, caller, [
+        "employee.directory.view",
+        "employee.analytics.view",
+        "employee.resignations.view",
+        "employee.change_history.view",
+      ]);
+    } else if (action === "resign_employee") {
+      await requirePermission(service, caller, "employee.directory.view");
+    } else if (action === "update_resignation") {
+      await requirePermission(service, caller, "employee.resignations.view");
+    } else if (["undo_resignation", "reactivate_employee"].includes(action)) {
+      await requireAnyPermission(service, caller, [
+        "employee.directory.reactivate",
+        "employee.resignations.reactivate",
+      ]);
+    } else {
+      await requirePermission(service, caller, "employee.directory.view");
+    }
+    if (body.export === true) await requirePermission(service,caller,"employee.directory.export");
 
     // Employee mutations are transactional and Google-Sheet-backed in admin-employee-write.
     // Keep this read endpoint from becoming a second, weaker write path.
@@ -633,21 +695,23 @@ Deno.serve(async (req) => {
       }
       const [
         { data: teams }, { data: positions }, total, active, noTeam, officialPending, options, platformMap,
-        canCreateRaw, canEditRaw, canGenerateActivationRaw, canViewEmployeeSensitiveRaw, canEditPaymentRaw, canEditCompensationRaw,
+        canCreateRaw, canEditRaw, canGenerateActivationRaw, canViewEmployeeSensitiveRaw, canEditEmployeeSensitiveRaw, canEditPaymentRaw, canEditCompensationRaw,
       ] = await Promise.all([
         teamQuery,service.from("positions").select("id,name,code,status").order("name"),countScoped(service,scope),countScoped(service,scope,q=>q.eq("status","active")),countScoped(service,scope,q=>q.eq("status","active").is("team_id",null)),countScoped(service,scope,q=>q.eq("status","active").eq("official_id_pending",true)),collectEmployeeOptions(service,scope),fetchPlatformMapFromSchedule(),
         permissionAllowed(service,caller.access,caller.userId,"employee.create"),
         permissionAllowed(service,caller.access,caller.userId,"employee.edit"),
         permissionAllowed(service,caller.access,caller.userId,"user.activation.generate"),
-        permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.employee.edit","sensitive.employee.view"]),
+        permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view"),
+        permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.edit"),
         permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.payout.edit","sensitive.payment.edit"]),
-        permissionAllowedFirstDefined(service,caller.access,caller.userId,["payroll.edit","employee.compensation.edit"]),
+        permissionAllowed(service,caller.access,caller.userId,"employee.compensation.edit"),
       ]);
       const founder=caller.roleCode==="founder";
       const canCreate=(founder||canCreateRaw)&&scope.mode!=="self";
       const canEdit=(founder||canEditRaw)&&scope.mode!=="self";
       const canGenerateActivation=founder||canGenerateActivationRaw;
       const canViewEmployeeSensitive=founder||canViewEmployeeSensitiveRaw;
+      const canEditEmployeeSensitive=founder||canEditEmployeeSensitiveRaw;
       const canEditPayment=founder||canEditPaymentRaw;
       const canEditCompensation=founder||canEditCompensationRaw;
       const visibleTeamNames=new Set((teams||[]).map((row:any)=>text(row.name).toLowerCase()));
@@ -657,7 +721,8 @@ Deno.serve(async (req) => {
       return json({
         total,active,no_team:noTeam,official_id_pending:officialPending,teams:teams||[],positions:positions||[],options,platform_map:visiblePlatformMap,
         permissions:{
-          sensitive_employee_edit:canViewEmployeeSensitive,
+          sensitive_employee_view:canViewEmployeeSensitive,
+          sensitive_employee_edit:canEditEmployeeSensitive,
           sensitive_payment_edit:canEditPayment,
           compensation_edit:canEditCompensation,
         },
@@ -665,16 +730,32 @@ Deno.serve(async (req) => {
           can_create:canCreate,
           can_edit:canEdit,
           can_generate_activation_code:canGenerateActivation,
-          can_create_sensitive_employee:canCreate&&canViewEmployeeSensitive,
+          can_create_sensitive_employee:canCreate&&canEditEmployeeSensitive,
           can_create_payment:canCreate&&canEditPayment,
           can_create_compensation:canCreate&&canEditCompensation,
         },
       });
     }
 
+    if (action === "filter_options") {
+      const scopedEmployees=await fetchAllScopedEmployees(service,scope);
+      const teamMap=new Map<string,string>();
+      const positionMap=new Map<string,string>();
+      for(const employee of scopedEmployees){
+        if(employee.team_id&&text(employee.teams?.name)) teamMap.set(employee.team_id,text(employee.teams.name));
+        if(employee.position_id&&text(employee.positions?.name)) positionMap.set(employee.position_id,text(employee.positions.name));
+      }
+      return json({
+        options:await collectEmployeeOptions(service, scope, body.include_inactive===true),
+        teams:Array.from(teamMap,([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN")),
+        positions:Array.from(positionMap,([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN")),
+      });
+    }
+
     if (action === "analytics") {
-      await requirePermission(service,caller,"employee.view");
+      await requirePermission(service,caller,"employee.analytics.view");
       const filter=body.filters||{};
+      const canFilterSensitive=caller.roleCode==="founder"||await permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view");
       const today=isoDateLocal(body.today),yesterday=addDaysIso(today,-1),dayBeforeYesterday=addDaysIso(today,-2),start14=addDaysIso(today,-13),start30=addDaysIso(today,-29),start60=addDaysIso(today,-59),start7=addDaysIso(today,-6),prev7Start=addDaysIso(today,-13),prev7End=addDaysIso(today,-7);
       const monthStart=monthStartIso(today),prevMonth=previousMonthSamePeriod(today);
       const rawFrom=text(filter.date_from),rawTo=text(filter.date_to),periodActive=Boolean(rawFrom||rawTo);
@@ -696,10 +777,10 @@ Deno.serve(async (req) => {
         if(text(filter.shift_name)&&!text(r.shift_name).toLowerCase().includes(text(filter.shift_name).toLowerCase()))return false;
         if(text(filter.employee_no)&&!text(r.employee_no).toLowerCase().includes(text(filter.employee_no).toLowerCase()))return false;
         if(text(filter.full_name)&&!text(r.full_name).toLowerCase().includes(text(filter.full_name).toLowerCase()))return false;
-        if(text(filter.work_tg)&&!text(r.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))return false;
+        if(canFilterSensitive&&text(filter.work_tg)&&!text(r.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))return false;
         const keyword=text(filter.keyword).toLowerCase();
         if(keyword){
-          const hay=[r.employee_no,r.full_name,r.work_tg,r.backend_accounts,r.teams?.name,r.positions?.name,r.country,r.nationality,r.shift_name].map(text).join(" ").toLowerCase();
+          const hay=[r.employee_no,r.full_name,...(canFilterSensitive?[r.work_tg,r.backend_accounts]:[]),r.teams?.name,r.positions?.name,r.country,r.nationality,r.shift_name].map(text).join(" ").toLowerCase();
           if(!hay.includes(keyword))return false;
         }
         return true;
@@ -720,7 +801,7 @@ Deno.serve(async (req) => {
         if(text(filter.shift_name)&&!text(dims.shift).toLowerCase().includes(text(filter.shift_name).toLowerCase()))return false;
         if(text(filter.employee_no)&&!text(emp?.employee_no||ev.employee_no).toLowerCase().includes(text(filter.employee_no).toLowerCase()))return false;
         if(text(filter.full_name)&&!text(emp?.full_name||ev.full_name||ev.snapshot?.full_name||ev.snapshot?.name).toLowerCase().includes(text(filter.full_name).toLowerCase()))return false;
-        if(text(filter.work_tg)&&!text(emp?.work_tg||ev.snapshot?.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))return false;
+        if(canFilterSensitive&&text(filter.work_tg)&&!text(emp?.work_tg||ev.snapshot?.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))return false;
         if(text(filter.reason)){
           if(text(ev.event_type)!=="resign")return false;
           if(!text(ev.reason).toLowerCase().includes(text(filter.reason).toLowerCase()))return false;
@@ -728,7 +809,7 @@ Deno.serve(async (req) => {
         const keyword=text(filter.keyword).toLowerCase();
         if(keyword){
           const snap=ev.snapshot||{};
-          const hay=[ev.employee_no,ev.full_name,emp?.employee_no,emp?.full_name,emp?.work_tg,emp?.backend_accounts,dims.team,dims.position,dims.country,dims.shift,snap.work_tg,snap.backend_accounts].map(text).join(" ").toLowerCase();
+          const hay=[ev.employee_no,ev.full_name,emp?.employee_no,emp?.full_name,...(canFilterSensitive?[emp?.work_tg,emp?.backend_accounts,snap.work_tg,snap.backend_accounts]:[]),dims.team,dims.position,dims.country,dims.shift].map(text).join(" ").toLowerCase();
           if(!hay.includes(keyword))return false;
         }
         return true;
@@ -846,7 +927,8 @@ Deno.serve(async (req) => {
     }
 
     if (action === "analytics_event_details") {
-      await requirePermission(service,caller,"employee.view");
+      await requirePermission(service,caller,"employee.analytics.view");
+      const canFilterSensitive=caller.roleCode==="founder"||await permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view");
       const today=isoDateLocal(body.date_to||body.today),dateFrom=text(body.date_from)||addDaysIso(today,-29),dateTo=text(body.date_to)||today;
       const eventType=text(body.event_type)||"all",dimension=text(body.dimension),value=text(body.value),limit=Math.min(2000,Math.max(1,Number(body.limit||500)));
       const filter=body.filters||{};
@@ -871,11 +953,11 @@ Deno.serve(async (req) => {
           if(text(filter.shift_name)&&!text(dims.shift).toLowerCase().includes(text(filter.shift_name).toLowerCase()))continue;
           if(text(filter.employee_no)&&!text(emp.employee_no).toLowerCase().includes(text(filter.employee_no).toLowerCase()))continue;
           if(text(filter.full_name)&&!text(emp.full_name).toLowerCase().includes(text(filter.full_name).toLowerCase()))continue;
-          if(text(filter.work_tg)&&!text(emp.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))continue;
+          if(canFilterSensitive&&text(filter.work_tg)&&!text(emp.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))continue;
           if(tenureBucket&&hireTenureBucket(emp.hire_date,today)!==tenureBucket)continue;
           const keyword=text(filter.keyword).toLowerCase();
           if(keyword){
-            const hay=[emp.employee_no,emp.full_name,emp.work_tg,emp.backend_accounts,dims.team,dims.position,dims.country,dims.shift].map(text).join(" ").toLowerCase();
+            const hay=[emp.employee_no,emp.full_name,...(canFilterSensitive?[emp.work_tg,emp.backend_accounts]:[]),dims.team,dims.position,dims.country,dims.shift].map(text).join(" ").toLowerCase();
             if(!hay.includes(keyword))continue;
           }
           result.push({
@@ -914,12 +996,12 @@ Deno.serve(async (req) => {
         if(text(filter.shift_name)&&!text(dims.shift).toLowerCase().includes(text(filter.shift_name).toLowerCase()))continue;
         if(text(filter.employee_no)&&!text(emp?.employee_no||ev.employee_no).toLowerCase().includes(text(filter.employee_no).toLowerCase()))continue;
         if(text(filter.full_name)&&!text(emp?.full_name||ev.full_name||ev.snapshot?.full_name||ev.snapshot?.name).toLowerCase().includes(text(filter.full_name).toLowerCase()))continue;
-        if(text(filter.work_tg)&&!text(emp?.work_tg||ev.snapshot?.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))continue;
+        if(canFilterSensitive&&text(filter.work_tg)&&!text(emp?.work_tg||ev.snapshot?.work_tg).toLowerCase().includes(text(filter.work_tg).toLowerCase()))continue;
         if(text(filter.reason)&&type==="resign"&&!text(ev.reason).toLowerCase().includes(text(filter.reason).toLowerCase()))continue;
         if(text(filter.reason)&&type!=="resign")continue;
         const keyword=text(filter.keyword).toLowerCase();
         if(keyword){
-          const hay=[ev.employee_no,ev.full_name,emp?.employee_no,emp?.full_name,emp?.work_tg,emp?.backend_accounts,dims.team,dims.position,dims.country,dims.shift].map(text).join(" ").toLowerCase();
+          const hay=[ev.employee_no,ev.full_name,emp?.employee_no,emp?.full_name,...(canFilterSensitive?[emp?.work_tg,emp?.backend_accounts]:[]),dims.team,dims.position,dims.country,dims.shift].map(text).join(" ").toLowerCase();
           if(!hay.includes(keyword))continue;
         }
         result.push({
@@ -954,8 +1036,11 @@ Deno.serve(async (req) => {
       const to = from + pageSize - 1;
       const f = body.filters || {};
       let teamIds:string[]=[],positionIds:string[]=[];
-      if(text(f.team)){const {data}=await service.from("teams").select("id").ilike("name",`%${text(f.team)}%`);teamIds=(data||[]).map((x:any)=>x.id);if(!teamIds.length)return json({rows:[],total:0,page,page_size:pageSize,pages:1});}
-      if(text(f.position)){const {data}=await service.from("positions").select("id").ilike("name",`%${text(f.position)}%`);positionIds=(data||[]).map((x:any)=>x.id);if(!positionIds.length)return json({rows:[],total:0,page,page_size:pageSize,pages:1});}
+      // Combo-box options come from exact current employee dimensions. Exact
+      // lookup avoids selecting retired combined values such as “巴西/印度” when
+      // the user explicitly chose “巴西”.
+      if(text(f.team)){const {data}=await service.from("teams").select("id").eq("name",text(f.team));teamIds=(data||[]).map((x:any)=>x.id);if(!teamIds.length)return json({rows:[],total:0,page,page_size:pageSize,pages:1});}
+      if(text(f.position)){const {data}=await service.from("positions").select("id").eq("name",text(f.position));positionIds=(data||[]).map((x:any)=>x.id);if(!positionIds.length)return json({rows:[],total:0,page,page_size:pageSize,pages:1});}
 
       let q = service.from("employees").select(`
         id,employee_no,full_name,country,nationality,employment_type,status,
@@ -993,7 +1078,14 @@ Deno.serve(async (req) => {
       if (text(f.status)) q = q.eq("status", f.status);
       if (text(f.employment_type)) q = q.ilike("employment_type", `%${text(f.employment_type)}%`);
       if (text(f.shift_name)) q = q.ilike("shift_name",`%${text(f.shift_name)}%`);
-      if (text(f.leader)) q = q.ilike("leader_name",`%${text(f.leader)}%`);
+      if (text(f.leader)) {
+        const manager = text(f.leader).replace(/[%_,()]/g," ").trim();
+        if(manager) q = q.or([
+          `leader_name.ilike.%${manager}%`,
+          `person_in_charge.ilike.%${manager}%`,
+          `online_leader.ilike.%${manager}%`,
+        ].join(","));
+      }
       if (text(f.profile_status)) q = q.eq("profile_status", f.profile_status);
       if (text(f.hire_from)) q = q.gte("hire_date", f.hire_from);
       if (text(f.hire_to)) q = q.lte("hire_date", f.hire_to);
@@ -1083,7 +1175,7 @@ Deno.serve(async (req) => {
         canViewEmployeeSensitiveRaw,
         canEditEmployeeSensitiveRaw,
         canViewSensitiveRaw,
-        canViewPayrollRaw,
+        canViewCompensationRaw,
         canEditRaw,
         canResignRaw,
         canReactivateRaw,
@@ -1094,18 +1186,18 @@ Deno.serve(async (req) => {
         permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view"),
         permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.employee.edit","sensitive.employee.view"]),
         permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.payout.view","sensitive.payment.view"]),
-        permissionAllowed(service,caller.access,caller.userId,"payroll.view"),
+        permissionAllowed(service,caller.access,caller.userId,"employee.directory.compensation.view"),
         permissionAllowed(service,caller.access,caller.userId,"employee.edit"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.resign"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.reactivate"),
+        permissionAllowed(service,caller.access,caller.userId,"employee.directory.resign"),
+        permissionAllowed(service,caller.access,caller.userId,"employee.directory.reactivate"),
         permissionAllowed(service,caller.access,caller.userId,"employee.delete"),
         permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.payout.edit","sensitive.payment.edit"]),
-        permissionAllowedFirstDefined(service,caller.access,caller.userId,["payroll.edit","employee.compensation.edit"]),
+        permissionAllowed(service,caller.access,caller.userId,"employee.compensation.edit"),
       ]);
       const founder=caller.roleCode==="founder";
       const canViewEmployeeSensitive = founder || canViewEmployeeSensitiveRaw;
       const canViewSensitive = founder || canViewSensitiveRaw;
-      const canViewPayroll = founder || canViewPayrollRaw;
+      const canViewCompensation = founder || canViewCompensationRaw;
       const canEditEmployee = (founder || canEditRaw) && scope.mode!=="self";
       // Explicit edit permission may replace a hidden value without revealing
       // it. The client submits only fields actually changed, never masks.
@@ -1151,11 +1243,11 @@ Deno.serve(async (req) => {
         employee:employeeView,
         contact:contactView,
         payment:paymentView,
-        compensation:canViewPayroll ? (compensation || legacyComp || null) : null,
+        compensation:canViewCompensation ? (compensation || legacyComp || null) : null,
         permissions:{
           sensitive_employee_view:canViewEmployeeSensitive,
           sensitive_payment_view:canViewSensitive,
-          payroll_view:canViewPayroll,
+          compensation_view:canViewCompensation,
           sensitive_employee_edit:canEditEmployeeSensitive,
           sensitive_payment_edit:canEditPayment,
           compensation_edit:canEditCompensation,
@@ -1176,7 +1268,7 @@ Deno.serve(async (req) => {
 
 
     if (action === "history_list") {
-      await requirePermission(service, caller, "employee.view");
+      await requirePermission(service, caller, "employee.resignations.view");
 
       const page = Math.max(1, Number(body.page || 1));
       const allowed = [20,30,50,100,500];
@@ -1267,9 +1359,9 @@ Deno.serve(async (req) => {
       const enriched=enrichedAll.slice(from,from+pageSize);
 
       const [canEditRaw,canRestoreRaw,canDeleteRaw]=await Promise.all([
-        permissionAllowed(service,caller.access,caller.userId,"employee.resign"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.reactivate"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.delete"),
+        permissionAllowed(service,caller.access,caller.userId,"employee.resignations.resign"),
+        permissionAllowed(service,caller.access,caller.userId,"employee.resignations.reactivate"),
+        Promise.resolve(false),
       ]);
       const founder=caller.roleCode==="founder";
 
@@ -1431,7 +1523,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update_resignation") {
-      await requirePermission(service, caller, "employee.resign");
+      await requirePermission(service, caller, "employee.resignations.resign");
       const eventId=text(body.event_id);
       const employeeId=text(body.employee_id);
       const resignDate=text(body.resign_date);
@@ -1493,7 +1585,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "resign_employee") {
-      await requirePermission(service, caller, "employee.resign");
+      await requirePermission(service, caller, "employee.directory.resign");
       const employeeId = text(body.employee_id);
       const resignDate = text(body.resign_date);
       const reason = text(body.reason);
@@ -1546,7 +1638,10 @@ Deno.serve(async (req) => {
     }
 
     if (action === "undo_resignation" || action === "reactivate_employee") {
-      await requirePermission(service, caller, "employee.reactivate");
+      await requireAnyPermission(service, caller, [
+        "employee.directory.reactivate",
+        "employee.resignations.reactivate",
+      ]);
       const employeeId = text(body.employee_id);
       if(!employeeId) throw new Error("缺少 employee_id");
       await requireEmployeeInScope(service,scope,employeeId);

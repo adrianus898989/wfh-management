@@ -43,7 +43,7 @@ test('company asset endpoint is read-only, scoped, and returns only display fiel
   const actionEnd = source.indexOf("if (action === 'bootstrap')", actionStart)
   assert.ok(actionStart > 0 && actionEnd > actionStart)
   const actionSource = source.slice(actionStart, actionEnd)
-  assert.match(actionSource, /can\('user\.view'\)/)
+  assert.match(actionSource, /can\('asset\.view'\)/)
   assert.match(actionSource, /getScopedEmployees\(true\)/)
   assert.match(actionSource, /hire_date:/)
   assert.match(actionSource, /employee_no:/)

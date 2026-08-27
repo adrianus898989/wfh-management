@@ -46,7 +46,10 @@ async function callerAndScope(req:Request,service:any){
   const {data:access,error}=await service.from("user_access").select("auth_user_id,employee_id,role_id,data_scope,active,backend_enabled").eq("auth_user_id",userId).maybeSingle();
   if(error||!access?.active||!access?.backend_enabled) throw new Error("无后台访问权限");
   const {data:role}=await service.from("roles").select("code").eq("id",access.role_id).maybeSingle();
-  if(!(await permissionAllowed(service,userId,access,text(role?.code),"employee.view"))) throw new Error("没有查看员工资料的权限");
+  const roleCode=text(role?.code);
+  const mayViewDirectory=await permissionAllowed(service,userId,access,roleCode,"employee.directory.view");
+  const mayViewAnalytics=await permissionAllowed(service,userId,access,roleCode,"employee.analytics.view");
+  if(!mayViewDirectory&&!mayViewAnalytics) throw new Error("没有查看员工资料分析的权限");
   if(role?.code==="founder"||access.data_scope==="all") return {mode:"all",teamIds:[],employeeIds:[]};
   if(access.data_scope==="assigned_teams"){
     const [{data:ts},{data:es}]=await Promise.all([

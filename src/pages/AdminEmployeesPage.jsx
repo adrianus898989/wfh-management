@@ -10,20 +10,20 @@ import AdminModuleNav from '../components/AdminModuleNav'
 import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
-import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 import { employeePortalAccountPresentation } from '../lib/employeeAccountStatus'
+import { employeeArchiveCsv, employeeArchiveExportFilename } from '../lib/employeeArchiveExport'
 import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
 import { employeeTrainerReviewRows } from '../lib/onlineTrainingPresentation'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
-  '员工档案': 'employee.view',
+  '员工档案': 'employee.directory.view',
   '人员分析': 'employee.analytics.view',
   '停电 / 断网记录': 'connectivity.view',
-  '预警记录': ADMIN_ALERT_PERMISSIONS,
-  '离职记录': 'employee.view',
-  '操作日志': 'audit.view',
+  '预警记录': 'alert.view',
+  '离职记录': 'employee.resignations.view',
+  '操作日志': 'employee.change_history.view',
 }
 
 const text = v => String(v ?? '').trim()
@@ -60,6 +60,8 @@ const blankEmployeeFilters=()=>({
   employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',account_status:'',team:'',position:'',country:'',status:'active',
   employment_type:'',shift_name:'',leader:'',hire_from:'',hire_to:'',
 })
+const EMPLOYEE_EXPORT_PAGE_SIZE=500
+const EMPLOYEE_EXPORT_MAX_PAGES=100
 const blankPeopleFilters=()=>({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
 const blankResignationAnalyticsFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
 const blankHistoryFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
@@ -329,7 +331,7 @@ function employeeWriteCapabilities(source,mode){
   return {
     basic,
     sensitiveEmployeeView:creating||permissions.sensitive_employee_view===true,
-    compensationView:creating||permissions.payroll_view===true,
+    compensationView:creating||permissions.compensation_view===true,
     paymentView:creating||permissions.sensitive_payment_view===true,
     sensitiveEmployee:creating
       ? actions.can_create_sensitive_employee===true
@@ -428,11 +430,14 @@ export default function AdminEmployeesPage(){
   const requestedEmployeeRef=useRef('')
   const lastAutoRefreshAtRef=useRef(0)
   const refreshEmployeeDataRef=useRef(null)
-  const canViewEmployees=adminAccess.hasPermission('employee.view')
+  const canViewEmployees=adminAccess.hasPermission('employee.directory.view')
+  const canViewResignations=adminAccess.hasPermission('employee.resignations.view')
+  const canExportEmployees=adminAccess.hasPermission('employee.directory.export')
   const canViewAnalytics=adminAccess.hasPermission('employee.analytics.view')
-  const canViewAudit=adminAccess.hasPermission('audit.view')
-  const canViewAdjustmentLogs=canViewAudit&&adminAccess.hasPermission('adjustment.view')
-  const canViewAttendanceLogs=canViewAudit&&adminAccess.hasPermission('attendance.view')
+  const canViewAudit=adminAccess.hasPermission('employee.change_history.view')
+  const canViewSensitiveEmployees=adminAccess.hasPermission(PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW)
+  const canViewAdjustmentLogs=canViewAudit&&adminAccess.hasPermission('adjustment.page.view')
+  const canViewAttendanceLogs=canViewAudit&&adminAccess.hasAnyPermission(['attendance.monthly.view','attendance.today.view','attendance.records.view','attendance.leave.view'])
   const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>{
     const permissions=EMPLOYEE_TAB_PERMISSIONS[item]
     return Array.isArray(permissions)?adminAccess.hasAnyPermission(permissions):adminAccess.hasPermission(permissions)
@@ -451,7 +456,7 @@ export default function AdminEmployeesPage(){
 
   const [meta,setMeta]=useState({
     teams:[],positions:[],position_options:[],total:0,active:0,no_team:0,official_id_pending:0,
-    options:{countries:[],nationalities:[],employment_types:[],shifts:[],groups:[],leaders:[],trainers:[],market_countries:[],market_positions:[],platforms:[]},
+    options:{teams:[],positions:[],countries:[],nationalities:[],employment_types:[],shifts:[],groups:[],leaders:[],trainers:[],market_countries:[],market_positions:[],platforms:[]},
     platform_map:[],
     schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]},
     permissions:{},actions:{can_create:false,can_edit:false},
@@ -464,6 +469,7 @@ export default function AdminEmployeesPage(){
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [refreshing,setRefreshing]=useState(false)
+  const [exporting,setExporting]=useState(false)
   const [generated,setGenerated]=useState(null)
   const [activationError,setActivationError]=useState('')
   const [activationLoading,setActivationLoading]=useState('')
@@ -591,6 +597,20 @@ export default function AdminEmployeesPage(){
     }
   }
 
+  const loadPageFilterOptions=async(includeInactive=tab==='离职记录')=>{
+    try{
+      const data=await invoke({action:'filter_options',include_inactive:includeInactive})
+      setMeta(current=>({
+        ...current,
+        teams:data?.teams||current.teams,
+        positions:data?.positions||current.positions,
+        options:{...current.options,...(data?.options||{})},
+      }))
+    }catch(e){
+      setMetaError(employeeRequestError(e,'筛选选项读取失败，请稍后重试。'))
+    }
+  }
+
   const loadArchiveStats=async(silent=false)=>{
     if(!silent) setArchiveStats(v=>({...v,loading:true}))
     try{
@@ -636,14 +656,14 @@ export default function AdminEmployeesPage(){
     }
   }
 
-  const fetchEmployeeListData=async(nextPage,nextSize,nextFilters=appliedFilters)=>{
+  const fetchEmployeeListData=async(nextPage,nextSize,nextFilters=appliedFilters,forExport=false)=>{
     const archiveFilters={...nextFilters,status:'active'}
     if(text(archiveFilters.risk_level)||text(archiveFilters.account_status)){
-      const {data,error}=await supabase.functions.invoke('admin-employee-risk-list',{body:{action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters,risk_level:archiveFilters.risk_level}})
+      const {data,error}=await supabase.functions.invoke('admin-employee-risk-list',{body:{action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters,risk_level:archiveFilters.risk_level,export:forExport}})
       if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'等级筛选读取失败'}))
       return data
     }
-    return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters})
+    return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters,export:forExport})
   }
 
   const loadList=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters}={})=>{
@@ -698,7 +718,8 @@ export default function AdminEmployeesPage(){
     if(!silent) setRefreshing(true)
     try{
       const jobs=[]
-      if(canViewEmployees) jobs.push(loadMeta())
+      if(canViewEmployees&&tab==='员工档案') jobs.push(loadMeta())
+      else if(canViewAnalytics||canViewResignations||canViewAudit) jobs.push(loadPageFilterOptions(tab==='离职记录'))
       if(canViewEmployees||canViewAnalytics) jobs.push(loadArchiveStats(true))
       if(canViewEmployees&&tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
       if(canViewAnalytics&&tab==='人员分析'){
@@ -707,7 +728,7 @@ export default function AdminEmployeesPage(){
         // analytics payload and is populated by loadPeopleAnalytics above.
         if(hasFilterValues(appliedResignationAnalyticsFilters)) jobs.push(loadResignationAnalytics(appliedResignationAnalyticsFilters))
       }
-      if(canViewEmployees&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
+      if(canViewResignations&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
       if(canViewAudit&&tab==='操作日志'&&auditSubview==='employment') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
       if(canViewEmployees&&selected?.employee?.id){
         jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(d=>setSelected(prev=>({...d,resignation_reason:text(prev?.resignation_reason||d?.resignation_reason)}))).catch(()=>{}))
@@ -721,9 +742,10 @@ export default function AdminEmployeesPage(){
   refreshEmployeeDataRef.current=refreshEmployeeData
 
   useEffect(()=>{
-    if(adminAccess.loading||(!canViewEmployees&&!canViewAnalytics))return undefined
+    if(adminAccess.loading||(!canViewEmployees&&!canViewAnalytics&&!canViewResignations&&!canViewAudit))return undefined
     const initialJobs=[]
-    if(canViewEmployees) initialJobs.push(loadMeta())
+    if(canViewEmployees&&tab==='员工档案') initialJobs.push(loadMeta())
+    else if(canViewAnalytics||canViewResignations||canViewAudit) initialJobs.push(loadPageFilterOptions(tab==='离职记录'))
     if(canViewEmployees||canViewAnalytics) initialJobs.push(loadArchiveStats())
     Promise.all(initialJobs).finally(()=>{lastAutoRefreshAtRef.current=Date.now()})
     const refreshIfStale=()=>{
@@ -734,7 +756,11 @@ export default function AdminEmployeesPage(){
     window.addEventListener('focus',refreshIfStale)
     document.addEventListener('visibilitychange',refreshIfStale)
     return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
-  },[adminAccess.loading,canViewEmployees,canViewAnalytics])
+  },[adminAccess.loading,canViewEmployees,canViewAnalytics,canViewResignations,canViewAudit])
+  useEffect(()=>{
+    if(adminAccess.loading||tab!=='离职记录'||!canViewResignations)return
+    loadPageFilterOptions(true)
+  },[adminAccess.loading,canViewResignations,tab])
   useEffect(()=>{
     if(adminAccess.loading||!canViewEmployees)return
     loadList(1,pageSize,{nextFilters:appliedFilters})
@@ -762,10 +788,10 @@ export default function AdminEmployeesPage(){
   },[sp,adminAccess.loading,adminAccess.permissionKey])
 
   useEffect(()=>{
-    if(!canViewEmployees||tab!=='离职记录') return
+    if(!canViewResignations||tab!=='离职记录') return
     const t=setTimeout(()=>{ setHistoryPage(1); loadHistory(1,historyPageSize,historyFilters) },80)
     return()=>clearTimeout(t)
-  },[tab,canViewEmployees])
+  },[tab,canViewResignations])
 
   useEffect(()=>{
     if(!canViewAudit||tab!=='操作日志'||auditSubview!=='employment') return
@@ -1035,7 +1061,10 @@ export default function AdminEmployeesPage(){
         reason:editResignModal.reason,
       })
       setEditResignModal(null)
-      await Promise.all([loadMeta(),loadArchiveStats(),loadList(page,pageSize),loadHistory(historyPage,historyPageSize)])
+      const refreshes=[loadHistory(historyPage,historyPageSize)]
+      if(canViewEmployees) refreshes.push(loadMeta(),loadArchiveStats(),loadList(page,pageSize))
+      else refreshes.push(loadPageFilterOptions())
+      await Promise.all(refreshes)
       if(!sheetSyncSucceeded(data?.sync)) setError(`离职记录已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
@@ -1052,9 +1081,13 @@ export default function AdminEmployeesPage(){
       setRows(prev=>prev.filter(r=>text(r.id)!==text(resignedEmployeeId)))
       setTotal(prev=>Math.max(0,prev-1))
       setResignModal(null); setSelected(null)
-      setHistoryPage(1)
-      setTab('离职记录')
-      await Promise.all([loadMeta(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters)])
+      const refreshes=[loadMeta(),loadArchiveStats(),loadList(1,pageSize)]
+      if(canViewResignations){
+        setHistoryPage(1)
+        setTab('离职记录')
+        refreshes.push(loadHistory(1,historyPageSize,historyFilters))
+      }
+      await Promise.all(refreshes)
       if(!sheetSyncSucceeded(data?.sync)) setError(`离职已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
@@ -1069,7 +1102,10 @@ export default function AdminEmployeesPage(){
       })
       setRestoreModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters)])
+      const refreshes=[loadHistory(1,historyPageSize,historyFilters)]
+      if(canViewEmployees) refreshes.push(loadMeta(),loadArchiveStats(),loadList(1,pageSize))
+      else refreshes.push(loadPageFilterOptions())
+      await Promise.all(refreshes)
       if(!sheetSyncSucceeded(data?.sync)) setError(`已恢复 Supabase 在职状态，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
     }catch(e){ setError(e.message) }
   }
@@ -1087,7 +1123,10 @@ export default function AdminEmployeesPage(){
       })
       setCancelHireModal(null)
       setSelected(null)
-      await Promise.all([loadMeta(),loadArchiveStats(),loadList(1,pageSize),loadHistory(1,historyPageSize,historyFilters),loadAudit(1,auditPageSize,auditFilters,{silent:true})])
+      const refreshes=[loadMeta(),loadArchiveStats(),loadList(1,pageSize)]
+      if(canViewResignations) refreshes.push(loadHistory(1,historyPageSize,historyFilters))
+      if(canViewAudit) refreshes.push(loadAudit(1,auditPageSize,auditFilters,{silent:true}))
+      await Promise.all(refreshes)
       if(data?.sheet_warning) setError(data.sheet_warning)
     }catch(e){ setError(e.message) }
   }
@@ -1133,6 +1172,74 @@ export default function AdminEmployeesPage(){
       setActivationCopyStatus('已复制，可直接发给员工')
     }catch{
       setActivationCopyStatus('复制失败，请选中激活码后手动复制')
+    }
+  }
+
+  const exportEmployeeArchive=async()=>{
+    if(exporting||!canExportEmployees)return
+    setExporting(true)
+    setError('')
+    try{
+      const collected=new Map()
+      let nextPage=1
+      let expectedPages=1
+      while(nextPage<=expectedPages){
+        const data=await fetchEmployeeListData(nextPage,EMPLOYEE_EXPORT_PAGE_SIZE,appliedFilters,true)
+        expectedPages=Math.max(1,Number(data?.pages||Math.ceil(Number(data?.total||0)/EMPLOYEE_EXPORT_PAGE_SIZE)||1))
+        if(expectedPages>EMPLOYEE_EXPORT_MAX_PAGES) throw new Error(`当前筛选超过 ${EMPLOYEE_EXPORT_PAGE_SIZE*EMPLOYEE_EXPORT_MAX_PAGES} 条，请缩小筛选范围后再导出。`)
+        const visibleRows=(data?.rows||[]).filter(row=>text(row.source_type)!=='google_deleted')
+        const operatorMap=await loadOperatorMap(visibleRows.map(row=>row.id))
+        visibleRows.forEach((row,index)=>{
+          const totalErrorCount=Number(row.total_error_count||0)
+          const normalized={
+            ...row,
+            total_error_count:totalErrorCount,
+            risk_level:riskKeyFromCount(totalErrorCount),
+            operator_account:operatorMap.get(text(row.id))||text(row.operator_account),
+          }
+          const risk=employeeRiskMeta(normalized)
+          const portalAccount=employeePortalAccountPresentation(normalized)
+          const key=text(normalized.id)||`${text(normalized.employee_no)}-${nextPage}-${index}`
+          collected.set(key,{
+            risk_label:risk?.zh||'—',
+            total_error_count:totalErrorCount,
+            employee_no:text(normalized.employee_no)||'—',
+            full_name:text(normalized.full_name)||'—',
+            country:text(normalized.country||normalized.nationality)||'—',
+            team:text(normalized.teams?.name)||'—',
+            leader:text(normalized.leader_name)||'—',
+            position:text(normalized.positions?.name)||'—',
+            shift:text(normalized.shift_name)||'—',
+            employment_type:typeName(normalized.employment_type),
+            status:statusName(normalized.status),
+            hire_date:text(normalized.hire_date).slice(0,10)||'—',
+            tenure:tenureCompactLabel(normalized.hire_date,normalized.resign_date,normalized.status),
+            created_at:formatDateTime(normalized.created_at),
+            operator_account:operatorDisplay(normalized.operator_account),
+            profile_status:Number(normalized.missing_count||0)>0?`待完善 ${Number(normalized.missing_count)} 项`:'完整',
+            account_status:portalAccount.label,
+            work_tg:text(normalized.work_tg)||'—',
+            backend_accounts:text(normalized.backend_accounts)||'—',
+          })
+        })
+        nextPage+=1
+      }
+      const exportRows=[...collected.values()]
+      if(!exportRows.length) throw new Error('当前筛选没有可导出的员工。')
+      const blob=new Blob([employeeArchiveCsv(exportRows)],{type:'text/csv;charset=utf-8'})
+      const url=URL.createObjectURL(blob)
+      const anchor=document.createElement('a')
+      anchor.href=url
+      anchor.download=employeeArchiveExportFilename()
+      anchor.style.display='none'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    }catch(e){
+      setError(employeeRequestError(e,'员工档案导出失败，请稍后重试。'))
+    }finally{
+      setExporting(false)
     }
   }
 
@@ -1225,24 +1332,24 @@ export default function AdminEmployeesPage(){
     <AdminModuleNav />
 
     {error&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {metaError&&['员工档案','人员分析','离职记录','操作日志'].includes(visibleTab)&&<div className="employee-inline-sync-note" role="status"><span>{metaError}</span><button type="button" onClick={loadMeta}>重新读取</button></div>}
+    {metaError&&['员工档案','人员分析','离职记录','操作日志'].includes(visibleTab)&&<div className="employee-inline-sync-note" role="status"><span>{metaError}</span><button type="button" onClick={()=>canViewEmployees&&visibleTab==='员工档案'?loadMeta():loadPageFilterOptions(visibleTab==='离职记录')}>重新读取</button></div>}
     {visibleTab==='员工档案'&&<>
       <div className="archive-compact-head">
-        <div><h2>员工档案</h2><span>当前仅显示在职员工 · 共 {meta.active||0} 人</span></div>
+        <div><h2>员工档案</h2><span>当前仅显示在职员工 · 当前筛选共 {total} 人</span></div>
       </div>
       <div className="filter-card archive-filter-card v24-filter-card">
         <div className="field-search-grid employee-core-search-grid">
           <label className="pro-filter-field" data-native-risk-filter="1"><span>等级</span><select value={filters.risk_level||''} onChange={e=>setFilters({...filters,risk_level:e.target.value})}><option value="">全部等级</option><option value="excellent">优秀（0错误）</option><option value="normal">正常（1–8）</option><option value="attention">注意（9–15）</option><option value="watch">重点（16–30）</option><option value="high">高频（31+）</option></select></label>
           <label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={filters.employee_no} onChange={e=>setFilters({...filters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
           <label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={filters.full_name} onChange={e=>setFilters({...filters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
-          <label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={filters.work_tg} onChange={e=>setFilters({...filters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>
-          <label className="pro-filter-field"><span>后台账号</span><div className="pro-input-shell"><i>⌕</i><input value={filters.backend_account} onChange={e=>setFilters({...filters,backend_account:e.target.value})} placeholder="输入后台账号"/></div></label>
+          {canViewSensitiveEmployees&&<label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={filters.work_tg} onChange={e=>setFilters({...filters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>}
+          {canViewSensitiveEmployees&&<label className="pro-filter-field"><span>后台账号</span><div className="pro-input-shell"><i>⌕</i><input value={filters.backend_account} onChange={e=>setFilters({...filters,backend_account:e.target.value})} placeholder="输入后台账号"/></div></label>}
           <label className="pro-filter-field"><span>账号激活状态</span><select className="pro-native-select" value={filters.account_status||''} onChange={e=>setFilters({...filters,account_status:e.target.value})}><option value="">全部账号</option><option value="activated">已激活</option><option value="unactivated">未激活</option></select></label>
-          <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="primary-action" onClick={applyEmployeeFilters} disabled={loading}>{loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetEmployeeFilters} disabled={loading}>重置</button></div>
+          <div className="filter-toolbar-actions archive-filter-actions"><button className="secondary-action" onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'更多筛选'}</button><button className="primary-action" onClick={applyEmployeeFilters} disabled={loading}>{loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={resetEmployeeFilters} disabled={loading}>重置</button>{canExportEmployees&&<button type="button" className="secondary-action archive-export-action" title="导出当前筛选的全部员工数据" onClick={exportEmployeeArchive} disabled={exporting||loading||total===0}>{exporting?'导出中…':`⇩ 导出（${total}）`}</button>}</div>
         </div>
         {showFilters&&<div className="filter-grid employee-filter-grid v24-advanced-filter-grid">
-          <label>团队<FilterCombo value={filters.team} options={(meta.teams||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="employee-team-filter"/></label>
-          <label>岗位<FilterCombo value={filters.position} options={(meta.positions||[]).map(x=>x.name)} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位 / 输入搜索" listId="employee-position-filter"/></label>
+          <label>团队<FilterCombo value={filters.team} options={meta.options?.teams||[]} onChange={v=>setFilters({...filters,team:v})} placeholder="全部团队 / 输入搜索" listId="employee-team-filter"/></label>
+          <label>岗位<FilterCombo value={filters.position} options={meta.options?.positions||[]} onChange={v=>setFilters({...filters,position:v})} placeholder="全部岗位 / 输入搜索" listId="employee-position-filter"/></label>
           <label>员工国家<FilterCombo value={filters.country} options={meta.options?.countries||[]} onChange={v=>setFilters({...filters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="employee-country-filter"/></label>
           <label>员工类型<select value={filters.employment_type} onChange={e=>setFilters({...filters,employment_type:e.target.value})}><option value="">全部</option>{typeOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>
           <label>班次<FilterCombo value={filters.shift_name} options={cleanShiftOptions(meta.options?.shifts||[])} onChange={v=>setFilters({...filters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="employee-shift-filter"/></label>
@@ -1302,9 +1409,9 @@ export default function AdminEmployeesPage(){
 
       {analysisView!=='离职分析'&&<div className="analytics-filter-panel v24-analytics-filter-panel">
         <div className={`people-filter-grid view-${analysisView}`}>
-          {analysisView==='总览'&&<><label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.employee_no} onChange={e=>setAnalysisFilters({...analysisFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label><label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.full_name} onChange={e=>setAnalysisFilters({...analysisFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label><label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.work_tg} onChange={e=>setAnalysisFilters({...analysisFilters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label></>}
-          {['总览','团队分析','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={(meta.teams||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>}
-          {['总览','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>岗位</span><FilterCombo value={analysisFilters.position} options={(meta.positions||[]).map(x=>x.name)} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/></label>}
+          {analysisView==='总览'&&<><label className="pro-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.employee_no} onChange={e=>setAnalysisFilters({...analysisFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label><label className="pro-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.full_name} onChange={e=>setAnalysisFilters({...analysisFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>{canViewSensitiveEmployees&&<label className="pro-filter-field"><span>工作TG</span><div className="pro-input-shell"><i>⌕</i><input value={analysisFilters.work_tg} onChange={e=>setAnalysisFilters({...analysisFilters,work_tg:e.target.value})} placeholder="输入工作TG"/></div></label>}</>}
+          {['总览','团队分析','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>团队</span><FilterCombo value={analysisFilters.team} options={meta.options?.teams||[]} onChange={v=>setAnalysisFilters({...analysisFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="analysis-team"/></label>}
+          {['总览','岗位分析'].includes(analysisView)&&<label className="pro-filter-field"><span>岗位</span><FilterCombo value={analysisFilters.position} options={meta.options?.positions||[]} onChange={v=>setAnalysisFilters({...analysisFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="analysis-position"/></label>}
           {['总览','国家分析'].includes(analysisView)&&<label className="pro-filter-field"><span>员工国家</span><FilterCombo value={analysisFilters.country} options={meta.options?.countries||[]} onChange={v=>setAnalysisFilters({...analysisFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="analysis-country"/></label>}
           {['总览','班次分析'].includes(analysisView)&&<label className="pro-filter-field"><span>班次</span><FilterCombo value={analysisFilters.shift_name} options={cleanShiftOptions(meta.options?.shifts||[])} onChange={v=>setAnalysisFilters({...analysisFilters,shift_name:v})} placeholder="全部班次 / 输入搜索" listId="analysis-shift"/></label>}
           <label className="pro-filter-field people-date-range-field"><span>分析日期区间</span><div className="pro-date-range"><input type="date" value={analysisFilters.date_from} onChange={e=>setAnalysisFilters({...analysisFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={analysisFilters.date_to} onChange={e=>setAnalysisFilters({...analysisFilters,date_to:e.target.value})}/></div></label>
@@ -1415,8 +1522,8 @@ export default function AdminEmployeesPage(){
       <div className="resignation-filter-panel v25-resignation-filter-panel resignation-search-panel">
         <label className="resign-filter-field"><span>员工ID</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.employee_no} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,employee_no:e.target.value})} placeholder="输入员工ID"/></div></label>
         <label className="resign-filter-field"><span>姓名</span><div className="pro-input-shell"><i>⌕</i><input value={historyDraftFilters.full_name} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,full_name:e.target.value})} placeholder="输入姓名"/></div></label>
-        <label className="resign-filter-field"><span>团队</span><FilterCombo value={historyDraftFilters.team} options={(meta.teams||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/></label>
-        <label className="resign-filter-field"><span>岗位</span><FilterCombo value={historyDraftFilters.position} options={(meta.positions||[]).map(x=>x.name)} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="history-position"/></label>
+        <label className="resign-filter-field"><span>团队</span><FilterCombo value={historyDraftFilters.team} options={meta.options?.teams||[]} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,team:v})} placeholder="全部团队 / 输入搜索" listId="history-team"/></label>
+        <label className="resign-filter-field"><span>岗位</span><FilterCombo value={historyDraftFilters.position} options={meta.options?.positions||[]} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,position:v})} placeholder="全部岗位 / 输入搜索" listId="history-position"/></label>
         <label className="resign-filter-field"><span>员工国家</span><FilterCombo value={historyDraftFilters.country} options={meta.options?.countries||[]} onChange={v=>setHistoryDraftFilters({...historyDraftFilters,country:v})} placeholder="全部员工国家 / 输入搜索" listId="history-country"/></label>
         <label className="resign-filter-field v25-resign-reason"><span>离职原因</span><input value={historyDraftFilters.reason} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,reason:e.target.value})} placeholder="输入离职原因关键字"/></label>
         <label className="resign-filter-field v25-resign-date"><span>离职日期区间</span><div className="pro-date-range"><input aria-label="离职日期起" type="date" value={historyDraftFilters.date_from} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_from:e.target.value})}/><b>—</b><input aria-label="离职日期止" type="date" value={historyDraftFilters.date_to} onChange={e=>setHistoryDraftFilters({...historyDraftFilters,date_to:e.target.value})}/></div></label>
@@ -1439,7 +1546,7 @@ export default function AdminEmployeesPage(){
             <td>{r.source_label||r.source_sheet||r.source||'-'}</td>
             <td><div className="operation-record"><span className="operator-chip">{operatorDisplay(r.snapshot?.operator_account||r.snapshot?.operator_email||r.snapshot?.last_edited_username||r.operator_account)}</span><small>{formatDateTime(r.snapshot?.operation_time||r.snapshot?.last_edited_at||r.operation_time||r.created_at)}</small></div></td>
             <td><div className="row-actions history-row-actions">
-              <button className="table-action" onClick={()=>openHistoryDetail(r)}>查看</button>
+              {canViewEmployees&&<button className="table-action" onClick={()=>openHistoryDetail(r)}>查看员工档案</button>}
               {historyPermissions.can_edit&&<button className="table-action edit-history-action" onClick={()=>setEditResignModal({event_id:r.id,employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,resign_date:r.effective_date||'',reason:r.reason||''})}>编辑</button>}
               {historyPermissions.can_restore&&<button className="table-action restore-action" onClick={()=>setRestoreModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,restore_portal:true})}>恢复在职</button>}
               {historyPermissions.can_delete&&r.employee_id&&<button className="table-action cancel-hire-history-action" title="未正式入职或后台新增员工可直接撤销；不符合条件时系统会安全拒绝" onClick={()=>setCancelHireModal({employee_id:r.employee_id,employee_no:r.employee_no,full_name:r.full_name,confirm_text:''})}>撤销入职</button>}
@@ -1484,7 +1591,7 @@ export default function AdminEmployeesPage(){
       <div style={{padding:'0 24px 24px'}}><div style={{whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:1.8,fontSize:14,color:'#243b5a',padding:'16px 18px',border:'1px solid #dbe5f1',borderRadius:12,background:'#f8fbff',maxHeight:'55vh',overflow:'auto'}}>{reasonPreview.reason}</div></div>
     </div></div>}
 
-    {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={row=>openHistoryDetail(row)}/>}
+    {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={canViewEmployees?row=>openHistoryDetail(row):null}/>}
 
     {selected&&<EmployeeDrawer
       detail={selected}
@@ -1770,13 +1877,13 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const drawerTabs=useMemo(()=>[
     ['info','员工信息',true],
     ['alerts','预警记录',adminAccess.hasAnyPermission(ADMIN_ALERT_PERMISSIONS)],
-    ['errors','员工出错记录',adminAccess.hasPermission('employee.view')||adminAccess.hasPermission('report.view')],
-    ['exams','员工考试记录',adminAccess.hasPermission('employee.view')||adminAccess.hasPermission('exam.view')],
+    ['errors','员工出错记录',adminAccess.hasPermission(PERMISSIONS.REPORT_ERRORS_VIEW)],
+    ['exams','员工考试记录',adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)],
     ['connectivity','停电 / 断网记录',adminAccess.hasPermission('connectivity.view')],
-    ['payroll','工资记录',adminAccess.hasPermission('payroll.view')],
-    ['attendance','员工出勤记录',adminAccess.hasPermission('attendance.view')],
-    ['penalties','奖金 / 扣款',adminAccess.hasPermission('adjustment.view')],
-    ['trainer_reviews','老师评价',adminAccess.hasAnyPermission(['online_training.view','online_training.submit','online_training.review','online_training.manage'])],
+    ['payroll','工资记录',adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_PAYROLL_HISTORY_VIEW)],
+    ['attendance','员工出勤记录',adminAccess.hasPermission(PERMISSIONS.ATTENDANCE_RECORDS_VIEW)],
+    ['penalties','奖金 / 扣款',adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)],
+    ['trainer_reviews','老师评价',adminAccess.hasPermission(PERMISSIONS.ONLINE_TRAINING_REPORT_VIEW)],
   ].filter(([, ,allowed])=>allowed),[adminAccess.founder,adminAccess.permissionKey])
   useEffect(()=>setActiveSection('info'),[e.id])
   useEffect(()=>{
@@ -1920,7 +2027,7 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
         {activeSection==='trainer_reviews'&&<EmployeeTrainerReviewPanel data={trainerReviewData} employeeId={e.id} loading={trainerReviewLoading} error={trainerReviewError}/>}
         {activeSection==='info'&&<>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
-        <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人 / 组长',e.leader_name],['培训老师',e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
+        <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人',e.person_in_charge||e.leader_name],['现场培训',e.on_site_trainer],['线上组长',e.online_leader||e.leader_name],['线上培训',e.online_trainer||e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
         <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
           ? (comp.base_salary!==null && comp.base_salary!==undefined && comp.base_salary!==''
@@ -1994,7 +2101,7 @@ function EmployeeExamPanel({data,loading,error}){
   }
   const openExam=async row=>{
     setExamDetail({session:row,answers:[]});setDetailLoading(true);setDetailError('')
-    const fn=row.source_system==='legacy'?'admin_legacy_exam_session_detail':'admin_exam_session_detail'
+    const fn=row.source_system==='legacy'?'admin_employee_exam_legacy_detail':'admin_employee_exam_session_detail'
     const {data:detail,error:e}=await supabase.rpc(fn,{p_session_id:row.id})
     if(e)setDetailError(e.message);else setExamDetail(detail)
     setDetailLoading(false)

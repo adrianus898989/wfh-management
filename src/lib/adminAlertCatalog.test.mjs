@@ -27,22 +27,21 @@ test('five undefined rules remain visible but fail closed as pending', () => {
   })
 })
 
-test('type visibility follows the least privilege permission map', () => {
-  const examViewer = { permissions:['exam.view'] }
-  assert.equal(canViewAdminAlertType(examViewer, 'exam_failed'), true)
-  assert.equal(canViewAdminAlertType(examViewer, 'resigned_account_active'), false)
-  assert.deepEqual(visibleAdminAlertTypes(examViewer, { readyOnly:true }).map(([type]) => type), ['exam_failed'])
+test('alert-center visibility is owned by its independent page permission', () => {
+  const alertViewer = { permissions:['alert.view','alert.exam_failed.view','alert.resigned_account_active.view'] }
+  assert.equal(canViewAdminAlertType(alertViewer, 'exam_failed'), true)
+  assert.equal(canViewAdminAlertType(alertViewer, 'resigned_account_active'), true)
+  assert.deepEqual(visibleAdminAlertTypes(alertViewer, { readyOnly:true }).map(([type])=>type).sort(), ['exam_failed','resigned_account_active'])
 
-  const accountViewer = { permissions:['account.view'] }
-  assert.equal(canViewAdminAlertType(accountViewer, 'resigned_account_active'), true)
-  assert.equal(canViewAdminAlertType(accountViewer, 'exam_failed'), false)
+  const legacyViewer = { permissions:['exam.view','account.view'] }
+  assert.equal(canViewAdminAlertType(legacyViewer, 'exam_failed'), false)
 
   const founder = { founder:true, permissions:[] }
   assert.equal(visibleAdminAlertTypes(founder).length, Object.keys(ADMIN_ALERT_TYPES).length)
 })
 
 test('group filter never promotes pending categories into ready RPC filters', () => {
-  const access = { permissions:['attendance.view','adjustment.view'] }
+  const access = { permissions:['alert.view','alert.late_timeout_frequency.view','alert.consecutive_rest.view','alert.weekly_absence.view','alert.monthly_leave.view'] }
   const attendance = visibleAdminAlertTypes(access, { readyOnly:true, group:'attendance' })
   assert.deepEqual(attendance.map(([type]) => type), [
     'late_timeout_frequency', 'consecutive_rest', 'weekly_absence', 'monthly_leave',

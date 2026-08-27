@@ -19,10 +19,9 @@ test('admin sidebar uses the requested top-level order and names', () => {
     '员工档案查询表', '人员分析表', '离职记录表', '档案变更记录',
     '汇总表', '人员分布总表', '站点人数报表', '排班表',
   ])
-  assert.deepEqual(
-    group('account_usage').children[0],
-    { label:'公司提供资产', to:'/admin/account-usage', permissions:['user.view'] },
-  )
+  assert.deepEqual(group('account_usage').children[0], {
+    label:'公司提供资产', to:'/admin/account-usage', pagePermission:'assets', permissions:['asset.view'],
+  })
   assert.deepEqual(group('payroll').children.map(entry => entry.label), [
     '待发布工资表', '已发布工资表', '导入记录', '修改工资信息记录',
   ])
@@ -39,7 +38,8 @@ test('new menu names keep pointing at canonical existing tabs', () => {
   assert.deepEqual(accountItems[accountIndex + 1], {
     label:'后台登入IP白名单',
     to:'/admin/ip-allowlist',
-    permissions:['account.ip_allowlist.manage'],
+    pagePermission:'ip_allowlist',
+    permissions:['account.ip_allowlist.view'],
   })
 })
 
@@ -117,18 +117,18 @@ test('staff navigation is organized into four modules with stable query-tab matc
   assert.equal(requestedStaffGroup('/staff/payroll', '?tab=payment-change')?.id, 'payroll')
 })
 
-test('planning routes use existing permissions and are part of the guarded route registry', () => {
+test('planning routes use independent page permissions and are part of the guarded route registry', () => {
   const eventRoute = requestedAdminRoute('/admin/work-execution', '')
   const assetRoute = requestedAdminRoute('/admin/account-usage', '')
-  assert.ok(eventRoute?.permissions?.includes('report.view'))
+  assert.deepEqual(eventRoute?.permissions, ['work.event.view'])
   assert.equal(assetRoute?.groupId, 'account_usage')
-  assert.deepEqual(assetRoute?.permissions, ['user.view'])
+  assert.deepEqual(assetRoute?.permissions, ['asset.view'])
 })
 
 test('backend IP allowlist has a dedicated guarded route and permission', () => {
   const route = requestedAdminRoute('/admin/ip-allowlist', '')
   assert.equal(route?.groupId, 'account_usage')
-  assert.deepEqual(route?.permissions, ['account.ip_allowlist.manage'])
+  assert.deepEqual(route?.permissions, ['account.ip_allowlist.view'])
   assert.equal(requestedAdminRoute('/admin/ip-allowlist', '?tab=anything'), null)
 })
 

@@ -427,7 +427,7 @@ async function saveProfiles(service:any,caller:any,employee:any,body:any,options
   const compKeys=compFields.filter(k=>owns(comp,k));
   assertFieldsNotMasked(comp,compFields,"工资资料");
   if(compKeys.length){
-    const canEditCompensation=await permissionAllowedFirstDefined(service,caller,["payroll.edit","employee.compensation.edit"]);
+    const canEditCompensation=await permissionAllowed(service,caller,"employee.compensation.edit");
     if(!canEditCompensation) throw new Error("没有修改员工工资资料的权限");
     const current=before.compensation||{};
     const monthly=owns(comp,"base_salary")?numberOrNull(comp.base_salary):numberOrNull(current.base_salary);
@@ -657,17 +657,19 @@ async function writeAudit(service:any,caller:any,row:any){
 }
 
 function redactAuditObject(value:any,canViewContact:boolean,canViewPayroll:boolean,canViewPayment:boolean,keyHint=""):any{
+  const pathSegments=keyHint.split(".").map(segment=>segment.trim()).filter(Boolean);
+  const contactSensitive=pathSegments.includes("contact")||pathSegments.includes("work_tg")||pathSegments.includes("backend_accounts");
+  const payrollSensitive=pathSegments.includes("compensation");
+  const paymentSensitive=pathSegments.includes("payment");
+  if(contactSensitive&&!canViewContact) return "***";
+  if(payrollSensitive&&!canViewPayroll) return "***";
+  if(paymentSensitive&&!canViewPayment) return "***";
   if(value===null||value===undefined) return value;
   if(Array.isArray(value)) return value.map((item)=>redactAuditObject(item,canViewContact,canViewPayroll,canViewPayment,keyHint));
-  if(typeof value!=="object"){
-    if((keyHint.startsWith("contact.")||["work_tg","backend_accounts"].includes(keyHint))&&!canViewContact) return "***";
-    if(keyHint.startsWith("compensation.")&&!canViewPayroll) return "***";
-    if(keyHint.startsWith("payment.")&&!canViewPayment) return "***";
-    return value;
-  }
+  if(typeof value!=="object") return value;
   const out:any={};
   for(const [key,item] of Object.entries(value)){
-    const nextHint=key.includes(".")?key:(keyHint?`${keyHint}.${key}`:key);
+    const nextHint=keyHint?`${keyHint}.${key}`:key;
     out[key]=redactAuditObject(item,canViewContact,canViewPayroll,canViewPayment,nextHint);
   }
   return out;
@@ -685,7 +687,7 @@ function applyAuditFilters(q:any,f:any){
 
 async function auditList(service:any,caller:any,body:any){
   const canView=caller.roleCode==="founder"
-    || await permissionAllowed(service,caller,"audit.view");
+    || await permissionAllowed(service,caller,"employee.change_history.view");
   if(!canView) throw new Error("没有查看操作日志的权限");
 
   const page=Math.max(1,Number(body.page||1));
@@ -720,7 +722,7 @@ async function auditList(service:any,caller:any,body:any){
 
   const [canViewContact,canViewPayroll,canViewPayment]=await Promise.all([
     caller.roleCode==="founder"?true:permissionAllowed(service,caller,"sensitive.employee.view"),
-    caller.roleCode==="founder"?true:permissionAllowed(service,caller,"payroll.view"),
+    caller.roleCode==="founder"?true:permissionAllowed(service,caller,"employee.directory.compensation.view"),
     caller.roleCode==="founder"?true:permissionAllowed(service,caller,"sensitive.payment.view"),
   ]);
   data=data.map((row:any)=>({
@@ -837,7 +839,7 @@ export async function handleRequest(req:Request){
 
     if(action==="check_identity"){
       const canCheck=caller.roleCode==="founder"
-        || await permissionAllowed(service,caller,"employee.view")
+        || await permissionAllowed(service,caller,"employee.directory.view")
         || await permissionAllowed(service,caller,"employee.create")
         || await permissionAllowed(service,caller,"employee.edit");
       if(!canCheck) throw new Error("没有查看员工重复检查的权限");
@@ -867,7 +869,7 @@ export async function handleRequest(req:Request){
 
     if(action==="get_master_position_options"){
       const canView=caller.roleCode==="founder"
-        || await permissionAllowed(service,caller,"employee.view")
+        || await permissionAllowed(service,caller,"employee.directory.view")
         || await permissionAllowed(service,caller,"employee.create")
         || await permissionAllowed(service,caller,"employee.edit");
       if(!canView) throw new Error("没有读取岗位候选的权限");

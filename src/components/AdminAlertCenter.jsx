@@ -221,8 +221,9 @@ export function AdminAlertBell({ access }) {
   const [open, setOpen] = useState(false)
   const [state, setState] = useState({ loading:false, error:'', rows:[], unread:0, active:0 })
   const enabled = Boolean(access && !access.loading && !access.error && (
-    access.founder || access.permissions?.includes('*') || ALERT_PERMISSIONS.some(code => access.permissions?.includes(code))
+    access.founder || access.permissions?.includes('*') || access.permissions?.includes('alert.view')
   ))
+  const canMarkRead = Boolean(access?.founder || access?.permissions?.includes('*') || access?.permissions?.includes('alert.mark_read'))
 
   const load = async ({ quiet=false } = {}) => {
     if (!enabled) return
@@ -273,7 +274,7 @@ export function AdminAlertBell({ access }) {
 
   if (!enabled) return null
   const openAlert = async row => {
-    try { if (row.unread) await markAlertsRead(row.id) } catch { /* navigation remains available */ }
+    try { if (canMarkRead && row.unread) await markAlertsRead(row.id) } catch { /* navigation remains available */ }
     setOpen(false)
     navigate(alertDetailsTarget(row))
   }
@@ -289,7 +290,7 @@ export function AdminAlertBell({ access }) {
       {state.unread > 0 && <b aria-live="polite">{state.unread > 99 ? '99+' : state.unread}</b>}
     </button>
     {open && <section id="admin-alert-popover" className="admin-alert-popover" role="dialog" aria-modal="false" aria-label={locale === 'en' ? 'Notifications' : '消息通知'}>
-      <header><div><strong>{locale === 'en' ? 'Notifications' : '消息通知'}</strong><small>{locale === 'en' ? `${state.active} active warnings` : `${state.active} 条进行中预警`}</small></div>{state.unread > 0 && <button type="button" onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部已读'}</button>}</header>
+      <header><div><strong>{locale === 'en' ? 'Notifications' : '消息通知'}</strong><small>{locale === 'en' ? `${state.active} active warnings` : `${state.active} 条进行中预警`}</small></div>{canMarkRead && state.unread > 0 && <button type="button" onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部已读'}</button>}</header>
       {state.error && <div className="admin-alert-popover-error">{state.error}</div>}
       {state.loading && !state.rows.length ? <div className="admin-alert-popover-empty">{locale === 'en' ? 'Loading…' : '读取中…'}</div>
         : !state.rows.length ? <div className="admin-alert-popover-empty">{locale === 'en' ? 'No active warnings' : '暂无进行中的预警'}</div>
@@ -309,6 +310,7 @@ export function AdminAlertBell({ access }) {
 }
 
 export function EmployeeAlertHistoryPanel({ employeeId }) {
+  const access = useAdminAccess()
   const { locale } = useAdminI18n()
   const requestRef = useRef(0)
   const [page, setPage] = useState(1)
@@ -355,7 +357,7 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
   const toggleRow = async row => {
     const opening = String(expandedId) !== String(row.id)
     setExpandedId(opening ? String(row.id) : '')
-    if (!opening || !row.unread) return
+    if (!opening || !row.unread || !access.hasPermission('alert.mark_read')) return
     try {
       await markAlertsRead(row.id)
       setState(current => ({
@@ -428,7 +430,9 @@ export function AdminAlertRecordsPage() {
   const latestRef = useRef(null)
   const recordsRef = useRef(null)
   const requestedAlertRef = useRef('')
-  const canViewEmployees = access.hasPermission('employee.view')
+  const canViewEmployees = access.hasPermission('employee.directory.view')
+  const canMarkRead = access.hasPermission('alert.mark_read')
+  const canFollowUp = access.hasPermission('alert.follow_up')
   const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false })
   const [filters, setFilters] = useState(draft)
   const [page, setPage] = useState(1)
@@ -525,7 +529,7 @@ export function AdminAlertRecordsPage() {
   const toggleRow = row => {
     const opening = String(expandedId) !== String(row.id)
     setExpandedId(opening ? String(row.id) : '')
-    if (opening && row.unread) markOne(row)
+    if (opening && row.unread && canMarkRead) markOne(row)
   }
   const updateRowFollowUp = (alertId, followUp) => {
     setState(current => ({
@@ -537,7 +541,7 @@ export function AdminAlertRecordsPage() {
   return <section className="admin-alert-records-page">
     <header className="admin-alert-records-head">
       <div><small>{locale === 'en' ? 'WARNING RECORDS' : '预警记录 · 新列表'}</small><h2>{locale === 'en' ? 'Employee warning records' : '员工预警记录表'}</h2><p>{locale === 'en' ? 'Employee IDs stay selectable. Only the Open / Collapse control toggles details.' : '员工 ID 可直接选择复制；只有点击“展开 / 收起”才会切换详情。'}</p></div>
-      <div><button type="button" className="secondary-action" onClick={() => setRuleDialog({ kind:'all', entries:visibleAdminAlertTypes(access) })}>{locale === 'en' ? 'Rules' : '规则说明'}</button><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every active warning in the current account scope as read.' : '把当前账号权限范围内所有进行中预警标为已读。'} onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部标为已读'}</button>}</div>
+      <div><button type="button" className="secondary-action" onClick={() => setRuleDialog({ kind:'all', entries:visibleAdminAlertTypes(access) })}>{locale === 'en' ? 'Rules' : '规则说明'}</button><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{canMarkRead && state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every active warning in the current account scope as read.' : '把当前账号权限范围内所有进行中预警标为已读。'} onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部标为已读'}</button>}</div>
     </header>
 
     <div className="admin-alert-summary-strip" aria-label={locale === 'en' ? 'Warning summary' : '预警汇总'}>
@@ -600,7 +604,7 @@ export function AdminAlertRecordsPage() {
               {expanded && <div className="admin-alert-expanded-panel">
                 <div className="admin-alert-expanded-head"><div><span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span><div><strong data-admin-i18n-skip>{copy.title}</strong><p data-admin-i18n-skip>{copy.message}</p></div></div><div className="admin-alert-record-actions">{row.alert_type === 'payout_change' && row.is_active && <button type="button" className="primary" onClick={() => navigate(adminAlertTarget(row.alert_type))}>{locale === 'en' ? 'Review' : '去审核'}</button>}{canViewEmployees && row.employee_id && <button type="button" onClick={() => navigate(adminAlertEmployeeTarget(row.employee_id))}>{locale === 'en' ? 'Employee file' : '员工档案'}</button>}</div></div>
                 <AlertAttendanceDetails row={row} locale={locale}/>
-                <AlertFollowUpPanel row={row} locale={locale} onUpdated={followUp => updateRowFollowUp(row.id, followUp)}/>
+                <AlertFollowUpPanel row={row} locale={locale} onUpdated={canFollowUp ? followUp => updateRowFollowUp(row.id, followUp) : undefined}/>
                 <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{row.is_active ? (locale === 'en' ? 'Last updated' : '最后更新') : (locale === 'en' ? 'Resolved' : '解除时间')} <b data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</b></span></div>
               </div>}
             </article>

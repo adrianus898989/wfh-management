@@ -120,7 +120,7 @@ async function authorize(req: Request) {
   if (roleError) {
     throw new ReportRequestError(503, 'ROLE_LOOKUP_UNAVAILABLE', 'access', '角色权限服务暂时不可用，请稍后重试')
   }
-  if (role?.code !== 'founder' && !(await permissionAllowed(service, user.id, access.role_id, 'report.view'))) {
+  if (role?.code !== 'founder' && !(await permissionAllowed(service, user.id, access.role_id, 'report.errors.view'))) {
     throw new ReportRequestError(403, 'REPORT_VIEW_DENIED', 'access', '当前账号没有统计报表查看权限')
   }
   const scope = await resolveReportScope(service, user.id, access, text(role?.code))

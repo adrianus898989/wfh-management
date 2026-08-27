@@ -71,7 +71,7 @@ Deno.serve(async(req)=>{
   const service=createClient(Deno.env.get("SUPABASE_URL")!,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,{auth:{persistSession:false}});
   try{
     const caller=await getCaller(req,service);
-    if(!(await permissionAllowed(service,caller,"employee.view"))) throw new Error("没有查看员工资料的权限");
+    if(!(await permissionAllowed(service,caller,"employee.directory.view"))) throw new Error("没有查看员工资料的权限");
     const body=await req.json().catch(()=>({}));
     const requested=Array.from(new Set((Array.isArray(body.employee_ids)?body.employee_ids:[]).map(text).filter(Boolean))).slice(0,500) as string[];
     if(!requested.length) return json({rows:[]});

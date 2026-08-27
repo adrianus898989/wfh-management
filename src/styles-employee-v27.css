@@ -271,7 +271,7 @@
 /* ===== V28.3 — one-line desktop filters and activation-code dialog ===== */
 @media(min-width:1450px){
   .employee-page .employee-core-search-grid{
-    grid-template-columns:112px 132px 150px 150px minmax(180px,1fr) 132px auto!important;
+    grid-template-columns:108px 128px 140px 140px 170px 124px minmax(300px,auto)!important;
     gap:8px 10px!important;
     align-items:end!important;
   }
