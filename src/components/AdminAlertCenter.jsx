@@ -15,6 +15,7 @@ import {
   adminAlertAttendanceDetails,
   adminAlertEmployeeHistoryFilters,
   adminAlertEmployeeHireDate,
+  adminAlertErrorFrequencyDetails,
   adminAlertFollowUpState,
   adminAlertKeyAttendanceEvidence,
   adminAlertReadState,
@@ -38,7 +39,7 @@ const ALERT_RULE_COPY = {
   consecutive_rest: { zh:'连续公休达到 2 天。', en:'At least 2 consecutive public rest days.' },
   weekly_absence: { zh:'7 天内缺席达到 2 天。', en:'At least 2 absence days within 7 days.' },
   monthly_leave: { zh:'本月休假超过 5 天；半天按 0.5 天，回家不计。', en:'More than 5 leave days this month; half days count as 0.5 and home leave is excluded.' },
-  error_spike: { zh:'3 天内错误记录达到 6 笔。', en:'At least 6 error records within 3 days.' },
+  error_spike: { zh:'任一条件达到即预警：1 天 5 笔、3 天 5 笔或 7 天 10 笔错误。', en:'Alerts at 5 errors in 1 day, 5 in 3 days, or 10 in 7 days.' },
   deduction_frequency: { zh:'7 天内扣款达到 4 次。', en:'At least 4 deductions within 7 days.' },
   exam_failed: { zh:'最近一次已评分考试未达到及格线。', en:'The latest graded exam did not reach the pass score.' },
 }
@@ -91,7 +92,10 @@ function alertCopy(row, locale) {
     case 'payout_change': return row?.payload?.fulfillment_status === 'mismatch'
       ? { title:'Approved payment details do not match', message:`${name}'s saved payment details differ from the approved request.` }
       : { title:'Payment details awaiting review', message:`${name} submitted a payment-details change.` }
-    case 'error_spike': return { title:'Three-day error warning', message:`${name} has ${count} error records in the last 3 days.` }
+    case 'error_spike': {
+      const days = numeric(row?.payload?.days) || 3
+      return { title:'Error-frequency warning', message:`${name} has ${count} error records in the last ${days} ${days === 1 ? 'day' : 'days'}.` }
+    }
     case 'deduction_frequency': return { title:'Seven-day deduction warning', message:`${name} received ${count} deductions in the last 7 days.` }
     case 'late_timeout_frequency': return { title:'Late / timeout frequency warning', message:`${name} has ${count} late or timeout-related deductions in the last 7 days.` }
     case 'consecutive_rest': return { title:'Consecutive rest-day warning', message:`${name} is marked for ${count} consecutive public rest days.` }
@@ -127,6 +131,15 @@ function AlertAttendanceDetails({ row, locale }) {
           <span data-label={locale === 'en' ? 'Note' : '备注'}>{event.note || (locale === 'en' ? 'Not entered' : '未填写')}</span>
         </li>)}</ul>
       </div>}
+  </section>
+}
+
+function AlertErrorFrequencyDetails({ row, locale }) {
+  const detail = adminAlertErrorFrequencyDetails(row, locale)
+  if (!detail) return null
+  return <section className="admin-alert-attendance-detail error-frequency" data-admin-i18n-skip>
+    <div className="admin-alert-attendance-title"><h4>{detail.title}</h4><strong>{detail.note}</strong></div>
+    <div className="admin-alert-attendance-breakdown">{detail.rules.map(rule => <span key={rule.days} className={rule.triggered ? 'triggered' : ''}><b>{rule.label}</b> {rule.result}{rule.triggered ? (locale === 'en' ? ' · Triggered' : ' · 已触发') : ''}</span>)}</div>
   </section>
 }
 
@@ -403,6 +416,7 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
               {expanded && <div className="employee-alert-history-expanded">
                 <p data-admin-i18n-skip>{copy.message}</p>
                 <AlertAttendanceDetails row={row} locale={locale}/>
+                <AlertErrorFrequencyDetails row={row} locale={locale}/>
                 <AlertFollowUpPanel row={row} locale={locale}/>
                 <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{locale === 'en' ? 'Last updated' : '最后更新'} <b data-admin-i18n-skip>{formatTime(row.last_seen_at, locale)}</b></span></div>
               </div>}
@@ -607,6 +621,7 @@ export function AdminAlertRecordsPage() {
               {expanded && <div className="admin-alert-expanded-panel">
                 <div className="admin-alert-expanded-head"><div><span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span><div><strong data-admin-i18n-skip>{copy.title}</strong><p data-admin-i18n-skip>{copy.message}</p></div></div><div className="admin-alert-record-actions">{row.alert_type === 'payout_change' && row.is_active && <button type="button" className="primary" onClick={() => navigate(adminAlertTarget(row.alert_type))}>{locale === 'en' ? 'Review' : '去审核'}</button>}{canViewEmployees && row.employee_id && <button type="button" onClick={() => navigate(adminAlertEmployeeTarget(row.employee_id))}>{locale === 'en' ? 'Employee file' : '员工档案'}</button>}</div></div>
                 <AlertAttendanceDetails row={row} locale={locale}/>
+                <AlertErrorFrequencyDetails row={row} locale={locale}/>
                 <AlertFollowUpPanel row={row} locale={locale} onUpdated={canFollowUp ? followUp => updateRowFollowUp(row.id, followUp) : undefined}/>
                 <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{row.is_active ? (locale === 'en' ? 'Last updated' : '最后更新') : (locale === 'en' ? 'Resolved' : '解除时间')} <b data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</b></span></div>
               </div>}

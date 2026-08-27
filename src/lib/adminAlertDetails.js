@@ -70,6 +70,44 @@ export function adminAlertAttendanceDetails(row, locale='zh') {
   }
 }
 
+export function adminAlertErrorFrequencyDetails(row, locale='zh') {
+  if (row?.alert_type !== 'error_spike') return null
+  const payload = isRecord(row?.payload) ? row.payload : {}
+  const rules = Array.isArray(payload.rules)
+    ? payload.rules.flatMap(value => {
+      if (!isRecord(value)) return []
+      const days = numeric(value.days)
+      const threshold = numeric(value.threshold)
+      if (![1, 3, 7].includes(days) || threshold <= 0) return []
+      return [{
+        days,
+        threshold,
+        count:numeric(value.count),
+        triggered:Boolean(value.triggered),
+      }]
+    }).sort((a, b) => a.days - b.days)
+    : [{
+      days:numeric(payload.days) || 3,
+      threshold:numeric(payload.threshold) || 6,
+      count:numeric(payload.count ?? row?.occurrence_count),
+      triggered:true,
+    }]
+
+  return {
+    title:locale === 'en' ? 'Error-frequency checks' : '错误频率检测明细',
+    note:locale === 'en' ? 'A warning is created when any rule is reached.' : '任意一条规则达到阈值即产生预警。',
+    rules:rules.map(rule => ({
+      ...rule,
+      label:locale === 'en'
+        ? `${rule.days} ${rule.days === 1 ? 'day' : 'days'}`
+        : `${rule.days}天`,
+      result:locale === 'en'
+        ? `${rule.count} / ${rule.threshold} errors`
+        : `${rule.count} / ${rule.threshold} 笔错误`,
+    })),
+  }
+}
+
 export function adminAlertEmployeeHireDate(row) {
   const payload = isRecord(row?.payload) ? row.payload : {}
   const value = clean(

@@ -199,8 +199,10 @@ test('adjustment edits use their own selectable permission instead of approval',
 test('account overview payloads omit sensitive employee contact fields', () => {
   assert.match(accounts, /function employeeWithoutSensitiveContact\(employee: any\)[\s\S]+const \{ work_tg: _workTg, \.\.\.safeEmployee \} = employee/)
   const sanitizedLists = accounts.match(/employees: employees\.map\(employeeWithoutSensitiveContact\)/g) ?? []
-  assert.equal(sanitizedLists.length, 2)
-  assert.match(accounts, /employee: x\.employee_id[\s\S]+employeeWithoutSensitiveContact\(scope\.employeeMap\.get\(x\.employee_id\)\)/)
+  assert.equal(sanitizedLists.length, 1)
+  assert.match(accounts, /const decorateScopeEmployee = \(employee: any\) => employee[\s\S]+employeeWithoutSensitiveContact\(employee\)/)
+  assert.match(accounts, /employees: employees\.map\(decorateScopeEmployee\)/)
+  assert.match(accounts, /employee: x\.employee_id[\s\S]+decorateScopeEmployee\(scope\.employeeMap\.get\(x\.employee_id\)\)/)
 })
 
 test('directory-owned restore permission reaches the shared reactivation mutation', () => {

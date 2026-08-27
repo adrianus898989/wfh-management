@@ -193,6 +193,7 @@ export const PERMISSIONS = {
   ROLE_VIEW: 'role.view',
   ROLE_AUDIT_VIEW: 'role.audit.view',
   ACCOUNT_ACTIVITY_LOG_VIEW: 'account.activity_log.view',
+  ACCOUNT_MANUAL_VIEW: 'account.manual.view',
   SCOPE_MANAGE: 'scope.manage',
 
   // 预警中心（读取、已读与人工跟进互相独立）

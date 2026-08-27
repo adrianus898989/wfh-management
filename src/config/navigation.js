@@ -120,6 +120,7 @@ const ACCESS = {
   staffAccounts: adminPageAccess('staff_accounts'),
   roles: adminPageAccess('roles'),
   activityLog: adminPageAccess('activity_log'),
+  manual: adminPageAccess('manual'),
   accountUsage: adminPageAccess('assets'),
 }
 
@@ -180,10 +181,7 @@ export const adminNavigation = [
       item('后台登入IP白名单', '/admin/ip-allowlist', ACCESS.ipAllowlist),
       item('后台角色权限', tab('/admin/users', 'roles'), ACCESS.roles),
       item('后台操作日志', '/admin/activity-log', ACCESS.activityLog),
-      // The manual contains no business data and is intentionally available
-      // to every authenticated, active backend account. Protected + AppLayout
-      // still enforce the backend session, MFA and enabled-account checks.
-      item('后台功能用途手册', '/admin/manual', { backendOnly:true }),
+      item('后台功能用途手册', '/admin/manual', ACCESS.manual),
     ],
   },
 ]
@@ -246,7 +244,7 @@ export const adminRouteAccess = [
   route(tab('/admin/users', 'roles'), ACCESS.roles, 'account_usage'),
   route('/admin/ip-allowlist', ACCESS.ipAllowlist, 'account_usage'),
   route('/admin/activity-log', ACCESS.activityLog, 'account_usage'),
-  route('/admin/manual', { backendOnly:true }, 'account_usage'),
+  route('/admin/manual', ACCESS.manual, 'account_usage'),
 
   route('/admin/work-execution', ACCESS.eventTracking, 'work_execution'),
   route(tab('/admin/work-execution', 'daily-inspection'), ACCESS.dailyInspection, 'work_execution'),

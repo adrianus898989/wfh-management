@@ -213,6 +213,68 @@ async function permissionAllowedFirstDefined(service: any, access: any, userId: 
   return false;
 }
 
+type PermissionBatchDecision = { defined: boolean; allowed: boolean };
+
+// Employee detail needs several independent capability flags. Resolving each
+// flag separately used to repeat the same role, permission and override reads
+// dozens of times for a single drawer open. Keep the exact override/role
+// precedence, but resolve every requested code in three bounded queries.
+async function permissionDecisionBatch(service:any,caller:any,codes:string[]) {
+  const uniqueCodes=[...new Set(codes.map(text).filter(Boolean))];
+  const decisions=new Map<string,PermissionBatchDecision>();
+  if(caller.roleCode==="founder"){
+    uniqueCodes.forEach(code=>decisions.set(code,{defined:true,allowed:true}));
+    return decisions;
+  }
+
+  const {data:permissions,error:permissionError}=await service.from("permissions")
+    .select("id,code").in("code",uniqueCodes);
+  if(permissionError) throw permissionError;
+  const permissionByCode=new Map((permissions||[]).map((row:any)=>[text(row.code),row]));
+  const permissionIds=(permissions||[]).map((row:any)=>text(row.id)).filter(Boolean);
+  if(!permissionIds.length){
+    uniqueCodes.forEach(code=>decisions.set(code,{defined:false,allowed:false}));
+    return decisions;
+  }
+
+  const [overrideResult,rolePermissionResult]=await Promise.all([
+    service.from("user_permission_overrides").select("permission_id,allowed")
+      .eq("auth_user_id",caller.userId).in("permission_id",permissionIds),
+    service.from("role_permissions").select("permission_id")
+      .eq("role_id",caller.access.role_id).in("permission_id",permissionIds),
+  ]);
+  if(overrideResult.error) throw overrideResult.error;
+  if(rolePermissionResult.error) throw rolePermissionResult.error;
+  const overrides=new Map((overrideResult.data||[]).map((row:any)=>[text(row.permission_id),Boolean(row.allowed)]));
+  const rolePermissionIds=new Set((rolePermissionResult.data||[]).map((row:any)=>text(row.permission_id)));
+
+  uniqueCodes.forEach(code=>{
+    const permission:any=permissionByCode.get(code);
+    if(!permission?.id){
+      decisions.set(code,{defined:false,allowed:false});
+      return;
+    }
+    const permissionId=text(permission.id);
+    decisions.set(code,{
+      defined:true,
+      allowed:overrides.has(permissionId) ? Boolean(overrides.get(permissionId)) : rolePermissionIds.has(permissionId),
+    });
+  });
+  return decisions;
+}
+
+function permissionAllowedFromBatch(decisions:Map<string,PermissionBatchDecision>,code:string){
+  return Boolean(decisions.get(code)?.allowed);
+}
+
+function permissionAllowedFirstDefinedFromBatch(decisions:Map<string,PermissionBatchDecision>,codes:string[]){
+  for(const code of codes){
+    const decision=decisions.get(code);
+    if(decision?.defined) return decision.allowed;
+  }
+  return false;
+}
+
 async function getCaller(req: Request, service: any) {
   const auth = req.headers.get("Authorization") || "";
   const token = auth.replace(/^Bearer\s+/i, "").trim();
@@ -1227,13 +1289,32 @@ Deno.serve(async (req) => {
       if (!rawEmployee) return json({ error:"找不到员工或无查看权限" },404);
       const employee=overlayCurrentOrganization(rawEmployee,scope);
 
-      const [{ data:contact }, { data:payment }, { data:compensation }, { data:legacyComp }, { data:portalRows }] = await Promise.all([
+      const detailPermissionCodes=[
+        "sensitive.employee.view","sensitive.employee.edit",
+        "sensitive.payout.view","sensitive.payment.view",
+        "employee.directory.compensation.view","employee.edit",
+        "employee.directory.resign","employee.directory.reactivate","employee.delete",
+        "sensitive.payout.edit","sensitive.payment.edit","employee.compensation.edit",
+      ];
+      const [contactResult,paymentResult,compensationResult,legacyCompResult,portalResult,permissionDecisions] = await Promise.all([
         service.from("employee_contact_profiles").select(CONTACT_DETAIL_SELECT).eq("employee_id",employeeId).maybeSingle(),
         service.from("employee_payment_profiles").select(PAYMENT_DETAIL_SELECT).eq("employee_id",employeeId).maybeSingle(),
         service.from("employee_compensation_settings").select(COMPENSATION_DETAIL_SELECT).eq("employee_id",employeeId).maybeSingle(),
         service.from("employee_compensation_legacy").select("*").eq("employee_id",employeeId).maybeSingle(),
         service.from("user_access").select("auth_user_id,employee_portal_enabled,active").eq("employee_id",employeeId),
+        permissionDecisionBatch(service,caller,detailPermissionCodes),
       ]);
+      const contact=contactResult.data;
+      const payment=paymentResult.data;
+      const compensation=compensationResult.data;
+      const legacyComp=legacyCompResult.data;
+      const portalRows=portalResult.error?null:portalResult.data;
+      const partialErrors=[...new Set([
+        contactResult.error?"联系方式":null,
+        paymentResult.error?"收款资料":null,
+        compensationResult.error||legacyCompResult.error?"工资设置":null,
+        portalResult.error?"员工账号状态":null,
+      ].filter(Boolean))];
 
       const [
         canViewEmployeeSensitiveRaw,
@@ -1246,18 +1327,18 @@ Deno.serve(async (req) => {
         canDeleteRaw,
         canEditPaymentRaw,
         canEditCompensationRaw,
-      ] = await Promise.all([
-        permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view"),
-        permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.employee.edit","sensitive.employee.view"]),
-        permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.payout.view","sensitive.payment.view"]),
-        permissionAllowed(service,caller.access,caller.userId,"employee.directory.compensation.view"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.edit"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.directory.resign"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.directory.reactivate"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.delete"),
-        permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.payout.edit","sensitive.payment.edit"]),
-        permissionAllowed(service,caller.access,caller.userId,"employee.compensation.edit"),
-      ]);
+      ] = [
+        permissionAllowedFromBatch(permissionDecisions,"sensitive.employee.view"),
+        permissionAllowedFirstDefinedFromBatch(permissionDecisions,["sensitive.employee.edit","sensitive.employee.view"]),
+        permissionAllowedFirstDefinedFromBatch(permissionDecisions,["sensitive.payout.view","sensitive.payment.view"]),
+        permissionAllowedFromBatch(permissionDecisions,"employee.directory.compensation.view"),
+        permissionAllowedFromBatch(permissionDecisions,"employee.edit"),
+        permissionAllowedFromBatch(permissionDecisions,"employee.directory.resign"),
+        permissionAllowedFromBatch(permissionDecisions,"employee.directory.reactivate"),
+        permissionAllowedFromBatch(permissionDecisions,"employee.delete"),
+        permissionAllowedFirstDefinedFromBatch(permissionDecisions,["sensitive.payout.edit","sensitive.payment.edit"]),
+        permissionAllowedFromBatch(permissionDecisions,"employee.compensation.edit"),
+      ];
       const founder=caller.roleCode==="founder";
       const canViewEmployeeSensitive = founder || canViewEmployeeSensitiveRaw;
       const canViewSensitive = founder || canViewSensitiveRaw;
@@ -1324,9 +1405,10 @@ Deno.serve(async (req) => {
           can_resign:canResignEmployee,
           can_reactivate:canReactivateEmployee,
           can_delete:canDeleteEmployee,
-          can_cancel_hire:canDeleteEmployee && employee.status==="active" && employee.source_type==="backend" && !(portalRows||[]).length,
+          can_cancel_hire:canDeleteEmployee && employee.status==="active" && employee.source_type==="backend" && !portalResult.error && !(portalRows||[]).length,
         },
         missing_fields:missing,
+        partial_errors:partialErrors,
       });
     }
 

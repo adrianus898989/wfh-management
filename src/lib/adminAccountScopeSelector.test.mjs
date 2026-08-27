@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { assignedScopeCandidates, pruneAssignedScopeSelection } from './adminAccountScopeSelection.js'
 
 const usersPage = await readFile(new URL('../pages/AdminUsersPage.jsx', import.meta.url), 'utf8')
 
@@ -12,7 +13,7 @@ test('assigned account scope keeps compact checkboxes separate from form text in
   assert.match(usersPage, /checked=\{scopeEmployeeIdSet\.has\(employee\.id\)\}/)
 })
 
-test('assigned teams, narrowing positions and employee exceptions expose complete controls', () => {
+test('assigned teams, narrowing positions and in-team employee supplements expose complete controls', () => {
   assert.match(usersPage, /aria-label="已选团队"/)
   assert.match(usersPage, /aria-label="已选岗位"/)
   assert.match(usersPage, /aria-label="已选员工"/)
@@ -23,7 +24,8 @@ test('assigned teams, narrowing positions and employee exceptions expose complet
   assert.match(usersPage, /clearScopeIds\('position_ids'\)/)
   assert.match(usersPage, /clearScopeIds\('employee_ids'\)/)
   assert.match(usersPage, /基础范围 = 已选团队 ∩ 可选岗位/)
-  assert.match(usersPage, /“指定员工”是额外例外/)
+  assert.match(usersPage, /已选团队是硬边界/)
+  assert.match(usersPage, /指定员工只能从已选团队内补充/)
 })
 
 test('scope selection continues saving database IDs and shows current-roster headcount from bootstrap teams', () => {
@@ -35,7 +37,32 @@ test('scope selection continues saving database IDs and shows current-roster hea
   assert.match(usersPage, /updateScopeIds\('team_ids', team\.id, event\.target\.checked\)/)
   assert.match(usersPage, /updateScopeIds\('position_ids', position\.id, event\.target\.checked\)/)
   assert.match(usersPage, /updateScopeIds\('employee_ids', employee\.id, event\.target\.checked\)/)
-  assert.match(usersPage, /岗位只能收窄已选团队，请先选择至少一个团队/)
+  assert.match(usersPage, /团队是不可越过的数据边界/)
+})
+
+test('scope candidates cascade from current roster teams to positions and employees', () => {
+  const employees = [
+    { id: 'a', current_team_id: 'panda', current_position_id: 'payout' },
+    { id: 'b', current_team_id: 'panda', current_position_id: 'service' },
+    { id: 'c', current_team_id: 'india', current_position_id: 'payout' },
+  ]
+  const positions = [{ id: 'payout' }, { id: 'service' }, { id: 'finance' }]
+  const candidates = assignedScopeCandidates(employees, positions, ['panda'])
+  assert.deepEqual(candidates.employees.map(employee => employee.id), ['a', 'b'])
+  assert.deepEqual(candidates.positions.map(position => position.id), ['payout', 'service'])
+})
+
+test('scope pruning removes positions and employee supplements outside selected current teams', () => {
+  const employees = [
+    { id: 'a', current_team_id: 'panda', current_position_id: 'payout' },
+    { id: 'b', current_team_id: 'india', current_position_id: 'service' },
+  ]
+  const result = pruneAssignedScopeSelection({
+    teamIds: ['panda'],
+    positionIds: ['payout', 'service'],
+    employeeIds: ['a', 'b'],
+  }, employees, [{ id: 'panda' }, { id: 'india' }])
+  assert.deepEqual(result, { teamIds: ['panda'], positionIds: ['payout'], employeeIds: ['a'] })
 })
 
 test('account search leaves room for adjacent actions instead of consuming the toolbar', () => {

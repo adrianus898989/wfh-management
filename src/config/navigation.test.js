@@ -154,20 +154,21 @@ test('backend IP allowlist has a dedicated guarded route and permission', () => 
   assert.equal(requestedAdminRoute('/admin/ip-allowlist', '?tab=anything'), null)
 })
 
-test('backend manual is the final account page and is guarded by the active backend session instead of a role checkbox', () => {
+test('backend manual is the final account page and requires its independent view permission', () => {
   const accountItems=group('account_usage').children
   assert.deepEqual(accountItems.at(-1), {
     label:'后台功能用途手册',
     to:'/admin/manual',
-    backendOnly:true,
+    pagePermission:'manual',
+    permissions:['account.manual.view'],
   })
   const route=requestedAdminRoute('/admin/manual','')
   assert.equal(route?.groupId,'account_usage')
-  assert.equal(route?.backendOnly,true)
-  assert.equal(route?.permissions,undefined)
+  assert.deepEqual(route?.permissions,['account.manual.view'])
   assert.equal(requestedAdminRoute('/admin/manual','?tab=anything'),null)
   assert.match(appSource,/path="\/admin\/manual"[\s\S]{0,180}<AdminManualPage/)
-  assert.match(topbarSource,/<Link className="admin-topbar-help" to="\/admin\/manual"/)
+  assert.match(topbarSource,/canManual\s*=\s*Boolean\([\s\S]{0,180}ACCOUNT_MANUAL_VIEW/)
+  assert.match(topbarSource,/\{canManual && <Link className="admin-topbar-help" to="\/admin\/manual"/)
 })
 
 test('centralized backend activity log sits between roles and the manual with an independent permission',()=>{

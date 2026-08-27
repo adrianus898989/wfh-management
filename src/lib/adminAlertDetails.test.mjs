@@ -5,6 +5,7 @@ import {
   adminAlertAttendanceDetails,
   adminAlertEmployeeHistoryFilters,
   adminAlertEmployeeHireDate,
+  adminAlertErrorFrequencyDetails,
   adminAlertFollowUpState,
   adminAlertKeyAttendanceEvidence,
   adminAlertReadState,
@@ -26,6 +27,10 @@ const teamColumnsMigration = readFileSync(new URL(
 ), 'utf8')
 const currentRosterTeamMigration = readFileSync(new URL(
   '../../supabase/migrations/20260827155000_admin_alert_current_roster_team.sql',
+  import.meta.url,
+), 'utf8')
+const errorFrequencyMigration = readFileSync(new URL(
+  '../../supabase/migrations/20260827165000_admin_alert_error_frequency_thresholds.sql',
   import.meta.url,
 ), 'utf8')
 
@@ -98,6 +103,49 @@ test('legacy payloads remain renderable until the enriched refresh runs', () => 
   assert.deepEqual(detail.events, [])
   assert.equal(detail.missingDetails, true)
   assert.equal(adminAlertAttendanceDetails({ alert_type:'exam_failed', payload:{} }), null)
+})
+
+test('error-frequency details expose all three thresholds and triggered rules', () => {
+  const detail = adminAlertErrorFrequencyDetails({
+    alert_type:'error_spike',
+    payload:{ rules:[
+      { days:1, threshold:5, count:2, triggered:false },
+      { days:3, threshold:5, count:5, triggered:true },
+      { days:7, threshold:10, count:8, triggered:false },
+    ] },
+  }, 'zh')
+
+  assert.equal(detail.title, '错误频率检测明细')
+  assert.equal(detail.note, '任意一条规则达到阈值即产生预警。')
+  assert.deepEqual(detail.rules.map(rule => [rule.label, rule.result, rule.triggered]), [
+    ['1天', '2 / 5 笔错误', false],
+    ['3天', '5 / 5 笔错误', true],
+    ['7天', '8 / 10 笔错误', false],
+  ])
+  assert.equal(adminAlertErrorFrequencyDetails({ alert_type:'weekly_absence' }), null)
+})
+
+test('legacy error-frequency payload keeps its historical threshold readable', () => {
+  const detail = adminAlertErrorFrequencyDetails({
+    alert_type:'error_spike', occurrence_count:6,
+    payload:{ days:3, threshold:6, count:6 },
+  }, 'en')
+
+  assert.deepEqual(detail.rules.map(rule => [rule.label, rule.result, rule.triggered]), [
+    ['3 days', '6 / 6 errors', true],
+  ])
+})
+
+test('error-frequency migration is server-authoritative, deduplicated and scope-safe', () => {
+  assert.match(errorFrequencyMigration, /error_frequency_candidates\(v_today\)/)
+  assert.match(errorFrequencyMigration, /count_1d >= 5/)
+  assert.match(errorFrequencyMigration, /count_3d >= 5/)
+  assert.match(errorFrequencyMigration, /count_7d >= 10/)
+  assert.match(errorFrequencyMigration, /not exists \([\s\S]{0,220}newer\.record_key = error\.record_key/)
+  assert.match(errorFrequencyMigration, /'error_spike:' \|\| frequency\.employee_id::text/)
+  assert.match(errorFrequencyMigration, /revoke all on function alerts_private\.error_frequency_candidates\(date\)[\s\S]{0,80}from public, anon, authenticated/)
+  assert.match(alertCenterComponent, /1 天 5 笔、3 天 5 笔或 7 天 10 笔错误/)
+  assert.match(alertCenterComponent, /<AlertErrorFrequencyDetails row=\{row\} locale=\{locale\}\/>/)
 })
 
 test('alert table resolves the employee hire date from current and compatible payload fields', () => {

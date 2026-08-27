@@ -11,7 +11,6 @@ import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } f
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
-import { getAllErrorSummaryMap } from '../lib/errorSummaryStore'
 import { employeePortalAccountPresentation } from '../lib/employeeAccountStatus'
 import { ADMIN_ALERT_PERMISSIONS } from '../lib/adminAlertCatalog'
 import { employeeArchiveCsv, employeeArchiveExportFilename } from '../lib/employeeArchiveExport'
@@ -19,6 +18,7 @@ import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunct
 import { employeeTrainerReviewRows } from '../lib/onlineTrainingPresentation'
 import { managementRiskDatePreset } from '../lib/managementRiskPresentation'
 import ManagementRiskPanel from '../components/ManagementRiskPanel'
+import { employeeProfileMetricSeed, mergeEmployeeDetailRefresh, withEmployeeDetailTimeout } from '../lib/employeeDrawerState'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -35,6 +35,10 @@ const employeeRequestError = (error, fallback) => {
   const raw=readableErrorMessage(error)
   if(!raw||raw==='操作失败'||/^edge function returned a non-2xx status code$/i.test(raw)) return fallback
   return raw
+}
+const employeeDetailPartialError = detail => {
+  const sections=[...new Set((detail?.partial_errors||[]).map(text).filter(Boolean))]
+  return sections.length?`部分资料读取失败（${sections.join('、')}），已显示其余资料。请重试。`:''
 }
 const localDateIso = () => {
   const d=new Date()
@@ -435,6 +439,7 @@ export default function AdminEmployeesPage(){
   const [sp,setSp]=useSearchParams()
   const requestedEmployeeId=sp.get('employee')||''
   const requestedEmployeeRef=useRef('')
+  const detailRequestRef=useRef(0)
   const lastAutoRefreshAtRef=useRef(0)
   const refreshEmployeeDataRef=useRef(null)
   const canViewEmployees=adminAccess.hasPermission('employee.directory.view')
@@ -488,7 +493,10 @@ export default function AdminEmployeesPage(){
   const [appliedFilters,setAppliedFilters]=useState(blankEmployeeFilters)
 
   const [selected,setSelected]=useState(null)
+  const selectedEmployeeIdRef=useRef('')
+  selectedEmployeeIdRef.current=text(selected?.employee?.id)
   const [detailLoading,setDetailLoading]=useState(false)
+  const [detailError,setDetailError]=useState('')
   const [employeeModal,setEmployeeModal]=useState(null) // {mode,employee_id,form}
   const [resignModal,setResignModal]=useState(null)
   const [editResignModal,setEditResignModal]=useState(null)
@@ -560,13 +568,23 @@ export default function AdminEmployeesPage(){
   useEffect(()=>{
     if(!canViewEmployees||!requestedEmployeeId||requestedEmployeeRef.current===requestedEmployeeId)return
     let cancelled=false
+    const requestId=++detailRequestRef.current
     requestedEmployeeRef.current=requestedEmployeeId
     setSelected({employee:{id:requestedEmployeeId},missing_fields:[]})
-    setDetailLoading(true)
-    invoke({action:'detail',employee_id:requestedEmployeeId})
-      .then(detail=>{if(!cancelled)setSelected(detail)})
-      .catch(e=>{if(!cancelled){setError(e.message);setSelected(null);requestedEmployeeRef.current=''}})
-      .finally(()=>{if(!cancelled)setDetailLoading(false)})
+    setDetailLoading(true);setDetailError('')
+    withEmployeeDetailTimeout(invoke({action:'detail',employee_id:requestedEmployeeId}))
+      .then(detail=>{
+        if(!cancelled&&detailRequestRef.current===requestId){
+          setSelected(detail)
+          setDetailError(employeeDetailPartialError(detail))
+        }
+      })
+      .catch(e=>{
+        if(!cancelled&&detailRequestRef.current===requestId){
+          setDetailError(`${employeeRequestError(e,'完整档案读取失败，已保留当前可见资料。')}请重试。`)
+        }
+      })
+      .finally(()=>{if(!cancelled&&detailRequestRef.current===requestId)setDetailLoading(false)})
     return()=>{cancelled=true}
   },[requestedEmployeeId,canViewEmployees])
 
@@ -768,7 +786,16 @@ export default function AdminEmployeesPage(){
       if(canViewResignations&&tab==='离职记录') jobs.push(loadHistory(historyPage,historyPageSize,historyFilters,{silent}))
       if(canViewAudit&&tab==='操作日志'&&auditSubview==='employment') jobs.push(loadAudit(auditPage,auditPageSize,auditFilters,{silent}))
       if(canViewEmployees&&selected?.employee?.id){
-        jobs.push(invoke({action:'detail',employee_id:selected.employee.id}).then(d=>setSelected(prev=>({...d,resignation_reason:text(prev?.resignation_reason||d?.resignation_reason)}))).catch(()=>{}))
+        const selectedEmployeeId=text(selected.employee.id)
+        const detailRequestId=detailRequestRef.current
+        jobs.push(withEmployeeDetailTimeout(invoke({action:'detail',employee_id:selectedEmployeeId})).then(d=>{
+          if(detailRequestRef.current!==detailRequestId||selectedEmployeeIdRef.current!==selectedEmployeeId)return
+          setSelected(prev=>{
+            if(detailRequestRef.current!==detailRequestId||text(prev?.employee?.id)!==selectedEmployeeId)return prev
+            return mergeEmployeeDetailRefresh(prev,d)
+          })
+          setDetailError(employeeDetailPartialError(d))
+        }).catch(()=>{}))
       }
       await Promise.all(jobs)
       lastAutoRefreshAtRef.current=Date.now()
@@ -895,20 +922,34 @@ export default function AdminEmployeesPage(){
 
   const openDetail=async row=>{
     setSelected({employee:row,missing_fields:row.missing_fields||[]})
-    setDetailLoading(true)
+    const requestId=++detailRequestRef.current
+    setDetailLoading(true);setDetailError('')
     try{
-      const detail=await invoke({action:'detail',employee_id:row.id})
-      if(detail?.employee?.status==='resigned'&&!text(detail.resignation_reason)&&text(detail.employee.employee_no)){
-        try{
-          const h=await invoke({action:'history_list',page:1,page_size:20,filters:{employee_no:text(detail.employee.employee_no)}})
-          const match=(h.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(detail.employee.employee_no).toUpperCase()&&text(x.reason))
-          if(match) detail.resignation_reason=text(match.reason)
-        }catch(_){}
+      const detail=await withEmployeeDetailTimeout(invoke({action:'detail',employee_id:row.id}))
+      if(detailRequestRef.current!==requestId)return
+      detail.employee={
+        ...row,
+        ...(detail.employee||{}),
+        month_error_count:row.month_error_count,
+        total_error_count:row.total_error_count,
+        risk_level:row.risk_level,
       }
       setSelected(detail)
+      setDetailError(employeeDetailPartialError(detail))
+      if(detail?.employee?.status==='resigned'&&!text(detail.resignation_reason)&&text(detail.employee.employee_no)){
+        invoke({action:'history_list',page:1,page_size:20,filters:{employee_no:text(detail.employee.employee_no)}}).then(h=>{
+          if(detailRequestRef.current!==requestId)return
+          const match=(h.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(detail.employee.employee_no).toUpperCase()&&text(x.reason))
+          if(match)setSelected(current=>current?.employee?.id===row.id?{...current,resignation_reason:text(match.reason)}:current)
+        }).catch(()=>{})
+      }
     }
-    catch(e){ setError(e.message); setSelected(null) }
-    finally{ setDetailLoading(false) }
+    catch(e){
+      if(detailRequestRef.current===requestId){
+        setDetailError(`${employeeRequestError(e,'完整档案读取失败，已保留当前可见资料。')}请重试。`)
+      }
+    }
+    finally{ if(detailRequestRef.current===requestId)setDetailLoading(false) }
   }
 
   const openCreate=()=>{
@@ -1674,7 +1715,9 @@ export default function AdminEmployeesPage(){
     {selected&&<EmployeeDrawer
       detail={selected}
       loading={detailLoading}
-      onClose={()=>{setSelected(null);if(requestedEmployeeId){const next=new URLSearchParams(sp);next.delete('employee');setSp(next,{replace:true});requestedEmployeeRef.current=''}}}
+      error={detailError}
+      onRetry={()=>openDetail(selected.employee)}
+      onClose={()=>{detailRequestRef.current+=1;setSelected(null);setDetailError('');if(requestedEmployeeId){const next=new URLSearchParams(sp);next.delete('employee');setSp(next,{replace:true});requestedEmployeeRef.current=''}}}
       returnToAnalysis={Boolean(analysisDetail)}
       onReturn={()=>setSelected(null)}
       onEdit={openEdit}
@@ -1921,7 +1964,7 @@ function ActivationCodeModal({data,copyStatus,onCopy,onClose}){
   </div>
 }
 
-export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn,readOnly=false}){
+export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn,readOnly=false}){
   const adminAccess=useAdminAccess()
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
   const [profileSummary,setProfileSummary]=useState(null)
@@ -1952,6 +1995,8 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
   const paymentTitle=paymentMode==='usdt'?'USDT 收款资料':'银行卡 / 钱包收款资料'
+  const seededProfileSummary=employeeProfileMetricSeed(e)
+  const visibleProfileSummary=profileSummary?.employee_id===e.id?profileSummary:seededProfileSummary
   const drawerTabs=useMemo(()=>[
     ['info','员工信息',true],
     ['alerts','预警记录',adminAccess.hasAnyPermission(ADMIN_ALERT_PERMISSIONS)],
@@ -1971,21 +2016,21 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
     if(!e.id)return
     let alive=true
     setProfileSummaryLoading(true)
-    Promise.all([
-      supabase.rpc('admin_employee_profile_summary',{p_employee_id:e.id}),
-      getAllErrorSummaryMap().catch(()=>new Map()),
-    ]).then(([{data,error},errorSummaryMap])=>{
+    supabase.rpc('admin_employee_profile_summary',{p_employee_id:e.id}).then(({data,error})=>{
       if(!alive)return
       if(error)return
-      const summary=errorSummaryMap.get(text(e.employee_no).toUpperCase())
+      const seed=employeeProfileMetricSeed(e)
       setProfileSummary({
+        employee_id:e.id,
         ...(data||{}),
-        month_records:Number(summary?.month_error_count??data?.month_records??0),
-        total_errors:Number(summary?.total_error_count??data?.total_errors??0),
+        // The list has already calculated the current error totals. Keep those
+        // authoritative values while the lighter profile RPC fills exam KPIs.
+        month_records:seed.month_records??Number(data?.month_records||0),
+        total_errors:seed.total_errors??Number(data?.total_errors||0),
       })
     }).finally(()=>alive&&setProfileSummaryLoading(false))
     return()=>{alive=false}
-  },[e.id,e.employee_no])
+  },[e.id,e.month_error_count,e.total_error_count])
   useEffect(()=>{
     if(!e.id||activeSection!=='exams'){return}
     let alive=true
@@ -2088,9 +2133,9 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
         <button className="drawer-close" onClick={onClose}>×</button>
       </div>
     </div>
-    {e.id&&<EmployeeProfileMetrics data={profileSummary} loading={profileSummaryLoading}/>}
-    {loading?<div className="empty-state">读取完整档案...</div>:<>
-      <div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>
+    {e.id&&<EmployeeProfileMetrics data={visibleProfileSummary} loading={profileSummaryLoading}/>}
+    {(loading||error)&&<div className={`employee-inline-sync-note ${error?'is-error':''}`} role={error?'alert':'status'}><span>{error||'已先显示员工基础资料，正在补充联系方式、工资与收款资料…'}</span>{error&&<button type="button" onClick={onRetry}>重新读取</button>}</div>}
+    {!loading&&!error&&<div className={`profile-status-line ${missing.length?'has-missing':'is-complete'}`}><div><strong>{missing.length?`资料待完善 ${missing.length} 项`:'当前必填资料完整'}</strong><span>{missing.length?missing.join(' · '):'已通过当前员工类型的资料检查规则'}</span></div></div>}
       <nav className="employee-drawer-tabs">
         {drawerTabs.map(([key,label])=><button key={key} className={activeSection===key?'active':''} onClick={()=>setActiveSection(key)}>{label}</button>)}
       </nav>
@@ -2124,7 +2169,6 @@ export function EmployeeDrawer({detail,loading,onClose,onEdit,onResign,onCancelH
         </section>
         </>}
       </div>
-    </>}
   </div></div>
 }
 

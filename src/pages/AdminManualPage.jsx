@@ -39,7 +39,6 @@ export default function AdminManualPage(){
   const [sectionId,setSectionId]=useState('')
 
   const allowed=item=>{
-    if(item.backendOnly)return true
     if(item.allPermissions?.length)return access.hasAllPermissions(item.allPermissions)
     return access.hasAnyPermission(item.permissions||[])
   }
@@ -104,10 +103,10 @@ export default function AdminManualPage(){
 
           <section className="admin-manual-permissions">
             <h3>权限动作</h3>
-            {page.backendOnly?<p className="admin-manual-backend-only">所有已启用且通过当前会话安全校验的后台账号均可访问，本页不需要额外勾选权限。</p>:<div>{page.permissionCodes.map(code=>{
+            <div>{page.permissionCodes.map(code=>{
               const granted=access.hasPermission(code)
               return <span className={granted?'granted':'not-granted'} key={code}><b>{permissionAction(code)}</b><code>{code}</code><em>{granted?'已授权':'未授权'}</em></span>
-            })}</div>}
+            })}</div>
           </section>
 
           <section className="admin-manual-risk"><h3>风险提示</h3><p>{page.detail.risks}</p></section>

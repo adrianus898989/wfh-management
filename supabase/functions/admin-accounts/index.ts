@@ -3,6 +3,7 @@ import {
   decideBackendDataScope,
   delegatedBackendDataScopeError,
   partitionCurrentTeamIds,
+  validateAssignedScopeBoundary,
 } from './scope.ts'
 import { loadEffectiveEmployeeScope } from '../_shared/employeeScope.ts'
 
@@ -326,11 +327,20 @@ Deno.serve(async (req) => {
           .filter(Boolean))
         const currentTeamMemberCounts = new Map<string, number>()
         const currentPositionMemberCounts = new Map<string, number>()
+        const currentTeamIdsByPositionId = new Map<string, Set<string>>()
         for (const assignment of currentAssignments) {
           const teamId = cleanString(assignment?.team_id)
           const positionId = cleanString(assignment?.position_id)
           if (teamId) currentTeamMemberCounts.set(teamId, (currentTeamMemberCounts.get(teamId) || 0) + 1)
-          if (positionId) currentPositionMemberCounts.set(positionId, (currentPositionMemberCounts.get(positionId) || 0) + 1)
+          if (positionId) {
+            currentPositionMemberCounts.set(positionId, (currentPositionMemberCounts.get(positionId) || 0) + 1)
+            if (teamId) {
+              if (!currentTeamIdsByPositionId.has(positionId)) {
+                currentTeamIdsByPositionId.set(positionId, new Set())
+              }
+              currentTeamIdsByPositionId.get(positionId)!.add(teamId)
+            }
+          }
         }
         const currentTeams = allTeams
           .filter((team: any) => currentTeamIds.has(cleanString(team.id)))
@@ -360,7 +370,8 @@ Deno.serve(async (req) => {
         } else {
           // The database RPC is the sole source of truth for every limited
           // scope. It resolves self/own-team against the current roster and
-          // assigned scope as (team AND optional position) OR exceptions.
+          // assigned scope as selected team AND (optional position OR selected
+          // in-team employee supplement). No team-external exception exists.
           for (const employeeIdRaw of effectiveEmployeeScope.employeeIds) {
             const employeeId = cleanString(employeeIdRaw)
             if (employeeId && employeeMap.has(employeeId)) allowedEmployeeIds.add(employeeId)
@@ -388,9 +399,7 @@ Deno.serve(async (req) => {
           if (callerPositionIds.size) {
             callerPositionIds.forEach((positionId: string) => delegablePositionIds.add(positionId))
           } else {
-            // An unfiltered parent team may delegate a narrower position, but
-            // an explicit employee exception outside the base teams must never
-            // make that person's team/position selectable as a future grant.
+            // An unfiltered parent team may delegate a narrower position.
             for (const assignment of currentAssignments) {
               if (!callerTeamIds.has(cleanString(assignment?.team_id))) continue
               const positionId = cleanString(assignment?.position_id)
@@ -403,12 +412,14 @@ Deno.serve(async (req) => {
           allEmployees,
           allTeams,
           currentTeams,
+          currentAssignments,
           employeeMap,
           allTeamIds,
           currentTeamIds,
           currentTeamIdByEmployeeId,
           currentPositionIdByEmployeeId,
           currentPositionMemberCounts,
+          currentTeamIdsByPositionId,
           allowedEmployeeIds,
           delegableTeamIds,
           currentPositionIds,
@@ -477,18 +488,22 @@ Deno.serve(async (req) => {
       const targetTeamIds = cleanStringList(selection.teamIds)
       const targetPositionIds = cleanStringList(selection.positionIds)
       const targetEmployeeIds = cleanStringList(selection.employeeIds)
-      if (targetPositionIds.length && !targetTeamIds.length) return false
-      if (!targetTeamIds.length && !targetEmployeeIds.length) return false
+      const targetBoundary = validateAssignedScopeBoundary(
+        targetTeamIds,
+        targetPositionIds,
+        targetEmployeeIds,
+        scope.currentAssignments,
+      )
+      if (!targetBoundary.ok) return false
 
       // A fixed assigned grant can outlive an own_team/self caller's future
       // transfer. Those dynamic parent scopes therefore cannot delegate an
       // assigned scope at all.
       if (activeCaller.data_scope === 'self' || activeCaller.data_scope === 'own_team') return false
       if (activeCaller.data_scope === 'assigned_teams') {
-        // Employee exceptions are durable across future team changes. A child
-        // may therefore inherit only exceptions explicitly configured on the
-        // parent, never an employee who happens to be inside today's base
-        // team/position result.
+        // An in-team employee supplement can outlive a position change. A
+        // child may therefore inherit only supplements explicitly configured
+        // on the parent, never a current base employee converted into one.
         if (!targetEmployeeIds.every(employeeId => scope.callerScopeEmployeeIds.has(employeeId))) return false
         if (!targetTeamIds.every(teamId => scope.callerScopeTeamIds.has(teamId))) return false
         if (targetTeamIds.length && scope.callerScopePositionIds.size > 0) {
@@ -569,11 +584,26 @@ Deno.serve(async (req) => {
       }
 
       if (dataScope === 'assigned_teams') {
-        if (positionIds.length && !teamIds.length) {
-          throw new Error('岗位只能用于收窄已选团队，请先选择至少一个团队')
-        }
-        if (!teamIds.length && !employeeIds.length) {
-          throw new Error('指定范围至少选择一个团队或一名额外员工')
+        const boundary = validateAssignedScopeBoundary(
+          teamIds,
+          positionIds,
+          employeeIds,
+          scope.currentAssignments,
+        )
+        if (!boundary.ok) {
+          if (boundary.reason === 'team_required') {
+            throw new Error('指定范围必须选择至少一个当前团队；团队是不可越过的数据边界')
+          }
+          if (boundary.reason === 'team_not_current') {
+            throw new Error('选择的团队已不在当前排班目录，请刷新后重新选择')
+          }
+          if (boundary.reason === 'position_not_in_selected_team') {
+            throw new Error('选择的岗位不属于已选当前团队，请重新选择团队内岗位')
+          }
+          if (boundary.reason === 'employee_not_in_selected_team') {
+            throw new Error('指定员工不属于已选当前团队，不能作为团队外例外')
+          }
+          throw new Error('团队与岗位组合没有匹配人员，请调整范围')
         }
         const teamPartition = partitionCurrentTeamIds(teamIds, scope.currentTeamIds)
         if (teamPartition.staleTeamIds.length) {
@@ -584,32 +614,17 @@ Deno.serve(async (req) => {
         )
         if (invalidTeam) throw new Error('选择的团队超出当前账号可授权范围')
 
-        const invalidPosition = positionIds.find(positionId =>
-          !scope.currentPositionIds.has(positionId) || (!isFounder && !scope.delegablePositionIds.has(positionId))
+        const invalidPosition = boundary.positionIds.find(positionId =>
+          !isFounder && !scope.delegablePositionIds.has(positionId)
         )
-        if (invalidPosition) throw new Error('选择的岗位不存在或超出当前账号可授权范围')
+        if (invalidPosition) throw new Error('选择的团队内岗位超出当前账号可授权范围')
 
-        const invalidEmployee = employeeIds.find(scopedEmployeeId =>
-          !scope.employeeMap.has(scopedEmployeeId) || (!isFounder && !scope.allowedEmployeeIds.has(scopedEmployeeId))
+        const invalidEmployee = boundary.employeeIds.find(scopedEmployeeId =>
+          !isFounder && !scope.allowedEmployeeIds.has(scopedEmployeeId)
         )
         if (invalidEmployee) throw new Error('选择的员工超出当前账号可授权范围')
 
-        const selectedTeams = new Set(teamPartition.currentTeamIds)
-        const selectedPositions = new Set(positionIds)
-        const effectiveEmployeeIds = new Set(employeeIds)
-        if (selectedTeams.size) {
-          scope.allEmployees.forEach((candidate: any) => {
-            const currentTeamId = scope.currentTeamIdByEmployeeId.get(candidate.id)
-            const teamMatches = !selectedTeams.size || (currentTeamId && selectedTeams.has(currentTeamId))
-            const currentPositionId = scope.currentPositionIdByEmployeeId.get(candidate.id)
-            const positionMatches = !selectedPositions.size || (currentPositionId && selectedPositions.has(currentPositionId))
-            if (teamMatches && positionMatches) effectiveEmployeeIds.add(candidate.id)
-          })
-        }
-        if (!effectiveEmployeeIds.size) {
-          throw new Error('团队与岗位组合没有匹配人员，请调整范围')
-        }
-        if (!isFounder && [...effectiveEmployeeIds].some(id => !scope.allowedEmployeeIds.has(id))) {
+        if (!isFounder && boundary.effectiveEmployeeIds.some(id => !scope.allowedEmployeeIds.has(id))) {
           throw new Error('团队与岗位组合会包含当前账号范围以外的人员，不能授权')
         }
       }
@@ -918,7 +933,15 @@ Deno.serve(async (req) => {
       const mayManageRoles = can('role.view')
       const mayCreateAccounts = can('account.create')
       const scope = await getScopeContext()
-      const employees = mayViewAccounts ? await getScopedEmployees(true) : []
+      // Scope-picker candidates come only from the strict current roster.
+      // Founder/all may still manage archived account records, but stale
+      // employees must never reappear as selectable authorization targets.
+      const employees = mayViewAccounts
+        ? (await getScopedEmployees(true)).filter((employee: any) =>
+          scope.currentTeamIdByEmployeeId.has(employee.id) &&
+          scope.currentPositionIdByEmployeeId.has(employee.id)
+        )
+        : []
       const emptyResult = () => Promise.resolve({ data: [] as any[], error: null })
 
       const [
@@ -987,10 +1010,17 @@ Deno.serve(async (req) => {
         const targetPermissions = await getAccountPermissionCodes(account.auth_user_id, account.role_id)
         if (permissionsWithinCaller(targetPermissions, true)) manageableAccounts.push(account)
       }
+      const decorateScopeEmployee = (employee: any) => employee
+        ? {
+          ...employeeWithoutSensitiveContact(employee),
+          current_team_id: scope.currentTeamIdByEmployeeId.get(employee.id) || null,
+          current_position_id: scope.currentPositionIdByEmployeeId.get(employee.id) || null,
+        }
+        : null
       const decorate = (x: any) => ({
         ...x,
         employee: x.employee_id
-          ? employeeWithoutSensitiveContact(scope.employeeMap.get(x.employee_id))
+          ? decorateScopeEmployee(scope.employeeMap.get(x.employee_id))
           : null,
       })
 
@@ -1024,6 +1054,7 @@ Deno.serve(async (req) => {
         ).map((position: any) => ({
           ...position,
           member_count: scope.currentPositionMemberCounts.get(cleanString(position.id)) || 0,
+          team_ids: [...(scope.currentTeamIdsByPositionId.get(cleanString(position.id)) || [])],
         }))
         : []
       const visibleScopeTeamRows = (scopeTeamRes.data || [])
@@ -1041,7 +1072,7 @@ Deno.serve(async (req) => {
           is_founder: isFounder,
           permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
         },
-        employees: employees.map(employeeWithoutSensitiveContact),
+        employees: employees.map(decorateScopeEmployee),
         backend_accounts: backendAccounts,
         employee_accounts: employeeAccounts,
         roles,

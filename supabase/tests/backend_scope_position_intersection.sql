@@ -1,7 +1,7 @@
 -- Run only against a disposable database after every migration. All fixture
 -- mutations are rolled back. This regression protects the server-side meaning
 -- of an assigned backend scope:
---   (selected current team AND optional current position) OR named employees.
+--   selected current team AND (optional position OR selected in-team employee).
 
 begin;
 
@@ -25,7 +25,8 @@ insert into public.positions (id, name, status) values
   ('00000000-0000-4000-8000-00000000a202', '__SCOPE_PAYOUT__', 'active'),
   -- Production contains duplicate active position labels. Authorization maps a
   -- label to one canonical ID, so the duplicate ID must never be selectable.
-  ('00000000-0000-4000-8000-00000000a203', '__SCOPE_SERVICE__', 'active');
+  ('00000000-0000-4000-8000-00000000a203', '__SCOPE_SERVICE__', 'active'),
+  ('00000000-0000-4000-8000-00000000a204', '__SCOPE_ONLY_B__', 'active');
 
 -- E1 deliberately has stale canonical organization columns. The current roster
 -- below is authoritative and places E1 in Team A / Service.
@@ -54,7 +55,7 @@ insert into public.employees (
   (
     '00000000-0000-4000-8000-00000000e104', 'SCOPE-E4', '__SCOPE_E4__', 'active',
     '00000000-0000-4000-8000-00000000a102',
-    '00000000-0000-4000-8000-00000000a202',
+    '00000000-0000-4000-8000-00000000a204',
     null, null, 'schedule_temp', 'test'
   ),
   (
@@ -72,7 +73,7 @@ insert into public.report_employee_directory_cache (
   ('SCOPE-E1', 9101, '__SCOPE_E1__', '__SCOPE_TEAM_A__', '__SCOPE_SERVICE__', '__SCOPE_CURRENT_TEACHER__', 'roster'),
   ('SCOPE-E2', 9102, '__SCOPE_E2__', '__SCOPE_TEAM_A__', '__SCOPE_PAYOUT__', null, 'roster'),
   ('SCOPE-E3', 9103, '__SCOPE_E3__', '__SCOPE_TEAM_B__', '__SCOPE_SERVICE__', '__SCOPE_TEACHER_B__', 'roster'),
-  ('SCOPE-E4', 9104, '__SCOPE_E4__', '__SCOPE_TEAM_B__', '__SCOPE_PAYOUT__', null, 'roster'),
+  ('SCOPE-E4', 9104, '__SCOPE_E4__', '__SCOPE_TEAM_B__', '__SCOPE_ONLY_B__', null, 'roster'),
   ('SCOPE-E5', 9105, '__SCOPE_E5__', '__SCOPE_TEAM_A__', '__SCOPE_SERVICE__', '__SCOPE_CURRENT_TEACHER__', 'roster');
 
 insert into auth.users (
@@ -141,7 +142,7 @@ select public.admin_save_account_access_scope(
   'assigned_teams',
   array['00000000-0000-4000-8000-00000000a101'::uuid],
   array['00000000-0000-4000-8000-00000000a201'::uuid],
-  array['00000000-0000-4000-8000-00000000e104'::uuid]
+  array['00000000-0000-4000-8000-00000000e102'::uuid]
 );
 
 update public.user_access
@@ -168,10 +169,10 @@ begin
 
   if v_assigned is distinct from array[
     '00000000-0000-4000-8000-00000000e101'::uuid,
-    '00000000-0000-4000-8000-00000000e104'::uuid,
+    '00000000-0000-4000-8000-00000000e102'::uuid,
     '00000000-0000-4000-8000-00000000e105'::uuid
   ] then
-    raise exception 'assigned scope is not (Team A AND Service) OR explicit E4: %', v_assigned;
+    raise exception 'assigned scope is not Team A AND (Service OR in-team E2): %', v_assigned;
   end if;
 
   if exists (
@@ -290,6 +291,46 @@ begin
 end
 $position_without_team_rejected$;
 
+do $position_outside_selected_team_rejected$
+begin
+  begin
+    perform public.admin_save_account_scope_filters(
+      '00000000-0000-4000-8000-00000000f101',
+      array['00000000-0000-4000-8000-00000000a101'::uuid],
+      array['00000000-0000-4000-8000-00000000a204'::uuid],
+      '{}'::uuid[]
+    );
+    raise exception 'position outside selected current team was accepted';
+  exception
+    when others then
+      if sqlerrm = 'position outside selected current team was accepted'
+         or position('position_filter_not_in_selected_current_team' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+end
+$position_outside_selected_team_rejected$;
+
+do $employee_outside_selected_team_rejected$
+begin
+  begin
+    perform public.admin_save_account_scope_filters(
+      '00000000-0000-4000-8000-00000000f101',
+      array['00000000-0000-4000-8000-00000000a101'::uuid],
+      array['00000000-0000-4000-8000-00000000a201'::uuid],
+      array['00000000-0000-4000-8000-00000000e104'::uuid]
+    );
+    raise exception 'employee outside selected current team was accepted';
+  exception
+    when others then
+      if sqlerrm = 'employee outside selected current team was accepted'
+         or position('employee_filter_not_in_selected_current_team' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+end
+$employee_outside_selected_team_rejected$;
+
 do $noncanonical_duplicate_position_rejected$
 begin
   begin
@@ -303,7 +344,7 @@ begin
   exception
     when others then
       if sqlerrm = 'noncanonical duplicate position ID was accepted'
-         or position('position_filter_not_in_current_roster' in sqlerrm) = 0 then
+         or position('position_filter_not_in_selected_current_team' in sqlerrm) = 0 then
         raise;
       end if;
   end;

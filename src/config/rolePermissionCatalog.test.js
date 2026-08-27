@@ -76,7 +76,7 @@ test('English sidebar tabs keep the same granular action permissions', () => {
   assert.ok(!codes('后台角色权限').has(PERMISSIONS.ROLE_MANAGE))
 })
 
-test('all configurable pages have a unique view code and the backend manual needs no checkbox', () => {
+test('all configurable pages, including the backend manual, have a unique view code', () => {
   const futurePermission = {
     id: 'future-permission',
     code: 'future_feature.archive',
@@ -95,13 +95,12 @@ test('all configurable pages have a unique view code and the backend manual need
   assert.ok(sections.find(section => section.key === 'system_supplement')?.pages[0].items.some(item => item.code === futurePermission.code))
   const currentPages=sections.filter(section=>section.key!=='system_supplement').flatMap(section=>section.pages)
   const manual=currentPages.find(page=>page.label==='后台功能用途手册')
-  const configurablePages=currentPages.filter(page=>page!==manual)
-  const viewCodes=configurablePages.map(page=>page.items.find(item=>item.actionKey==='view')?.code)
+  const viewCodes=currentPages.map(page=>page.items.find(item=>item.actionKey==='view')?.code)
   assert.equal(currentPages.length,36)
-  assert.equal(manual?.items.length,0)
-  assert.match(manual?.description||'',/所有已启用后台账号/)
+  assert.deepEqual(manual?.items.map(item=>item.code),[PERMISSIONS.ACCOUNT_MANUAL_VIEW])
+  assert.match(manual?.description||'',/查看平台各模块/)
   assert.ok(viewCodes.every(Boolean))
-  assert.equal(new Set(viewCodes).size,35)
+  assert.equal(new Set(viewCodes).size,36)
   assert.equal(uniquePermissionIds(visibleItems).length, visibleItems.length)
 })
 
@@ -116,8 +115,7 @@ test('every latest sidebar child page remains visible with selectable permission
       (navigationSection.children || [navigationSection]).map(page => page.label),
     )
     for (const page of permissionSection.pages) {
-      if(page.label==='后台功能用途手册')assert.equal(page.items.length,0)
-      else assert.ok(page.items.length > 0, `${page.label} must expose a real permission`)
+      assert.ok(page.items.length > 0, `${page.label} must expose a real permission`)
       assert.equal(page.pendingCodes.length,0)
     }
   }

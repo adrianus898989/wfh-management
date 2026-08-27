@@ -50,6 +50,7 @@ export const ADMIN_PAGE_PERMISSIONS = Object.freeze({
   // that a non-Founder can select but the server must reject.
   roles: { view:PERMISSIONS.ROLE_VIEW, actions:[PERMISSIONS.ROLE_AUDIT_VIEW] },
   activity_log: { view:PERMISSIONS.ACCOUNT_ACTIVITY_LOG_VIEW, actions:[] },
+  manual: { view:PERMISSIONS.ACCOUNT_MANUAL_VIEW, actions:[] },
 })
 
 export function adminPageAccess(pagePermission) {

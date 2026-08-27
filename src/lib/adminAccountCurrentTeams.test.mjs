@@ -2,10 +2,17 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-import { partitionCurrentTeamIds } from '../../supabase/functions/admin-accounts/scope.ts'
+import {
+  partitionCurrentTeamIds,
+  validateAssignedScopeBoundary,
+} from '../../supabase/functions/admin-accounts/scope.ts'
 
 const migration = await readFile(
   new URL('../../supabase/migrations/20260827152000_backend_scope_position_intersection.sql', import.meta.url),
+  'utf8',
+)
+const hardCeilingMigration = await readFile(
+  new URL('../../supabase/migrations/20260827164000_backend_scope_team_hard_ceiling.sql', import.meta.url),
   'utf8',
 )
 const edge = await readFile(
@@ -31,6 +38,38 @@ test('current team ID partition cleans, deduplicates and separates stale grants'
   })
 })
 
+test('assigned scope makes selected current teams a hard ceiling', () => {
+  const assignments = [
+    { employee_id: 'panda-payout', team_id: 'panda', position_id: 'payout' },
+    { employee_id: 'panda-service', team_id: 'panda', position_id: 'service' },
+    { employee_id: 'india-payout', team_id: 'india', position_id: 'payout' },
+  ]
+
+  assert.deepEqual(
+    validateAssignedScopeBoundary(
+      ['panda'],
+      ['payout'],
+      ['panda-service'],
+      assignments,
+    ),
+    {
+      ok: true,
+      teamIds: ['panda'],
+      positionIds: ['payout'],
+      employeeIds: ['panda-service'],
+      effectiveEmployeeIds: ['panda-payout', 'panda-service'],
+    },
+  )
+  assert.deepEqual(
+    validateAssignedScopeBoundary([], [], ['panda-payout'], assignments),
+    { ok: false, reason: 'team_required' },
+  )
+  assert.deepEqual(
+    validateAssignedScopeBoundary(['panda'], [], ['india-payout'], assignments),
+    { ok: false, reason: 'employee_not_in_selected_team', invalidId: 'india-payout' },
+  )
+})
+
 test('database directory derives current team and canonical position from the latest roster', () => {
   assert.match(migration, /where directory\.source_kind = 'roster'/)
   assert.match(migration, /create or replace function scope_private\.current_employee_scope_directory\(\)/)
@@ -47,6 +86,21 @@ test('strict employee organization directory RPC is service-only', () => {
   assert.match(migration, /grant execute on function public\.admin_scope_current_employee_directory\(\)[\s\S]+to service_role/)
 })
 
+test('database writer and materializer enforce team-scoped positions and employees', () => {
+  assert.match(hardCeilingMigration, /assigned_scope_requires_team/)
+  assert.match(hardCeilingMigration, /position_filter_not_in_selected_current_team/)
+  assert.match(hardCeilingMigration, /employee_filter_not_in_selected_current_team/)
+  assert.match(hardCeilingMigration, /team_filter\.team_id = directory\.current_team_id/)
+  assert.match(hardCeilingMigration, /employee_filter\.employee_id = directory\.employee_id/)
+  assert.doesNotMatch(
+    hardCeilingMigration.slice(
+      hardCeilingMigration.indexOf('create or replace function scope_private.rebuild_account_employee_scope'),
+      hardCeilingMigration.indexOf('create or replace function public.admin_save_account_scope_filters'),
+    ),
+    /union\s+select filter\.employee_id/i,
+  )
+})
+
 test('admin account bootstrap and save use strict current assignments and one atomic RPC', () => {
   assert.match(edge, /admin\.rpc\('admin_scope_current_employee_directory'\)/)
   assert.match(edge, /if \(!currentAssignments\.length\) throw new Error\('当前排班组织目录为空或全部未匹配，已停止账号范围授权'\)/)
@@ -55,6 +109,9 @@ test('admin account bootstrap and save use strict current assignments and one at
   assert.match(edge, /admin_save_account_access_scope/)
   assert.match(edge, /p_position_ids:/)
   assert.match(edge, /scopeDirectoryDiagnostics/)
+  assert.match(edge, /current_team_id: scope\.currentTeamIdByEmployeeId/)
+  assert.match(edge, /current_position_id: scope\.currentPositionIdByEmployeeId/)
+  assert.match(edge, /team_ids: \[\.\.\.\(scope\.currentTeamIdsByPositionId/)
 })
 
 test('delegated scopes are structurally contained, not only current-row subsets', () => {
@@ -74,12 +131,12 @@ test('limited managers can still manage staff-only accounts inside employee scop
   assert.match(edge, /Staff-only accounts cannot read backend modules/)
 })
 
-test('account editor explains current organization cleanup and the intersection-plus-exception rule', () => {
+test('account editor explains current organization cleanup and the hard team ceiling', () => {
   assert.match(usersPage, /const staleScopeTeams = data\?\.stale_scope_teams \|\| \[\]/)
   assert.match(usersPage, /removedStaleTeamIds/)
   assert.match(usersPage, /旧名、已移除或当前无排班成员的历史团队，已从本次选择中剔除；保存后不会恢复/)
   assert.match(usersPage, /团队清单只读取当前居家排班 \/ 当前组织目录/)
   assert.match(usersPage, /基础范围 = 已选团队 ∩ 可选岗位/)
-  assert.match(usersPage, /指定员工（额外例外）/)
+  assert.match(usersPage, /指定员工只能从已选团队内补充/)
   assert.match(usersPage, /Number\(team\.member_count\) \|\| 0/)
 })

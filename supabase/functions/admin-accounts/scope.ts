@@ -23,6 +23,109 @@ export type CurrentTeamIdPartition = {
   staleTeamIds: string[];
 };
 
+export type CurrentScopeAssignment = {
+  employee_id?: unknown;
+  team_id?: unknown;
+  position_id?: unknown;
+};
+
+export type AssignedScopeBoundaryDecision =
+  | {
+    ok: true;
+    teamIds: string[];
+    positionIds: string[];
+    employeeIds: string[];
+    effectiveEmployeeIds: string[];
+  }
+  | {
+    ok: false;
+    reason:
+      | "team_required"
+      | "team_not_current"
+      | "position_not_in_selected_team"
+      | "employee_not_in_selected_team"
+      | "empty_effective_scope";
+    invalidId?: string;
+  };
+
+/**
+ * Enforce the durable boundary for a manually assigned backend scope.
+ *
+ * Selected teams are always the hard ceiling. Positions narrow employees
+ * inside those teams, while explicitly selected employees may supplement a
+ * position filter only when their current roster team is still selected.
+ * Historical employee.team_id / position_id values are deliberately ignored.
+ */
+export function validateAssignedScopeBoundary(
+  teamIds: unknown,
+  positionIds: unknown,
+  employeeIds: unknown,
+  currentAssignments: CurrentScopeAssignment[],
+): AssignedScopeBoundaryDecision {
+  const selectedTeamIds = cleanList(teamIds);
+  const selectedPositionIds = cleanList(positionIds);
+  const selectedEmployeeIds = cleanList(employeeIds);
+  if (!selectedTeamIds.length) return { ok: false, reason: "team_required" };
+
+  const teamSet = new Set(selectedTeamIds);
+  const positionSet = new Set(selectedPositionIds);
+  const employeeSet = new Set(selectedEmployeeIds);
+  const assignments = currentAssignments.map((assignment) => ({
+    employeeId: clean(assignment?.employee_id),
+    teamId: clean(assignment?.team_id),
+    positionId: clean(assignment?.position_id),
+  })).filter((assignment) => assignment.employeeId && assignment.teamId);
+
+  for (const teamId of selectedTeamIds) {
+    if (!assignments.some((assignment) => assignment.teamId === teamId)) {
+      return { ok: false, reason: "team_not_current", invalidId: teamId };
+    }
+  }
+
+  for (const positionId of selectedPositionIds) {
+    if (!assignments.some((assignment) =>
+      teamSet.has(assignment.teamId) && assignment.positionId === positionId
+    )) {
+      return {
+        ok: false,
+        reason: "position_not_in_selected_team",
+        invalidId: positionId,
+      };
+    }
+  }
+
+  for (const employeeId of selectedEmployeeIds) {
+    if (!assignments.some((assignment) =>
+      assignment.employeeId === employeeId && teamSet.has(assignment.teamId)
+    )) {
+      return {
+        ok: false,
+        reason: "employee_not_in_selected_team",
+        invalidId: employeeId,
+      };
+    }
+  }
+
+  const effectiveEmployeeIds = assignments.filter((assignment) => {
+    if (!teamSet.has(assignment.teamId)) return false;
+    return !positionSet.size || positionSet.has(assignment.positionId) ||
+      employeeSet.has(assignment.employeeId);
+  }).map((assignment) => assignment.employeeId);
+
+  const uniqueEffectiveIds = [...new Set(effectiveEmployeeIds)];
+  if (!uniqueEffectiveIds.length) {
+    return { ok: false, reason: "empty_effective_scope" };
+  }
+
+  return {
+    ok: true,
+    teamIds: selectedTeamIds,
+    positionIds: selectedPositionIds,
+    employeeIds: selectedEmployeeIds,
+    effectiveEmployeeIds: uniqueEffectiveIds,
+  };
+}
+
 /**
  * Split an account's requested/persisted team IDs against the current roster
  * directory. Historical IDs are never silently treated as current grants.

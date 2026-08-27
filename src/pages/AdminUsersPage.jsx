@@ -6,6 +6,7 @@ import { adminLocalPageTabs } from '../config/navigation'
 import { buildRolePermissionSections, uniquePermissionIds } from '../config/rolePermissionCatalog'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
+import { assignedScopeCandidates, pruneAssignedScopeSelection } from '../lib/adminAccountScopeSelection'
 
 const USER_TABS = ['backend', 'staff', 'roles']
 
@@ -257,6 +258,11 @@ export default function AdminUsersPage() {
     const removedStaleTeamIds = staleScopeTeams
       .filter(x => x.auth_user_id === a.auth_user_id)
       .map(x => x.team_id)
+    const currentSelection = pruneAssignedScopeSelection({
+      teamIds: scopeTeams.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.team_id),
+      positionIds: scopePositions.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.position_id),
+      employeeIds: scopeEmployees.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.employee_id),
+    }, employees, teams)
     setAccountModal({
       mode: 'edit',
       error: '',
@@ -271,9 +277,9 @@ export default function AdminUsersPage() {
         role_id: role?.id || a.role_id || '',
         data_scope: a.data_scope || 'own_team',
         otp_required: Boolean(a.otp_required),
-        team_ids: scopeTeams.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.team_id),
-        position_ids: scopePositions.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.position_id),
-        employee_ids: scopeEmployees.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.employee_id),
+        team_ids: currentSelection.teamIds,
+        position_ids: currentSelection.positionIds,
+        employee_ids: currentSelection.employeeIds,
         scope_team_search: '',
         scope_position_search: '',
         scope_employee_search: '',
@@ -293,8 +299,17 @@ export default function AdminUsersPage() {
     }
     if (!form.role_id) return '请选择角色。'
     if (['self', 'own_team'].includes(form.data_scope) && !form.employee_id) return '“仅本人”或“关联员工所在团队”必须先关联员工档案。'
-    if (form.data_scope === 'assigned_teams' && form.position_ids.length && !form.team_ids.length) return '岗位只能收窄已选团队，请先选择至少一个团队。'
-    if (form.data_scope === 'assigned_teams' && !(form.team_ids.length || form.employee_ids.length)) return '指定范围至少选择一个团队或一名员工。'
+    if (form.data_scope === 'assigned_teams' && !form.team_ids.length) return '指定范围必须先选择至少一个团队；团队是不可越过的数据边界。'
+    if (form.data_scope === 'assigned_teams') {
+      const pruned = pruneAssignedScopeSelection({
+        teamIds: form.team_ids,
+        positionIds: form.position_ids,
+        employeeIds: form.employee_ids,
+      }, employees, teams)
+      if (pruned.teamIds.length !== form.team_ids.length) return '已选团队不在当前排班组织目录，请重新选择。'
+      if (pruned.positionIds.length !== form.position_ids.length) return '已选岗位不属于所选团队，请重新选择。'
+      if (pruned.employeeIds.length !== form.employee_ids.length) return '指定员工必须属于所选团队，不能添加团队外人员。'
+    }
     return ''
   }
 
@@ -530,19 +545,26 @@ export default function AdminUsersPage() {
   const scopePositionQuery = String(accountModal?.form?.scope_position_search || '').trim().toLowerCase()
   const scopeEmployeeQuery = String(accountModal?.form?.scope_employee_search || '').trim().toLowerCase()
   const teamActiveCounts = new Map(teams.map(team => [team.id, Number(team.member_count) || 0]))
-  const positionActiveCounts = new Map(positions.map(position => [position.id, Number(position.member_count) || 0]))
   const selectedScopeTeams = scopeTeamIds.map(id => teams.find(team => team.id === id) || { id, name: `团队 ${id}` })
   const selectedScopePositions = scopePositionIds.map(id => positions.find(position => position.id === id) || { id, name: `已失效岗位 ${id}` })
   const selectedScopeEmployees = scopeEmployeeIds.map(id => employees.find(employee => employee.id === id) || { id, employee_no: '未知员工', full_name: id })
+  const assignedCandidates = assignedScopeCandidates(employees, positions, scopeTeamIds)
+  const eligibleScopeEmployees = assignedCandidates.employees
+  const eligibleScopePositions = assignedCandidates.positions
+  const selectedTeamPositionCounts = eligibleScopeEmployees.reduce((counts, employee) => {
+    const positionId = String(employee.current_position_id || employee.position_id || '').trim()
+    if (positionId) counts.set(positionId, (counts.get(positionId) || 0) + 1)
+    return counts
+  }, new Map())
   const visibleScopeTeams = teams.filter(team => {
     if (accountModal?.form?.scope_team_selected_only && !scopeTeamIdSet.has(team.id)) return false
     return !scopeTeamQuery || String(team.name || '').toLowerCase().includes(scopeTeamQuery)
   })
-  const matchingScopeEmployees = employees.filter(employee => {
+  const matchingScopeEmployees = eligibleScopeEmployees.filter(employee => {
     if (accountModal?.form?.scope_employee_selected_only && !scopeEmployeeIdSet.has(employee.id)) return false
     return !scopeEmployeeQuery || `${employee.employee_no} ${employee.full_name}`.toLowerCase().includes(scopeEmployeeQuery)
   })
-  const visibleScopePositions = positions.filter(position => {
+  const visibleScopePositions = eligibleScopePositions.filter(position => {
     if (accountModal?.form?.scope_position_selected_only && !scopePositionIdSet.has(position.id)) return false
     return !scopePositionQuery || String(position.name || '').toLowerCase().includes(scopePositionQuery)
   })
@@ -555,13 +577,32 @@ export default function AdminUsersPage() {
       if (!current || !scopeCanEdit) return current
       const ids = current.form[key] || []
       const next = checked ? [...new Set([...ids, id])] : ids.filter(value => value !== id)
-      return { ...current, error: '', form: { ...current.form, [key]: next } }
+      const nextForm = { ...current.form, [key]: next }
+      if (key === 'team_ids') {
+        const pruned = pruneAssignedScopeSelection({
+          teamIds: next,
+          positionIds: nextForm.position_ids,
+          employeeIds: nextForm.employee_ids,
+        }, employees, teams)
+        nextForm.team_ids = pruned.teamIds
+        nextForm.position_ids = pruned.positionIds
+        nextForm.employee_ids = pruned.employeeIds
+      }
+      return { ...current, error: '', form: nextForm }
     })
   }
 
   const clearScopeIds = key => {
     if (!scopeCanEdit) return
-    setAccountModal(current => current ? ({ ...current, error: '', form: { ...current.form, [key]: [] } }) : current)
+    setAccountModal(current => {
+      if (!current) return current
+      const nextForm = { ...current.form, [key]: [] }
+      if (key === 'team_ids') {
+        nextForm.position_ids = []
+        nextForm.employee_ids = []
+      }
+      return { ...current, error: '', form: nextForm }
+    })
   }
 
   const updatePermissionSelection = (permissionIds, checked) => {
@@ -847,7 +888,7 @@ export default function AdminUsersPage() {
                 <div className="scope-panel">
                   <div className="scope-current-team-note">
                     <strong>范围计算规则</strong>
-                    <span>基础范围 = 已选团队 ∩ 可选岗位；不选岗位表示已选团队的全部当前人员。“指定员工”是额外例外，会与基础范围合并；所有页面和预警中心均由服务端按这个结果限制。</span>
+                    <span>已选团队是硬边界。基础范围 = 已选团队 ∩ 可选岗位；不选岗位表示团队内全部当前人员。指定员工只能从已选团队内补充，不能查看任何团队外数据；所有页面和预警中心都按同一结果限制。</span>
                   </div>
                   <div className={`scope-current-team-note ${(accountModal.removedStaleTeamIds || []).length ? 'warning' : ''}`}>
                     <strong>{(accountModal.removedStaleTeamIds || []).length ? '已自动清理' : '当前团队口径'}</strong>
@@ -891,17 +932,17 @@ export default function AdminUsersPage() {
                         {selectedScopePositions.map(position => <span className="scope-chip" key={position.id}><span title={position.name}>{position.name}</span><button type="button" aria-label={`移除岗位 ${position.name}`} disabled={!scopeCanEdit} onClick={()=>updateScopeIds('position_ids', position.id, false)}>×</button></span>)}
                       </div> : <div className="scope-selection-empty">未选岗位：将包含已选团队的全部岗位</div>}
                       <div className="check-list">
-                        {positions.length === 0 ? <div className="empty-state">暂无岗位</div> : visibleScopePositions.length === 0 ? <div className="empty-state">没有匹配的岗位</div> : visibleScopePositions.map(position => (
+                        {!scopeTeamIds.length ? <div className="empty-state">请先选择团队</div> : eligibleScopePositions.length === 0 ? <div className="empty-state">所选团队当前没有可用岗位</div> : visibleScopePositions.length === 0 ? <div className="empty-state">没有匹配的岗位</div> : visibleScopePositions.map(position => (
                           <label className={scopePositionIdSet.has(position.id) ? 'scope-row-selected' : ''} key={position.id}><input className="scope-check" type="checkbox"
                             disabled={!scopeCanEdit}
                             checked={scopePositionIdSet.has(position.id)}
                             onChange={event => updateScopeIds('position_ids', position.id, event.target.checked)}
-                          /><span title={position.name}>{position.name}</span><small>当前排班 {positionActiveCounts.get(position.id) || 0} 人</small></label>
+                          /><span title={position.name}>{position.name}</span><small>所选团队 {selectedTeamPositionCounts.get(position.id) || 0} 人</small></label>
                         ))}
                       </div>
                     </div>
                     <div className="scope-column">
-                      <div className="scope-column-head"><strong>指定员工（额外例外）</strong><span>已选 {scopeEmployeeIds.length}</span></div>
+                      <div className="scope-column-head"><strong>指定员工（团队内补充）</strong><span>已选 {scopeEmployeeIds.length}</span></div>
                       <div className="scope-column-tools">
                         <input className="scope-search" placeholder="搜索员工ID或姓名" value={accountModal.form.scope_employee_search} onChange={e=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_search:e.target.value}}))}/>
                         <button type="button" className={`scope-filter-button ${accountModal.form.scope_employee_selected_only ? 'active' : ''}`} onClick={()=>setAccountModal(x=>({...x,form:{...x.form,scope_employee_selected_only:!x.form.scope_employee_selected_only}}))}>只看已选</button>
@@ -911,7 +952,7 @@ export default function AdminUsersPage() {
                         {selectedScopeEmployees.map(employee => <span className="scope-chip" key={employee.id}><span title={`${employee.employee_no} · ${employee.full_name}`}>{employee.employee_no} · {employee.full_name}</span><button type="button" aria-label={`移除员工 ${employee.employee_no}`} disabled={!scopeCanEdit} onClick={()=>updateScopeIds('employee_ids', employee.id, false)}>×</button></span>)}
                       </div> : <div className="scope-selection-empty">尚未选择指定员工</div>}
                       <div className="check-list">
-                        {employees.length === 0 ? <div className="empty-state">暂无员工</div> : visibleScopeEmployees.length === 0 ? <div className="empty-state">没有匹配的员工</div> : visibleScopeEmployees.map(employee => (
+                        {!scopeTeamIds.length ? <div className="empty-state">请先选择团队</div> : eligibleScopeEmployees.length === 0 ? <div className="empty-state">所选团队当前没有人员</div> : visibleScopeEmployees.length === 0 ? <div className="empty-state">没有匹配的员工</div> : visibleScopeEmployees.map(employee => (
                           <label className={scopeEmployeeIdSet.has(employee.id) ? 'scope-row-selected' : ''} key={employee.id}><input className="scope-check" type="checkbox"
                             disabled={!scopeCanEdit}
                             checked={scopeEmployeeIdSet.has(employee.id)}

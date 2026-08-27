@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { businessTodayIso, businessTodayRange } from '../lib/adminQueryDefaults'
 import { supabase } from '../lib/supabase'
 import { Pagination } from './DataPageControls'
+import { employeeMetricCountLabel, employeeRiskGradeFromTotal } from '../lib/employeeDrawerState'
 
 const text=value=>String(value??'').trim()
 const EVIDENCE_BUCKET='connectivity-evidence'
@@ -341,8 +342,8 @@ export function EmployeePayrollHistoryPanel({data,loading,error}){
 }
 
 export function EmployeeProfileMetrics({data,loading}){
-  const total=Number(data?.total_errors||0)
-  // Keep the drawer grade identical to the employee list/filter thresholds.
-  const grade=total>=31?'高频':total>=16?'重点':total>=9?'注意':total===0?'优秀':'正常'
-  return <div className="wfh-v2722-risk-summary" data-grade={grade} data-profile-metrics="1"><div className="risk-grade"><span>等级</span><strong>{grade}</strong></div><div><span>本月记录</span><strong>{loading?'—':`${Number(data?.month_records||0)} 笔`}</strong></div><div><span>总错误</span><strong>{loading?'—':`${total} 笔`}</strong></div><div><span>考试总次数</span><strong>{loading?'—':`${Number(data?.exam_attempts||0)} 次`}</strong></div><div><span>平均考试分数</span><strong>{loading?'—':data?.exam_average==null?'—':`${Number(data.exam_average).toFixed(1)} 分`}</strong></div></div>
+  const grade=employeeRiskGradeFromTotal(data?.total_errors)
+  const average=Number(data?.exam_average)
+  const averageLabel=data?.exam_average==null||data?.exam_average===''||!Number.isFinite(average)?'—':`${average.toFixed(1)} 分`
+  return <div className="wfh-v2722-risk-summary" data-grade={grade} data-profile-metrics="1"><div className="risk-grade"><span>等级</span><strong>{grade}</strong></div><div><span>本月记录</span><strong>{employeeMetricCountLabel(data?.month_records,'笔')}</strong></div><div><span>总错误</span><strong>{employeeMetricCountLabel(data?.total_errors,'笔')}</strong></div><div><span>考试总次数</span><strong>{employeeMetricCountLabel(data?.exam_attempts,'次')}</strong></div><div><span>平均考试分数</span><strong>{loading&&data?.exam_average==null?'—':averageLabel}</strong></div></div>
 }
