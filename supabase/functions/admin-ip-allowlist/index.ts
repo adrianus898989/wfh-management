@@ -3,10 +3,30 @@ import {
   bearerToken,
   hostCidr,
   jwtSessionId,
+  jwtUserId,
   trustedClientIp,
 } from '../_shared/adminIp.ts'
 
 const allowedOrigin = 'https://adrianus898989.github.io'
+const DEPENDENCY_TIMEOUT_MS = 8_000
+
+function timedFetch(timeoutMs: number) {
+  return async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const controller = new AbortController()
+    const upstreamSignal = init.signal
+    const abortFromUpstream = () => controller.abort(upstreamSignal?.reason)
+    if (upstreamSignal?.aborted) abortFromUpstream()
+    else upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true })
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+      clearTimeout(timer)
+      upstreamSignal?.removeEventListener('abort', abortFromUpstream)
+    }
+  }
+}
 
 function cors(origin: string | null) {
   return {
@@ -34,6 +54,14 @@ function text(value: unknown) {
 
 function related(value: any) {
   return Array.isArray(value) ? value[0] : value
+}
+
+function safeMeta(error: any) {
+  return {
+    name: String(error?.name || 'Error').slice(0, 64),
+    code: String(error?.code || '').slice(0, 64) || null,
+    status: Number.isFinite(Number(error?.status)) ? Number(error.status) : null,
+  }
 }
 
 function databaseErrorMessage(error: any) {
@@ -166,26 +194,27 @@ export async function handleRequest(req: Request) {
     const authorization = req.headers.get('Authorization') || ''
     const token = bearerToken(authorization)
     const sessionId = jwtSessionId(token)
-    if (!token || !/^[0-9a-f-]{36}$/i.test(sessionId)) {
+    const userId = jwtUserId(token)
+    if (!token || !/^[0-9a-f-]{36}$/i.test(sessionId) || !/^[0-9a-f-]{36}$/i.test(userId)) {
       return json(req, { error: '登录已失效', reason: 'auth_session_missing' }, 401)
     }
 
+    const boundedFetch = timedFetch(DEPENDENCY_TIMEOUT_MS)
     const admin = createClient(supabaseUrl, secretKey, {
+      global: { fetch: boundedFetch },
       auth: { persistSession: false, autoRefreshToken: false },
     })
     const userClient = createClient(supabaseUrl, publishableKey, {
-      global: { headers: { Authorization: authorization } },
+      global: {
+        fetch: boundedFetch,
+        headers: { Authorization: authorization },
+      },
       auth: { persistSession: false, autoRefreshToken: false },
     })
 
-    const { data: userData, error: userError } = await admin.auth.getUser(token)
-    if (userError || !userData.user) {
-      return json(req, { error: '登录已失效', reason: 'auth_session_missing' }, 401)
-    }
-
     const observedClientIp = trustedClientIp(req)
     const { data: guard, error: guardError } = await admin.rpc('admin_ip_session_attest', {
-      p_user_id: userData.user.id,
+      p_user_id: userId,
       p_session_id: sessionId,
       p_client_ip: observedClientIp || null,
       p_source: 'management',
@@ -204,15 +233,23 @@ export async function handleRequest(req: Request) {
     const clientIp = text(guard.client_ip)
 
     const { data: heartbeat, error: heartbeatError } = await userClient.rpc('app_session_heartbeat')
-    if (heartbeatError || !heartbeat?.ok) {
+    if (heartbeatError) {
+      console.error('ADMIN_IP_ALLOWLIST_HEARTBEAT_ERROR', safeMeta(heartbeatError))
+      return json(req, { error: '会话验证服务暂时不可用，请稍后重试', reason: 'service_unavailable' }, 503)
+    }
+    if (!heartbeat?.ok) {
       return json(req, { error: '当前浏览器会话已失效', reason: heartbeat?.reason || 'session_not_current' }, 401)
     }
 
     const { data: caller, error: callerError } = await admin.from('user_access')
       .select('auth_user_id,employee_id,role_id,active,backend_enabled,roles(code)')
-      .eq('auth_user_id', userData.user.id)
+      .eq('auth_user_id', userId)
       .maybeSingle()
-    if (callerError || !caller?.active || !caller?.backend_enabled) {
+    if (callerError) {
+      console.error('ADMIN_IP_ALLOWLIST_CALLER_ERROR', safeMeta(callerError))
+      return json(req, { error: '权限验证服务暂时不可用，请稍后重试', reason: 'service_unavailable' }, 503)
+    }
+    if (!caller?.active || !caller?.backend_enabled) {
       return json(req, { error: '当前账号没有后台权限' }, 403)
     }
 
@@ -243,7 +280,13 @@ export async function handleRequest(req: Request) {
         .maybeSingle()
       if (error) throw error
 
-      if (existing?.enabled) return json(req, await snapshot(admin, clientIp))
+      if (existing?.enabled) {
+        return json(req, {
+          ok: true,
+          mutation: { action: 'add_current_ip', id: existing.id, unchanged: true },
+          refresh_required: true,
+        })
+      }
       if (existing) {
         mutationAction = 'set_enabled'
         payload = { id: existing.id, enabled: true }
@@ -283,8 +326,8 @@ export async function handleRequest(req: Request) {
       return json(req, { error: '不支持的操作' }, 400)
     }
 
-    const { error: mutationError } = await admin.rpc('admin_ip_allowlist_mutate', {
-      p_actor_id: userData.user.id,
+    const { data: mutation, error: mutationError } = await admin.rpc('admin_ip_allowlist_mutate', {
+      p_actor_id: userId,
       p_session_id: sessionId,
       p_client_ip: clientIp || null,
       p_action: mutationAction,
@@ -295,7 +338,10 @@ export async function handleRequest(req: Request) {
         String(mutationError.code || '') === '42501' ? 403 : 400)
     }
 
-    return json(req, await snapshot(admin, clientIp))
+    // Do not keep a successful save waiting on the full list snapshot. The
+    // browser releases its saving state, then performs a separately authorized
+    // list refresh to obtain canonical labels, counters and coverage data.
+    return json(req, { ok: true, mutation, refresh_required: true })
   } catch (error) {
     console.error('ADMIN_IP_ALLOWLIST_ERROR', {
       name: error instanceof Error ? error.name : 'Error',

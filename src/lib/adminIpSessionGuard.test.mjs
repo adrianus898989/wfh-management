@@ -4,10 +4,12 @@ import test from 'node:test'
 
 const source = relativePath => readFile(new URL(relativePath, import.meta.url), 'utf8')
 
-const [app, client, guard, migration] = await Promise.all([
+const [app, client, guard, allowlistPage, allowlistEdge, migration] = await Promise.all([
   source('../App.jsx'),
   source('./supabase.js'),
   source('../../supabase/functions/admin-ip-guard/index.ts'),
+  source('../pages/AdminIpAllowlistPage.jsx'),
+  source('../../supabase/functions/admin-ip-allowlist/index.ts'),
   source('../../supabase/migrations/20260827090427_admin_login_ip_allowlist.sql'),
 ])
 
@@ -18,12 +20,37 @@ test('admin claim and heartbeat use Edge while staff retains its direct heartbea
   assert.match(guard, /action === 'claim'[\s\S]*?app_session_claim[\s\S]*?: await userClient\.rpc\('app_session_heartbeat'\)/)
 })
 
-test('admin heartbeat avoids a redundant Auth user lookup and bounds dependencies', () => {
+test('admin IP guard bounds every upstream dependency call', () => {
+  assert.match(guard, /const DEPENDENCY_TIMEOUT_MS = 8_000/)
+  assert.match(guard, /function timedFetch\(timeoutMs: number\)/)
+  assert.match(guard, /global: \{ fetch: boundedFetch \}/)
+  assert.match(guard, /global: \{[\s\S]{0,100}?fetch: boundedFetch,[\s\S]{0,100}?Authorization: authorization/)
   assert.doesNotMatch(guard, /auth\.getUser\(/)
   assert.match(guard, /const userId = jwtUserId\(token\)/)
   assert.match(guard, /p_user_id: userId/)
-  assert.match(guard, /const DEPENDENCY_TIMEOUT_MS = 8_000/)
-  assert.match(guard, /global: \{ fetch: boundedFetch \}/)
+})
+
+test('IP allowlist requests abort and always release both saving locks', () => {
+  assert.match(allowlistPage, /const IP_ALLOWLIST_REQUEST_TIMEOUT_MS = 15 \* 1000/)
+  assert.match(allowlistPage, /withAbortTimeout\([\s\S]{0,100}?signal => supabase\.functions\.invoke\('admin-ip-allowlist',[\s\S]{0,120}?signal/)
+  assert.match(allowlistPage, /保存响应超时；本次操作可能已经完成，请先刷新确认，未生效再重试/)
+  assert.match(allowlistPage, /const mutate = async[\s\S]{0,900}?finally \{\s*setSaving\(false\)/)
+  assert.match(allowlistPage, /const saveEntry = async[\s\S]{0,1300}?finally \{\s*setModal\(current => current \? \(\{ \.\.\.current, saving: false \}\) : current\)/)
+  assert.match(allowlistPage, /response\?\.refresh_required[\s\S]{0,220}?void load\(\{ background: true \}\)/)
+  assert.match(allowlistPage, /const load = async \(\{ background = false \} = \{\}\)[\s\S]{0,220}?if \(!background\) setLoading\(false\)/)
+})
+
+test('IP allowlist Edge dependencies are bounded and rely on gateway-verified JWT identity', () => {
+  assert.match(allowlistEdge, /const DEPENDENCY_TIMEOUT_MS = 8_000/)
+  assert.match(allowlistEdge, /global: \{ fetch: boundedFetch \}/)
+  assert.match(allowlistEdge, /fetch: boundedFetch,[\s\S]{0,100}?Authorization: authorization/)
+  assert.doesNotMatch(allowlistEdge, /auth\.getUser\(/)
+  assert.match(allowlistEdge, /const userId = jwtUserId\(token\)/)
+  assert.match(allowlistEdge, /p_user_id: userId/)
+  assert.match(allowlistEdge, /p_actor_id: userId/)
+  assert.match(allowlistEdge, /if \(heartbeatError\)[\s\S]{0,220}?service_unavailable[\s\S]{0,40}?503/)
+  assert.match(allowlistEdge, /return json\(req, \{ ok: true, mutation, refresh_required: true \}\)/)
+  assert.equal(allowlistEdge.match(/await snapshot\(admin, clientIp\)/g)?.length, 1)
 })
 
 test('only an explicit non-allowlisted decision is terminal in React', () => {
