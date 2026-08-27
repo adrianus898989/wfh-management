@@ -2,10 +2,30 @@ import { createClient } from 'npm:@supabase/supabase-js@2.57.4'
 import {
   bearerToken,
   jwtSessionId,
+  jwtUserId,
   trustedClientIp,
 } from '../_shared/adminIp.ts'
 
 const allowedOrigin = 'https://adrianus898989.github.io'
+const DEPENDENCY_TIMEOUT_MS = 8_000
+
+function timedFetch(timeoutMs: number) {
+  return async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const controller = new AbortController()
+    const upstreamSignal = init.signal
+    const abortFromUpstream = () => controller.abort(upstreamSignal?.reason)
+    if (upstreamSignal?.aborted) abortFromUpstream()
+    else upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true })
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+      clearTimeout(timer)
+      upstreamSignal?.removeEventListener('abort', abortFromUpstream)
+    }
+  }
+}
 
 function cors(origin: string | null) {
   return {
@@ -29,6 +49,7 @@ function json(req: Request, body: unknown, status = 200) {
 
 function safeMeta(error: any) {
   return {
+    name: String(error?.name || 'Error').slice(0, 64),
     code: String(error?.code || '').slice(0, 64) || null,
     status: Number.isFinite(Number(error?.status)) ? Number(error.status) : null,
   }
@@ -52,7 +73,12 @@ export async function handleRequest(req: Request) {
   const authorization = req.headers.get('Authorization') || ''
   const token = bearerToken(authorization)
   const sessionId = jwtSessionId(token)
-  if (!token || !/^[0-9a-f-]{36}$/i.test(sessionId)) {
+  const userId = jwtUserId(token)
+  if (
+    !token ||
+    !/^[0-9a-f-]{36}$/i.test(sessionId) ||
+    !/^[0-9a-f-]{36}$/i.test(userId)
+  ) {
     return json(req, { ok: false, reason: 'auth_session_missing' }, 401)
   }
 
@@ -63,17 +89,18 @@ export async function handleRequest(req: Request) {
     return json(req, { ok: false, reason: 'invalid_action' }, 400)
   }
 
+  const boundedFetch = timedFetch(DEPENDENCY_TIMEOUT_MS)
   const admin = createClient(supabaseUrl, secretKey, {
+    global: { fetch: boundedFetch },
     auth: { persistSession: false, autoRefreshToken: false },
   })
-  const { data: userData, error: userError } = await admin.auth.getUser(token)
-  if (userError || !userData.user) {
-    return json(req, { ok: false, reason: 'auth_session_missing' }, 401)
-  }
 
   const clientIp = trustedClientIp(req)
   const { data: guard, error: guardError } = await admin.rpc('admin_ip_session_attest', {
-    p_user_id: userData.user.id,
+    // The hosted Functions gateway verifies this JWT before invocation. The
+    // RPC independently requires this exact user/session pair in auth.sessions,
+    // so a separate Auth /user round-trip only amplifies heartbeat incidents.
+    p_user_id: userId,
     p_session_id: sessionId,
     p_client_ip: clientIp || null,
     p_source: action,
@@ -91,7 +118,10 @@ export async function handleRequest(req: Request) {
   }
 
   const userClient = createClient(supabaseUrl, publishableKey, {
-    global: { headers: { Authorization: authorization } },
+    global: {
+      fetch: boundedFetch,
+      headers: { Authorization: authorization },
+    },
     auth: { persistSession: false, autoRefreshToken: false },
   })
   const leaseResult = action === 'claim'

@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   hostCidr,
   jwtSessionId,
+  jwtUserId,
   trustedClientIp,
 } from '../../supabase/functions/_shared/adminIp.ts'
 
@@ -32,9 +33,14 @@ test('exact IPv4/IPv6 CIDRs and JWT session binding stay deterministic', () => {
   assert.equal(hostCidr('2001:db8::8'), '2001:db8::8/128')
   const payload = Buffer.from(JSON.stringify({
     session_id: '11111111-2222-4333-8444-555555555555',
+    sub: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
   })).toString('base64url')
   assert.equal(
     jwtSessionId(`Bearer header.${payload}.signature`),
     '11111111-2222-4333-8444-555555555555',
+  )
+  assert.equal(
+    jwtUserId(`Bearer header.${payload}.signature`),
+    'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
   )
 })

@@ -2,6 +2,7 @@ import {
   bearerToken,
   hostCidr,
   jwtSessionId,
+  jwtUserId,
   trustedClientIp,
 } from './adminIp.ts'
 
@@ -54,8 +55,11 @@ Deno.test('host CIDR preserves exact IPv4 and IPv6 addresses', () => {
   assertEquals(hostCidr('2001:db8::8'), '2001:db8::8/128', 'IPv6 host CIDR')
 })
 
-Deno.test('JWT session id is decoded without trusting an input body', () => {
-  const payload = btoa(JSON.stringify({ session_id: '11111111-2222-4333-8444-555555555555' }))
+Deno.test('JWT identity is decoded without trusting an input body', () => {
+  const payload = btoa(JSON.stringify({
+    session_id: '11111111-2222-4333-8444-555555555555',
+    sub: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+  }))
     .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
   const token = `header.${payload}.signature`
   assertEquals(bearerToken(`Bearer ${token}`), token, 'bearer token')
@@ -63,5 +67,10 @@ Deno.test('JWT session id is decoded without trusting an input body', () => {
     jwtSessionId(`Bearer ${token}`),
     '11111111-2222-4333-8444-555555555555',
     'session id',
+  )
+  assertEquals(
+    jwtUserId(`Bearer ${token}`),
+    'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    'user id',
   )
 })

@@ -18,6 +18,14 @@ test('admin claim and heartbeat use Edge while staff retains its direct heartbea
   assert.match(guard, /action === 'claim'[\s\S]*?app_session_claim[\s\S]*?: await userClient\.rpc\('app_session_heartbeat'\)/)
 })
 
+test('admin heartbeat avoids a redundant Auth user lookup and bounds dependencies', () => {
+  assert.doesNotMatch(guard, /auth\.getUser\(/)
+  assert.match(guard, /const userId = jwtUserId\(token\)/)
+  assert.match(guard, /p_user_id: userId/)
+  assert.match(guard, /const DEPENDENCY_TIMEOUT_MS = 8_000/)
+  assert.match(guard, /global: \{ fetch: boundedFetch \}/)
+})
+
 test('only an explicit non-allowlisted decision is terminal in React', () => {
   const terminalBlock = app.slice(
     app.indexOf('const terminalLeaseReason'),

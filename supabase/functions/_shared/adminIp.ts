@@ -41,6 +41,20 @@ export function jwtSessionId(tokenOrAuthorization: string) {
   }
 }
 
+export function jwtUserId(tokenOrAuthorization: string) {
+  const token = bearerToken(tokenOrAuthorization)
+  const payloadPart = token.split('.')[1]
+  if (!payloadPart) return ''
+
+  try {
+    const base64 = payloadPart.replaceAll('-', '+').replaceAll('_', '/')
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+    return String(JSON.parse(atob(padded))?.sub || '').trim()
+  } catch {
+    return ''
+  }
+}
+
 export function hostCidr(clientIp: string) {
   const ip = String(clientIp || '').trim()
   if (!ip) return ''
