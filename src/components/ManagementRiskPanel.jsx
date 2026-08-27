@@ -50,8 +50,10 @@ export default function ManagementRiskPanel({data,filters,setFilters,dimension,s
   const issueRows=Array.isArray(data.common_issues)?data.common_issues:[]
   const trendRows=managementRiskTrendRows(data)
   const teamOptions=managementRiskOptions(data,'teams')
-  const groupOptions=managementRiskOptions(data,'groups')
-  const managerOptions=managementRiskOptions(data,'managers')
+  const groupOptions=managementRiskOptions(data,'groups',{team:filters.team})
+  const managerOptions=managementRiskOptions(data,'managers',{
+    team:filters.team,group:filters.group,manager_role:filters.manager_role,
+  })
   const trendMax=Math.max(1,...trendRows.map(row=>managementRiskIncidentTotal(row)))
   const organizationLabels={teams:'团队',groups:'组别',managers:'组长 / 老师'}
   const syncAt=text(scope.roster_refreshed_at||scope.refreshed_at||data.roster_refreshed_at)
@@ -64,9 +66,9 @@ export default function ManagementRiskPanel({data,filters,setFilters,dimension,s
 
     <div className="management-risk-filter-panel">
       <label><span>日期区间</span><div className="management-risk-date-range"><input type="date" value={filters.date_from} onChange={event=>setFilters({...filters,date_from:event.target.value})}/><b>—</b><input type="date" value={filters.date_to} onChange={event=>setFilters({...filters,date_to:event.target.value})}/></div></label>
-      <label><span>当前团队</span><RiskCombo id="risk-team-options" value={filters.team} options={teamOptions} onChange={value=>setFilters({...filters,team:value,group:''})} placeholder="全部当前团队"/></label>
-      <label><span>当前组别</span><RiskCombo id="risk-group-options" value={filters.group} options={groupOptions} onChange={value=>setFilters({...filters,group:value})} placeholder="全部当前组别"/></label>
-      <label><span>负责人类型</span><select value={filters.manager_role} onChange={event=>setFilters({...filters,manager_role:event.target.value})}><option value="">全部负责人 / 老师</option>{Object.entries(MANAGER_ROLES).map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>
+      <label><span>当前团队</span><RiskCombo id="risk-team-options" value={filters.team} options={teamOptions} onChange={value=>setFilters({...filters,team:value,group:'',manager:''})} placeholder="全部当前团队"/></label>
+      <label><span>当前组别</span><RiskCombo id="risk-group-options" value={filters.group} options={groupOptions} onChange={value=>setFilters({...filters,group:value,manager:''})} placeholder="全部当前组别"/></label>
+      <label><span>负责人类型</span><select value={filters.manager_role} onChange={event=>setFilters({...filters,manager_role:event.target.value,manager:''})}><option value="">全部负责人 / 老师</option>{Object.entries(MANAGER_ROLES).map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>
       <label><span>负责人 / 老师</span><RiskCombo id="risk-manager-options" value={filters.manager} options={managerOptions} onChange={value=>setFilters({...filters,manager:value})} placeholder="输入姓名"/></label>
       <label><span>员工</span><input value={filters.employee_search} onChange={event=>setFilters({...filters,employee_search:event.target.value})} placeholder="员工 ID / 姓名"/></label>
       <div className="management-risk-filter-actions"><div><button type="button" onClick={()=>onRange('30d')} disabled={data.loading}>近30天</button><button type="button" onClick={()=>onRange('90d')} disabled={data.loading}>近90天</button><button type="button" onClick={()=>onRange('month')} disabled={data.loading}>本月</button></div><button type="button" className="secondary-action" onClick={onReset} disabled={data.loading}>重置</button><button type="button" className="primary-action" onClick={onQuery} disabled={data.loading}>{data.loading?'分析中…':'查询'}</button></div>

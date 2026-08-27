@@ -40,6 +40,26 @@ test('presentation helpers accept the RPC organization contract', () => {
   assert.equal(managementRiskIncidentTotal({error_events:2,exam_failures:1,attendance_issues:3,deductions:4}),10)
 })
 
+test('management risk options preserve team, group and manager relationships', () => {
+  const data={options:{
+    teams:[{team_name:'熊猫PH'},{team_name:'AR印度'}],
+    groups:[
+      {team_name:'熊猫PH',group_name:'客服组'},
+      {team_name:'AR印度',group_name:'客服组'},
+      {team_name:'熊猫PH',group_name:'审单组'},
+    ],
+    managers:[
+      {team_name:'熊猫PH',group_name:'客服组',manager_role:'online_leader',manager_name:'甲'},
+      {team_name:'熊猫PH',group_name:'审单组',manager_role:'online_trainer',manager_name:'乙'},
+      {team_name:'AR印度',group_name:'客服组',manager_role:'online_leader',manager_name:'丙'},
+    ],
+  }}
+  assert.deepEqual(managementRiskOptions(data,'groups',{team:'熊猫PH'}),['客服组','审单组'])
+  assert.deepEqual(managementRiskOptions(data,'managers',{
+    team:'熊猫PH',group:'客服组',manager_role:'online_leader',
+  }),['甲'])
+})
+
 test('trend helper uses daily detail for short periods and weekly buckets for long periods', () => {
   const trend={daily:[{date:'2026-08-27'}],weekly:[{week_start:'2026-08-24'}]}
   assert.deepEqual(managementRiskTrendRows({period:{days:30},trend}),trend.daily)

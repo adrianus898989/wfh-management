@@ -44,10 +44,22 @@ export function managementRiskOrganizationRows(data = {}, dimension = 'teams') {
   return Array.isArray(rows) ? rows : []
 }
 
-export function managementRiskOptions(data = {}, key) {
+const normalizedOption = value => String(value ?? '').trim().toLocaleLowerCase()
+
+export function managementRiskOptions(data = {}, key, filters = {}) {
   const rows = Array.isArray(data?.options?.[key]) ? data.options[key] : []
   const field = key === 'teams' ? 'team_name' : key === 'groups' ? 'group_name' : 'manager_name'
-  return [...new Set(rows.map(item => String(
+  const team = normalizedOption(filters.team)
+  const group = normalizedOption(filters.group)
+  const managerRole = normalizedOption(filters.manager_role)
+  const visible = rows.filter(item => {
+    if (typeof item === 'string') return !team && !group && !managerRole
+    if (key !== 'teams' && team && normalizedOption(item?.team_name) !== team) return false
+    if (key === 'managers' && group && normalizedOption(item?.group_name) !== group) return false
+    if (key === 'managers' && managerRole && normalizedOption(item?.manager_role) !== managerRole) return false
+    return true
+  })
+  return [...new Set(visible.map(item => String(
     typeof item === 'string' ? item : item?.[field] || item?.name || item?.value || '',
   ).trim()).filter(Boolean))]
 }
