@@ -206,7 +206,7 @@ test('adjustment edits use their own selectable permission instead of approval',
 
 test('account overview payloads omit sensitive employee contact fields', () => {
   assert.match(accounts, /function employeeWithoutSensitiveContact\(employee: any\)[\s\S]+const \{ work_tg: _workTg, \.\.\.safeEmployee \} = employee/)
-  const sanitizedLists = accounts.match(/employees: employees\.map\(employeeWithoutSensitiveContact\)/g) ?? []
+  const sanitizedLists = accounts.match(/employees: employees\.map\((?:employeeWithoutSensitiveContact|decorateScopeEmployee)\)/g) ?? []
   assert.equal(sanitizedLists.length, 1)
   assert.match(accounts, /const decorateScopeEmployee = \(employee: any\) => employee[\s\S]+employeeWithoutSensitiveContact\(employee\)/)
   assert.match(accounts, /employees: employees\.map\(decorateScopeEmployee\)/)
