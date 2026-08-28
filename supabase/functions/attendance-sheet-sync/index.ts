@@ -1,18 +1,30 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import {
+  releaseSheetSyncLease,
+  SheetSyncDeadlineError,
+  SheetSyncRpcError,
+  sheetSyncDatabaseErrorIsRetryable,
+  sheetSyncRpcWithDeadline,
+} from "../_shared/sheetSyncRuntime.ts";
+import type { SheetSyncLease } from "../_shared/sheetSyncRuntime.ts";
+import { claimAttendanceSheetSyncLeaseWithWait } from "./leaseWait.ts";
 import { normalizeSnapshot, sha256Hex } from "./normalize.ts";
 
 const MAX_REQUEST_BYTES = 6 * 1024 * 1024;
+const LEASE_TTL_SECONDS = 90;
+const RPC_TIMEOUT_MS = 45_000;
 // This committed SHA-256 digest is the sole authoritative credential for this
 // deployment. The corresponding high-entropy raw token remains outside source
 // control. Rotation requires changing this digest and deploying new code.
 const EXPECTED_TOKEN_SHA256 = "32c9484536652a282ba31becb2dde899992a6f7c403c901e0598e9ff5e1340be";
 
-const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+const jsonResponse = (body: unknown, status = 200, extraHeaders: HeadersInit = {}) => new Response(JSON.stringify(body), {
   status,
   headers: {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    ...Object.fromEntries(new Headers(extraHeaders).entries()),
   },
 });
 
@@ -45,7 +57,29 @@ Deno.serve(async (request: Request) => {
     return jsonResponse({ ok: false, error: "payload_too_large" }, 413);
   }
 
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) {
+    return jsonResponse({ ok: false, error: "sync_request_failed" }, 500);
+  }
+  const client = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { headers: { "x-attendance-sync": "private-sheet-v1" } },
+  });
+  let lease: SheetSyncLease | null = null;
+  let preserveLeaseUntilExpiry = false;
+
   try {
+    const claim = await claimAttendanceSheetSyncLeaseWithWait(client, LEASE_TTL_SECONDS);
+    if (!claim.acquired) {
+      return jsonResponse(
+        { ok: false, error: "sync_busy", retry_after_seconds: claim.retryAfterSeconds },
+        503,
+        { "retry-after": String(claim.retryAfterSeconds) },
+      );
+    }
+    lease = claim.lease;
+
     const rawBody = await request.text();
     if (new TextEncoder().encode(rawBody).byteLength > MAX_REQUEST_BYTES) {
       return jsonResponse({ ok: false, error: "payload_too_large" }, 413);
@@ -53,11 +87,7 @@ Deno.serve(async (request: Request) => {
     const payload = JSON.parse(rawBody);
     const normalized = await normalizeSnapshot(payload);
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!supabaseUrl || !serviceRoleKey) throw new Error("runtime_credentials_unavailable");
-
-    const client = createClient(supabaseUrl, serviceRoleKey, {
+    const rpcClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       global: { headers: {
         "x-attendance-sync": normalized.sync_contract === "annual_v1"
@@ -68,17 +98,21 @@ Deno.serve(async (request: Request) => {
     const rpcName = normalized.sync_contract === "annual_v1"
       ? "ingest_annual_attendance_snapshot"
       : "ingest_august_attendance_snapshot";
-    const { data, error } = await client.rpc(rpcName, {
+    const { data, error } = await sheetSyncRpcWithDeadline(rpcClient, rpcName, {
       p_payload: normalized,
-    });
+    }, RPC_TIMEOUT_MS);
     if (error) {
       console.error("attendance-sheet-sync rpc_failed", {
         request_id: normalized.request_id,
         source_key: normalized.source.source_key,
         code: error.code,
       });
-      if (error.code === "57014") {
-        return jsonResponse({ ok: false, error: "database_timeout", request_id: normalized.request_id }, 503);
+      if (sheetSyncDatabaseErrorIsRetryable(error)) {
+        return jsonResponse(
+          { ok: false, error: "sync_busy", request_id: normalized.request_id },
+          503,
+          { "retry-after": "5" },
+        );
       }
       const safeDatabaseMessage = String(error.message ?? "").match(
         /\b(source_not_configured|request_id_reuse_mismatch|stale_snapshot|empty_snapshot_requires_manual_override|large_delete_requires_manual_override)\b/,
@@ -113,6 +147,14 @@ Deno.serve(async (request: Request) => {
     }
     return jsonResponse(data);
   } catch (error) {
+    if (error instanceof SheetSyncDeadlineError) {
+      preserveLeaseUntilExpiry = true;
+      console.error("attendance-sheet-sync deadline", { rpc: error.rpcName });
+      return jsonResponse({ ok: false, error: "database_timeout" }, 503, { "retry-after": "45" });
+    }
+    if (error instanceof SheetSyncRpcError && sheetSyncDatabaseErrorIsRetryable(error)) {
+      return jsonResponse({ ok: false, error: "sync_busy" }, 503, { "retry-after": "5" });
+    }
     const message = error instanceof Error ? error.message : "unexpected_error";
     const isClientError = /^(invalid_|source_not_allowlisted|sheet_|snapshot_|values_|cell_|date_|payload_|adjustment_|employee_identity_|sheet_row_|sheet_column_)/.test(message);
     const clientSafe = isClientError ? message : "sync_request_failed";
@@ -120,5 +162,15 @@ Deno.serve(async (request: Request) => {
     // Configuration/runtime failures must remain retryable by Apps Script. Only
     // deterministic payload or source-validation failures are blocked by hash.
     return jsonResponse({ ok: false, error: clientSafe }, isClientError ? 400 : 500);
+  } finally {
+    if (lease && !preserveLeaseUntilExpiry) {
+      try {
+        await releaseSheetSyncLease(client, lease);
+      } catch (error) {
+        console.warn("attendance-sheet-sync lease_release_failed", {
+          error: error instanceof Error ? error.name : "unknown",
+        });
+      }
+    }
   }
 });
