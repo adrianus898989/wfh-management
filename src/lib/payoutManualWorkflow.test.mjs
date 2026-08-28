@@ -8,8 +8,8 @@ const guardMigrationUrl = new URL('../../supabase/migrations/20260826145000_clos
 const guardSql = await readFile(guardMigrationUrl, 'utf8')
 const serverOwnedOldDataMigrationUrl = new URL('../../supabase/migrations/20260826150000_payout_change_server_owned_old_data.sql', import.meta.url)
 const serverOwnedOldDataSql = await readFile(serverOwnedOldDataMigrationUrl, 'utf8')
-const searchContractMigrationUrl = new URL('../../supabase/migrations/20260826160500_payout_change_hire_date_and_search.sql', import.meta.url)
-const searchContractSql = await readFile(searchContractMigrationUrl, 'utf8')
+const privacyMigrationUrl = new URL('../../supabase/migrations/20260828010000_payout_change_requester_privacy.sql', import.meta.url)
+const privacySql = await readFile(privacyMigrationUrl, 'utf8')
 const workflowComponentUrl = new URL('../components/PaymentChangeWorkflow.jsx', import.meta.url)
 const workflowComponent = await readFile(workflowComponentUrl, 'utf8')
 
@@ -97,13 +97,13 @@ test('staff form renders current payout details read only and submits only repla
   assert.match(workflowComponent, /paymentProof/)
 })
 
-test('admin payout list returns hire date and searches the fields promised by the UI', () => {
-  const countBlock = searchContractSql.slice(
-    searchContractSql.indexOf('select count(*) into v_total'),
-    searchContractSql.indexOf('select coalesce(jsonb_agg'),
+test('latest admin payout list returns hire date without requester portal identifiers', () => {
+  const countBlock = privacySql.slice(
+    privacySql.indexOf('select count(*) into v_total'),
+    privacySql.indexOf('select coalesce(jsonb_agg'),
   )
-  const rowsBlock = searchContractSql.slice(searchContractSql.indexOf('select coalesce(jsonb_agg'))
-  assert.match(searchContractSql, /employee\.hire_date as employee_hire_date/i)
+  const rowsBlock = privacySql.slice(privacySql.indexOf('select coalesce(jsonb_agg'))
+  assert.match(privacySql, /employee\.hire_date as employee_hire_date/i)
   for (const field of [
     /employee\.employee_no/i,
     /employee\.full_name/i,
@@ -115,19 +115,24 @@ test('admin payout list returns hire date and searches the fields promised by th
     assert.match(countBlock, field, `${field} must be included in the total-count search`)
     assert.match(rowsBlock, field, `${field} must be included in the paged-row search`)
   }
-  assert.match(countBlock, /requester_search\.login_username/i)
-  assert.match(countBlock, /requester_search\.login_email/i)
-  assert.match(rowsBlock, /requester\.login_username/i)
-  assert.match(rowsBlock, /requester\.login_email/i)
-  assert.match(searchContractSql, /current_app_session_is_valid\('admin'\)/i)
-  assert.match(searchContractSql, /can_manage_employee\(request\.employee_id\)/i)
-  assert.match(searchContractSql, /revoke all on function public\.admin_payout_change_requests[\s\S]+from public, anon, authenticated/i)
-  assert.match(searchContractSql, /grant execute on function public\.admin_payout_change_requests[\s\S]+to authenticated/i)
+  assert.doesNotMatch(privacySql, /requester(?:_search)?\./i)
+  assert.doesNotMatch(privacySql, /requested_by/i)
+  assert.doesNotMatch(privacySql, /login_email/i)
+  assert.match(privacySql, /strpos\(btrim\(coalesce\(manual_fulfillment\.actor_username,''\)\),'@'\) = 0/i)
+  assert.match(privacySql, /strpos\(btrim\(coalesce\(reviewer\.login_username,''\)\),'@'\) = 0/i)
+  assert.match(privacySql, /current_app_session_is_valid\('admin'\)/i)
+  assert.match(privacySql, /can_manage_employee\(request\.employee_id\)/i)
+  assert.match(privacySql, /revoke all on function public\.admin_payout_change_requests[\s\S]+from public, anon, authenticated/i)
+  assert.match(privacySql, /grant execute on function public\.admin_payout_change_requests[\s\S]+to authenticated/i)
 })
 
-test('admin payout UI orders identity columns and renders both proofs inline with zoom', () => {
-  assert.match(workflowComponent, /<th>\{adminT\('员工ID'\)\}<\/th><th>\{adminT\('入职日期'\)\}<\/th><th>\{adminT\('姓名'\)\}<\/th>/)
-  assert.match(workflowComponent, /员工ID、姓名、申请账号、团队、岗位或修改原因/)
+test('admin payout UI separates employee, application, review and fulfillment fields', () => {
+  assert.match(workflowComponent, /<th>\{adminT\('入职日期'\)\}<\/th><th>\{adminT\('员工ID'\)\}<\/th><th>\{adminT\('姓名'\)\}<\/th>/)
+  assert.match(workflowComponent, /员工ID、姓名、团队、岗位或修改原因/)
+  assert.doesNotMatch(workflowComponent, /申请账号|requested_by|申请人 \/ 时间/)
+  for (const label of ['申请时间','审核结果','审核操作人','审核时间','资料处理状态','资料操作人','资料处理时间']) {
+    assert.ok(workflowComponent.includes(`adminT('${label}')`), `missing separated payout field ${label}`)
+  }
   assert.match(workflowComponent, /identity_proof_path/)
   assert.match(workflowComponent, /payment_proof_path/)
   assert.match(workflowComponent, /createSignedUrl\(proof\.path, 120\)/)

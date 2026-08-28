@@ -259,7 +259,7 @@
 }
 
 /* V28 — employee archive opened from analytics must sit above the analytics modal. */
-.detail-mask{z-index:10050!important;}
+.detail-mask{z-index:10050!important;background:rgba(16,29,48,.18)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 .detail-mask .employee-detail-drawer{z-index:10051!important;}
 
 /* ===== V28.1 — explicit refresh control + live data feedback ===== */
@@ -380,3 +380,26 @@
   line-height:1.35;
   padding:4px 8px!important;
 }
+
+/* ===== V28.4 — restricted employee internal notes ===== */
+.employee-private-notes-panel{grid-column:1/-1;min-width:0}
+.employee-private-note-head-actions{display:flex;align-items:center;gap:8px}
+.employee-private-note-head-actions>span{padding:4px 8px;border-radius:999px;background:#eef4ff;color:#3568c9;font-size:9px;font-weight:850}
+.employee-private-note-head-actions button,.employee-private-note-list button,.employee-private-notes-panel .employee-section-placeholder button{min-height:31px;padding:0 10px;border:1px solid #ccdaec;border-radius:8px;background:#fff;color:#31557d;font-size:10px;font-weight:800;cursor:pointer}
+.employee-private-note-message{margin:12px 14px 0;padding:9px 11px;border:1px solid #bce8cf;border-radius:9px;background:#effaf4;color:#18734a;font-size:10px}
+.employee-private-note-message.is-error{border-color:#efc3c7;background:#fff3f4;color:#ad3038}
+.employee-private-note-form{display:grid;gap:11px;margin:12px 14px;padding:13px;border:1px solid #cfe0f5;border-radius:11px;background:#f7faff}
+.employee-private-note-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.employee-private-note-form label{display:grid;gap:5px;color:#526b8b;font-size:10px;font-weight:800}
+.employee-private-note-form input,.employee-private-note-form select,.employee-private-note-form textarea{box-sizing:border-box;width:100%;border:1px solid #cbd9ea;border-radius:8px;background:#fff;color:#17365d;font:inherit;outline:none;padding:9px 10px}
+.employee-private-note-form textarea{resize:vertical;line-height:1.55}
+.employee-private-note-form input:focus,.employee-private-note-form select:focus,.employee-private-note-form textarea:focus{border-color:#4d7ee8;box-shadow:0 0 0 3px rgba(77,126,232,.11)}
+.employee-private-note-form>footer{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#7d8da3;font-size:9px}
+.employee-private-note-form>footer>div{display:flex;gap:8px}.employee-private-note-form button{min-height:33px;padding:0 12px;border:1px solid #cbd9ea;border-radius:8px;background:#fff;color:#355776;font-weight:800;cursor:pointer}.employee-private-note-form button.primary-action{border-color:#3169df;background:#3169df;color:#fff}.employee-private-note-form button:disabled{opacity:.55;cursor:wait}
+.employee-private-note-list{display:grid;gap:10px;padding:12px 14px 16px}
+.employee-private-note-list article{overflow:hidden;border:1px solid #dce5f0;border-radius:11px;background:#fff}
+.employee-private-note-list article>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-bottom:1px solid #e7edf5;background:#f8fafc}
+.employee-private-note-list article>header>div{display:flex;align-items:center;gap:8px}.employee-private-note-list article>header b{padding:4px 7px;border-radius:999px;background:#edf3ff;color:#315fc0;font-size:9px}.employee-private-note-list article>header time{color:#798aa0;font-size:9px}.employee-private-note-list article>header button{margin-left:6px}.employee-private-note-list article>header button.danger-outline{border-color:#efc2c6;color:#b2373e;background:#fff8f8}
+.employee-private-note-list article>p{margin:0;padding:13px 14px;color:#2b405b;font-size:11px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+.employee-private-note-list article>footer{display:flex;justify-content:space-between;gap:16px;padding:9px 13px;border-top:1px solid #edf1f6;color:#7a8ca4;font-size:8px}
+@media(max-width:680px){.employee-private-note-form-grid{grid-template-columns:1fr}.employee-private-note-list article>header,.employee-private-note-list article>footer{align-items:flex-start;flex-direction:column}.employee-private-note-form>footer{align-items:flex-start;flex-direction:column}.employee-private-note-form>footer>div{width:100%}.employee-private-note-form>footer button{flex:1}}

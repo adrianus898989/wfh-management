@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   configured,
   consumeAppSessionNotice,
@@ -8,6 +8,7 @@ import {
 } from '../lib/supabase'
 import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
+import { requestAdminIpPreflight } from '../lib/adminIpPreflight'
 import { registerCurrentAppRelease } from '../lib/releaseSession'
 
 function withTimeout(promise, ms = 25000) {
@@ -55,10 +56,35 @@ export default function AdminLoginPage() {
         : ''
   })
   const [loading, setLoading] = useState(false)
+  const [preflight, setPreflight] = useState({
+    status: 'checking',
+    allowed: false,
+    enforced: false,
+    reason: '',
+  })
   const submitInFlight = useRef(false)
+  const preflightAbort = useRef(null)
+
+  const checkPreflight = useCallback(async () => {
+    preflightAbort.current?.abort()
+    const controller = new AbortController()
+    preflightAbort.current = controller
+    setPreflight({ status: 'checking', allowed: false, enforced: false, reason: '' })
+
+    const result = await requestAdminIpPreflight(configured ? supabase : null, {
+      signal: controller.signal,
+    })
+    if (!controller.signal.aborted) setPreflight(result)
+  }, [])
+
+  useEffect(() => {
+    void checkPreflight()
+    return () => preflightAbort.current?.abort()
+  }, [checkPreflight])
 
   const submit = async (e) => {
     e.preventDefault()
+    if (preflight.status !== 'allowed') return
     if (submitInFlight.current) return
     submitInFlight.current = true
     setError('')
@@ -125,7 +151,7 @@ export default function AdminLoginPage() {
           <div className="login-logo" aria-hidden="true">W</div>
         </div>
 
-        <form className="login-card login-card--signin" onSubmit={submit} aria-busy={loading}>
+        {preflight.status === 'allowed' ? <form className="login-card login-card--signin" onSubmit={submit} aria-busy={loading}>
           <h1 className="login-title">{adminT('WFH 登录')}</h1>
 
           <label className="login-field">
@@ -164,7 +190,27 @@ export default function AdminLoginPage() {
           <button type="submit" className="login-submit" disabled={loading}>
             {adminT(loading ? '登录中...' : '登录')}
           </button>
-        </form>
+        </form> : <section
+          className="login-card login-card--signin login-preflight-card"
+          aria-busy={preflight.status === 'checking'}
+          role={preflight.status === 'blocked' ? 'alert' : 'status'}
+        >
+          <h1 className="login-title">{adminT('后台访问验证')}</h1>
+          <p className="login-preflight-state">
+            {adminT(preflight.status === 'checking'
+              ? '正在确认当前网络是否允许访问后台…'
+              : preflight.status === 'blocked'
+                ? '当前网络未获准访问后台，请联系管理员'
+                : '访问验证暂时不可用，请稍后重试')}
+          </p>
+          {preflight.status !== 'checking' && <button
+            type="button"
+            className="login-submit"
+            onClick={() => void checkPreflight()}
+          >
+            {adminT('重新检查')}
+          </button>}
+        </section>}
       </main>
     </div>
   )

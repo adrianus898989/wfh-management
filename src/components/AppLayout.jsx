@@ -54,6 +54,7 @@ export default function AppLayout({ mode, children }) {
         loading:false,
         founder:Boolean(data?.caller?.is_founder),
         permissions:Array.isArray(data?.caller?.permissions)?data.caller.permissions:[],
+        authUserId:data?.caller?.auth_user_id||'',
         roleCode:data?.caller?.role_code||'',
         employeeId:data?.caller?.employee_id||'',
         dataScope:data?.caller?.data_scope||'',
@@ -70,6 +71,11 @@ export default function AppLayout({ mode, children }) {
   },[mode,accessRetryKey])
 
   const permissionSet=new Set(adminAccess.permissions)
+  const adminAccessIdentityKey=JSON.stringify([
+    adminAccess.authUserId||'',Boolean(adminAccess.founder),adminAccess.roleCode||'',
+    adminAccess.employeeId||'',adminAccess.dataScope||'',adminAccess.teamId||'',
+    adminAccess.positionId||'',[...(adminAccess.permissions||[])].sort(),
+  ])
   const permissionAllowed=code=>adminAccess.founder||permissionSet.has('*')||permissionSet.has(code)
   const navAllowed=item=>{
     if(item.allPermissions?.some(code=>!permissionAllowed(code)))return false
@@ -125,7 +131,7 @@ export default function AppLayout({ mode, children }) {
       ? <div className="center-screen auth-retry"><div><strong>{adminT('权限读取失败')}</strong><p>{adminAccess.error}</p><button type="button" onClick={()=>setAccessRetryKey(value=>value+1)}>{adminT('重试')}</button></div></div>
       : !requestedAdminAllowed
         ? <div className="center-screen">{adminT(routeFallbackTarget?'正在打开可访问页面…':'当前账号尚未配置可访问页面')}</div>
-        : <AdminAccessProvider access={adminAccess}>{children}</AdminAccessProvider>
+        : <AdminAccessProvider key={adminAccessIdentityKey} access={adminAccess}>{children}</AdminAccessProvider>
 
   return (
     <div className={`app-shell ${mode==='admin'?'admin-shell':'staff-shell'}`}>

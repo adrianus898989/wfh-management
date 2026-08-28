@@ -349,6 +349,9 @@ a{color:inherit;text-decoration:none}
 }
 .login-card--signin .login-submit:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 16px 34px rgba(52,93,210,.35)}
 .login-card--signin .login-submit:hover:not(:disabled):before{transform:translateX(115%)}
+.login-preflight-card{min-height:230px;text-align:center}
+.login-preflight-state{margin:10px 0 24px;color:#66788f;font-size:13px;line-height:1.7}
+.login-preflight-card[role="alert"] .login-preflight-state{color:#a54d4d}
 
 @media(prefers-reduced-motion:reduce){
   .login-shell--signin{animation:none}

@@ -16,7 +16,21 @@ const dateTime=value=>{
   const parsed=new Date(value)
   return Number.isNaN(parsed.getTime())?text(value):parsed.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})
 }
-const methodText=value=>Array.isArray(value)?value.join('；'):value&&typeof value==='object'?Object.values(value).map(text).filter(Boolean).join('；'):text(value)
+const scoreMethodText=value=>{
+  if(!value||typeof value!=='object')return text(value)
+  return '员工错误、出勤异常和扣款按当前人数换算；考试按已评分试卷的不及格率换算；四项合成 0–100 关注分。'
+}
+const sampleMethodText=value=>{
+  if(!value||typeof value!=='object')return text(value)
+  const headcount=number(value.headcount_warning_below)
+  const exams=number(value.exam_warning_below_attempts)
+  const events=number(value.event_warning_for_positive_events_below)
+  const rules=[]
+  if(headcount)rules.push(`人数少于 ${headcount} 人`)
+  if(exams)rules.push(`已评分考试少于 ${exams} 份`)
+  if(events)rules.push(`有效事件少于 ${events} 笔`)
+  return `${rules.join('、')||'人数或考试样本不足'}时标记“样本不足”，不据此判断管理表现。`
+}
 const organizationCount=row=>number(row.employee_count??row.headcount??row.employees)
 const affectedCount=row=>number(row.affected_employees??row.at_risk_employees??row.people_with_events??row.observed_employees)
 const perHundred=row=>number(row.negative_rate_per_100??row.incident_rate_per_100??row.events_per_100??row.rate_per_100)
@@ -86,7 +100,7 @@ export default function ManagementRiskPanel({data,filters,setFilters,dimension,s
         <RiskKpi label="扣款记录" value={summary.deductions??0} hint={`每百人 ${number(summary.deduction_rate_per_100).toFixed(1)}`}/>
       </div>
 
-      <div className="management-risk-methodology"><strong>公平比较口径</strong><span>{methodText(methodology.score_formula)||'四类问题按人数 / 考试次数归一化后合成 0–100 关注分。'}</span><span>{methodText(methodology.min_sample_rules||methodology.minimum_sample_rules)||'人数或考试样本不足时只显示“样本不足”，不据此判断管理表现。'}</span></div>
+      <div className="management-risk-methodology"><strong>公平比较口径</strong><span>{scoreMethodText(methodology.score_formula)||'四类问题按人数 / 考试次数归一化后合成 0–100 关注分。'}</span><span>{sampleMethodText(methodology.min_sample_rules||methodology.minimum_sample_rules)||'人数或考试样本不足时只显示“样本不足”，不据此判断管理表现。'}</span></div>
 
       <section className="management-risk-card management-risk-organization-card">
         <div className="management-risk-card-head"><div><h3>组织风险排行</h3><p>总量与每百人发生率同时展示，避免人数多的团队天然排在前面。</p></div><div className="management-risk-dimension-tabs">{Object.entries(organizationLabels).map(([key,label])=><button type="button" key={key} className={dimension===key?'active':''} onClick={()=>setDimension(key)}>{label}</button>)}</div></div>

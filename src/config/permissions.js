@@ -50,6 +50,8 @@ export const PERMISSIONS = {
   EMPLOYEE_CHANGE_HISTORY_VIEW: 'employee.change_history.view',
   EMPLOYEE_ANALYTICS_VIEW: 'employee.analytics.view',
   EMPLOYEE_MANAGEMENT_RISK_VIEW: 'employee.management_risk.view',
+  EMPLOYEE_PRIVATE_NOTE_VIEW: 'employee.private_note.view',
+  EMPLOYEE_PRIVATE_NOTE_MANAGE: 'employee.private_note.manage',
   EMPLOYEE_CREATE: 'employee.create',
   EMPLOYEE_EDIT: 'employee.edit',
   EMPLOYEE_RESIGN: 'employee.resign',

@@ -11,8 +11,45 @@ const cors = {
 
 const text = (value: unknown) => String(value ?? '').trim()
 const upper = (value: unknown) => text(value).toUpperCase()
+class HttpError extends Error {
+  status: number
+  code: string
+  retryable: boolean
+  constructor(status: number, code: string, message: string, retryable = false) {
+    super(message)
+    this.name = 'HttpError'
+    this.status = status
+    this.code = code
+    this.retryable = retryable
+  }
+}
+const errorStatus = (value: any) => Number(value?.status || value?.statusCode || value?.context?.status || 0)
+const errorCode = (value: any) => text(value?.code || value?.error_code || value?.name).slice(0, 80)
+function isRetryableBackendFailure(value: any) {
+  const status = errorStatus(value)
+  const code = errorCode(value).toUpperCase()
+  const message = text(value?.message || value?.error || value).toLowerCase()
+  return status >= 500 || code === '57014' || message === 'SCOPE_SERVICE_UNAVAILABLE'.toLowerCase() ||
+    /statement timeout|canceling statement|connection|connection reset|connection refused|fetch failed|network|timed? ?out|timeout|upstream|gateway|socket|econn/.test(message)
+}
+function responseFailure(value: any) {
+  if (value instanceof HttpError) return { status:value.status, code:value.code, retryable:value.retryable, message:value.message }
+  if (isRetryableBackendFailure(value)) return { status:503, code:'service_temporarily_unavailable', retryable:true, message:'员工资料服务暂时繁忙，请稍后重试。' }
+  const status = errorStatus(value)
+  if (status === 401) return { status:401, code:'not_authenticated', retryable:false, message:'登录状态无效，请重新登录。' }
+  if (status === 403) return { status:403, code:'permission_denied', retryable:false, message:'没有执行此操作的权限。' }
+  return { status:500, code:'internal_error', retryable:false, message:'员工资料服务处理失败，请稍后重试。' }
+}
 function jwtSessionId(token: string) { try { const raw = token.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/') || ''; const padded = raw + '='.repeat((4 - raw.length % 4) % 4); return text(JSON.parse(atob(padded))?.session_id) } catch { return '' } }
-async function requireCurrentAdminSession(service: any, userId: string, token: string) { const sessionId = jwtSessionId(token); if (!sessionId) throw new Error('UNAUTHORIZED'); const { data, error } = await service.from('app_session_leases').select('user_id').eq('user_id', userId).eq('session_id', sessionId).eq('portal', 'admin').gt('lease_expires_at', new Date().toISOString()).maybeSingle(); if (error || !data?.user_id) throw new Error('SESSION_NOT_CURRENT') }
+async function requireCurrentAdminSession(service: any, userId: string, token: string) {
+  const sessionId = jwtSessionId(token)
+  if (!sessionId) throw new HttpError(401, 'not_authenticated', '登录状态无效，请重新登录。')
+  const { data, error } = await service.from('app_session_leases').select('user_id')
+    .eq('user_id', userId).eq('session_id', sessionId).eq('portal', 'admin')
+    .gt('lease_expires_at', new Date().toISOString()).maybeSingle()
+  if (error) throw error
+  if (!data?.user_id) throw new HttpError(401, 'session_not_current', '当前登录会话已失效，请重新登录。')
+}
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' },
@@ -31,10 +68,14 @@ const riskKey = (value: unknown) => {
 async function caller(req: Request, service: any) {
   const auth = req.headers.get('Authorization') || ''
   const token = auth.replace(/^Bearer\s+/i, '').trim()
-  if (!token) throw new Error('UNAUTHORIZED')
+  if (!token) throw new HttpError(401, 'not_authenticated', '登录状态无效，请重新登录。')
 
   const { data: userData, error: userError } = await service.auth.getUser(token)
-  if (userError || !userData?.user) throw new Error('UNAUTHORIZED')
+  if (userError) {
+    if ([401, 403].includes(errorStatus(userError))) throw new HttpError(401, 'not_authenticated', '登录状态无效，请重新登录。')
+    throw userError
+  }
+  if (!userData?.user) throw new HttpError(401, 'not_authenticated', '登录状态无效，请重新登录。')
 
   const userId = userData.user.id
   await requireCurrentAdminSession(service, userId, token)
@@ -42,21 +83,26 @@ async function caller(req: Request, service: any) {
     .select('auth_user_id,employee_id,role_id,data_scope,active,backend_enabled')
     .eq('auth_user_id', userId)
     .maybeSingle()
-  if (error || !access?.active || !access?.backend_enabled) throw new Error('FORBIDDEN')
+  if (error) throw error
+  if (!access?.active || !access?.backend_enabled) throw new HttpError(403, 'permission_denied', '当前账号没有后台访问权限。')
 
-  const { data: role } = await service.from('roles').select('code').eq('id', access.role_id).maybeSingle()
+  const { data: role, error: roleError } = await service.from('roles').select('code').eq('id', access.role_id).maybeSingle()
+  if (roleError) throw roleError
   return { userId, access, roleCode: role?.code || '' }
 }
 
 async function permissionAllowed(service: any, current: any, code: string) {
   if (current.roleCode === 'founder') return true
-  const { data: permission } = await service.from('permissions').select('id').eq('code', code).maybeSingle()
+  const { data: permission, error: permissionError } = await service.from('permissions').select('id').eq('code', code).maybeSingle()
+  if (permissionError) throw permissionError
   if (!permission?.id) return false
-  const { data: override } = await service.from('user_permission_overrides').select('allowed')
+  const { data: override, error: overrideError } = await service.from('user_permission_overrides').select('allowed')
     .eq('auth_user_id', current.userId).eq('permission_id', permission.id).maybeSingle()
+  if (overrideError) throw overrideError
   if (override && typeof override.allowed === 'boolean') return override.allowed
-  const { data: rolePermission } = await service.from('role_permissions').select('role_id')
+  const { data: rolePermission, error: rolePermissionError } = await service.from('role_permissions').select('role_id')
     .eq('role_id', current.access.role_id).eq('permission_id', permission.id).maybeSingle()
+  if (rolePermissionError) throw rolePermissionError
   return Boolean(rolePermission)
 }
 
@@ -186,6 +232,7 @@ async function loadRowsByValues(
 
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
+  if (req.method !== 'POST') return json({ error:'请求方法无效。', code:'method_not_allowed', retryable:false }, 405)
 
   try {
     const service = createClient(
@@ -194,9 +241,10 @@ Deno.serve(async req => {
       { auth: { persistSession: false } },
     )
     const current = await caller(req, service)
-    const body = await req.json().catch(() => ({}))
-    if (!(await permissionAllowed(service, current, 'employee.directory.view'))) throw new Error('没有查看员工资料的权限')
-    if (body.export === true && !(await permissionAllowed(service, current, 'employee.directory.export'))) throw new Error('没有导出员工资料的权限')
+    let body: any
+    try { body = await req.json() } catch { throw new HttpError(400, 'invalid_json', '请求格式无效。') }
+    if (!(await permissionAllowed(service, current, 'employee.directory.view'))) throw new HttpError(403, 'permission_denied', '没有查看员工资料的权限。')
+    if (body.export === true && !(await permissionAllowed(service, current, 'employee.directory.export'))) throw new HttpError(403, 'permission_denied', '没有导出员工资料的权限。')
     const canViewEmployeeSensitive = await permissionAllowed(service, current, 'sensitive.employee.view')
     const scope = await scopeInfo(service, current)
     const organization = await loadCurrentRosterOrganization(service, scope)
@@ -286,11 +334,20 @@ Deno.serve(async req => {
     const start = (page - 1) * pageSize
     const rows = matched.slice(start, start + pageSize)
     const ids = rows.map((row: any) => row.id)
-    const { data: operatorRows } = ids.length
-      ? await service.from('employee_audit_logs').select('employee_id,actor_username,created_at').in('employee_id', ids).order('created_at', { ascending: false }).limit(500)
-      : { data: [] }
+    let operatorRows: any[] = []
+    if (ids.length) {
+      try {
+        const operatorResult = await service.from('employee_audit_logs')
+          .select('employee_id,actor_username,created_at').in('employee_id', ids)
+          .order('created_at', { ascending:false }).limit(Math.min(Math.max(ids.length * 10, 50), 5000))
+        if (!operatorResult.error) operatorRows = operatorResult.data || []
+        else console.error(JSON.stringify({ function:'admin-employee-risk-list', event:'operator_enrichment_skipped', code:errorCode(operatorResult.error) || 'query_failed' }))
+      } catch (operatorError) {
+        console.error(JSON.stringify({ function:'admin-employee-risk-list', event:'operator_enrichment_skipped', code:errorCode(operatorError) || 'fetch_failed' }))
+      }
+    }
     const operatorMap = new Map<string, string>()
-    for (const row of operatorRows || []) {
+    for (const row of operatorRows) {
       if (!operatorMap.has(row.employee_id)) operatorMap.set(row.employee_id, text(row.actor_username))
     }
 
@@ -322,10 +379,11 @@ Deno.serve(async req => {
       risk_level: risk,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message === 'UNAUTHORIZED') return json({ error: '登录已失效，请重新登录' }, 401)
-    if (message === 'FORBIDDEN') return json({ error: '当前账号没有后台访问权限' }, 403)
-    console.error(error)
-    return json({ error: message || '等级筛选读取失败' }, 500)
+    const failure = responseFailure(error)
+    console.error(JSON.stringify({
+      function:'admin-employee-risk-list', event:'request_failed', status:failure.status,
+      code:failure.code, retryable:failure.retryable,
+    }))
+    return json({ error:failure.message, code:failure.code, retryable:failure.retryable }, failure.status)
   }
 })

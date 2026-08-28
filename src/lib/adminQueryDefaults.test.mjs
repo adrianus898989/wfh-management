@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import test from 'node:test'
 
-import {businessMonthIso,businessTodayIso,businessTodayRange} from './adminQueryDefaults.js'
+import {businessMonthIso,businessRecentRange,businessTodayIso,businessTodayRange} from './adminQueryDefaults.js'
 
 const attendancePage=await readFile(new URL('../pages/AdminAttendancePage.jsx',import.meta.url),'utf8')
 const connectivityPage=await readFile(new URL('../components/ConnectivityRecords.jsx',import.meta.url),'utf8')
@@ -17,12 +17,14 @@ test('admin detail defaults use the Manila business date at timezone boundaries'
   assert.equal(businessTodayIso(instant),'2026-08-27')
   assert.equal(businessMonthIso(instant),'2026-08')
   assert.deepEqual(businessTodayRange(instant),{date_from:'2026-08-27',date_to:'2026-08-27'})
+  assert.deepEqual(businessRecentRange(30,instant),{date_from:'2026-07-29',date_to:'2026-08-27'})
 })
 
 test('high-volume attendance detail views are bounded while the employee archive remains paged and unbounded',()=>{
   assert.match(attendancePage,/\['今日考勤','考勤记录','请假审批','奖金 \/ 扣款'\]\.includes\(tab\)\?businessTodayRange\(\):\{\}\)/)
   assert.match(attendancePage,/const monthValue=businessMonthIso/)
-  assert.match(connectivityPage,/const initialFilters=\(\)=>\([^\n]*\.\.\.businessTodayRange\(\)/)
+  assert.match(connectivityPage,/const initialFilters=\(\)=>\([^\n]*\.\.\.businessRecentRange\(30\)/)
+  assert.match(connectivityPage,/const initialRecord=\(\)=>\([^\n]*incident_type:'power_outage'/)
   assert.match(dataEntryLogs,/const initialLogFilters = \(\) => \{[\s\S]*?const day = businessTodayIso\(\)[\s\S]*?dateFrom: day, dateTo: day/)
   assert.match(reportsPage,/const currentDayRange=\(\)=>\{const today=isoToday\(\);return\{from:today,to:today\}\}/)
   assert.match(reportsPage,/const \[range,setRange\]=useState\(currentDayRange\),\[appliedRange,setAppliedRange\]=useState\(currentDayRange\)/)

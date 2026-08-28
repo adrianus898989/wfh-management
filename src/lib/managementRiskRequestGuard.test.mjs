@@ -4,6 +4,7 @@ import test from 'node:test'
 import { withAbortTimeout } from './abortableRequest.js'
 
 const page = await readFile(new URL('../pages/AdminEmployeesPage.jsx', import.meta.url), 'utf8')
+const panel = await readFile(new URL('../components/ManagementRiskPanel.jsx', import.meta.url), 'utf8')
 
 test('management risk keeps only the latest pending filters without applying a dropped request', () => {
   assert.match(page, /managementRiskRequestRef=useRef\(\{inFlight:null,activeFilterKey:'',pendingFilters:null\}\)/)
@@ -44,4 +45,10 @@ test('abort timeout cancels the underlying attempt without retrying it', async (
   )
   assert.equal(calls, 1)
   assert.equal(observedSignal?.aborted, true)
+})
+
+test('management methodology is explained in plain language instead of exposing formulas', () => {
+  assert.match(panel, /四项合成 0–100 关注分/)
+  assert.match(panel, /时标记“样本不足”/)
+  assert.doesNotMatch(panel, /Object\.values\(value\).*join\('；'\)/)
 })

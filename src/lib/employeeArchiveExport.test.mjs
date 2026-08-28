@@ -39,7 +39,8 @@ test('employee archive exports every page for the applied filters and keeps the 
 
   assert.match(source, /fetchEmployeeListData\(nextPage,EMPLOYEE_EXPORT_PAGE_SIZE,appliedFilters,true\)/)
   assert.match(source, /while\(nextPage<=expectedPages\)/)
-  assert.match(source, /loadOperatorMap\(visibleRows\.map\(row=>row\.id\)\)/)
+  assert.doesNotMatch(source, /loadOperatorMap|admin-employee-operators/)
+  assert.match(source, /operator_account:text\(row\.operator_account\)/)
   assert.match(source, /employeeArchiveCsv\(exportRows\)/)
   assert.doesNotMatch(source, /setRows\(/)
   assert.match(page, /导出当前筛选/)

@@ -131,6 +131,103 @@ Deno.test("M:P compensation changes alter raw integrity but not employee-master 
     "home semantic source hash changed for M:P-only edits");
 });
 
+Deno.test("raw formatting churn keeps the canonical database dedupe hash stable", async () => {
+  const originalHome = homeValues(baseHomeRows);
+  const originalSchedule = scheduleValues(baseScheduleRows);
+  const originalDates = [["", ""], ["", ""], ["2026-08-01", ""]];
+  const original = await normalizeSnapshot(await payloadFor(
+    originalHome,
+    originalSchedule,
+    originalDates,
+  ));
+
+  const formattedHome = homeValues([[
+    ...baseHomeRows[0],
+  ]]);
+  formattedHome[2][3] = " DAY SHIFT ";
+  formattedHome[2][5] = "  Alice A  ";
+  formattedHome[2][6] = " ｗｄ００１ ";
+  formattedHome[2][7] = "08/01/2026";
+  const formattedSchedule = scheduleValues([[
+    ...baseScheduleRows[0],
+  ]]);
+  formattedSchedule[1][6] = " Alice A ";
+  formattedSchedule[1][7] = " wd001 ";
+  formattedSchedule[1][8] = "DAY SHIFT";
+  const formatted = await normalizeSnapshot(await payloadFor(
+    formattedHome,
+    formattedSchedule,
+    originalDates,
+  ));
+
+  assert(original.sources.home_roster.snapshot_hash !== formatted.sources.home_roster.snapshot_hash,
+    "raw home integrity hash did not capture formatting changes");
+  assert(original.snapshot_hash === formatted.snapshot_hash,
+    "normalized-equivalent rows changed the database dedupe hash");
+  assert(original.sources.home_roster.semantic_snapshot_hash === formatted.sources.home_roster.semantic_snapshot_hash,
+    "normalized-equivalent home rows changed their canonical hash");
+  assert(original.sources.schedule_roster.semantic_snapshot_hash === formatted.sources.schedule_roster.semantic_snapshot_hash,
+    "normalized-equivalent schedule rows changed their canonical hash");
+});
+
+Deno.test("schedule source row moves and array order do not trigger a database reconciliation", async () => {
+  const home = homeValues(baseHomeRows);
+  const dates = [["", ""], ["", ""], ["2026-08-01", ""]];
+  const first = [
+    ...baseScheduleRows[0],
+  ];
+  const second = [
+    "负责人乙", "现场培训丙", "线上组长丁", "线上培训戊", "客服组2", "熊猫PH", "Bob B", "WD002",
+    "夜班", "菲律宾", "客服", "PANDA", "居家客服",
+  ];
+  const original = await normalizeSnapshot(await payloadFor(
+    home,
+    scheduleValues([first, second]),
+    dates,
+  ));
+  const reordered = await normalizeSnapshot(await payloadFor(
+    home,
+    scheduleValues([second, first]),
+    dates,
+  ));
+
+  assert(original.sources.schedule_roster.snapshot_hash !== reordered.sources.schedule_roster.snapshot_hash,
+    "raw schedule integrity hash ignored the row movement");
+  assert(original.sources.schedule_roster.semantic_snapshot_hash === reordered.sources.schedule_roster.semantic_snapshot_hash,
+    "source-row movement changed the canonical schedule hash");
+  assert(original.snapshot_hash === reordered.snapshot_hash,
+    "source-row movement changed the canonical combined hash");
+  assert(original.schedule_rows[0].source_row !== reordered.schedule_rows[1].source_row,
+    "test fixture did not actually move the source row");
+});
+
+Deno.test("real schedule group and work-content changes remain hash-significant", async () => {
+  const home = homeValues(baseHomeRows);
+  const dates = [["", ""], ["", ""], ["2026-08-01", ""]];
+  const originalSchedule = scheduleValues(baseScheduleRows);
+  const original = await normalizeSnapshot(await payloadFor(home, originalSchedule, dates));
+
+  const changedGroupRows = baseScheduleRows.map((row) => [...row]);
+  changedGroupRows[0][4] = "出款组2";
+  const changedGroup = await normalizeSnapshot(await payloadFor(
+    home,
+    scheduleValues(changedGroupRows),
+    dates,
+  ));
+  assert(original.sources.schedule_roster.semantic_snapshot_hash !== changedGroup.sources.schedule_roster.semantic_snapshot_hash,
+    "a real schedule group change was excluded from the canonical hash");
+
+  const changedWorkRows = baseScheduleRows.map((row) => [...row]);
+  changedWorkRows[0][12] = "现场人员-不同工作内容";
+  const changedWork = await normalizeSnapshot(await payloadFor(
+    home,
+    scheduleValues(changedWorkRows),
+    dates,
+  ));
+  assert(original.sources.schedule_roster.semantic_snapshot_hash !== changedWork.sources.schedule_roster.semantic_snapshot_hash,
+    "a real work-content change was excluded from the canonical hash");
+});
+
 Deno.test("keeps explicit resignation signals instead of trusting the tab title", async () => {
   const home = homeValues([
     ["AR印度", "P", "客服", "白班", "菲律宾", "Date resigned", "WD002", "", "2026年 08月 12日", "", "", "reason", "", "", "", ""],

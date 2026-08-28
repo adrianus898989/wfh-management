@@ -322,6 +322,28 @@ function snapshotObject(value: unknown, key: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+// Source row numbers are useful evidence for diagnostics, but they are not
+// employee-master data. The schedule sheet contains actively sorted/reordered
+// sections whose row positions can move while every employee assignment stays
+// the same. Hashing the payload array directly would therefore turn harmless
+// row moves (or a different array order) into a full database reconciliation.
+//
+// Keep every business-owned field in this projection and sort the projection
+// deterministically. A real change to a team, group, position, shift, platform,
+// trainer, work-content marker, identity, or lifecycle field still changes the
+// hash; only source coordinates and input order are ignored.
+function canonicalRowsHashInput<Row extends { source_row: number }>(rows: readonly Row[]): Array<Omit<Row, "source_row">> {
+  return rows
+    .map((row) => {
+      const { source_row: _sourceRow, ...businessFields } = row;
+      return { businessFields, sortKey: JSON.stringify(businessFields) };
+    })
+    .sort((left, right) => {
+      return left.sortKey < right.sortKey ? -1 : left.sortKey > right.sortKey ? 1 : 0;
+    })
+    .map(({ businessFields }) => businessFields);
+}
+
 async function normalizeHomeRoster(value: unknown) {
   const input = snapshotObject(value, "home_roster");
   assertSource(input.source, HOME_ROSTER_SOURCE);
@@ -342,7 +364,11 @@ async function normalizeHomeRoster(value: unknown) {
   if (!SHA256_RE.test(expectedHash)) throw new SnapshotValidationError("invalid_source_snapshot_hash", { source: "home_roster" });
   const actualHash = await sha256Hex(JSON.stringify({ values, date_values: dateValues }));
   if (actualHash !== expectedHash) throw new SnapshotValidationError("snapshot_hash_mismatch", { source: "home_roster" });
-  const semanticHash = await sha256Hex(JSON.stringify(homeSemanticProjection(values, dateValues)));
+  // Keep this raw semantic projection solely for validating the combined hash
+  // produced by the existing Apps Script. The database dedupe key is computed
+  // later from normalized rows, so harmless formatting/formula churn cannot
+  // force a full employee reconciliation.
+  const upstreamSemanticHash = await sha256Hex(JSON.stringify(homeSemanticProjection(values, dateValues)));
 
   const rows: NormalizedHomeRosterRow[] = [];
   const seen = new Map<string, number>();
@@ -394,7 +420,17 @@ async function normalizeHomeRoster(value: unknown) {
   if (!rows.some((row) => row.employee_id && !row.explicitly_resigned)) {
     throw new SnapshotValidationError("home_active_roster_empty");
   }
-  return { rows, warnings, hash: expectedHash, semanticHash, readRowCount: values.length };
+  const semanticHash = await sha256Hex(JSON.stringify(
+    canonicalRowsHashInput(rows),
+  ));
+  return {
+    rows,
+    warnings,
+    hash: expectedHash,
+    upstreamSemanticHash,
+    semanticHash,
+    readRowCount: values.length,
+  };
 }
 
 async function normalizeScheduleRoster(value: unknown) {
@@ -469,7 +505,17 @@ async function normalizeScheduleRoster(value: unknown) {
   }
   if (!rows.length) throw new SnapshotValidationError("schedule_roster_empty");
   if (!rows.some((row) => row.employee_id)) throw new SnapshotValidationError("schedule_employee_ids_missing");
-  return { rows, warnings, hash: expectedHash, semanticHash: expectedHash, readRowCount: values.length };
+  const semanticHash = await sha256Hex(JSON.stringify(
+    canonicalRowsHashInput(rows),
+  ));
+  return {
+    rows,
+    warnings,
+    hash: expectedHash,
+    upstreamSemanticHash: expectedHash,
+    semanticHash,
+    readRowCount: values.length,
+  };
 }
 
 export async function normalizeSnapshot(input: unknown): Promise<NormalizedEmployeeMasterSnapshot> {
@@ -487,13 +533,19 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedEmplo
     normalizeHomeRoster(sources.home_roster),
     normalizeScheduleRoster(sources.schedule_roster),
   ]);
-  const expectedCombinedHash = trimmed(payload.snapshot_hash).toLowerCase();
-  if (!SHA256_RE.test(expectedCombinedHash)) throw new SnapshotValidationError("invalid_snapshot_hash");
-  const actualCombinedHash = await sha256Hex(JSON.stringify({
+  const expectedUpstreamCombinedHash = trimmed(payload.snapshot_hash).toLowerCase();
+  if (!SHA256_RE.test(expectedUpstreamCombinedHash)) throw new SnapshotValidationError("invalid_snapshot_hash");
+  const actualUpstreamCombinedHash = await sha256Hex(JSON.stringify({
+    home: home.upstreamSemanticHash,
+    schedule: schedule.upstreamSemanticHash,
+  }));
+  if (actualUpstreamCombinedHash !== expectedUpstreamCombinedHash) {
+    throw new SnapshotValidationError("snapshot_hash_mismatch", { source: "combined" });
+  }
+  const canonicalCombinedHash = await sha256Hex(JSON.stringify({
     home: home.semanticHash,
     schedule: schedule.semanticHash,
   }));
-  if (actualCombinedHash !== expectedCombinedHash) throw new SnapshotValidationError("snapshot_hash_mismatch", { source: "combined" });
 
   // Employee ID is the cross-source identity key. The current-staff source
   // owns the official name, while the schedule frequently contains aliases,
@@ -507,7 +559,7 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedEmplo
     trigger_kind: triggerKind,
     captured_at: capturedAt.toISOString(),
     parser_version: PARSER_VERSION,
-    snapshot_hash: expectedCombinedHash,
+    snapshot_hash: canonicalCombinedHash,
     parse_warning_count: home.warnings + schedule.warnings,
     sources: {
       home_roster: {

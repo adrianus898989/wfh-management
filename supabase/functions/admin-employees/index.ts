@@ -16,6 +16,57 @@ const json = (body: unknown, status = 200) =>
 const text = (v: unknown) => String(v ?? "").trim();
 const employeeNoKey = (v: unknown) => text(v).toUpperCase();
 
+class HttpError extends Error {
+  status:number;
+  code:string;
+  retryable:boolean;
+
+  constructor(status:number,code:string,message:string,retryable=false){
+    super(message);
+    this.name="HttpError";
+    this.status=status;
+    this.code=code;
+    this.retryable=retryable;
+  }
+}
+
+function errorStatus(value:any){
+  const status=Number(value?.status||value?.statusCode||value?.context?.status||0);
+  return Number.isFinite(status)?status:0;
+}
+
+function errorCode(value:any){
+  return text(value?.code||value?.error_code||value?.name).slice(0,80);
+}
+
+function isRetryableBackendFailure(value:any){
+  const status=errorStatus(value);
+  const code=errorCode(value).toUpperCase();
+  const message=text(value?.message||value?.error||value).toLowerCase();
+  return status>=500
+    || code==="57014"
+    || code.startsWith("PGRST")&&status>=500
+    || /statement timeout|canceling statement|connection|connection reset|connection refused|fetch failed|network|timed? ?out|timeout|upstream|gateway|socket|econn/.test(message);
+}
+
+function responseFailure(value:any){
+  if(value instanceof HttpError){
+    return {status:value.status,code:value.code,retryable:value.retryable,message:value.message};
+  }
+  if(isRetryableBackendFailure(value)){
+    return {status:503,code:"service_temporarily_unavailable",retryable:true,message:"员工资料服务暂时繁忙，请稍后重试。"};
+  }
+  const status=errorStatus(value);
+  if(status===401) return {status:401,code:"not_authenticated",retryable:false,message:"登录状态无效，请重新登录。"};
+  if(status===403) return {status:403,code:"permission_denied",retryable:false,message:"没有执行此操作的权限。"};
+  const backendCode=errorCode(value);
+  if(backendCode&&backendCode!=="Error"){
+    return {status:500,code:"internal_error",retryable:false,message:"员工资料服务处理失败，请稍后重试。"};
+  }
+  const message=value instanceof Error?value.message:text(value?.message||value?.error||value);
+  return {status:400,code:"invalid_request",retryable:false,message:message&&!/^\[object /i.test(message)?message:"请求处理失败。"};
+}
+
 function employeeRiskKey(value: unknown) {
   const count = Number(value || 0);
   if (count >= 31) return "high";
@@ -34,11 +85,12 @@ function jwtSessionId(token:string){
 }
 async function requireCurrentAdminSession(service:any,userId:string,token:string){
   const sessionId=jwtSessionId(token);
-  if(!sessionId) throw new Error("登录会话无效，请重新登录");
+  if(!sessionId) throw new HttpError(401,"not_authenticated","登录会话无效，请重新登录。");
   const {data,error}=await service.from("app_session_leases").select("user_id")
     .eq("user_id",userId).eq("session_id",sessionId).eq("portal","admin")
     .gt("lease_expires_at",new Date().toISOString()).maybeSingle();
-  if(error||!data?.user_id) throw new Error("此账号未持有当前设备登录权，请重新登录");
+  if(error) throw error;
+  if(!data?.user_id) throw new HttpError(401,"session_not_current","此账号未持有当前设备登录权，请重新登录。");
 }
 
 const EMPLOYEE_DETAIL_SELECT = `
@@ -169,33 +221,38 @@ function missingFields(employee: any, payment: any) {
 }
 
 async function permissionAllowed(service: any, access: any, userId: string, code: string) {
-  const { data: role } = await service.from("roles").select("id,code").eq("id", access.role_id).maybeSingle();
+  const { data: role, error:roleError } = await service.from("roles").select("id,code").eq("id", access.role_id).maybeSingle();
+  if(roleError) throw roleError;
   if (role?.code === "founder") return true;
 
-  const { data: perm } = await service.from("permissions").select("id").eq("code", code).maybeSingle();
+  const { data: perm, error:permissionError } = await service.from("permissions").select("id").eq("code", code).maybeSingle();
+  if(permissionError) throw permissionError;
   if (!perm?.id) return false;
 
-  const { data: override } = await service
+  const { data: override, error:overrideError } = await service
     .from("user_permission_overrides")
     .select("allowed")
     .eq("auth_user_id", userId)
     .eq("permission_id", perm.id)
     .maybeSingle();
+  if(overrideError) throw overrideError;
 
   if (override && typeof override.allowed === "boolean") return override.allowed;
 
-  const { data: rolePerm } = await service
+  const { data: rolePerm, error:rolePermissionError } = await service
     .from("role_permissions")
     .select("role_id")
     .eq("role_id", access.role_id)
     .eq("permission_id", perm.id)
     .maybeSingle();
+  if(rolePermissionError) throw rolePermissionError;
 
   return Boolean(rolePerm);
 }
 
 async function permissionAllowedFirstDefined(service: any, access: any, userId: string, codes: string[]) {
-  const { data: role } = await service.from("roles").select("code").eq("id", access.role_id).maybeSingle();
+  const { data: role, error:roleError } = await service.from("roles").select("code").eq("id", access.role_id).maybeSingle();
+  if(roleError) throw roleError;
   if (role?.code === "founder") return true;
   for (const code of codes) {
     const { data: perm, error: permissionError } = await service.from("permissions").select("id").eq("code", code).maybeSingle();
@@ -278,10 +335,14 @@ function permissionAllowedFirstDefinedFromBatch(decisions:Map<string,PermissionB
 async function getCaller(req: Request, service: any) {
   const auth = req.headers.get("Authorization") || "";
   const token = auth.replace(/^Bearer\s+/i, "").trim();
-  if (!token) throw new Error("未登录");
+  if (!token) throw new HttpError(401,"not_authenticated","未登录。");
 
   const { data: userData, error: userError } = await service.auth.getUser(token);
-  if (userError || !userData?.user) throw new Error("登录状态无效");
+  if(userError){
+    if(isRetryableBackendFailure(userError)) throw userError;
+    throw new HttpError(401,"not_authenticated","登录状态无效，请重新登录。");
+  }
+  if(!userData?.user) throw new HttpError(401,"not_authenticated","登录状态无效，请重新登录。");
 
   const userId = userData.user.id;
   await requireCurrentAdminSession(service,userId,token);
@@ -291,9 +352,11 @@ async function getCaller(req: Request, service: any) {
     .eq("auth_user_id", userId)
     .maybeSingle();
 
-  if (error || !access?.active || !access?.backend_enabled) throw new Error("无后台访问权限");
+  if(error) throw error;
+  if(!access?.active || !access?.backend_enabled) throw new HttpError(403,"backend_access_denied","无后台访问权限。");
 
-  const { data: role } = await service.from("roles").select("code").eq("id", access.role_id).maybeSingle();
+  const { data: role, error:roleError } = await service.from("roles").select("code").eq("id", access.role_id).maybeSingle();
+  if(roleError) throw roleError;
   return { userId, access, roleCode: role?.code || "", loginUsername:text(access?.login_username) };
 }
 
@@ -430,7 +493,8 @@ async function countScoped(service: any, scope: any, mutate?: (q:any)=>any) {
   let q = service.from("employees").select("id", { count:"exact", head:true });
   q = applyScope(q, scope);
   if (mutate) q = mutate(q);
-  const { count } = await q;
+  const { count,error } = await q;
+  if(error) throw error;
   return count || 0;
 }
 
@@ -449,7 +513,7 @@ function numberOrNull(v: unknown) {
 async function requirePermission(service: any, caller: any, code: string) {
   if (caller.roleCode === "founder") return true;
   const allowed = await permissionAllowed(service, caller.access, caller.userId, code);
-  if (!allowed) throw new Error("没有执行此操作的权限");
+  if (!allowed) throw new HttpError(403,"permission_denied","没有执行此操作的权限。");
   return true;
 }
 async function requireAnyPermission(service: any, caller: any, codes: string[]) {
@@ -457,7 +521,7 @@ async function requireAnyPermission(service: any, caller: any, codes: string[]) 
   for (const code of codes) {
     if (await permissionAllowed(service, caller.access, caller.userId, code)) return true;
   }
-  throw new Error("没有执行此操作的权限");
+  throw new HttpError(403,"permission_denied","没有执行此操作的权限。");
 }
 async function permissionAllowedAny(service:any,access:any,userId:string,codes:string[]){
   for(const code of codes) if(await permissionAllowed(service,access,userId,code)) return true;
@@ -475,7 +539,7 @@ async function fetchPlatformMapFromSchedule(): Promise<PlatformRef[]> {
   const secret=Deno.env.get("STAFF_SHEET_SYNC_SECRET")||"";
   if(!url||!secret) return [];
   try{
-    const resp=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"get_platform_map",secret})});
+    const resp=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"get_platform_map",secret}),signal:AbortSignal.timeout(2500)});
     if(!resp.ok) return [];
     const body=await resp.json().catch(()=>({}));
     return Array.isArray(body?.rows)?body.rows:[];
@@ -764,23 +828,306 @@ function hireTenureBucket(hireDate:any,today:string){
   return "days_60_plus";
 }
 
+async function buildEmployeeMeta(service:any,caller:any,scope:any){
+  let teamQuery=service.from("teams").select("id,name,country,status").order("name");
+  if(scope.mode!=="all"){
+    const visibleTeamIds=new Set<string>(scope.teamIds||[]);
+    teamQuery=visibleTeamIds.size
+      ? teamQuery.in("id",Array.from(visibleTeamIds))
+      : teamQuery.eq("id","00000000-0000-0000-0000-000000000000");
+  }
+  let positionQuery=service.from("positions").select("id,name,code,status").order("name");
+  if(scope.mode!=="all"){
+    positionQuery=(scope.positionIds||[]).length
+      ? positionQuery.in("id",scope.positionIds)
+      : positionQuery.eq("id","00000000-0000-0000-0000-000000000000");
+  }
+  const permissionCodes=[
+    "employee.create","employee.edit","user.activation.generate",
+    "sensitive.employee.view","sensitive.employee.edit",
+    "sensitive.payout.edit","sensitive.payment.edit","employee.compensation.edit",
+  ];
+  const [
+    teamResult,positionResult,total,active,noTeam,officialPending,options,platformMap,permissionDecisions,
+  ]=await Promise.all([
+    teamQuery,positionQuery,countScoped(service,scope),
+    countScoped(service,scope,q=>q.eq("status","active")),
+    countScoped(service,scope,q=>q.eq("status","active").is("team_id",null)),
+    countScoped(service,scope,q=>q.eq("status","active").eq("official_id_pending",true)),
+    collectEmployeeOptions(service,scope),fetchPlatformMapFromSchedule(),
+    permissionDecisionBatch(service,caller,permissionCodes),
+  ]);
+  if(teamResult.error) throw teamResult.error;
+  if(positionResult.error) throw positionResult.error;
+  const teams=teamResult.data||[];
+  const positions=positionResult.data||[];
+  const founder=caller.roleCode==="founder";
+  const canCreate=(founder||permissionAllowedFromBatch(permissionDecisions,"employee.create"))&&scope.mode!=="self";
+  const canEdit=(founder||permissionAllowedFromBatch(permissionDecisions,"employee.edit"))&&scope.mode!=="self";
+  const canGenerateActivation=founder||permissionAllowedFromBatch(permissionDecisions,"user.activation.generate");
+  const canViewEmployeeSensitive=founder||permissionAllowedFromBatch(permissionDecisions,"sensitive.employee.view");
+  const canEditEmployeeSensitive=founder||permissionAllowedFromBatch(permissionDecisions,"sensitive.employee.edit");
+  const canEditPayment=founder||permissionAllowedFirstDefinedFromBatch(
+    permissionDecisions,["sensitive.payout.edit","sensitive.payment.edit"],
+  );
+  const canEditCompensation=founder||permissionAllowedFromBatch(permissionDecisions,"employee.compensation.edit");
+  const visibleTeamNames=new Set(teams.map((row:any)=>text(row.name).toLowerCase()));
+  const visiblePlatformMap=scope.mode==="all"
+    ? (platformMap||[])
+    : (platformMap||[]).filter((row:any)=>visibleTeamNames.has(text(row.series).toLowerCase()));
+  return {
+    total,active,no_team:noTeam,official_id_pending:officialPending,teams,positions,options,platform_map:visiblePlatformMap,
+    permissions:{
+      sensitive_employee_view:canViewEmployeeSensitive,
+      sensitive_employee_edit:canEditEmployeeSensitive,
+      sensitive_payment_edit:canEditPayment,
+      compensation_edit:canEditCompensation,
+    },
+    actions:{
+      can_create:canCreate,
+      can_edit:canEdit,
+      can_generate_activation_code:canGenerateActivation,
+      can_create_sensitive_employee:canCreate&&canEditEmployeeSensitive,
+      can_create_payment:canCreate&&canEditPayment,
+      can_create_compensation:canCreate&&canEditCompensation,
+    },
+  };
+}
+
+const genericEmployeeOperator=(value:any)=>{
+  const actor=text(value);
+  return !actor||[
+    "Google Sheet","Google Sheet（账号不可用）","Google Sheet（未登记操作人）",
+    "后台账号","后台历史账号",
+  ].includes(actor);
+};
+
+async function loadEmployeeOperatorAccounts(service:any,employees:any[]){
+  const ids=employees.map((row:any)=>text(row.id)).filter(Boolean);
+  const fallback=new Map<string,string>(employees.map((row:any)=>[
+    text(row.id),
+    text(row.source_type)==="backend"?"后台历史账号":"Google Sheet（未登记操作人）",
+  ]));
+  if(!ids.length)return fallback;
+  const joinLimit=Math.min(Math.max(ids.length*4,20),2000);
+  const auditLimit=Math.min(Math.max(ids.length*10,50),5000);
+
+  let joinResult:any,auditResult:any;
+  try{
+    [joinResult,auditResult]=await Promise.all([
+      service.from("employee_lifecycle_events")
+        .select("employee_id,created_by,snapshot,source,source_sheet,created_at")
+        .in("employee_id",ids).eq("event_type","join").order("created_at",{ascending:true}).limit(joinLimit),
+      service.from("employee_audit_logs")
+        .select("employee_id,actor_username,action,created_at")
+        .in("employee_id",ids).order("created_at",{ascending:false}).limit(auditLimit),
+    ]);
+  }catch(error){
+    console.error(JSON.stringify({function:"admin-employees",event:"operator_enrichment_skipped",code:errorCode(error)||"fetch_failed"}));
+    return fallback;
+  }
+  if(joinResult.error||auditResult.error){
+    const enrichmentError=joinResult.error||auditResult.error;
+    console.error(JSON.stringify({function:"admin-employees",event:"operator_enrichment_skipped",code:errorCode(enrichmentError)||"query_failed"}));
+    return fallback;
+  }
+
+  const joins=joinResult.data||[],audits=auditResult.data||[];
+  const creatorIds=Array.from(new Set(joins.map((row:any)=>text(row.created_by)).filter(Boolean)));
+  let userMap=new Map<string,string>();
+  if(creatorIds.length){
+    try{
+      const {data,error}=await service.from("user_access")
+        .select("auth_user_id,login_username").in("auth_user_id",creatorIds.slice(0,500));
+      if(error){
+        console.error(JSON.stringify({function:"admin-employees",event:"operator_actor_lookup_skipped",code:errorCode(error)||"query_failed"}));
+      }else{
+        userMap=new Map((data||[]).map((row:any)=>[text(row.auth_user_id),text(row.login_username)]));
+      }
+    }catch(error){
+      console.error(JSON.stringify({function:"admin-employees",event:"operator_actor_lookup_skipped",code:errorCode(error)||"fetch_failed"}));
+    }
+  }
+
+  const joinMap=new Map<string,any[]>(),auditMap=new Map<string,any[]>();
+  for(const row of joins){const id=text(row.employee_id);if(!joinMap.has(id))joinMap.set(id,[]);joinMap.get(id)!.push(row);}
+  for(const row of audits){const id=text(row.employee_id);if(!auditMap.has(id))auditMap.set(id,[]);auditMap.get(id)!.push(row);}
+
+  const result=new Map<string,string>(fallback);
+  for(const employee of employees){
+    const id=text(employee.id),employeeJoins=joinMap.get(id)||[],employeeAudits=auditMap.get(id)||[];
+    let actor="";
+    const createAudit=employeeAudits.find((row:any)=>
+      ["employee_create","google_employee_create"].includes(text(row.action))&&!genericEmployeeOperator(row.actor_username)
+    );
+    if(createAudit)actor=text(createAudit.actor_username);
+    if(!actor){
+      const backendJoin=employeeJoins.find((row:any)=>text(row.created_by)&&text(userMap.get(text(row.created_by))));
+      if(backendJoin)actor=text(userMap.get(text(backendJoin.created_by)));
+    }
+    if(!actor){
+      for(const row of employeeJoins){
+        const snapshot=row?.snapshot||{};
+        const candidate=text(snapshot.operator_account)||text(snapshot.operator_email)||text(snapshot.last_edited_username);
+        if(!genericEmployeeOperator(candidate)){actor=candidate;break;}
+      }
+    }
+    if(!actor){
+      const recentAudit=employeeAudits.find((row:any)=>!genericEmployeeOperator(row.actor_username));
+      if(recentAudit)actor=text(recentAudit.actor_username);
+    }
+    if(!actor)actor=text(employee.source_type)==="backend"?"后台历史账号":"Google Sheet（未登记操作人）";
+    result.set(id,actor);
+  }
+  return result;
+}
+
+async function buildEmployeeList(service:any,caller:any,scope:any,body:any){
+  const canViewEmployeeSensitive=caller.roleCode==="founder"
+    || await permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view");
+  const page=Math.max(1,Number(body.page||1));
+  const allowed=[20,30,50,100,500];
+  const requested=Number(body.page_size||20);
+  const pageSize=allowed.includes(requested)?requested:20;
+  const from=(page-1)*pageSize;
+  const to=from+pageSize-1;
+  const f=body.filters||{};
+  const organizationEmployeeIds=currentRosterEmployeeIdsForOrganizationFilters(
+    scope,text(f.team),text(f.position),text(f.teacher || f.leader),
+  );
+  if(organizationEmployeeIds&&organizationEmployeeIds.length===0){
+    return {rows:[],total:0,page,page_size:pageSize,pages:1};
+  }
+
+  let q=service.from("employees").select(`
+    id,employee_no,full_name,country,nationality,employment_type,status,
+    team_id,position_id,shift_name,group_name,platform_scope,work_content,
+    work_tg,backend_accounts,hire_date,resign_date,leader_name,trainer_name,online_trainer,
+    profile_status,official_id_pending,source_type,source_sheet,created_at,
+    teams:team_id(id,name,country,status),
+    positions:position_id(id,name,code,status)
+  `,{count:"exact"});
+
+  q=organizationEmployeeIds?q.in("id",organizationEmployeeIds):applyScope(q,scope);
+  if(text(f.employee_no)) q=q.ilike("employee_no",`%${text(f.employee_no)}%`);
+  if(text(f.full_name)) q=q.ilike("full_name",`%${text(f.full_name)}%`);
+  if(canViewEmployeeSensitive&&text(f.work_tg)) q=q.ilike("work_tg",`%${text(f.work_tg)}%`);
+  if(canViewEmployeeSensitive&&text(f.backend_account)) q=q.ilike("backend_accounts",`%${text(f.backend_account)}%`);
+  const keyword=text(f.keyword);
+  if(keyword){
+    const k=keyword.replace(/[%_,()]/g," ");
+    const keywordFields=[
+      `employee_no.ilike.%${k}%`,`full_name.ilike.%${k}%`,
+      `leader_name.ilike.%${k}%`,`platform_scope.ilike.%${k}%`,
+    ];
+    if(canViewEmployeeSensitive) keywordFields.push(`work_tg.ilike.%${k}%`,`backend_accounts.ilike.%${k}%`);
+    q=q.or(keywordFields.join(","));
+  }
+  if(text(f.country)) q=q.ilike("country",`%${text(f.country)}%`);
+  if(text(f.status)) q=q.eq("status",f.status);
+  if(text(f.employment_type)) q=q.ilike("employment_type",`%${text(f.employment_type)}%`);
+  if(text(f.shift_name)) q=q.ilike("shift_name",`%${text(f.shift_name)}%`);
+  if(text(f.profile_status)) q=q.eq("profile_status",f.profile_status);
+  if(text(f.hire_from)) q=q.gte("hire_date",f.hire_from);
+  if(text(f.hire_to)) q=q.lte("hire_date",f.hire_to);
+
+  const {data:rawRows,count,error}=await q.order("employee_no").range(from,to);
+  if(error) throw error;
+  const rows=(rawRows||[]).map((row:any)=>overlayCurrentOrganization(row,scope));
+  const ids=rows.map((row:any)=>row.id);
+  const employeeNos=rows.map((row:any)=>employeeNoKey(row.employee_no)).filter(Boolean);
+  const emptyRelated={data:[],error:null};
+  const [
+    {data:pays,error:paysError},
+    {data:contacts,error:contactsError},
+    {data:accountRows,error:accountRowsError},
+    {data:errorSummaries,error:errorSummaryError},
+    operatorMap,
+  ]=ids.length?await Promise.all([
+    service.from("employee_payment_profiles").select("*").in("employee_id",ids),
+    service.from("employee_contact_profiles").select("employee_id,telegram_username").in("employee_id",ids),
+    service.from("user_access").select("employee_id,employee_portal_enabled,active").in("employee_id",ids),
+    employeeNos.length
+      ? service.from("employee_error_summary").select("employee_no,month_error_count,total_error_count").in("employee_no",employeeNos)
+      : Promise.resolve(emptyRelated),
+    loadEmployeeOperatorAccounts(service,rows),
+  ]):[emptyRelated,emptyRelated,emptyRelated,emptyRelated,new Map<string,string>()];
+  if(paysError) throw paysError;
+  if(contactsError) throw contactsError;
+  if (accountRowsError) throw accountRowsError;
+  if(errorSummaryError) throw errorSummaryError;
+
+  const payMap=new Map((pays||[]).map((row:any)=>[row.employee_id,row]));
+  const contactMap=new Map((contacts||[]).map((row:any)=>[row.employee_id,row]));
+  const errorSummaryMap=new Map((errorSummaries||[]).map((row:any)=>[employeeNoKey(row.employee_no),row]));
+  const portalAccountRows=(accountRows||[]).filter((row:any)=>row.employee_portal_enabled);
+  const accountSet=new Set(portalAccountRows.map((row:any)=>row.employee_id));
+  const activeAccountSet=new Set(portalAccountRows.filter((row:any)=>row.active===true).map((row:any)=>row.employee_id));
+  const result=rows.map((row:any)=>{
+    const merged={...row,telegram_username:contactMap.get(row.id)?.telegram_username};
+    const missing=missingFields(merged,payMap.get(row.id));
+    const summary=errorSummaryMap.get(employeeNoKey(row.employee_no));
+    const monthErrorCount=Number(summary?.month_error_count||0);
+    const totalErrorCount=Number(summary?.total_error_count||0);
+    return {
+      ...row,
+      work_tg:canViewEmployeeSensitive?row.work_tg:(row.work_tg?"****":null),
+      backend_accounts:canViewEmployeeSensitive?row.backend_accounts:(row.backend_accounts?"****":null),
+      month_error_count:monthErrorCount,total_error_count:totalErrorCount,
+      risk_level:employeeRiskKey(totalErrorCount),missing_fields:missing,missing_count:missing.length,
+      account_opened:accountSet.has(row.id),account_active:activeAccountSet.has(row.id),
+      operator_account:operatorMap.get(text(row.id))||"",
+    };
+  });
+  return {rows:result,total:count||0,page,page_size:pageSize,pages:Math.max(1,Math.ceil((count||0)/pageSize))};
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers:corsHeaders });
   if (req.method !== "POST") return json({ error:"Method not allowed" }, 405);
 
   let requestAction = "unknown";
+  const requestId=crypto.randomUUID();
+  const requestStartedAt=performance.now();
+  let stageStartedAt=requestStartedAt;
+  const stageMs:Record<string,number>={};
+  const finishStage=(name:string)=>{
+    const now=performance.now();
+    stageMs[name]=Math.round((now-stageStartedAt)*10)/10;
+    stageStartedAt=now;
+  };
+  const respond=(body:unknown,status=200,code=status<400?"ok":"request_failed",retryable=false)=>{
+    finishStage("handler");
+    const log={
+      function:"admin-employees",event:"request_complete",request_id:requestId,
+      action:requestAction,status,code,retryable,
+      total_ms:Math.round((performance.now()-requestStartedAt)*10)/10,stages_ms:stageMs,
+    };
+    (status>=400?console.error:console.info)(JSON.stringify(log));
+    return json(body,status);
+  };
   try {
+    let body:any;
+    try{
+      body=await req.json();
+    }catch{
+      requestAction="invalid";
+      return respond({error:"请求格式无效。",code:"invalid_json",retryable:false,action:requestAction},400,"invalid_json",false);
+    }
+    finishStage("parse_body");
+    const requestedAction=text(body?.action||"list");
+    requestAction=/^[a-z_]{1,64}$/.test(requestedAction)?requestedAction:"invalid";
+
     const service = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
       { auth:{ persistSession:false } },
     );
+    finishStage("create_client");
 
     const caller = await getCaller(req, service);
-    const scope = await scopeInfo(service, caller);
-    const body = await req.json().catch(() => ({}));
-    const action = text(body.action || "list");
-    requestAction = action;
+    finishStage("authenticate");
+    const action=requestAction;
     if (action === "analytics" || action === "analytics_event_details") {
       await requirePermission(service, caller, "employee.analytics.view");
     } else if (action === "history_list") {
@@ -793,9 +1140,11 @@ Deno.serve(async (req) => {
         "employee.change_history.view",
       ]);
     } else if (action === "resign_employee") {
-      await requirePermission(service, caller, "employee.directory.view");
+      await requirePermission(service, caller, "employee.directory.resign");
     } else if (action === "update_resignation") {
-      await requirePermission(service, caller, "employee.resignations.view");
+      await requirePermission(service, caller, "employee.resignations.resign");
+    } else if (action === "cancel_new_hire") {
+      await requirePermission(service, caller, "employee.delete");
     } else if (["undo_resignation", "reactivate_employee"].includes(action)) {
       await requireAnyPermission(service, caller, [
         "employee.directory.reactivate",
@@ -805,69 +1154,24 @@ Deno.serve(async (req) => {
       await requirePermission(service, caller, "employee.directory.view");
     }
     if (body.export === true) await requirePermission(service,caller,"employee.directory.export");
+    finishStage("authorize");
 
-    // Employee mutations are transactional and Google-Sheet-backed in admin-employee-write.
-    // Keep this read endpoint from becoming a second, weaker write path.
+    // These retired mutations must not pay the scope-resolution cost merely to
+    // return their fixed 410 response.
     if (action === "create_employee_full" || action === "update_employee_full") {
-      return json({ error:"此旧写入接口已停用，请通过员工档案的正式保存流程操作。" },410);
+      return respond({ error:"此旧写入接口已停用，请通过员工档案的正式保存流程操作。" },410,"legacy_write_disabled",false);
     }
 
-    if (action === "meta") {
-      let teamQuery=service.from("teams").select("id,name,country,status").order("name");
-      if(scope.mode!=="all"){
-        const visibleTeamIds=new Set<string>(scope.teamIds||[]);
-        teamQuery=visibleTeamIds.size
-          ? teamQuery.in("id",Array.from(visibleTeamIds))
-          : teamQuery.eq("id","00000000-0000-0000-0000-000000000000");
-      }
-      let positionQuery=service.from("positions").select("id,name,code,status").order("name");
-      if(scope.mode!=="all"){
-        positionQuery=(scope.positionIds||[]).length
-          ? positionQuery.in("id",scope.positionIds)
-          : positionQuery.eq("id","00000000-0000-0000-0000-000000000000");
-      }
-      const [
-        { data: teams }, { data: positions }, total, active, noTeam, officialPending, options, platformMap,
-        canCreateRaw, canEditRaw, canGenerateActivationRaw, canViewEmployeeSensitiveRaw, canEditEmployeeSensitiveRaw, canEditPaymentRaw, canEditCompensationRaw,
-      ] = await Promise.all([
-        teamQuery,positionQuery,countScoped(service,scope),countScoped(service,scope,q=>q.eq("status","active")),countScoped(service,scope,q=>q.eq("status","active").is("team_id",null)),countScoped(service,scope,q=>q.eq("status","active").eq("official_id_pending",true)),collectEmployeeOptions(service,scope),fetchPlatformMapFromSchedule(),
-        permissionAllowed(service,caller.access,caller.userId,"employee.create"),
-        permissionAllowed(service,caller.access,caller.userId,"employee.edit"),
-        permissionAllowed(service,caller.access,caller.userId,"user.activation.generate"),
-        permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view"),
-        permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.edit"),
-        permissionAllowedFirstDefined(service,caller.access,caller.userId,["sensitive.payout.edit","sensitive.payment.edit"]),
-        permissionAllowed(service,caller.access,caller.userId,"employee.compensation.edit"),
+    const scope = await scopeInfo(service, caller);
+    finishStage("scope");
+
+    if(action==="meta") return respond(await buildEmployeeMeta(service,caller,scope));
+    if(action==="bootstrap"){
+      const [meta,list]=await Promise.all([
+        buildEmployeeMeta(service,caller,scope),
+        buildEmployeeList(service,caller,scope,body),
       ]);
-      const founder=caller.roleCode==="founder";
-      const canCreate=(founder||canCreateRaw)&&scope.mode!=="self";
-      const canEdit=(founder||canEditRaw)&&scope.mode!=="self";
-      const canGenerateActivation=founder||canGenerateActivationRaw;
-      const canViewEmployeeSensitive=founder||canViewEmployeeSensitiveRaw;
-      const canEditEmployeeSensitive=founder||canEditEmployeeSensitiveRaw;
-      const canEditPayment=founder||canEditPaymentRaw;
-      const canEditCompensation=founder||canEditCompensationRaw;
-      const visibleTeamNames=new Set((teams||[]).map((row:any)=>text(row.name).toLowerCase()));
-      const visiblePlatformMap=scope.mode==="all"
-        ? (platformMap||[])
-        : (platformMap||[]).filter((row:any)=>visibleTeamNames.has(text(row.series).toLowerCase()));
-      return json({
-        total,active,no_team:noTeam,official_id_pending:officialPending,teams:teams||[],positions:positions||[],options,platform_map:visiblePlatformMap,
-        permissions:{
-          sensitive_employee_view:canViewEmployeeSensitive,
-          sensitive_employee_edit:canEditEmployeeSensitive,
-          sensitive_payment_edit:canEditPayment,
-          compensation_edit:canEditCompensation,
-        },
-        actions:{
-          can_create:canCreate,
-          can_edit:canEdit,
-          can_generate_activation_code:canGenerateActivation,
-          can_create_sensitive_employee:canCreate&&canEditEmployeeSensitive,
-          can_create_payment:canCreate&&canEditPayment,
-          can_create_compensation:canCreate&&canEditCompensation,
-        },
-      });
+      return respond({meta,list});
     }
 
     if (action === "filter_options") {
@@ -878,7 +1182,7 @@ Deno.serve(async (req) => {
         if(employee.team_id&&text(employee.teams?.name)) teamMap.set(employee.team_id,text(employee.teams.name));
         if(employee.position_id&&text(employee.positions?.name)) positionMap.set(employee.position_id,text(employee.positions.name));
       }
-      return json({
+      return respond({
         options:await collectEmployeeOptions(service, scope, body.include_inactive===true),
         teams:Array.from(teamMap,([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN")),
         positions:Array.from(positionMap,([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN")),
@@ -1029,7 +1333,7 @@ Deno.serve(async (req) => {
       const resignHistoryFrom=allResignMetrics.length?allResignMetrics.map((x:any)=>x.date).filter(Boolean).sort()[0]:today;
       const periodJoin=periodActive?countEvents("join",periodFrom,periodTo):0,periodResign=periodActive?countEvents("resign",periodFrom,periodTo):0;
       const periodLabel=periodFrom===periodTo?periodFrom:`${periodFrom} 至 ${periodTo}`;
-      return json({
+      return respond({
         as_of:today,
         filters:filter,
         period:{active:periodActive,from:periodFrom,to:periodTo,label:periodLabel,days:periodDays,join:periodJoin,resign:periodResign,net:periodJoin-periodResign,resign_rate:ratioPercent(periodResign,activeTotal+periodResign),trend_truncated:periodActive&&periodFrom<trendStart},
@@ -1110,7 +1414,7 @@ Deno.serve(async (req) => {
           });
         }
         result.sort((a,b)=>text(b.date).localeCompare(text(a.date))||text(a.employee_no).localeCompare(text(b.employee_no)));
-        return json({rows:result.slice(0,limit),total:result.length,date_from:"",date_to:"",event_type:eventType,dimension,value});
+        return respond({rows:result.slice(0,limit),total:result.length,date_from:"",date_to:"",event_type:eventType,dimension,value});
       }
       const rawEvents=await fetchRecentLifecycleEvents(service,scope,employees,dateFrom);
       const result:any[]=[];
@@ -1154,128 +1458,10 @@ Deno.serve(async (req) => {
         });
       }
       result.sort((a,b)=>text(b.date).localeCompare(text(a.date))||text(a.employee_no).localeCompare(text(b.employee_no)));
-      return json({rows:result.slice(0,limit),total:result.length,date_from:dateFrom,date_to:dateTo,event_type:eventType,dimension,value});
+      return respond({rows:result.slice(0,limit),total:result.length,date_from:dateFrom,date_to:dateTo,event_type:eventType,dimension,value});
     }
 
-    if (action === "list") {
-      const canViewEmployeeSensitive=caller.roleCode==="founder"
-        || await permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view");
-      const page = Math.max(1, Number(body.page || 1));
-      // 专业后台统一标准：20 默认，允许 20/30/50/100/500
-      const allowed = [20,30,50,100,500];
-      const requested = Number(body.page_size || 20);
-      const pageSize = allowed.includes(requested) ? requested : 20;
-      const from = (page - 1) * pageSize;
-      const to = from + pageSize - 1;
-      const f = body.filters || {};
-      const organizationEmployeeIds=currentRosterEmployeeIdsForOrganizationFilters(
-        scope,text(f.team),text(f.position),text(f.teacher || f.leader),
-      );
-      if(organizationEmployeeIds&&organizationEmployeeIds.length===0){
-        return json({rows:[],total:0,page,page_size:pageSize,pages:1});
-      }
-
-      let q = service.from("employees").select(`
-        id,employee_no,full_name,country,nationality,employment_type,status,
-        team_id,position_id,shift_name,group_name,platform_scope,work_content,
-        work_tg,backend_accounts,hire_date,resign_date,leader_name,trainer_name,online_trainer,
-        profile_status,official_id_pending,source_type,source_sheet,created_at,
-        teams:team_id(id,name,country,status),
-        positions:position_id(id,name,code,status)
-      `, { count:"exact" });
-
-      q = organizationEmployeeIds
-        ? q.in("id",organizationEmployeeIds)
-        : applyScope(q, scope);
-
-      if (text(f.employee_no)) q = q.ilike("employee_no", `%${text(f.employee_no)}%`);
-      if (text(f.full_name)) q = q.ilike("full_name", `%${text(f.full_name)}%`);
-      if (canViewEmployeeSensitive&&text(f.work_tg)) q = q.ilike("work_tg", `%${text(f.work_tg)}%`);
-      if (canViewEmployeeSensitive&&text(f.backend_account)) q = q.ilike("backend_accounts", `%${text(f.backend_account)}%`);
-
-      const keyword = text(f.keyword);
-      if (keyword) {
-        const k = keyword.replace(/[%_,()]/g, " ");
-        const keywordFields=[
-          `employee_no.ilike.%${k}%`,
-          `full_name.ilike.%${k}%`,
-          `leader_name.ilike.%${k}%`,
-          `platform_scope.ilike.%${k}%`,
-        ];
-        if(canViewEmployeeSensitive) keywordFields.push(`work_tg.ilike.%${k}%`,`backend_accounts.ilike.%${k}%`);
-        q = q.or(keywordFields.join(","));
-      }
-
-      if (text(f.country)) q = q.ilike("country", `%${text(f.country)}%`);
-      if (text(f.status)) q = q.eq("status", f.status);
-      if (text(f.employment_type)) q = q.ilike("employment_type", `%${text(f.employment_type)}%`);
-      if (text(f.shift_name)) q = q.ilike("shift_name",`%${text(f.shift_name)}%`);
-      if (text(f.profile_status)) q = q.eq("profile_status", f.profile_status);
-      if (text(f.hire_from)) q = q.gte("hire_date", f.hire_from);
-      if (text(f.hire_to)) q = q.lte("hire_date", f.hire_to);
-
-      const { data: rawRows, count, error } = await q.order("employee_no").range(from,to);
-      if (error) throw error;
-      const rows=(rawRows||[]).map((row:any)=>overlayCurrentOrganization(row,scope));
-
-      const ids = rows.map((r:any) => r.id);
-      const employeeNos = rows.map((r:any) => employeeNoKey(r.employee_no)).filter(Boolean);
-      const emptyRelated = { data:[], error:null };
-      const [{ data:pays }, { data:contacts }, { data:accountRows, error:accountRowsError }, { data:errorSummaries, error:errorSummaryError }] = ids.length ? await Promise.all([
-        service.from("employee_payment_profiles").select("*").in("employee_id",ids),
-        service.from("employee_contact_profiles").select("employee_id,telegram_username").in("employee_id",ids),
-        service.from("user_access").select("employee_id,employee_portal_enabled,active").in("employee_id",ids),
-        employeeNos.length
-          ? service.from("employee_error_summary").select("employee_no,month_error_count,total_error_count").in("employee_no",employeeNos)
-          : Promise.resolve(emptyRelated),
-      ]) : [emptyRelated,emptyRelated,emptyRelated,emptyRelated];
-      // Never turn a failed account lookup into an all-“未开通” success page.
-      // That would be a dangerous false negative and would expose duplicate
-      // activation actions for accounts that already exist.
-      if (accountRowsError) throw accountRowsError;
-      if (errorSummaryError) throw errorSummaryError;
-
-      const payMap = new Map((pays || []).map((x:any) => [x.employee_id,x]));
-      const contactMap = new Map((contacts || []).map((x:any) => [x.employee_id,x]));
-      const errorSummaryMap = new Map((errorSummaries || []).map((x:any) => [employeeNoKey(x.employee_no),x]));
-      // A portal mapping means the account has been provisioned. `active` is
-      // only its current enabled/disabled state and must not turn an existing
-      // account back into “未开通”. Account creation and self-registration
-      // write Auth + user_access transactionally (with rollback on failure).
-      const portalAccountRows = (accountRows || []).filter((x:any)=>x.employee_portal_enabled);
-      const accountSet = new Set(portalAccountRows.map((x:any)=>x.employee_id));
-      const activeAccountSet = new Set(
-        portalAccountRows.filter((x:any)=>x.active === true).map((x:any)=>x.employee_id)
-      );
-
-      const result = rows.map((r:any) => {
-        const merged = { ...r, telegram_username:contactMap.get(r.id)?.telegram_username };
-        const missing = missingFields(merged,payMap.get(r.id));
-        const errorSummary = errorSummaryMap.get(employeeNoKey(r.employee_no));
-        const monthErrorCount = Number(errorSummary?.month_error_count || 0);
-        const totalErrorCount = Number(errorSummary?.total_error_count || 0);
-        return {
-          ...r,
-          work_tg:canViewEmployeeSensitive?r.work_tg:(r.work_tg?"****":null),
-          backend_accounts:canViewEmployeeSensitive?r.backend_accounts:(r.backend_accounts?"****":null),
-          month_error_count:monthErrorCount,
-          total_error_count:totalErrorCount,
-          risk_level:employeeRiskKey(totalErrorCount),
-          missing_fields:missing,
-          missing_count:missing.length,
-          account_opened:accountSet.has(r.id),
-          account_active:activeAccountSet.has(r.id),
-        };
-      });
-
-      return json({
-        rows:result,
-        total:count || 0,
-        page,
-        page_size:pageSize,
-        pages:Math.max(1,Math.ceil((count || 0) / pageSize)),
-      });
-    }
+    if(action==="list") return respond(await buildEmployeeList(service,caller,scope,body));
 
     if (action === "detail") {
       const employeeId = text(body.employee_id);
@@ -1286,7 +1472,7 @@ Deno.serve(async (req) => {
 
       const { data:rawEmployee, error } = await q.maybeSingle();
       if (error) throw error;
-      if (!rawEmployee) return json({ error:"找不到员工或无查看权限" },404);
+      if (!rawEmployee) return respond({ error:"找不到员工或无查看权限" },404,"employee_not_found",false);
       const employee=overlayCurrentOrganization(rawEmployee,scope);
 
       const detailPermissionCodes=[
@@ -1384,7 +1570,7 @@ Deno.serve(async (req) => {
       const merged = { ...employee, telegram_username:contact?.telegram_username };
       const missing = missingFields(merged,payment);
 
-      return json({
+      return respond({
         employee:employeeView,
         contact:contactView,
         payment:paymentView,
@@ -1511,7 +1697,7 @@ Deno.serve(async (req) => {
       ]);
       const founder=caller.roleCode==="founder";
 
-      return json({
+      return respond({
         rows:enriched,
         total,
         page,
@@ -1587,7 +1773,7 @@ Deno.serve(async (req) => {
 
       const bundle = await getEmployeeBundle(service,employee.id);
       const sync = await sendSheetSync(sheetPayload(bundle,"create"));
-      return json({ ok:true, employee_id:employee.id, sync });
+      return respond({ ok:true, employee_id:employee.id, sync });
     }
 
     if (action === "update_employee_full") {
@@ -1640,7 +1826,7 @@ Deno.serve(async (req) => {
 
       const bundle = await getEmployeeBundle(service,employee.id);
       const sync = await sendSheetSync(sheetPayload(bundle,"update"));
-      return json({ ok:true, sync });
+      return respond({ ok:true, sync });
     }
 
 
@@ -1665,7 +1851,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "cancel_new_hire") {
-      await requirePermission(service, caller, "employee.delete");const employeeId=text(body.employee_id),confirmNo=text(body.confirm_employee_no);if(!employeeId)throw new Error("缺少 employee_id");await requireEmployeeInScope(service,scope,employeeId);const {data:employee,error:employeeError}=await service.from("employees").select("*").eq("id",employeeId).single();if(employeeError)throw employeeError;if(text(employee.employee_no)!==confirmNo)throw new Error("员工ID确认不一致");if(employee.status!=="active")throw new Error("只有当前在职的新员工可以撤销入职");if(employee.source_type!=="backend")throw new Error("导入的历史员工不能使用撤销入职，请使用正式离职流程");const {data:accessRows,error:accessError}=await service.from("user_access").select("auth_user_id,employee_portal_enabled").eq("employee_id",employeeId);if(accessError)throw accessError;if((accessRows||[]).length)throw new Error("该员工已经存在登录账号/权限记录，请先处理账号后再撤销入职");const sheetResult=await removeEmployeeFromSheet(employee.employee_no,employee.full_name);for(const table of ["employee_contact_profiles","employee_payment_profiles","employee_compensation_settings","employee_compensation_legacy","employee_lifecycle_events"]){const {error}=await service.from(table).delete().eq("employee_id",employeeId);if(error)throw error;}const {error:deleteError}=await service.from("employees").delete().eq("id",employeeId);if(deleteError)throw deleteError;return json({ok:true,sheet:sheetResult,sheet_warning:sheetResult?.ok===false?`员工档案已撤销，但 TEST Google Sheet 删除失败：${sheetResult.error||"unknown"}`:null});
+      await requirePermission(service, caller, "employee.delete");const employeeId=text(body.employee_id),confirmNo=text(body.confirm_employee_no);if(!employeeId)throw new Error("缺少 employee_id");await requireEmployeeInScope(service,scope,employeeId);const {data:employee,error:employeeError}=await service.from("employees").select("*").eq("id",employeeId).single();if(employeeError)throw employeeError;if(text(employee.employee_no)!==confirmNo)throw new Error("员工ID确认不一致");if(employee.status!=="active")throw new Error("只有当前在职的新员工可以撤销入职");if(employee.source_type!=="backend")throw new Error("导入的历史员工不能使用撤销入职，请使用正式离职流程");const {data:accessRows,error:accessError}=await service.from("user_access").select("auth_user_id,employee_portal_enabled").eq("employee_id",employeeId);if(accessError)throw accessError;if((accessRows||[]).length)throw new Error("该员工已经存在登录账号/权限记录，请先处理账号后再撤销入职");const sheetResult=await removeEmployeeFromSheet(employee.employee_no,employee.full_name);for(const table of ["employee_contact_profiles","employee_payment_profiles","employee_compensation_settings","employee_compensation_legacy","employee_lifecycle_events"]){const {error}=await service.from(table).delete().eq("employee_id",employeeId);if(error)throw error;}const {error:deleteError}=await service.from("employees").delete().eq("id",employeeId);if(deleteError)throw deleteError;return respond({ok:true,sheet:sheetResult,sheet_warning:sheetResult?.ok===false?`员工档案已撤销，但 TEST Google Sheet 删除失败：${sheetResult.error||"unknown"}`:null});
     }
 
     if (action === "update_resignation") {
@@ -1727,7 +1913,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      return json({ok:true,sync});
+      return respond({ok:true,sync});
     }
 
     if (action === "resign_employee") {
@@ -1780,7 +1966,7 @@ Deno.serve(async (req) => {
       }, { onConflict:"source_key" });
 
       const sync = await sendSheetSync(sheetPayload(bundle,"resign",{resign_reason:reason}));
-      return json({ ok:true, sync });
+      return respond({ ok:true, sync });
     }
 
     if (action === "undo_resignation" || action === "reactivate_employee") {
@@ -1859,13 +2045,15 @@ Deno.serve(async (req) => {
 
       const bundle = await getEmployeeBundle(service,employee.id);
       const sync = await sendSheetSync(sheetPayload(bundle,"reactivate",{resign_reason:""}));
-      return json({ ok:true, sync });
+      return respond({ ok:true, sync });
     }
 
-    return json({ error:"未知 action" },400);
+    return respond({ error:"未知 action",code:"unknown_action",retryable:false,action:requestAction },400,"unknown_action",false);
   } catch (e) {
-    const message=e instanceof Error ? e.message : String(e);
-    console.error(JSON.stringify({ function:"admin-employees", action:requestAction, message }));
-    return json({ error:message, action:requestAction },400);
+    const failure=responseFailure(e);
+    return respond(
+      {error:failure.message,code:failure.code,retryable:failure.retryable,action:requestAction},
+      failure.status,failure.code,failure.retryable,
+    );
   }
 });

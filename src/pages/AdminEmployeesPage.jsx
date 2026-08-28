@@ -69,6 +69,13 @@ const blankEmployeeFilters=()=>({
   employee_no:'',full_name:'',work_tg:'',backend_account:'',risk_level:'',account_status:'',team:'',position:'',country:'',status:'active',
   employment_type:'',shift_name:'',teacher:'',hire_from:'',hire_to:'',
 })
+const emptyEmployeeMeta=()=>({
+  teams:[],positions:[],position_options:[],total:0,active:0,no_team:0,official_id_pending:0,
+  options:{teams:[],positions:[],countries:[],nationalities:[],employment_types:[],shifts:[],groups:[],leaders:[],trainers:[],market_countries:[],market_positions:[],platforms:[]},
+  platform_map:[],
+  schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]},
+  permissions:{},actions:{can_create:false,can_edit:false},
+})
 const EMPLOYEE_EXPORT_PAGE_SIZE=500
 const EMPLOYEE_EXPORT_MAX_PAGES=100
 const MANAGEMENT_RISK_REQUEST_TIMEOUT_MS=12*1000
@@ -438,12 +445,23 @@ function bundleToForm(detail,capabilities){
 export default function AdminEmployeesPage(){
   const adminAccess=useAdminAccess()
   const {locale}=useAdminI18n()
+  const employeeAccessKey=useMemo(()=>JSON.stringify([
+    adminAccess.authUserId||'',Boolean(adminAccess.founder),adminAccess.roleCode||'',
+    adminAccess.employeeId||'',adminAccess.dataScope||'',adminAccess.teamId||'',
+    adminAccess.positionId||'',adminAccess.permissionKey||'',
+  ]),[
+    adminAccess.authUserId,adminAccess.founder,adminAccess.roleCode,adminAccess.employeeId,
+    adminAccess.dataScope,adminAccess.teamId,adminAccess.positionId,adminAccess.permissionKey,
+  ])
   const [sp,setSp]=useSearchParams()
   const requestedEmployeeId=sp.get('employee')||''
   const requestedEmployeeRef=useRef('')
   const detailRequestRef=useRef(0)
   const lastAutoRefreshAtRef=useRef(0)
   const refreshEmployeeDataRef=useRef(null)
+  const employeeBootstrapRef=useRef({loaded:false,inFlight:null,accessKey:employeeAccessKey,epoch:0})
+  const employeeDirectoryRequestRef=useRef({inFlight:null,activeKey:'',pending:null})
+  const masterPositionOptionsRequestRef=useRef(null)
   const canViewEmployees=adminAccess.hasPermission('employee.directory.view')
   const canViewResignations=adminAccess.hasPermission('employee.resignations.view')
   const canExportEmployees=adminAccess.hasPermission('employee.directory.export')
@@ -470,13 +488,7 @@ export default function AdminEmployeesPage(){
   const requestedAuditView=text(sp.get('log'))
   const auditSubview=auditLogViews.some(item=>item.key===requestedAuditView)?requestedAuditView:(auditLogViews[0]?.key||'employment')
 
-  const [meta,setMeta]=useState({
-    teams:[],positions:[],position_options:[],total:0,active:0,no_team:0,official_id_pending:0,
-    options:{teams:[],positions:[],countries:[],nationalities:[],employment_types:[],shifts:[],groups:[],leaders:[],trainers:[],market_countries:[],market_positions:[],platforms:[]},
-    platform_map:[],
-    schedule:{teams:[],positions:[],shifts:[],leaders:[],trainers:[],position_stats:[],team_stats:[]},
-    permissions:{},actions:{can_create:false,can_edit:false},
-  })
+  const [meta,setMeta]=useState(emptyEmployeeMeta)
   const [metaError,setMetaError]=useState('')
   const [rows,setRows]=useState([])
   const [total,setTotal]=useState(0)
@@ -523,7 +535,7 @@ export default function AdminEmployeesPage(){
   const [appliedManagementRiskFilters,setAppliedManagementRiskFilters]=useState(blankManagementRiskFilters)
   const [managementRiskDimension,setManagementRiskDimension]=useState('teams')
   const managementRiskRequestRef=useRef({inFlight:null,activeFilterKey:'',pendingFilters:null})
-  const [archiveStats,setArchiveStats]=useState({loading:true,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
+  const [archiveStats,setArchiveStats]=useState({loading:false,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState(blankPeopleFilters)
   const [appliedAnalysisFilters,setAppliedAnalysisFilters]=useState(blankPeopleFilters)
   const [analysisDetail,setAnalysisDetail]=useState(null)
@@ -572,37 +584,30 @@ export default function AdminEmployeesPage(){
     if(!canViewEmployees||!requestedEmployeeId||requestedEmployeeRef.current===requestedEmployeeId)return
     let cancelled=false
     const requestId=++detailRequestRef.current
+    const requestEpoch=employeeBootstrapRef.current.epoch
     requestedEmployeeRef.current=requestedEmployeeId
     setSelected({employee:{id:requestedEmployeeId},missing_fields:[]})
     setDetailLoading(true);setDetailError('')
     withEmployeeDetailTimeout(invoke({action:'detail',employee_id:requestedEmployeeId}))
       .then(detail=>{
-        if(!cancelled&&detailRequestRef.current===requestId){
+        if(!cancelled&&detailRequestRef.current===requestId&&employeeBootstrapRef.current.epoch===requestEpoch){
           setSelected(detail)
           setDetailError(employeeDetailPartialError(detail))
         }
       })
       .catch(e=>{
-        if(!cancelled&&detailRequestRef.current===requestId){
+        if(!cancelled&&detailRequestRef.current===requestId&&employeeBootstrapRef.current.epoch===requestEpoch){
           setDetailError(`${employeeRequestError(e,'完整档案读取失败，已保留当前可见资料。')}请重试。`)
         }
       })
-      .finally(()=>{if(!cancelled&&detailRequestRef.current===requestId)setDetailLoading(false)})
+      .finally(()=>{if(!cancelled&&detailRequestRef.current===requestId&&employeeBootstrapRef.current.epoch===requestEpoch)setDetailLoading(false)})
     return()=>{cancelled=true}
-  },[requestedEmployeeId,canViewEmployees])
+  },[requestedEmployeeId,canViewEmployees,employeeAccessKey])
 
   const writeEmployee=async body=>{
     const {data,error}=await supabase.functions.invoke('admin-employee-write',{body})
     if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'员工资料保存失败'}))
     return data
-  }
-
-  const loadOperatorMap=async employeeIds=>{
-    const ids=(employeeIds||[]).map(text).filter(Boolean)
-    if(!ids.length) return new Map()
-    const {data,error}=await supabase.functions.invoke('admin-employee-operators',{body:{employee_ids:ids}})
-    if(error||data?.error) return new Map()
-    return new Map((data?.rows||[]).map(x=>[text(x.employee_id),text(x.operator_account)]))
   }
 
   const checkEmployeeIdentity=async body=>{
@@ -617,19 +622,16 @@ export default function AdminEmployeesPage(){
     return Array.isArray(data?.rows)?data.rows:[]
   }
 
-  const loadMeta=async()=>{
-    try{
-      const [baseMeta,positionOptions]=await Promise.all([
-        invoke({action:'meta'}),
-        loadMasterPositionOptions(),
-      ])
-      setMeta({...baseMeta,position_options:positionOptions})
-      setMetaError('')
-    }catch(e){
-      // Meta is an enhancement for filters and action visibility. A transient
-      // background failure must not poison unrelated employee sub-pages.
-      setMetaError(employeeRequestError(e,'筛选选项暂时不可用，当前页面仍可继续使用。'))
+  const ensureMasterPositionOptions=async()=>{
+    if(meta.position_options?.length)return meta.position_options
+    if(!masterPositionOptionsRequestRef.current){
+      masterPositionOptionsRequestRef.current=loadMasterPositionOptions().finally(()=>{
+        masterPositionOptionsRequestRef.current=null
+      })
     }
+    const rows=await masterPositionOptionsRequestRef.current
+    if(rows.length)setMeta(current=>({...current,position_options:rows}))
+    return rows
   }
 
   const loadPageFilterOptions=async(includeInactive=tab==='离职记录')=>{
@@ -767,27 +769,144 @@ export default function AdminEmployeesPage(){
     return await invoke({action:'list',page:nextPage,page_size:nextSize,filters:archiveFilters,export:forExport})
   }
 
-  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters}={})=>{
-    if(!silent){ setLoading(true); setError('') }
+  const applyEmployeeListData=(data,isCurrent=()=>true)=>{
+    const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
+    if(!isCurrent())return false
+    setRows(visibleRows.map(r=>{
+      const totalErrorCount=Number(r.total_error_count||0)
+      return {
+        ...r,
+        month_error_count:Number(r.month_error_count||0),
+        total_error_count:totalErrorCount,
+        risk_level:riskKeyFromCount(totalErrorCount),
+        operator_account:text(r.operator_account),
+      }
+    }))
+    setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))
+    return true
+  }
+
+  const executeEmployeeDirectoryRequest=async request=>{
+    const state=employeeDirectoryRequestRef.current
+    const sameIdentity=()=>employeeBootstrapRef.current.epoch===request.epoch
+    const isCurrent=()=>sameIdentity()&&!state.pending
     try{
-      const data=await fetchEmployeeListData(nextPage,nextSize,nextFilters)
-      const visibleRows=(data.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
-      const operatorMap=await loadOperatorMap(visibleRows.map(r=>r.id))
-      setRows(visibleRows.map(r=>{
-        const totalErrorCount=Number(r.total_error_count||0)
-        return {
-          ...r,
-          month_error_count:Number(r.month_error_count||0),
-          total_error_count:totalErrorCount,
-          risk_level:riskKeyFromCount(totalErrorCount),
-          operator_account:operatorMap.get(text(r.id))||text(r.operator_account),
-        }
-      }))
-      setTotal(Math.max(0,(data.total||0)-((data.rows||[]).length-visibleRows.length)))
+      if(request.kind==='meta'){
+        const data=await invoke({action:'meta'})
+        if(!sameIdentity())return false
+        setMeta(current=>({...data,position_options:current.position_options||[]}))
+        setMetaError('')
+        employeeBootstrapRef.current.loaded=true
+        return true
+      }
+      if(request.kind==='bootstrap'){
+        const data=await invoke({
+          action:'bootstrap',page:request.page,page_size:request.pageSize,
+          filters:{...request.filters,status:'active'},
+        })
+        if(!data?.meta||!data?.list)throw new Error('员工档案初始化返回不完整')
+        if(!sameIdentity())return false
+        setMeta(current=>({...data.meta,position_options:current.position_options||[]}))
+        setMetaError('')
+        employeeBootstrapRef.current.loaded=true
+        // A newer page/filter request may arrive while bootstrap is running.
+        // Its metadata is still current for this identity, but its list must
+        // not overwrite the newer request that the queue will run next.
+        if(state.pending)return false
+        if(!applyEmployeeListData(data.list,isCurrent))return false
+        return true
+      }
+
+      const data=await fetchEmployeeListData(request.page,request.pageSize,request.filters)
+      if(!isCurrent())return false
+      return applyEmployeeListData(data,isCurrent)
     }catch(e){
-      if(!silent) setError(employeeRequestError(e,rows.length?'员工档案刷新失败，已保留当前列表，请稍后重试。':'员工档案读取失败，请稍后重试。'))
+      if(request.kind==='meta'&&sameIdentity()){
+        setMetaError(employeeRequestError(e,'筛选选项暂时不可用，当前页面仍可继续使用。'))
+        return false
+      }
+      if(isCurrent()&&!request.silent){
+        setError(employeeRequestError(e,rows.length?'员工档案刷新失败，已保留当前列表，请稍后重试。':'员工档案读取失败，请稍后重试。'))
+      }
+      return false
     }
-    finally{ if(!silent) setLoading(false) }
+  }
+
+  const enqueueEmployeeDirectoryRequest=request=>{
+    const state=employeeDirectoryRequestRef.current
+    const queued={
+      ...request,
+      epoch:employeeBootstrapRef.current.epoch,
+      key:JSON.stringify([request.kind,request.page,request.pageSize,request.filters,employeeBootstrapRef.current.epoch]),
+    }
+    if(state.inFlight){
+      if(state.pending?.key===queued.key)return state.inFlight
+      if(state.activeKey===queued.key){
+        // The newest intent returned to the request already in flight. Drop a
+        // superseded queued request so the active result may be applied.
+        state.pending=null
+        return state.inFlight
+      }
+      // Serialize directory reads and keep only the newest requested page/filter.
+      // This prevents focus refreshes and fast filter changes from stacking the
+      // expensive scope RPC or allowing an older response to overwrite the UI.
+      state.pending=queued
+      return state.inFlight
+    }
+
+    let task
+    const drain=async()=>{
+      let current=queued
+      let success=false
+      while(current){
+        state.activeKey=current.key
+        state.pending=null
+        success=await executeEmployeeDirectoryRequest(current)
+        current=state.pending
+      }
+      return success
+    }
+    task=drain().finally(()=>{
+      if(state.inFlight===task){state.inFlight=null;state.activeKey='';state.pending=null}
+    })
+    state.inFlight=task
+    return task
+  }
+
+  const loadBootstrap=async(nextPage=1,nextSize=pageSize,{silent=false,nextFilters=appliedFilters}={})=>{
+    if(!silent){setLoading(true);setError('')}
+    try{
+      return await enqueueEmployeeDirectoryRequest({kind:'bootstrap',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+    }finally{
+      if(!silent)setLoading(false)
+    }
+  }
+
+  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters}={})=>{
+    if(!silent){setLoading(true);setError('')}
+    try{
+      return await enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+    }finally{
+      if(!silent)setLoading(false)
+    }
+  }
+
+  const loadEmployeeDirectory=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters,refreshMeta=true}={})=>{
+    const usesSpecialReader=Boolean(text(nextFilters?.risk_level)||text(nextFilters?.account_status))
+    if(!usesSpecialReader) return loadBootstrap(nextPage,nextSize,{silent,nextFilters})
+    if(!silent){setLoading(true);setError('')}
+    try{
+      if(!refreshMeta) return await enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+      // The regular bootstrap list cannot apply risk/account filters. Queue a
+      // metadata-only request followed by the dedicated filtered reader, so an
+      // unfiltered bootstrap response can never replace the requested result.
+      const metaRequest=enqueueEmployeeDirectoryRequest({kind:'meta',page:nextPage,pageSize:nextSize,filters:nextFilters,silent:true})
+      const listRequest=enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+      const results=await Promise.all([metaRequest,listRequest])
+      return results[results.length-1]
+    }finally{
+      if(!silent)setLoading(false)
+    }
   }
 
   const loadHistory=async(nextPage=historyPage,nextSize=historyPageSize,nextFilters=historyFilters,{silent=false}={})=>{
@@ -819,10 +938,11 @@ export default function AdminEmployeesPage(){
     if(!silent) setRefreshing(true)
     try{
       const jobs=[]
-      if(canViewEmployees&&tab==='员工档案') jobs.push(loadMeta())
+      if(canViewEmployees&&tab==='员工档案'){
+        jobs.push(loadEmployeeDirectory(page,pageSize,{silent,nextFilters:appliedFilters}))
+      }
       else if(canViewAnalytics||canViewResignations||canViewAudit) jobs.push(loadPageFilterOptions(tab==='离职记录'))
       if(canViewEmployees||canViewAnalytics) jobs.push(loadArchiveStats(true))
-      if(canViewEmployees&&tab==='员工档案') jobs.push(loadList(page,pageSize,{silent,nextFilters:appliedFilters}))
       if(canViewAnalytics&&tab==='人员分析'){
         if(analysisView==='管理风险'&&canViewManagementRisk) jobs.push(loadManagementRisk(appliedManagementRiskFilters))
         else{
@@ -856,11 +976,6 @@ export default function AdminEmployeesPage(){
 
   useEffect(()=>{
     if(adminAccess.loading||(!canViewEmployees&&!canViewAnalytics&&!canViewResignations&&!canViewAudit))return undefined
-    const initialJobs=[]
-    if(canViewEmployees&&tab==='员工档案') initialJobs.push(loadMeta())
-    else if(canViewAnalytics||canViewResignations||canViewAudit) initialJobs.push(loadPageFilterOptions(tab==='离职记录'))
-    if(canViewEmployees||canViewAnalytics) initialJobs.push(loadArchiveStats())
-    Promise.all(initialJobs).finally(()=>{lastAutoRefreshAtRef.current=Date.now()})
     const refreshIfStale=()=>{
       if(document.hidden||Date.now()-lastAutoRefreshAtRef.current<300000)return
       lastAutoRefreshAtRef.current=Date.now()
@@ -871,13 +986,51 @@ export default function AdminEmployeesPage(){
     return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
   },[adminAccess.loading,canViewEmployees,canViewAnalytics,canViewResignations,canViewAudit])
   useEffect(()=>{
+    const state=employeeBootstrapRef.current
+    if(state.accessKey!==employeeAccessKey){
+      state.accessKey=employeeAccessKey
+      state.loaded=false
+      state.inFlight=null
+      state.epoch+=1
+      employeeDirectoryRequestRef.current.pending=null
+      detailRequestRef.current+=1
+      requestedEmployeeRef.current=''
+      setRows([]);setTotal(0);setMeta(emptyEmployeeMeta());setMetaError('')
+      setSelected(null);setDetailError('');setDetailLoading(false)
+      setEmployeeModal(null);setResignModal(null);setEditResignModal(null)
+      setRestoreModal(null);setCancelHireModal(null)
+      setGenerated(null);setActivationError('');setActivationCopyStatus('')
+    }
+    // Access invalidation must happen before these guards. Otherwise a user
+    // whose directory permission was removed could keep another scope's rows,
+    // drawer, or edit form visible until a full page reload.
+    if(adminAccess.loading||tab!=='员工档案'||!canViewEmployees)return
+    const usesSpecialReader=Boolean(text(appliedFilters.risk_level)||text(appliedFilters.account_status))
+    if((state.loaded&&!usesSpecialReader)||state.inFlight)return
+    const task=loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters})
+      .then(success=>{
+        if(success){
+          lastAutoRefreshAtRef.current=Date.now()
+          return loadArchiveStats()
+        }
+        return null
+      })
+      .finally(()=>{if(state.inFlight===task)state.inFlight=null})
+    state.inFlight=task
+  },[adminAccess.loading,canViewEmployees,tab,employeeAccessKey])
+  useEffect(()=>{
+    if(adminAccess.loading||!['人员分析','操作日志'].includes(tab))return
+    if(!canViewAnalytics&&!canViewAudit)return
+    loadPageFilterOptions(false)
+  },[adminAccess.loading,canViewAnalytics,canViewAudit,tab])
+  useEffect(()=>{
+    if(adminAccess.loading||tab!=='人员分析'||!canViewAnalytics||archiveStats.loading||archiveStats.refreshed_at)return
+    loadArchiveStats()
+  },[adminAccess.loading,canViewAnalytics,tab,archiveStats.loading,archiveStats.refreshed_at])
+  useEffect(()=>{
     if(adminAccess.loading||tab!=='离职记录'||!canViewResignations)return
     loadPageFilterOptions(true)
   },[adminAccess.loading,canViewResignations,tab])
-  useEffect(()=>{
-    if(adminAccess.loading||!canViewEmployees)return
-    loadList(1,pageSize,{nextFilters:appliedFilters})
-  },[adminAccess.loading,canViewEmployees])
 
   useEffect(()=>{
     if(adminAccess.loading)return
@@ -1006,6 +1159,9 @@ export default function AdminEmployeesPage(){
     if(!capabilities.basic) return setError('当前账号没有新增员工权限')
     const f=emptyForm()
     setEmployeeModal({mode:'create',employee_id:null,original_employee_no:'',original_full_name:'',form:f,initial_form:f,capabilities,masked_fields:{}})
+    // Position write options come from the transactional write function. Keep
+    // that extra call off the archive bootstrap path and load it only on demand.
+    void ensureMasterPositionOptions()
   }
 
   const openEdit=async()=>{
@@ -1024,10 +1180,12 @@ export default function AdminEmployeesPage(){
       capabilities,
       masked_fields:bundle.maskedFields,
     })
+    void ensureMasterPositionOptions()
   }
 
   const saveEmployee=async()=>{
     if(!employeeModal) return
+    const operationEpoch=employeeBootstrapRef.current.epoch
     const {mode,employee_id,form,original_employee_no,original_full_name}=employeeModal
     const capabilities=employeeModal.capabilities||{basic:false,sensitiveEmployee:false,compensation:false,payment:false}
     if(!capabilities.basic) return setError('当前账号没有保存员工资料的权限')
@@ -1071,6 +1229,7 @@ export default function AdminEmployeesPage(){
       if(payload.sections.compensation) payload.compensation=compensationPatch
       if(payload.sections.payment) payload.payment=paymentPatch
       const data=await writeEmployee(payload)
+      if(employeeBootstrapRef.current.epoch!==operationEpoch)return
       if(mode==='create'&&!sheetSyncSucceeded(data?.sync)){
         let rollbackOk=false
         try{
@@ -1086,17 +1245,23 @@ export default function AdminEmployeesPage(){
       if(mode==='create'){
         // 新增成功只刷新，不再把新员工 ID 自动塞进搜索框。
         setPage(1)
-        const [listData]=await Promise.all([
-          fetchEmployeeListData(1,pageSize,appliedFilters),
-          loadMeta(),loadArchiveStats(),
+        await Promise.all([
+          loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),
+          loadArchiveStats(),
         ])
-        const visibleRows=(listData.rows||[]).filter(r=>text(r.source_type)!=='google_deleted')
-        setRows(visibleRows)
-        setTotal(Math.max(0,(listData.total||0)-((listData.rows||[]).length-visibleRows.length)))
-        if(data?.employee_id) setSelected(await invoke({action:'detail',employee_id:data.employee_id}))
+        if(data?.employee_id&&employeeBootstrapRef.current.epoch===operationEpoch){
+          const detail=await invoke({action:'detail',employee_id:data.employee_id})
+          if(employeeBootstrapRef.current.epoch===operationEpoch)setSelected(detail)
+        }
       }else{
-        await Promise.all([loadMeta(),loadArchiveStats(),loadList(page,pageSize)])
-        if(employee_id) setSelected(await invoke({action:'detail',employee_id}))
+        await Promise.all([
+          loadEmployeeDirectory(page,pageSize,{nextFilters:appliedFilters}),
+          loadArchiveStats(),
+        ])
+        if(employee_id&&employeeBootstrapRef.current.epoch===operationEpoch){
+          const detail=await invoke({action:'detail',employee_id})
+          if(employeeBootstrapRef.current.epoch===operationEpoch)setSelected(detail)
+        }
       }
     }catch(e){ setError(e.message) }
   }
@@ -1136,7 +1301,6 @@ export default function AdminEmployeesPage(){
     setAppliedFilters(next)
     setPage(1)
     setTab('员工档案')
-    loadList(1,pageSize,{nextFilters:next})
   }
 
   const openAnalysisDetail=async({title,event_type='all',dimension='',value='',date_from='',date_to='',filters:detailFilters})=>{
@@ -1193,7 +1357,7 @@ export default function AdminEmployeesPage(){
       })
       setEditResignModal(null)
       const refreshes=[loadHistory(historyPage,historyPageSize)]
-      if(canViewEmployees) refreshes.push(loadMeta(),loadArchiveStats(),loadList(page,pageSize))
+      if(canViewEmployees) refreshes.push(loadEmployeeDirectory(page,pageSize,{nextFilters:appliedFilters}),loadArchiveStats())
       else refreshes.push(loadPageFilterOptions())
       await Promise.all(refreshes)
       if(!sheetSyncSucceeded(data?.sync)) setError(`离职记录已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
@@ -1212,7 +1376,7 @@ export default function AdminEmployeesPage(){
       setRows(prev=>prev.filter(r=>text(r.id)!==text(resignedEmployeeId)))
       setTotal(prev=>Math.max(0,prev-1))
       setResignModal(null); setSelected(null)
-      const refreshes=[loadMeta(),loadArchiveStats(),loadList(1,pageSize)]
+      const refreshes=[loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),loadArchiveStats()]
       if(canViewResignations){
         setHistoryPage(1)
         setTab('离职记录')
@@ -1234,7 +1398,7 @@ export default function AdminEmployeesPage(){
       setRestoreModal(null)
       setSelected(null)
       const refreshes=[loadHistory(1,historyPageSize,historyFilters)]
-      if(canViewEmployees) refreshes.push(loadMeta(),loadArchiveStats(),loadList(1,pageSize))
+      if(canViewEmployees) refreshes.push(loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),loadArchiveStats())
       else refreshes.push(loadPageFilterOptions())
       await Promise.all(refreshes)
       if(!sheetSyncSucceeded(data?.sync)) setError(`已恢复 Supabase 在职状态，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
@@ -1254,7 +1418,7 @@ export default function AdminEmployeesPage(){
       })
       setCancelHireModal(null)
       setSelected(null)
-      const refreshes=[loadMeta(),loadArchiveStats(),loadList(1,pageSize)]
+      const refreshes=[loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),loadArchiveStats()]
       if(canViewResignations) refreshes.push(loadHistory(1,historyPageSize,historyFilters))
       if(canViewAudit) refreshes.push(loadAudit(1,auditPageSize,auditFilters,{silent:true}))
       await Promise.all(refreshes)
@@ -1319,14 +1483,13 @@ export default function AdminEmployeesPage(){
         expectedPages=Math.max(1,Number(data?.pages||Math.ceil(Number(data?.total||0)/EMPLOYEE_EXPORT_PAGE_SIZE)||1))
         if(expectedPages>EMPLOYEE_EXPORT_MAX_PAGES) throw new Error(`当前筛选超过 ${EMPLOYEE_EXPORT_PAGE_SIZE*EMPLOYEE_EXPORT_MAX_PAGES} 条，请缩小筛选范围后再导出。`)
         const visibleRows=(data?.rows||[]).filter(row=>text(row.source_type)!=='google_deleted')
-        const operatorMap=await loadOperatorMap(visibleRows.map(row=>row.id))
         visibleRows.forEach((row,index)=>{
           const totalErrorCount=Number(row.total_error_count||0)
           const normalized={
             ...row,
             total_error_count:totalErrorCount,
             risk_level:riskKeyFromCount(totalErrorCount),
-            operator_account:operatorMap.get(text(row.id))||text(row.operator_account),
+            operator_account:text(row.operator_account),
           }
           const risk=employeeRiskMeta(normalized)
           const portalAccount=employeePortalAccountPresentation(normalized)
@@ -1485,7 +1648,7 @@ export default function AdminEmployeesPage(){
     <AdminModuleNav />
 
     {error&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {metaError&&['员工档案','人员分析','离职记录','操作日志'].includes(visibleTab)&&<div className="employee-inline-sync-note" role="status"><span>{metaError}</span><button type="button" onClick={()=>canViewEmployees&&visibleTab==='员工档案'?loadMeta():loadPageFilterOptions(visibleTab==='离职记录')}>重新读取</button></div>}
+    {metaError&&['员工档案','人员分析','离职记录','操作日志'].includes(visibleTab)&&<div className="employee-inline-sync-note" role="status"><span>{metaError}</span><button type="button" onClick={()=>canViewEmployees&&visibleTab==='员工档案'?loadEmployeeDirectory(page,pageSize,{nextFilters:appliedFilters}):loadPageFilterOptions(visibleTab==='离职记录')}>重新读取</button></div>}
     {visibleTab==='员工档案'&&<>
       <div className="archive-compact-head">
         <div><h2>员工档案</h2><span>当前仅显示在职员工 · 当前筛选共 {total} 人</span></div>
@@ -2010,8 +2173,108 @@ function ActivationCodeModal({data,copyStatus,onCopy,onClose}){
   </div>
 }
 
+const PRIVATE_NOTE_CATEGORIES={
+  general:'一般情况',identity:'身份核验',integrity:'诚信风险',
+  conduct:'行为记录',payment:'收款资料',other:'其他',
+}
+const blankPrivateNoteForm=()=>({id:'',version:0,note_text:'',category:'general',incident_date:''})
+
+function privateNoteError(error){
+  const message=text(error?.message||error)
+  if(message.includes('private_note_version_conflict'))return '备注已被其他人修改，请刷新后再编辑。'
+  if(message.includes('private_note_archived'))return '这条备注已经归档，请刷新列表。'
+  if(message.includes('employee_out_of_scope'))return '该员工不在当前账号的管理范围内。'
+  if(message.includes('permission_denied'))return '当前账号没有内部备注操作权限。'
+  if(message.includes('invalid_private_note_category'))return '备注分类无效，请重新选择。'
+  if(message.includes('invalid_private_note'))return '备注需填写 1–2000 个字符。'
+  return employeeRequestError(error,'内部备注操作失败，请重试。')
+}
+
+function EmployeePrivateNotesPanel({employeeId,canManage}){
+  const [state,setState]=useState({loading:true,error:'',rows:[],total:0})
+  const [form,setForm]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [message,setMessage]=useState('')
+  const requestRef=useRef(0)
+  const mountedRef=useRef(true)
+  const employeeRef=useRef(employeeId)
+  employeeRef.current=employeeId
+  const load=async({clear=false}={})=>{
+    const targetEmployeeId=employeeId
+    const requestId=++requestRef.current
+    setState(current=>clear
+      ? {loading:true,error:'',rows:[],total:0}
+      : {...current,loading:true,error:''})
+    const {data,error}=await supabase.rpc('admin_employee_private_notes',{p_employee_id:targetEmployeeId,p_page:1,p_page_size:100})
+    if(!mountedRef.current||requestRef.current!==requestId||employeeRef.current!==targetEmployeeId)return false
+    setState(error
+      ? {loading:false,error:privateNoteError(error),rows:[],total:0}
+      : {loading:false,error:'',rows:data?.rows||[],total:Number(data?.total||0)})
+    return !error
+  }
+  useEffect(()=>{
+    mountedRef.current=true
+    return()=>{mountedRef.current=false;requestRef.current+=1}
+  },[])
+  useEffect(()=>{
+    requestRef.current+=1
+    setForm(null);setSaving(false);setMessage('')
+    setState({loading:Boolean(employeeId),error:'',rows:[],total:0})
+    if(employeeId)load({clear:true})
+    return()=>{requestRef.current+=1}
+  },[employeeId])
+  const startCreate=()=>{setMessage('');setForm(blankPrivateNoteForm())}
+  const startEdit=note=>{setMessage('');setForm({
+    id:note.id,version:Number(note.version||0),note_text:text(note.note_text),
+    category:text(note.category)||'general',incident_date:text(note.incident_date).slice(0,10),
+  })}
+  const save=async event=>{
+    event.preventDefault()
+    const targetEmployeeId=employeeId
+    const note=text(form?.note_text)
+    if(!note){setMessage('请填写备注内容。');return}
+    setSaving(true);setMessage('')
+    const args=form.id
+      ? {p_note_id:form.id,p_expected_version:form.version,p_note:note,p_category:form.category,p_incident_date:form.incident_date||null}
+      : {p_employee_id:employeeId,p_note:note,p_category:form.category,p_incident_date:form.incident_date||null}
+    const rpc=form.id?'admin_employee_private_note_update':'admin_employee_private_note_create'
+    const {error}=await supabase.rpc(rpc,args)
+    if(!mountedRef.current||employeeRef.current!==targetEmployeeId)return
+    setSaving(false)
+    if(error){setMessage(privateNoteError(error));return}
+    setForm(null);setMessage(form.id?'备注已更新。':'备注已保存。');await load()
+  }
+  const archive=async note=>{
+    if(!window.confirm('确定归档这条内部备注？记录及修订历史会保留，不会删除。'))return
+    const targetEmployeeId=employeeId
+    setSaving(true);setMessage('')
+    const {error}=await supabase.rpc('admin_employee_private_note_archive',{p_note_id:note.id,p_expected_version:Number(note.version||0)})
+    if(!mountedRef.current||employeeRef.current!==targetEmployeeId)return
+    setSaving(false)
+    if(error){setMessage(privateNoteError(error));return}
+    if(form?.id===note.id)setForm(null)
+    setMessage('备注已归档，历史审计仍保留。');await load()
+  }
+  return <section className="detail-panel employee-private-notes-panel">
+    <div className="detail-panel-head"><div><h3>内部备注</h3><p>仅授权后台账号可见；员工前端不会收到或显示这些内容。</p></div><div className="employee-private-note-head-actions"><span>{state.total} 条</span>{canManage&&!form&&<button type="button" onClick={startCreate}>+ 新增备注</button>}</div></div>
+    {message&&<div className={`employee-private-note-message ${/失败|无效|没有|冲突|填写|范围/.test(message)?'is-error':''}`}>{message}</div>}
+    {canManage&&form&&<form className="employee-private-note-form" onSubmit={save}>
+      <div className="employee-private-note-form-grid"><label>分类<select value={form.category} onChange={event=>setForm({...form,category:event.target.value})}>{Object.entries(PRIVATE_NOTE_CATEGORIES).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>事件日期（可选）<input type="date" value={form.incident_date} onChange={event=>setForm({...form,incident_date:event.target.value})}/></label></div>
+      <label>备注内容<textarea autoFocus rows="5" maxLength="2000" value={form.note_text} onChange={event=>setForm({...form,note_text:event.target.value})} placeholder="记录需要后续授权人员留意的事实、核验结果或历史情况。"/></label>
+      <footer><span>{text(form.note_text).length} / 2000</span><div><button type="button" disabled={saving} onClick={()=>setForm(null)}>取消</button><button className="primary-action" type="submit" disabled={saving}>{saving?'保存中…':form.id?'保存修改':'保存备注'}</button></div></footer>
+    </form>}
+    {state.loading?<div className="employee-section-placeholder"><p>正在读取内部备注…</p></div>:state.error?<div className="employee-section-placeholder"><p>{state.error}</p><button type="button" onClick={load}>重新读取</button></div>:state.rows.length?<div className="employee-private-note-list">{state.rows.map(note=><article key={note.id}>
+      <header><div><b>{PRIVATE_NOTE_CATEGORIES[note.category]||'其他'}</b>{note.incident_date&&<time>事件日期 · {text(note.incident_date).slice(0,10)}</time>}</div>{canManage&&<div><button type="button" disabled={saving} onClick={()=>startEdit(note)}>编辑</button><button type="button" className="danger-outline" disabled={saving} onClick={()=>archive(note)}>归档</button></div>}</header>
+      <p>{note.note_text}</p>
+      <footer><span>创建：{note.created_by_username||'后台账号'} · {formatDateTime(note.created_at)}</span><span>更新：{note.updated_by_username||'后台账号'} · {formatDateTime(note.updated_at)} · v{note.version}</span></footer>
+    </article>)}</div>:<div className="employee-section-placeholder"><p>暂无内部备注。</p>{canManage&&<button type="button" onClick={startCreate}>新增第一条备注</button>}</div>}
+  </section>
+}
+
 export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onResign,onCancelHire,returnToAnalysis,onReturn,readOnly=false}){
   const adminAccess=useAdminAccess()
+  const canViewPrivateNotes=adminAccess.hasAnyPermission([PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_VIEW,PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_MANAGE])
+  const canManagePrivateNotes=adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_MANAGE)
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
   const [profileSummary,setProfileSummary]=useState(null)
   const [profileSummaryLoading,setProfileSummaryLoading]=useState(false)
@@ -2053,6 +2316,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     ['attendance','员工出勤记录',adminAccess.hasPermission(PERMISSIONS.ATTENDANCE_RECORDS_VIEW)],
     ['penalties','奖金 / 扣款',adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)],
     ['trainer_reviews','老师评价',adminAccess.hasPermission(PERMISSIONS.ONLINE_TRAINING_REPORT_VIEW)],
+    ['private_notes','内部备注',canViewPrivateNotes],
   ].filter(([, ,allowed])=>allowed),[adminAccess.founder,adminAccess.permissionKey])
   useEffect(()=>setActiveSection('info'),[e.id])
   useEffect(()=>{
@@ -2194,6 +2458,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
         {activeSection==='attendance'&&<EmployeeAttendancePanel data={attendanceData} loading={attendanceLoading} error={attendanceError}/>}
         {activeSection==='penalties'&&<EmployeeAdjustmentPanel data={adjustmentData} loading={adjustmentLoading} error={adjustmentError}/>}
         {activeSection==='trainer_reviews'&&<EmployeeTrainerReviewPanel data={trainerReviewData} employeeId={e.id} loading={trainerReviewLoading} error={trainerReviewError}/>}
+        {activeSection==='private_notes'&&canViewPrivateNotes&&<EmployeePrivateNotesPanel key={e.id} employeeId={e.id} canManage={canManagePrivateNotes}/>}
         {activeSection==='info'&&<>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人',e.person_in_charge||e.leader_name],['现场培训',e.on_site_trainer],['线上组长',e.online_leader||e.leader_name],['线上培训',e.online_trainer||e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>

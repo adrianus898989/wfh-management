@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const migration = await readFile(new URL('../../supabase/migrations/20260827113000_granular_admin_page_permissions.sql', import.meta.url), 'utf8')
+const examHome = await readFile(new URL('../../supabase/migrations/20260828052000_exam_overview_single_rpc.sql', import.meta.url), 'utf8')
 const payroll = await readFile(new URL('../../supabase/migrations/20260827113100_payroll_page_permission_boundaries.sql', import.meta.url), 'utf8')
 const payrollCorrections = await readFile(new URL('../../supabase/migrations/20260827140000_payroll_batch_correction_workflow.sql', import.meta.url), 'utf8')
 const training = await readFile(new URL('../../supabase/migrations/20260827113200_online_training_page_permission_boundaries.sql', import.meta.url), 'utf8')
@@ -33,6 +34,11 @@ test('exam overview, question-bank and mutations enforce the current data scope'
   assert.match(migration, /admin_exam_overview_analytics[\s\S]+from public\.admin_exam_combined_sessions_v combined[\s\S]+session_private\.exam_employee_in_scope\(combined\.employee_id\)/)
   assert.match(migration, /admin_exam_overview_legacy[\s\S]+source_system='legacy'[\s\S]+session_private\.exam_employee_in_scope\(scoped\.employee_id\)/)
   assert.match(migration, /admin_exam_question_bank_dashboard[\s\S]+session_private\.exam_team_in_scope\(question\.team_name\)/)
+  assert.match(examHome, /exam_private\.admin_exam_overview_scope[\s\S]+v_allowed_employee_ids uuid\[\][\s\S]+admin_scope_effective_employee_ids\(v_user_id\)/)
+  assert.equal(examHome.match(/from exam_private\.admin_exam_overview_scope\(\) scope/g)?.length, 5)
+  assert.match(examHome, /question_scopes as materialized[\s\S]+user_scope_team_filters[\s\S]+user_scope_position_filters/)
+  assert.match(examHome, /scope\.position_key is null[\s\S]+scope\.position_key = public\.exam_norm\(question\.position_name\)/)
+  assert.doesNotMatch(examHome, /exam_employee_in_scope|can_manage_employee/)
 
   assert.match(migration, /admin_exam_save_question\(p_question jsonb\)[\s\S]+exam_team_in_scope\(v_old_team\)[\s\S]+exam_team_in_scope\(p_question->>'team_name'\)/)
   assert.match(migration, /admin_exam_delete_question\(p_question_id uuid\)[\s\S]+exam_team_in_scope\(v_team\)/)
@@ -48,7 +54,9 @@ test('exam overview, question-bank and mutations enforce the current data scope'
   assert.doesNotMatch(migration, /admin_exam_analytics_v2_permission_guard_prerequisite_changed/)
   assert.doesNotMatch(migration, /admin_exam_sessions_search_v2_permission_guard_prerequisite_changed/)
   for (const rpc of [
-    'admin_exam_overview_dashboard','admin_exam_overview_analytics','admin_exam_overview_legacy',
+    'admin_exam_overview_home',
+    'admin_exam_overview_analytics_summary','admin_exam_overview_analytics_dimensions',
+    'admin_exam_overview_analytics_activity','admin_exam_overview_analytics_leaderboard',
     'admin_exam_question_bank_dashboard','admin_exam_records_search','admin_exam_grading_search',
     'admin_exam_save_question','admin_exam_delete_question','admin_exam_grade_answer','admin_exam_delete_current_session',
   ]) assert.ok(trainingPage.includes(`'${rpc}'`), `AdminTrainingPage should keep using ${rpc}`)

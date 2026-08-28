@@ -38,10 +38,11 @@ test('employee initial loads and activation-code errors use the shared Edge resp
 })
 
 test('employee background metadata and analytics failures stay scoped to their own sub-pages', () => {
-  const loadMetaBlock = employees.slice(employees.indexOf('const loadMeta='), employees.indexOf('const loadArchiveStats='))
+  const directoryBlock = employees.slice(employees.indexOf('const executeEmployeeDirectoryRequest='), employees.indexOf('const loadHistory='))
   assert.match(employees, /const \[metaError,setMetaError\]=useState\(''\)/)
-  assert.match(employees, /const loadMeta=async\(\)=>\{[\s\S]*?setMetaError\(employeeRequestError\(e,'筛选选项暂时不可用，当前页面仍可继续使用。'\)\)/)
-  assert.doesNotMatch(loadMetaBlock, /setError\(/)
+  assert.match(directoryBlock, /request\.kind==='meta'[\s\S]*?setMetaError\(employeeRequestError\(e,'筛选选项暂时不可用，当前页面仍可继续使用。'\)\)/)
+  const metaFailure=directoryBlock.slice(directoryBlock.indexOf("if(request.kind==='meta'&&sameIdentity())"),directoryBlock.indexOf('if(isCurrent()',directoryBlock.indexOf("if(request.kind==='meta'&&sameIdentity())")))
+  assert.doesNotMatch(metaFailure, /setError\(/)
   assert.match(employees, /setPeopleAnalytics\(v=>\(\{\.\.\.v,loading:false,error:message\}\)\)/)
   assert.match(employees, /setResignationAnalytics\(v=>\(\{\.\.\.v,loading:false,error:employeeRequestError\(e,'离职分析读取失败，请重试。'\)\}\)\)/)
   assert.match(employees, /metaError&&\['员工档案','人员分析','离职记录','操作日志'\]\.includes\(visibleTab\)/)

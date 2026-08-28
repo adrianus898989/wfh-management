@@ -7,10 +7,15 @@ const emptyAccess = {
   permissionKey: '',
   error: '',
   roleCode: '',
+  authUserId: '',
   employeeId: '',
   dataScope: '',
   teamId: '',
   positionId: '',
+  loginUsername: '',
+  loginEmail: '',
+  employeeNo: '',
+  fullName: '',
   hasPermission: () => false,
   hasAnyPermission: () => false,
   hasAllPermissions: () => false,
@@ -44,14 +49,19 @@ export function AdminAccessProvider({ access, children }) {
     permissionKey,
     error: access?.error || '',
     roleCode: access?.roleCode || '',
+    authUserId: access?.authUserId || '',
     employeeId: access?.employeeId || '',
     dataScope: access?.dataScope || '',
     teamId: access?.teamId || '',
     positionId: access?.positionId || '',
+    loginUsername: access?.loginUsername || '',
+    loginEmail: access?.loginEmail || '',
+    employeeNo: access?.employeeNo || '',
+    fullName: access?.fullName || '',
     hasPermission,
     hasAnyPermission,
     hasAllPermissions,
-  }), [access?.loading, access?.error, access?.roleCode, access?.employeeId, access?.dataScope, access?.teamId, access?.positionId, founder, permissions, permissionKey, hasPermission, hasAnyPermission, hasAllPermissions])
+  }), [access?.loading, access?.error, access?.roleCode, access?.authUserId, access?.employeeId, access?.dataScope, access?.teamId, access?.positionId, access?.loginUsername, access?.loginEmail, access?.employeeNo, access?.fullName, founder, permissions, permissionKey, hasPermission, hasAnyPermission, hasAllPermissions])
 
   return <AdminAccessContext.Provider value={value}>{children}</AdminAccessContext.Provider>
 }

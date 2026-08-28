@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { businessTodayIso, businessTodayRange } from '../lib/adminQueryDefaults'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { businessRecentRange, businessTodayIso } from '../lib/adminQueryDefaults'
 import { supabase } from '../lib/supabase'
+import { isCurrentLiveRequest, staleSnapshotNotice } from '../lib/requestConsistency'
 import { Pagination } from './DataPageControls'
 import { employeeMetricCountLabel, employeeRiskGradeFromTotal } from '../lib/employeeDrawerState'
 
@@ -25,8 +26,12 @@ const calculatedDuration=(start,end)=>{
   const from=sh*60+sm,to=eh*60+em
   return to>=from?to-from:24*60-from+to
 }
-const initialFilters=()=>({employee_no:'',employee_name:'',team:'',position:'',incident_type:'',status:'',country:'',...businessTodayRange()})
-const initialRecord=()=>({id:null,employee_no:'',incident_date:today(),incident_type:'internet_outage',started_at:'',ended_at:'',details:'',status:'reported'})
+const initialFilters=()=>({employee_no:'',employee_name:'',team:'',position:'',incident_type:'',status:'',country:'',...businessRecentRange(30)})
+const initialRecord=()=>({id:null,employee_no:'',incident_date:today(),incident_type:'power_outage',started_at:'',ended_at:'',details:'',status:'reported'})
+const connectivityRequestLabel=(filters,page,pageSize)=>{
+  const value=input=>text(input)||'全部'
+  return `日期 ${value(filters.date_from)} 至 ${value(filters.date_to)}；员工 ${value(filters.employee_no||filters.employee_name)}；团队 ${value(filters.team)}；岗位 ${value(filters.position)}；类型 ${value(typeLabel(filters.incident_type))}；第 ${page} 页 / ${pageSize} 条`
+}
 const evidenceItems=row=>Array.isArray(row?.attachments)?row.attachments:[]
 const evidenceMime=file=>{
   if(file.type)return file.type.toLowerCase()
@@ -123,7 +128,7 @@ function EvidenceLinks({items=[],legacyUrl='',t}){
 export function ConnectivityRecordsPage(){
   const [filters,setFilters]=useState(initialFilters)
   const [applied,setApplied]=useState(initialFilters)
-  const [state,setState]=useState({loading:true,error:'',data:null})
+  const [state,setState]=useState({loading:true,error:'',data:null,snapshotLabel:'',staleNotice:''})
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(30)
   const [editor,setEditor]=useState('')
@@ -139,13 +144,32 @@ export function ConnectivityRecordsPage(){
   const [deleteTarget,setDeleteTarget]=useState(null)
   const [deleteError,setDeleteError]=useState('')
   const [deleting,setDeleting]=useState(false)
+  const aliveRef=useRef(true)
+  const loadRequestRef=useRef(0)
 
   const load=async(nextPage=page,nextSize=pageSize,nextFilters=applied)=>{
-    setState(current=>({...current,loading:true,error:''}))
-    const {data,error}=await supabase.rpc('admin_connectivity_home',{p_filters:{...nextFilters,page:nextPage,page_size:nextSize}})
-    if(error)setState({loading:false,error:error.message,data:null})
-    else setState({loading:false,error:'',data:data||null})
+    const requestToken=++loadRequestRef.current
+    const requestLabel=connectivityRequestLabel(nextFilters,nextPage,nextSize)
+    setState(current=>({...current,loading:true,error:'',staleNotice:current.data&&current.snapshotLabel!==requestLabel?staleSnapshotNotice(current.snapshotLabel):''}))
+    try{
+      const {data,error}=await supabase.rpc('admin_connectivity_home',{p_filters:{...nextFilters,page:nextPage,page_size:nextSize}})
+      if(!isCurrentLiveRequest(aliveRef.current,loadRequestRef.current,requestToken))return
+      if(error){
+        setState(current=>current.data
+          ?{...current,loading:false,error:error.message,staleNotice:staleSnapshotNotice(current.snapshotLabel)}
+          :{loading:false,error:error.message,data:null,snapshotLabel:'',staleNotice:''})
+      }else setState({loading:false,error:'',data:data||{},snapshotLabel:requestLabel,staleNotice:''})
+    }catch(error){
+      if(!isCurrentLiveRequest(aliveRef.current,loadRequestRef.current,requestToken))return
+      setState(current=>current.data
+        ?{...current,loading:false,error:error?.message||'读取失败',staleNotice:staleSnapshotNotice(current.snapshotLabel)}
+        :{loading:false,error:error?.message||'读取失败',data:null,snapshotLabel:'',staleNotice:''})
+    }
   }
+  useEffect(()=>{
+    aliveRef.current=true
+    return()=>{aliveRef.current=false;loadRequestRef.current+=1}
+  },[])
   useEffect(()=>{load(1,pageSize,applied)},[])
   useEffect(()=>{
     let active=true
@@ -291,11 +315,13 @@ export function ConnectivityRecordsPage(){
       <label>日期止<input type="date" value={filters.date_to} onChange={event=>setFilters({...filters,date_to:event.target.value})}/></label>
       <div className="connectivity-filter-actions"><button className="primary-action" onClick={query} disabled={state.loading}>{state.loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={reset}>重置</button></div>
     </div></section>
-    <div className="connectivity-summary"><div><span>记录总数</span><strong>{summary.total||0}</strong></div><div><span>涉及员工</span><strong>{summary.affected_employees||0}</strong></div><div><span>停电</span><strong>{summary.power||0}</strong></div><div><span>断网</span><strong>{summary.internet||0}</strong></div></div>
-    <section className="connectivity-daily-card"><header><div><h3>每日情况统计</h3></div><span>显示最近 {daily.length} 个有记录的日期</span></header>{daily.length?<div className="connectivity-daily-list">{daily.map(day=><article key={day.incident_date}><strong>{day.incident_date}</strong><span><b>{day.affected_employees}</b> 人</span><span>{day.total_records} 条记录</span><span className="power">停电 {day.power}</span><span className="internet">断网 {day.internet}</span><div>{(day.countries||[]).map(country=><em key={country.name}>{country.name} {country.employees}人</em>)}</div></article>)}</div>:<div className="connectivity-empty compact">暂无每日统计</div>}</section>
+    {state.error&&<div className="connectivity-message error" role="alert">读取失败：{state.error}</div>}
+    {state.staleNotice&&<div className="connectivity-message connectivity-snapshot-notice" role="status">{state.staleNotice}</div>}
+    {state.data&&<><div className="connectivity-summary"><div><span>记录总数</span><strong>{summary.total||0}</strong></div><div><span>涉及员工</span><strong>{summary.affected_employees||0}</strong></div><div><span>停电</span><strong>{summary.power||0}</strong></div><div><span>断网</span><strong>{summary.internet||0}</strong></div></div>
+    <section className="connectivity-daily-card"><header><div><h3>每日情况统计</h3></div><span>显示最近 {daily.length} 个有记录的日期</span></header>{daily.length?<div className="connectivity-daily-list">{daily.map(day=><article key={day.incident_date}><strong>{day.incident_date}</strong><span><b>{day.affected_employees}</b> 人</span><span>{day.total_records} 条记录</span><span className="power">停电 {day.power}</span><span className="internet">断网 {day.internet}</span><div>{(day.countries||[]).map(country=><em key={country.name}>{country.name} {country.employees}人</em>)}</div></article>)}</div>:<div className="connectivity-empty compact">暂无每日统计</div>}</section></>}
     <section className="connectivity-table-card">
-      {state.error?<div className="connectivity-empty error">{state.error}</div>:state.loading&&!data.rows?<div className="connectivity-empty">正在读取记录…</div>:rows.length?<div className="connectivity-table-wrap"><table><thead><tr><th>日期</th><th>入职日期</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>岗位</th><th>类型</th><th>开始 / 恢复</th><th>持续</th><th>状态</th><th>情况说明</th><th>证明</th><th>录入人</th>{showActions&&<th>操作</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.incident_date}</strong></td><td>{row.hire_date||'—'}</td><td><b>{row.employee_no}</b></td><td>{row.full_name}</td><td>{row.employee_country||'—'}</td><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td><td><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></td><td>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'}</td><td>{durationLabel(row.duration_minutes)}</td><td><span className={`connectivity-status ${row.status}`}>{statusLabel(row.status)}</span></td><td className="connectivity-details">{row.details||'—'}</td><td className="connectivity-proof"><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?'—':null}</td><td>{row.recorded_by_name||'—'}</td>{showActions&&<td><div className="connectivity-row-actions">{canEdit&&<button type="button" onClick={()=>openEdit(row)}>编辑</button>}{canDelete&&<button type="button" className="danger" onClick={()=>{setDeleteError('');setDeleteTarget(row)}}>删除</button>}</div></td>}</tr>)}</tbody></table></div>:<div className="connectivity-empty">暂无符合条件的记录</div>}
-      <Pagination page={Number(data.page||page)} pages={Number(data.pages||1)} total={Number(data.total||0)} pageSize={pageSize} loading={state.loading} onPage={next=>{setPage(next);load(next,pageSize,applied)}} onPageSize={next=>{setPageSize(next);setPage(1);load(1,next,applied)}}/>
+      {state.loading&&!state.data?<div className="connectivity-empty">正在读取记录…</div>:!state.data?<div className="connectivity-empty error">本次读取失败，未显示记录。</div>:rows.length?<div className="connectivity-table-wrap"><table><thead><tr><th>日期</th><th>入职日期</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>岗位</th><th>类型</th><th>开始 / 恢复</th><th>持续</th><th>状态</th><th>情况说明</th><th>证明</th><th>录入人</th>{showActions&&<th>操作</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.incident_date}</strong></td><td>{row.hire_date||'—'}</td><td><b>{row.employee_no}</b></td><td>{row.full_name}</td><td>{row.employee_country||'—'}</td><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td><td><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></td><td>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'}</td><td>{durationLabel(row.duration_minutes)}</td><td><span className={`connectivity-status ${row.status}`}>{statusLabel(row.status)}</span></td><td className="connectivity-details">{row.details||'—'}</td><td className="connectivity-proof"><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?'—':null}</td><td>{row.recorded_by_name||'后台账号'}</td>{showActions&&<td><div className="connectivity-row-actions">{canEdit&&<button type="button" onClick={()=>openEdit(row)}>编辑</button>}{canDelete&&<button type="button" className="danger" onClick={()=>{setDeleteError('');setDeleteTarget(row)}}>删除</button>}</div></td>}</tr>)}</tbody></table></div>:<div className="connectivity-empty">暂无符合条件的记录</div>}
+      {state.data&&<Pagination page={Number(data.page||page)} pages={Number(data.pages||1)} total={Number(data.total||0)} pageSize={pageSize} loading={state.loading} onPage={next=>{setPage(next);load(next,pageSize,applied)}} onPageSize={next=>{setPageSize(next);setPage(1);load(1,next,applied)}}/>}
     </section>
   </div>
 }

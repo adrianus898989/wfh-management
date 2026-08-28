@@ -21,3 +21,12 @@ export const businessTodayRange=(now=new Date())=>{
   const date=businessTodayIso(now)
   return {date_from:date,date_to:date}
 }
+
+export const businessRecentRange=(days=30,now=new Date())=>{
+  const dateTo=businessTodayIso(now)
+  const [year,month,day]=dateTo.split('-').map(Number)
+  const dateFrom=new Date(Date.UTC(year,month-1,day))
+  const windowDays=Number.isFinite(Number(days))?Math.max(1,Math.trunc(Number(days))):30
+  dateFrom.setUTCDate(dateFrom.getUTCDate()-windowDays+1)
+  return {date_from:dateFrom.toISOString().slice(0,10),date_to:dateTo}
+}
