@@ -166,7 +166,7 @@ test('backend manual is the final account page and requires its independent view
   assert.equal(route?.groupId,'account_usage')
   assert.deepEqual(route?.permissions,['account.manual.view'])
   assert.equal(requestedAdminRoute('/admin/manual','?tab=anything'),null)
-  assert.match(appSource,/path="\/admin\/manual"[\s\S]{0,180}<AdminManualPage/)
+  assert.match(appSource,/path="manual"[\s\S]{0,180}<AdminManualPage/)
   assert.match(topbarSource,/canManual\s*=\s*Boolean\([\s\S]{0,180}ACCOUNT_MANUAL_VIEW/)
   assert.match(topbarSource,/\{canManual && <Link className="admin-topbar-help" to="\/admin\/manual"/)
 })
@@ -181,7 +181,7 @@ test('centralized backend activity log sits between roles and the manual with an
   const route=requestedAdminRoute('/admin/activity-log','')
   assert.equal(route?.groupId,'account_usage')
   assert.deepEqual(route?.permissions,['account.activity_log.view'])
-  assert.match(appSource,/path="\/admin\/activity-log"[\s\S]{0,180}<AdminActivityLogPage/)
+  assert.match(appSource,/path="activity-log"[\s\S]{0,180}<AdminActivityLogPage/)
   assert.match(activityLogSource,/admin_activity_log_search/)
 })
 

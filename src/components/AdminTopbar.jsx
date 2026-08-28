@@ -41,6 +41,7 @@ export default function AdminTopbar({ access }) {
   const { locale } = useAdminI18n()
   const rootRef = useRef(null)
   const requestRef = useRef(0)
+  const requestInFlight = useRef(false)
   const [open, setOpen] = useState(false)
   const [section, setSection] = useState('admin')
   const [presence, setPresence] = useState(emptyPresence)
@@ -54,6 +55,8 @@ export default function AdminTopbar({ access }) {
 
   const load = async ({ quiet=false } = {}) => {
     if (!enabled || !canPresence) return
+    if (requestInFlight.current) return
+    requestInFlight.current = true
     const requestId = ++requestRef.current
     if (!quiet) setPresence(current => ({ ...current, loading:true, error:'' }))
     try {
@@ -74,6 +77,8 @@ export default function AdminTopbar({ access }) {
         loading:false,
         error:locale === 'en' ? 'Unable to load online users.' : '在线人员读取失败，请稍后重试。',
       }))
+    } finally {
+      requestInFlight.current = false
     }
   }
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import {
   APP_SESSION_HEARTBEAT_MS,
   bootstrapAppSessionAccess,
@@ -465,6 +465,17 @@ function Protected({ children, mode }) {
   return children
 }
 
+// Keep session verification, IP attestation, access loading, presence polling,
+// and the sidebar mounted while users move between pages. When every route
+// owned a separate Protected/AppLayout pair, a quick series of navigation
+// clicks remounted all of those effects and produced concurrent guard and
+// admin-accounts requests.
+function PortalShell({ mode }) {
+  return <Protected mode={mode}>
+    <AppLayout mode={mode}><Outlet /></AppLayout>
+  </Protected>
+}
+
 function AppRoutes() {
   const location = useLocation()
   const { t } = useStaffLocale()
@@ -475,26 +486,30 @@ function AppRoutes() {
     <Route path="/staff/login" element={<StaffLoginPage />} />
     <Route path="/staff/register" element={<StaffRegisterPage />} />
     <Route path="/admin/mfa" element={<Protected mode="admin"><MfaPage /></Protected>} />
-    <Route path="/admin" element={<Protected mode="admin"><AppLayout mode="admin"><AdminHome /></AppLayout></Protected>} />
-    <Route path="/admin/employees" element={<Protected mode="admin"><AppLayout mode="admin"><AdminEmployeesPage /></AppLayout></Protected>} />
-    <Route path="/admin/schedule" element={<Protected mode="admin"><AppLayout mode="admin"><AdminAttendancePage /></AppLayout></Protected>} />
-    <Route path="/admin/daily" element={<Protected mode="admin"><AppLayout mode="admin"><AdminDailyWorkPage /></AppLayout></Protected>} />
-    <Route path="/admin/training" element={<Protected mode="admin"><AppLayout mode="admin"><AdminTrainingPage /></AppLayout></Protected>} />
-    <Route path="/admin/payroll" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPayrollPage /></AppLayout></Protected>} />
-    <Route path="/admin/reports" element={<Protected mode="admin"><AppLayout mode="admin"><AdminReportsPage /></AppLayout></Protected>} />
-    <Route path="/admin/users" element={<Protected mode="admin"><AppLayout mode="admin"><AdminUsersPage /></AppLayout></Protected>} />
-    <Route path="/admin/ip-allowlist" element={<Protected mode="admin"><AppLayout mode="admin"><AdminIpAllowlistPage /></AppLayout></Protected>} />
-    <Route path="/admin/work-execution" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="work-execution" /></AppLayout></Protected>} />
-    <Route path="/admin/account-usage" element={<Protected mode="admin"><AppLayout mode="admin"><AdminPlanningPage section="account-usage" /></AppLayout></Protected>} />
-    <Route path="/admin/activity-log" element={<Protected mode="admin"><AppLayout mode="admin"><AdminActivityLogPage /></AppLayout></Protected>} />
-    <Route path="/admin/manual" element={<Protected mode="admin"><AppLayout mode="admin"><AdminManualPage /></AppLayout></Protected>} />
-    <Route path="/staff" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome /></AppLayout></Protected>} />
-    <Route path="/staff/rewards" element={<Protected mode="staff"><AppLayout mode="staff"><StaffHome mode="rewards" /></AppLayout></Protected>} />
-    <Route path="/staff/schedule" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.schedule','我的排班')} /></AppLayout></Protected>} />
-    <Route path="/staff/attendance" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.attendance','我的出勤')} /></AppLayout></Protected>} />
-    <Route path="/staff/payroll" element={<Protected mode="staff"><AppLayout mode="staff"><StaffPayrollPage /></AppLayout></Protected>} />
-    <Route path="/staff/exams" element={<Protected mode="staff"><AppLayout mode="staff"><StaffExamPage /></AppLayout></Protected>} />
-    <Route path="/staff/requests" element={<Protected mode="staff"><AppLayout mode="staff"><ComingSoon title={t('nav.requests','我的申请')} /></AppLayout></Protected>} />
+    <Route path="/admin" element={<PortalShell mode="admin" />}>
+      <Route index element={<AdminHome />} />
+      <Route path="employees" element={<AdminEmployeesPage />} />
+      <Route path="schedule" element={<AdminAttendancePage />} />
+      <Route path="daily" element={<AdminDailyWorkPage />} />
+      <Route path="training" element={<AdminTrainingPage />} />
+      <Route path="payroll" element={<AdminPayrollPage />} />
+      <Route path="reports" element={<AdminReportsPage />} />
+      <Route path="users" element={<AdminUsersPage />} />
+      <Route path="ip-allowlist" element={<AdminIpAllowlistPage />} />
+      <Route path="work-execution" element={<AdminPlanningPage section="work-execution" />} />
+      <Route path="account-usage" element={<AdminPlanningPage section="account-usage" />} />
+      <Route path="activity-log" element={<AdminActivityLogPage />} />
+      <Route path="manual" element={<AdminManualPage />} />
+    </Route>
+    <Route path="/staff" element={<PortalShell mode="staff" />}>
+      <Route index element={<StaffHome />} />
+      <Route path="rewards" element={<StaffHome mode="rewards" />} />
+      <Route path="schedule" element={<ComingSoon title={t('nav.schedule','我的排班')} />} />
+      <Route path="attendance" element={<ComingSoon title={t('nav.attendance','我的出勤')} />} />
+      <Route path="payroll" element={<StaffPayrollPage />} />
+      <Route path="exams" element={<StaffExamPage />} />
+      <Route path="requests" element={<ComingSoon title={t('nav.requests','我的申请')} />} />
+    </Route>
     <Route path="*" element={<Navigate to="/staff/login" replace />} />
   </Routes>
 }
