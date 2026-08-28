@@ -4,13 +4,14 @@ import test from 'node:test'
 
 const source = relativePath => readFile(new URL(relativePath, import.meta.url), 'utf8')
 
-const [app, client, guard, allowlistPage, allowlistEdge, migration] = await Promise.all([
+const [app, client, guard, allowlistPage, allowlistEdge, migration, raceFix] = await Promise.all([
   source('../App.jsx'),
   source('./supabase.js'),
   source('../../supabase/functions/admin-ip-guard/index.ts'),
   source('../pages/AdminIpAllowlistPage.jsx'),
   source('../../supabase/functions/admin-ip-allowlist/index.ts'),
   source('../../supabase/migrations/20260827090427_admin_login_ip_allowlist.sql'),
+  source('../../supabase/migrations/20260828064000_admin_ip_attestation_session_race.sql'),
 ])
 
 test('admin claim and heartbeat use Edge while staff retains its direct heartbeat', () => {
@@ -78,4 +79,14 @@ test('proxy metadata outage is retryable and cannot revoke a valid server sessio
   assert.match(attest, /if v_gate->>'reason' = 'ip_not_allowed' then[\s\S]*?delete from auth\.sessions/)
   assert.match(attest, /session_revoked', false/)
   assert.doesNotMatch(attest, /client_ip_unavailable'[\s\S]{0,300}?delete from auth\.sessions/)
+})
+
+test('concurrent logout cannot turn an IP attestation into an FK infrastructure error', () => {
+  assert.match(raceFix, /from auth\.sessions auth_session[\s\S]{0,180}?for key share;/)
+  assert.match(raceFix, /if not found then[\s\S]{0,180}?'auth_session_missing'/)
+  assert.ok(
+    raceFix.indexOf('for key share;') <
+      raceFix.indexOf('insert into public.admin_ip_session_attestations'),
+  )
+  assert.match(raceFix, /set lock_timeout = '750ms'/)
 })
