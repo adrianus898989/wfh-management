@@ -275,6 +275,7 @@ const english = {
   '日期、国家、类型、团队、岗位': 'Date, country, type, team and position',
   '当前员工主档岗位': 'Positions in employee records',
   '员工主档日期': 'Employee record dates',
+  '生命周期账本（已去重）': 'Deduplicated lifecycle ledger',
   '最新 6 人': 'Latest 6',
   '权限范围内': 'Within access scope',
   '登录邮箱': 'Login email',

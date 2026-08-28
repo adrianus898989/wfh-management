@@ -124,16 +124,16 @@ Deno.serve(async (req) => {
 
     const { data: caller, error: callerError } = await admin
       .from('user_access')
-      .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,active,login_username,login_email,roles(id,code,name)')
+      .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,active,login_username,login_email,roles(id,code,name,active)')
       .eq('auth_user_id', userData.user.id)
       .maybeSingle()
 
-    if (callerError || !caller || !caller.active || !caller.backend_enabled) {
+    const callerRole = Array.isArray(caller?.roles) ? caller.roles[0] : caller?.roles
+    if (callerError || !caller || !caller.active || !caller.backend_enabled || callerRole?.active !== true) {
       return json(req, { error: '无后台权限' }, 403)
     }
     const activeCaller = caller
 
-    const callerRole = Array.isArray(caller.roles) ? caller.roles[0] : caller.roles
     const isFounder = callerRole?.code === 'founder'
 
     const { data: callerRp, error: callerRpError } = await admin
@@ -733,6 +733,18 @@ Deno.serve(async (req) => {
       if (!can('backend_account.view') && !can('staff_account.view') && !can('employee.directory.view')) {
         return json(req, { error:'无在线账号查看权限' }, 403)
       }
+      // The service-role reads below must not outlive the caller's current
+      // admin security context. Revalidate the signed-in JWT at the database
+      // boundary so an expired release epoch, IP attestation or MFA/session
+      // cannot continue reading presence until the five-minute lease expires.
+      const { data: presenceAllowed, error: presenceGuardError } = await userClient
+        .rpc('admin_online_presence_allowed')
+      if (presenceGuardError) {
+        console.error('online presence guard failed', presenceGuardError)
+        return json(req, { error:'在线状态验证暂时失败，请重试' }, 503)
+      }
+      if (presenceAllowed !== true) return json(req, { error:'无在线账号查看权限' }, 403)
+
       const nowIso = new Date().toISOString()
       const { data: leaseRows, error: leaseError } = await admin
         .from('app_session_leases')
@@ -766,28 +778,44 @@ Deno.serve(async (req) => {
       // Presence is a once-per-minute global control. The old scope bootstrap
       // here used to fetch every employee, every team, and the complete current
       // roster for each online admin merely to filter a handful of live IDs.
-      // The server-authoritative effective-scope RPC returns the same effective
-      // ID allow-list used by the old full bootstrap for limited callers;
-      // founder/all callers do not need an enumerated list at all.
-      const presenceScope = await loadEffectiveEmployeeScope(
-        admin,
-        authenticatedUser.id,
-        activeCaller,
-        callerRole?.code || '',
-      )
-      const presenceAllowedIds = presenceScope.mode === 'all'
-        ? null
-        : new Set(presenceScope.employeeIds)
+      // Founder/all needs no scope query.  For limited callers, intersect only
+      // the handful of live candidates with the already-materialized effective
+      // scope table.  Never enumerate an administrator's complete scope for a
+      // once-per-minute presence badge.
+      let presenceAllowedIds: Set<string> | null = null
+      if (!isFounder && activeCaller.data_scope !== 'all') {
+        const callerDataScope = cleanString(activeCaller.data_scope)
+        if (callerDataScope === 'self') {
+          const ownEmployeeId = cleanString(activeCaller.employee_id)
+          presenceAllowedIds = new Set(ownEmployeeId ? [ownEmployeeId] : [])
+        } else if (['own_team', 'assigned_teams'].includes(callerDataScope)) {
+          if (!liveEmployeeIds.length) {
+            presenceAllowedIds = new Set()
+          } else {
+            const { data: effectiveRows, error: effectiveError } = await admin
+              .from('user_scope_employees')
+              .select('employee_id')
+              .eq('auth_user_id', authenticatedUser.id)
+              .in('employee_id', liveEmployeeIds)
+            if (effectiveError) return json(req, { error:'无法读取在线账号范围' }, 500)
+            presenceAllowedIds = new Set((effectiveRows || [])
+              .map((row: any) => cleanString(row.employee_id))
+              .filter(Boolean))
+          }
+        } else {
+          presenceAllowedIds = new Set()
+        }
+      }
       const visibleEmployeeIds = presenceAllowedIds === null
         ? new Set(liveEmployeeIds)
         : new Set(liveEmployeeIds.filter(id => presenceAllowedIds.has(id)))
 
       const employeeMap = new Map<string, any>()
-      if (liveEmployeeIds.length) {
+      if (visibleEmployeeIds.size) {
         const { data: employeeRows, error: employeeError } = await admin
           .from('employees')
           .select('id,employee_no,full_name,team_id,position_id,teams(id,name),positions(id,name)')
-          .in('id', liveEmployeeIds)
+          .in('id', [...visibleEmployeeIds])
         if (employeeError) return json(req, { error:'无法读取在线员工资料' }, 500)
         ;(employeeRows || []).forEach((row: any) => employeeMap.set(cleanString(row.id), row))
       }
@@ -812,7 +840,7 @@ Deno.serve(async (req) => {
         if (lease.portal === 'staff' && !account.employee_portal_enabled) return []
         const accountInScope = account.employee_id
           ? canSeeEmployee(account.employee_id)
-          : (isFounder || activeCaller.data_scope === 'all')
+          : isFounder
         if (!accountInScope && cleanString(lease.user_id) !== cleanString(userData.user.id)) return []
 
         const employee = formatEmployee(account.employee_id)
@@ -843,72 +871,25 @@ Deno.serve(async (req) => {
 
     if (action === 'dashboard') {
       if (!can('dashboard.view')) return json(req, { error: '无后台首页权限' }, 403)
-      const mayViewEmployees = can('employee.directory.view')
-      const mayViewStaffCoverage = can('staff_account.view') || can('backend_account.view') ||
-        can('user.activation.generate') || can('user.account.create')
-      const mayViewBackendAccounts = can('backend_account.view') ||
-        can('account.create') || can('account.edit')
-      const scopedEmployees = (mayViewEmployees || mayViewStaffCoverage)
-        ? await getScopedEmployees(false)
-        : []
-      const employees = mayViewEmployees
-        ? scopedEmployees.filter((employee: any) => {
-          const employeeNo = cleanString(employee.employee_no).toUpperCase()
-          return employeeNo && !['SYSTEM', 'ADMIN'].includes(employeeNo) &&
-            !employeeNo.startsWith('TEST') && cleanString(employee.source_type) !== 'google_deleted'
-        })
-        : []
-
-      let accountSummary: Record<string, number> | null = null
-      if (mayViewStaffCoverage || mayViewBackendAccounts) {
-        const scope = await getScopeContext()
-        const { data: accessRows, error: accessError } = await admin.from('user_access')
-          .select('auth_user_id,employee_id,backend_enabled,employee_portal_enabled,active')
-        if (accessError) return json(req, { error: accessError.message }, 500)
-
-        const visibleAccounts = (accessRows || []).filter((row: any) =>
-          isFounder || (row.employee_id && scope.allowedEmployeeIds.has(row.employee_id))
-        )
-        const activeEmployeeStatuses = new Set(['active', '在职'])
-        const activeScopedEmployees = scopedEmployees.filter((employee: any) => {
-          const employeeNo = cleanString(employee.employee_no).toUpperCase()
-          return activeEmployeeStatuses.has(cleanString(employee.status).toLowerCase()) && employeeNo &&
-            !['SYSTEM', 'ADMIN'].includes(employeeNo) && !employeeNo.startsWith('TEST') &&
-            cleanString(employee.source_type) !== 'google_deleted'
-        })
-        const activeScopedEmployeeIds = new Set(activeScopedEmployees.map((employee: any) => employee.id))
-        const portalEmployeeIds = new Set(visibleAccounts
-          .filter((row: any) => row.employee_portal_enabled && row.active !== false &&
-            row.employee_id && activeScopedEmployeeIds.has(row.employee_id))
-          .map((row: any) => row.employee_id))
-
-        accountSummary = {
-          can_view_staff_accounts: mayViewStaffCoverage ? 1 : 0,
-          active_staff_scope: mayViewStaffCoverage ? activeScopedEmployees.length : 0,
-          staff_accounts: mayViewStaffCoverage ? portalEmployeeIds.size : 0,
-          pending_staff_accounts: mayViewStaffCoverage
-            ? activeScopedEmployees.filter((employee: any) => !portalEmployeeIds.has(employee.id)).length
-            : 0,
-          backend_accounts: mayViewBackendAccounts
-            ? visibleAccounts.filter((row: any) => row.backend_enabled && row.active !== false).length
-            : 0,
-        }
+      // Keep the request's user JWT for the RPC.  The database function checks
+      // the current admin session, granular permissions and effective employee
+      // scope, then returns bounded aggregates.  Do not use the service client
+      // here: auth.uid() must remain the signed-in caller, and the old service
+      // path fetched and serialized the complete employee directory.
+      const { data: dashboard, error: dashboardError } = await userClient
+        .rpc('admin_home_dashboard')
+      if (dashboardError || !dashboard) {
+        console.error('bounded dashboard failed', dashboardError)
+        return json(req, { error: '首页数据读取失败，请稍后重试' }, 500)
       }
 
       return json(req, {
-        ok: true,
+        ...dashboard,
         caller: {
           auth_user_id: userData.user.id,
           role_code: callerRole?.code || null,
           is_founder: isFounder,
           permissions: isFounder ? ['*'] : [...callerEffectivePermissions],
-        },
-        employees: employees.map(employeeWithoutSensitiveContact),
-        account_summary: accountSummary,
-        dashboard_access: {
-          employee_metrics: mayViewEmployees,
-          staff_account_metrics: mayViewStaffCoverage,
-          backend_account_metrics: mayViewBackendAccounts,
         },
       })
     }

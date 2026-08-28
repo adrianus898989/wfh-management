@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
@@ -8,6 +8,7 @@ import { adjustmentReason, adjustmentTitle } from '../lib/adjustmentPresentation
 import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
 
 const activeStatuses = ['active', 'probation', '在职', '试用']
+const DASHBOARD_REFRESH_MS = 5 * 60 * 1000
 const text = v => String(v ?? '').trim()
 const portalErrorMessage = (error, fallback) => {
   const message = readableErrorMessage(error)
@@ -66,26 +67,61 @@ export const AdminHome = () => {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const dashboardFlightRef = useRef(null)
+  const dashboardMountedRef = useRef(false)
+  const dashboardLastCompletedRef = useRef(0)
 
-  useEffect(() => {
-    let alive = true
-    ;(async () => {
+  const loadDashboard = useCallback((background = false) => {
+    if (dashboardFlightRef.current) return dashboardFlightRef.current
+    if (!background) setLoading(true)
+    let completedSuccessfully = false
+    const request = (async () => {
       const { data, error } = await supabase.functions.invoke('admin-accounts', {
         body: { action: 'dashboard' },
       })
-      if (!alive) return
+      if (!dashboardMountedRef.current) return
       if (error || data?.error) {
         const errorMessage = await edgeFunctionErrorMessage({ data, error, fallback:'Dashboard 读取失败，请重试' })
-        if (!alive) return
+        if (!dashboardMountedRef.current) return
         setError(errorMessage)
-      } else setData(data)
-      setLoading(false)
-    })()
-    return () => { alive = false }
+      } else {
+        setData(data)
+        setError('')
+        completedSuccessfully = true
+      }
+    })().finally(() => {
+      if (dashboardFlightRef.current === request) dashboardFlightRef.current = null
+      if (dashboardMountedRef.current) {
+        if (completedSuccessfully) dashboardLastCompletedRef.current = Date.now()
+        setLoading(false)
+      }
+    })
+    dashboardFlightRef.current = request
+    return request
   }, [])
+
+  useEffect(() => {
+    dashboardMountedRef.current = true
+    void loadDashboard(false)
+    const refreshWhenDue = () => {
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - dashboardLastCompletedRef.current < DASHBOARD_REFRESH_MS) return
+      void loadDashboard(true)
+    }
+    const interval = window.setInterval(refreshWhenDue, DASHBOARD_REFRESH_MS)
+    document.addEventListener('visibilitychange', refreshWhenDue)
+    return () => {
+      dashboardMountedRef.current = false
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshWhenDue)
+    }
+  }, [loadDashboard])
 
   const view = useMemo(() => {
     const employees = data?.employees || []
+    const serverSummary = data?.summary || null
+    const serverDistributions = data?.distributions || null
+    const hasServerSummary = Boolean(serverSummary)
     const active = employees.filter(isActive)
     const inactiveRows = employees.filter(e => !isActive(e))
     const inactiveBreakdown = inactiveRows.reduce((summary, employee) => {
@@ -119,22 +155,31 @@ export const AdminHome = () => {
     }))
 
     return {
-      total: employees.length,
-      active: active.length,
-      inactive: Math.max(0, employees.length - active.length),
-      inactiveBreakdown,
-      teams: groupCount(active, e => e?.teams?.name),
-      positions: groupCount(active, e => e?.positions?.name),
-      types: groupCount(active, e => e?.employment_type),
-      countries: groupCount(active, e => e?.country || e?.nationality),
-      hires30: hires30.length,
-      resignations30: resignations30.length,
-      profileCompletion: active.length ? Math.round(completeProfiles.length / active.length * 100) : 0,
+      total: hasServerSummary ? Number(serverSummary.total || 0) : employees.length,
+      active: hasServerSummary ? Number(serverSummary.active || 0) : active.length,
+      inactive: hasServerSummary ? Number(serverSummary.inactive || 0) : Math.max(0, employees.length - active.length),
+      inactiveBreakdown: hasServerSummary ? {
+        resigned:Number(serverSummary?.inactive_breakdown?.resigned || 0),
+        disabled:Number(serverSummary?.inactive_breakdown?.disabled || 0),
+        unverified:Number(serverSummary?.inactive_breakdown?.unverified || 0),
+      } : inactiveBreakdown,
+      teams: serverDistributions?.teams || groupCount(active, e => e?.teams?.name),
+      positions: serverDistributions?.positions || groupCount(active, e => e?.positions?.name),
+      types: serverDistributions?.types || groupCount(active, e => e?.employment_type),
+      countries: serverDistributions?.countries || groupCount(active, e => e?.country || e?.nationality),
+      teamCount: hasServerSummary ? Number(serverSummary.team_count || 0) : groupCount(active, e => e?.teams?.name).length,
+      positionCount: hasServerSummary ? Number(serverSummary.position_count || 0) : groupCount(active, e => e?.positions?.name).length,
+      hires30: hasServerSummary ? serverSummary.hires_30_days : hires30.length,
+      resignations30: hasServerSummary ? serverSummary.resignations_30_days : resignations30.length,
+      profileCompletion: hasServerSummary
+        ? Number(serverSummary.profile_completion || 0)
+        : (active.length ? Math.round(completeProfiles.length / active.length * 100) : 0),
       accounts,
       accountSummary,
       canViewEmployees: Boolean(data?.dashboard_access?.employee_metrics),
-      movement,
-      recentHires,
+      movement: Array.isArray(data?.movement) ? data.movement : movement,
+      recentHires: Array.isArray(data?.recent_hires) ? data.recent_hires : recentHires,
+      freshness: data?.freshness || null,
     }
   }, [data])
 
@@ -159,17 +204,17 @@ export const AdminHome = () => {
           ? `${view.inactive} not active: ${view.inactiveBreakdown.resigned} resigned, ${view.inactiveBreakdown.disabled} disabled, ${view.inactiveBreakdown.unverified} status to verify`
           : `非在职 ${view.inactive}：离职 ${view.inactiveBreakdown.resigned} · 停用 ${view.inactiveBreakdown.disabled} · 状态待核 ${view.inactiveBreakdown.unverified}`}
           icon="人" tone="green" />
-        <Kpi label={adminT('团队总数')} value={loading ? '—' : view.teams.length} hint={adminT('按当前管理范围统计')} icon="组" tone="violet" />
-        <Kpi label={adminT('近 30 天入职')} value={loading ? '—' : view.hires30} hint={adminT('取员工主档入职日期')} icon="入" tone="green" />
-        <Kpi label={adminT('近 30 天离职')} value={loading ? '—' : view.resignations30} hint={adminT('取员工主档离职日期')} icon="离" tone="orange" />
+        <Kpi label={adminT('团队总数')} value={loading ? '—' : view.teamCount} hint={adminT('按当前管理范围统计')} icon="组" tone="violet" />
+        <Kpi label={adminT('近 30 天入职')} value={loading || view.hires30 == null ? '—' : view.hires30} hint={adminT('生命周期账本（已去重）')} icon="入" tone="green" />
+        <Kpi label={adminT('近 30 天离职')} value={loading || view.resignations30 == null ? '—' : view.resignations30} hint={adminT('生命周期账本（已去重）')} icon="离" tone="orange" />
         <Kpi label={adminT('资料完整率')} value={loading ? '—' : `${view.profileCompletion}%`} hint={adminT('日期、国家、类型、团队、岗位')} icon="档" tone="cyan" />
         {view.accounts
           ? <Kpi label={adminT('员工账号覆盖')} value={loading ? '—' : `${view.accounts.staff_accounts}/${view.accounts.active_staff_scope}`} hint={adminLocale === 'en' ? `${view.accounts.pending_staff_accounts} pending` : `待开通 ${view.accounts.pending_staff_accounts} 个`} icon="账" tone="indigo" />
-          : <Kpi label={adminT('岗位种类')} value={loading ? '—' : view.positions.length} hint={adminT('当前员工主档岗位')} icon="岗" tone="indigo" />}
+          : <Kpi label={adminT('岗位种类')} value={loading ? '—' : view.positionCount} hint={adminT('当前员工主档岗位')} icon="岗" tone="indigo" />}
       </div>
 
       <div className="dashboard-grid dashboard-grid-pro">
-        <DashboardCard title={adminT('近 6 个月人员变化')} meta={adminT('员工主档日期')} className="dashboard-span-8 dashboard-trend-card">
+        <DashboardCard title={adminT('近 6 个月人员变化')} meta={adminT('生命周期账本（已去重）')} className="dashboard-span-8 dashboard-trend-card">
           <MovementChart rows={view.movement} />
         </DashboardCard>
 
@@ -191,7 +236,7 @@ export const AdminHome = () => {
               {view.recentHires.map(e => (
                 <div className="recent-row" key={e.id}>
                   <div><strong>{e.full_name}</strong><span>{e.employee_no}</span></div>
-                  <div><span>{e?.teams?.name || '未匹配团队'}</span><b>{text(e.hire_date).slice(0,10)}</b></div>
+                  <div><span>{e?.team_name || e?.teams?.name || '未匹配团队'}</span><b>{text(e.hire_date).slice(0,10)}</b></div>
                 </div>
               ))}
             </div>
