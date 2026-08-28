@@ -763,11 +763,24 @@ Deno.serve(async (req) => {
 
       const accessMap = new Map((accessRows || []).map((row: any) => [cleanString(row.auth_user_id), row]))
       const liveEmployeeIds = [...new Set((accessRows || []).map((row: any) => cleanString(row.employee_id)).filter(Boolean))]
-      const visibleEmployeeIds = new Set<string>()
-      const scope = await getScopeContext()
-      liveEmployeeIds.forEach(id => {
-        if (scope.allowedEmployeeIds.has(id)) visibleEmployeeIds.add(id)
-      })
+      // Presence is a once-per-minute global control. The old scope bootstrap
+      // here used to fetch every employee, every team, and the complete current
+      // roster for each online admin merely to filter a handful of live IDs.
+      // The server-authoritative effective-scope RPC returns the same effective
+      // ID allow-list used by the old full bootstrap for limited callers;
+      // founder/all callers do not need an enumerated list at all.
+      const presenceScope = await loadEffectiveEmployeeScope(
+        admin,
+        authenticatedUser.id,
+        activeCaller,
+        callerRole?.code || '',
+      )
+      const presenceAllowedIds = presenceScope.mode === 'all'
+        ? null
+        : new Set(presenceScope.employeeIds)
+      const visibleEmployeeIds = presenceAllowedIds === null
+        ? new Set(liveEmployeeIds)
+        : new Set(liveEmployeeIds.filter(id => presenceAllowedIds.has(id)))
 
       const employeeMap = new Map<string, any>()
       if (liveEmployeeIds.length) {

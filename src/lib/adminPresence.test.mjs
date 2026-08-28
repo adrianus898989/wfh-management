@@ -28,6 +28,17 @@ test('online status reuses the existing low-frequency application lease', () => 
   assert.match(component, /连续 5 分钟没有心跳即显示离线/)
 })
 
+test('online presence scopes only live employees without loading the full account directory', () => {
+  const start = endpoint.indexOf("if (action === 'online_presence')")
+  const end = endpoint.indexOf("if (action === 'dashboard')", start)
+  const source = endpoint.slice(start, end)
+  assert.match(source, /loadEffectiveEmployeeScope\(/)
+  assert.match(source, /presenceScope\.mode === 'all'/)
+  assert.doesNotMatch(source, /getScopeContext\(/)
+  assert.doesNotMatch(source, /getAllEmployeeRows\(/)
+  assert.doesNotMatch(source, /admin_scope_current_employee_directory/)
+})
+
 test('admin presence controls remain visible while the page content scrolls', () => {
   assert.match(layout, /mode==='admin'\?'admin-shell':'staff-shell'/)
   assert.match(baseStyles, /\.admin-shell\{height:100vh;min-height:0;overflow:hidden\}/)
