@@ -341,7 +341,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
     event_date:text(record?.event_date).slice(0,10)||`${inferredMonth}-01`,
     amount:record?.amount==null?'':String(record.amount),
     currency:text(raw.currency||record?.currency)||workbookCurrencies[inferredWorkbook],
-    category:inferredWorkbook==='home_ph'?'':text(raw.category||record?.reason),
+    category:text(raw.category||record?.reason),
     note:text(record?.note),
   }))
   const [state,setState]=useState({loading:true,saving:false,error:'',options:{workbooks:[],months:[],employees:[]}})
@@ -359,7 +359,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
   },[])
 
   const update=(key,value)=>setDraft(current=>{
-    if(key==='workbook_key')return {...current,workbook_key:value,currency:workbookCurrencies[value]||'',category:value==='home_ph'?'':current.category}
+    if(key==='workbook_key')return {...current,workbook_key:value,currency:workbookCurrencies[value]||''}
     if(key==='source_month')return {...current,source_month:value,event_date:`${value}-01`}
     return {...current,[key]:value}
   })
@@ -408,7 +408,7 @@ function AdjustmentEditorModal({record,onClose,onSaved}){
       <label><span>日期 <em>必填</em></span><input type="date" min={`${draft.source_month}-01`} max={`${draft.source_month}-${monthEnd}`} value={draft.event_date} disabled={state.saving} onChange={event=>update('event_date',event.target.value)} required/></label>
       <label><span>币种 <em>固定</em></span><input value={draft.currency} readOnly aria-readonly="true"/></label>
       <label><span>金额 <em>必填</em></span><input type="number" step="0.01" min="-100000000" max="100000000" value={draft.amount} disabled={state.saving} onChange={event=>update('amount',event.target.value)} placeholder="例如 50 或 -20" required/><small>{Number(draft.amount)>0?'将记录为奖金':Number(draft.amount)<0?'将记录为扣除':'不能填写 0'}</small></label>
-      <label><span>类型 {draft.workbook_key==='home_ph'?<em>菲律宾表暂无独立类型列</em>:<em>必填</em>}</span><input maxLength="200" value={draft.category} disabled={state.saving||draft.workbook_key==='home_ph'} onChange={event=>update('category',event.target.value)} placeholder="例如：迟到 / 超时、质量奖励" required={draft.workbook_key!=='home_ph'}/><small>{draft.workbook_key==='home_ph'?'该表仍按两个半月金额栏与备注同步':'保存到 Google 表格的“类型”列，也可在后台搜索'}</small></label>
+      <label><span>类型 <em>必填</em></span><input maxLength="200" value={draft.category} disabled={state.saving} onChange={event=>update('category',event.target.value)} placeholder="例如：迟到 / 超时、质量奖励" required/><small>{draft.workbook_key==='home_ph'?'保存到菲律宾九列表的“类型”列；日期仍按上下半月区块同步':'保存到 Google 表格的“类型”列，也可在后台搜索'}</small></label>
       <label className="adjustment-editor-note"><span>原因 <em>必填</em></span><textarea rows="4" maxLength="4000" value={draft.note} disabled={state.saving} onChange={event=>update('note',event.target.value)} placeholder="说明奖金或扣除原因" required/><small>保存到 Google 表格的“备注”列</small></label>
     </div>
     <footer><div><b>保存结果会明确分两步显示</b><span>Supabase 已保存 → Google 待同步 / 已同步</span></div><button type="button" className="secondary-action" disabled={state.saving} onClick={onClose}>取消</button><button type="submit" className="primary-action" disabled={state.loading||state.saving}>{state.saving?'正在保存 Supabase…':editing?'保存修改':'保存并进入同步队列'}</button></footer>

@@ -32,6 +32,25 @@ test('后台编辑仍把用户填写的原因写入 note payload', async () => {
   assert.match(source, /adjustment-adjustment-category-cell|attendance-adjustment-category-cell/)
 })
 
+test('菲律宾九列表允许并要求填写类型，同时保留币种与上下半月路由', async () => {
+  const [source, correctionSource] = await Promise.all([
+    readFile(new URL('../pages/AdminAttendancePage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../supabase/migrations/20260826164000_restore_philippines_adjustment_nine_columns.sql', import.meta.url), 'utf8'),
+  ])
+  assert.match(source, /category:text\(raw\.category\|\|record\?\.reason\)/)
+  assert.doesNotMatch(source, /category:inferredWorkbook==='home_ph'\?'':/)
+  assert.match(source, /if\(key==='workbook_key'\)return \{\.\.\.current,workbook_key:value,currency:workbookCurrencies\[value\]\|\|''\}/)
+  assert.doesNotMatch(source, /category:value==='home_ph'\?'':current\.category/)
+  assert.match(source, /<span>类型 <em>必填<\/em><\/span><input maxLength="200" value=\{draft\.category\} disabled=\{state\.saving\}/)
+  assert.match(source, /placeholder="例如：迟到 \/ 超时、质量奖励" required\/>/)
+  assert.doesNotMatch(source, /disabled=\{state\.saving\|\|draft\.workbook_key==='home_ph'\}/)
+  assert.doesNotMatch(source, /required=\{draft\.workbook_key!=='home_ph'\}/)
+  assert.match(source, /保存到菲律宾九列表的“类型”列；日期仍按上下半月区块同步/)
+  assert.match(correctionSource, /when v_workbook='home_ph' and extract\(day from v_event_date\)<=15 then 'first_half'/)
+  assert.match(correctionSource, /when v_workbook='home_ph' then 'second_half'/)
+  assert.match(correctionSource, /v_workbook in \('onsite','home_vim','home_ph'\) and v_category=''/)
+})
+
 test('日考勤明细将员工与组织字段独立分列且不显示负责人', async () => {
   const source = await readFile(new URL('../pages/AdminAttendancePage.jsx', import.meta.url), 'utf8')
   const styles = await readFile(new URL('../styles-attendance.css', import.meta.url), 'utf8')
