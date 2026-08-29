@@ -57,6 +57,9 @@ test('payroll import history presents only persisted source and category fields'
   assert.equal(payrollBatchSourcePresentation({source_type:'partner_feed',title:'已记录类别'}).sourceLabel,'partner_feed')
   assert.match(page, /<span>来源 \/ 批次类别<\/span>/)
   assert.match(page, /source\.sourceLabel[\s\S]+source\.category/)
+  assert.match(page, /<span>币种<\/span><select value=\{historyCurrency\}/)
+  assert.match(page, /historyCurrency==='all'/)
+  assert.match(page, /clean\(batch\?\.currency\)\.toUpperCase\(\)===historyCurrency/)
 })
 
 test('payroll import history renders recorded actor timestamps without fabricating an editor', () => {

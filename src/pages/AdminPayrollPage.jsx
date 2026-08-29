@@ -533,6 +533,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
   const [platformFilter,setPlatformFilter]=useState('')
   const [historySearch,setHistorySearch]=useState('')
   const [historyStatus,setHistoryStatus]=useState('all')
+  const [historyCurrency,setHistoryCurrency]=useState('all')
   const [rowActionBusy,setRowActionBusy]=useState('')
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(20)
@@ -541,7 +542,10 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
     if(byCreated)return byCreated
     return Number(right.id||0)-Number(left.id||0)
   }),[batches])
-  const history=useMemo(()=>filterPayrollBatches(allHistory,{search:historySearch,status:historyStatus}),[allHistory,historySearch,historyStatus])
+  const history=useMemo(()=>filterPayrollBatches(allHistory,{search:historySearch,status:historyStatus}).filter(batch=>{
+    if(historyCurrency==='all')return true
+    return clean(batch?.currency).toUpperCase()===historyCurrency
+  }),[allHistory,historySearch,historyStatus,historyCurrency])
   const rows=panel?.rows||[]
   const selected=panel?.selected||panel?.batch||null
   const positionOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.position_name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
@@ -720,7 +724,8 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
       <div className="payroll-import-history-filters">
         <label><span>批次搜索</span><input value={historySearch} onChange={event=>setHistorySearch(event.target.value)} placeholder="文档名 / 来源 / 批次类别 / 批次号 / 操作人 / 币种"/></label>
         <label><span>批次状态</span><select value={historyStatus} onChange={event=>setHistoryStatus(event.target.value)}><option value="all">全部状态</option><option value="draft">待发布</option><option value="published">已发布</option><option value="archived">已归档</option><option value="voided">已作废</option></select></label>
-        <button type="button" disabled={!historySearch&&historyStatus==='all'} onClick={()=>{setHistorySearch('');setHistoryStatus('all')}}>重置</button>
+        <label><span>币种</span><select value={historyCurrency} onChange={event=>setHistoryCurrency(event.target.value)}><option value="all">全部币种</option>{PAYROLL_CURRENCY_OPTIONS.map(option=><option key={option.code} value={option.code}>{option.code} · {option.label}</option>)}</select></label>
+        <button type="button" disabled={!historySearch&&historyStatus==='all'&&historyCurrency==='all'} onClick={()=>{setHistorySearch('');setHistoryStatus('all');setHistoryCurrency('all')}}>重置</button>
       </div>
       <div className="payroll-import-history-list">
         <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>来源 / 批次类别</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span>操作</span></div>
