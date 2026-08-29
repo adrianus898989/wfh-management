@@ -14,6 +14,7 @@ const [
   sessionGuardEdge,
   allowlistEdge,
   allowlistPage,
+  cleanupHotfix,
 ] = await Promise.all([
   source('../../supabase/migrations/20260829112326_staff_portal_ip_allowlist.sql'),
   source('../App.jsx'),
@@ -23,6 +24,7 @@ const [
   source('../../supabase/functions/admin-ip-guard/index.ts'),
   source('../../supabase/functions/admin-ip-allowlist/index.ts'),
   source('../pages/AdminIpAllowlistPage.jsx'),
+  source('../../supabase/migrations/20260829165000_safe_portal_ip_attestation_cleanup.sql'),
 ])
 
 test('staff preflight sends an enum portal and keeps the public response minimal', async () => {
@@ -100,4 +102,13 @@ test('management requires explicit scope and staff activation confirmation', () 
   assert.match(allowlistEdge, /effective: Boolean\(setting\.enforced && adminEnabledCount > 0\)/)
   assert.match(allowlistEdge, /staff_effective: Boolean\(setting\.staff_enforced && staffEnabledCount > 0\)/)
   assert.match(allowlistPage, /拒绝全部 \/ 配置异常/)
+})
+
+test('portal enforcement cleanup keeps managed safe-delete protection enabled', () => {
+  assert.match(cleanupHotfix, /portal_ip_allowlist_cleanup_shape_changed/)
+  assert.match(cleanupHotfix, /emergency production migration may already have applied this exact/)
+  assert.match(cleanupHotfix, /admin_ip_session_attestations attestation where attestation\.session_id is not null/)
+  assert.match(cleanupHotfix, /staff_ip_session_attestations attestation where attestation\.session_id is not null/)
+  assert.doesNotMatch(cleanupHotfix, /^\s*delete from public\.(?:admin|staff)_ip_session_attestations\s*;\s*$/im)
+  assert.doesNotMatch(cleanupHotfix, /safeupdate|session_replication_role|disable trigger/i)
 })

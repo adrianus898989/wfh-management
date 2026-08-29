@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
+import { useAppToast } from '../components/AppToastProvider'
 import { ConnectivityRecordsPage, EmployeeConnectivityPanel, EmployeePayrollHistoryPanel, EmployeeProfileMetrics } from '../components/ConnectivityRecords'
 import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/AttendanceRecords'
 import { AdminAlertRecordsPage, EmployeeAlertHistoryPanel } from '../components/AdminAlertCenter'
@@ -78,6 +79,9 @@ const emptyEmployeeMeta=()=>({
 })
 const EMPLOYEE_EXPORT_PAGE_SIZE=500
 const EMPLOYEE_EXPORT_MAX_PAGES=100
+const EMPLOYEE_TOAST_MODULE='员工管理'
+const employeeToastDedupeKey=(operation,type,scope='')=>['employees',text(operation),text(scope),type].join(':')
+const employeeRefreshSucceeded=outcomes=>(outcomes||[]).every(outcome=>outcome!==false)
 const MANAGEMENT_RISK_REQUEST_TIMEOUT_MS=12*1000
 const blankPeopleFilters=()=>({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
 const blankManagementRiskFilters=()=>({
@@ -450,6 +454,7 @@ function bundleToForm(detail,capabilities){
 export default function AdminEmployeesPage(){
   const adminAccess=useAdminAccess()
   const {locale}=useAdminI18n()
+  const {notify}=useAppToast()
   const employeeAccessKey=useMemo(()=>JSON.stringify([
     adminAccess.authUserId||'',Boolean(adminAccess.founder),adminAccess.roleCode||'',
     adminAccess.employeeId||'',adminAccess.dataScope||'',adminAccess.teamId||'',
@@ -467,6 +472,33 @@ export default function AdminEmployeesPage(){
   const employeeBootstrapRef=useRef({loaded:false,inFlight:null,accessKey:employeeAccessKey,epoch:0})
   const employeeDirectoryRequestRef=useRef({inFlight:null,activeKey:'',pending:null})
   const masterPositionOptionsRequestRef=useRef(null)
+  const historyReadIntentRef=useRef('')
+  const pageMountedRef=useRef(true)
+  useEffect(()=>{
+    pageMountedRef.current=true
+    return()=>{pageMountedRef.current=false;refreshEmployeeDataRef.current=null;historyReadIntentRef.current=''}
+  },[])
+  const publishEmployeeFailure=(operation,reason,{retry,retryLabel='重试',scope=''}={})=>{
+    if(!pageMountedRef.current)return null
+    return notify({
+      type:'error',module:EMPLOYEE_TOAST_MODULE,operation,
+      reason:text(reason)||'操作未完成，请稍后重试。',
+      dedupeKey:employeeToastDedupeKey(operation,'error',scope),
+      retry,retryLabel,
+    })
+  }
+  const publishEmployeeSuccess=(operation,reason,scope='')=>{
+    if(!pageMountedRef.current)return null
+    return notify({
+      type:'success',module:EMPLOYEE_TOAST_MODULE,operation,
+      reason:text(reason)||'操作已完成。',
+      dedupeKey:employeeToastDedupeKey(operation,'success',scope),
+    })
+  }
+  const refreshMutationConfirmation=()=>refreshEmployeeDataRef.current?.({announceFailure:true})
+  const publishMutationFailure=(operation,reason,scope='')=>publishEmployeeFailure(operation,reason,{
+    retry:refreshMutationConfirmation,retryLabel:'刷新确认',scope,
+  })
   const canViewEmployees=adminAccess.hasPermission('employee.directory.view')
   const canViewResignations=adminAccess.hasPermission('employee.resignations.view')
   const canExportEmployees=adminAccess.hasPermission('employee.directory.export')
@@ -639,39 +671,56 @@ export default function AdminEmployeesPage(){
     return rows
   }
 
-  const loadPageFilterOptions=async(includeInactive=tab==='离职记录')=>{
+  const loadPageFilterOptions=async(includeInactive=tab==='离职记录',{announceFailure=false,operation='读取员工筛选项'}={})=>{
+    if(!pageMountedRef.current)return false
     try{
       const data=await invoke({action:'filter_options',include_inactive:includeInactive})
+      if(!pageMountedRef.current)return false
       setMeta(current=>({
         ...current,
         teams:data?.teams||current.teams,
         positions:data?.positions||current.positions,
         options:{...current.options,...(data?.options||{})},
       }))
+      setMetaError('')
+      return true
     }catch(e){
-      setMetaError(employeeRequestError(e,'筛选选项读取失败，请稍后重试。'))
+      if(!pageMountedRef.current)return false
+      const message=employeeRequestError(e,'筛选选项读取失败，请稍后重试。')
+      setMetaError(message)
+      if(announceFailure)publishEmployeeFailure(operation,message,{
+        retry:()=>loadPageFilterOptions(includeInactive,{announceFailure:true,operation}),
+      })
+      return false
     }
   }
 
   const loadArchiveStats=async(silent=false)=>{
+    if(!pageMountedRef.current)return false
     if(!silent) setArchiveStats(v=>({...v,loading:true}))
     try{
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'overview',today}})
+      if(!pageMountedRef.current)return false
       if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'员工结构统计读取失败'}))
       setArchiveStats({...data,loading:false,error:'',refreshed_at:new Date().toISOString()})
+      return true
     }catch(e){
+      if(!pageMountedRef.current)return false
       setArchiveStats(v=>({...v,loading:false,error:e.message||'员工结构统计读取失败'}))
+      return false
     }
   }
 
-  const loadPeopleAnalytics=async(nextFilters=appliedAnalysisFilters)=>{
+  const loadPeopleAnalytics=async(nextFilters=appliedAnalysisFilters,{announceFailure=false,operation='查询人员分析'}={})=>{
+    if(!pageMountedRef.current)return false
     setPeopleAnalytics(v=>({...v,loading:true,error:''}))
     try{
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const data=await invoke({action:'analytics',today,filters:nextFilters})
+      if(!pageMountedRef.current)return false
       setPeopleAnalytics({...data,loading:false,error:''})
       // The unfiltered response is also the base directory used by team and
       // position views. Reuse it instead of sending a duplicate heavy request.
@@ -679,18 +728,32 @@ export default function AdminEmployeesPage(){
         setAnalytics({...data,loading:false,error:''})
         setResignationAnalytics({...data,loading:false,error:''})
       }
+      return true
     }catch(e){
+      if(!pageMountedRef.current)return false
       const message=employeeRequestError(e,'人员分析读取失败，请重试。')
       setPeopleAnalytics(v=>({...v,loading:false,error:message}))
       if(!hasFilterValues(nextFilters)) setAnalytics(v=>({...v,loading:false,error:message}))
+      if(announceFailure)publishEmployeeFailure(operation,message,{
+        retry:()=>loadPeopleAnalytics(nextFilters,{announceFailure:true,operation}),
+      })
+      return false
     }
   }
 
-  const loadManagementRisk=(nextFilters=appliedManagementRiskFilters)=>{
-    if(!canViewManagementRisk) return Promise.resolve()
+  const loadManagementRisk=(nextFilters=appliedManagementRiskFilters,{announceFailure=false,operation='查询管理风险'}={})=>{
+    if(!pageMountedRef.current)return Promise.resolve(false)
+    if(!canViewManagementRisk) return Promise.resolve(true)
     const requestState=managementRiskRequestRef.current
     const requestedFilters={...blankManagementRiskFilters(),...(nextFilters||{})}
     const requestedFilterKey=JSON.stringify(requestedFilters)
+
+    const announceRequestFailure=task=>task.then(success=>{
+      if(!success)publishEmployeeFailure(operation,requestState.failureMessage||'管理风险分析读取失败，筛选条件已保留，请重试。',{
+        retry:()=>loadManagementRisk(requestedFilters,{announceFailure:true,operation}),
+      })
+      return success
+    })
 
     if(requestState.inFlight){
       // Keep only the latest explicit request. If the user returns to the
@@ -698,11 +761,14 @@ export default function AdminEmployeesPage(){
       requestState.pendingFilters=requestedFilterKey===requestState.activeFilterKey
         ? null
         : requestedFilters
-      return requestState.inFlight
+      if(!announceFailure)return requestState.inFlight
+      return announceRequestFailure(requestState.inFlight)
     }
 
+    requestState.failureMessage=''
     const drainRequests=async()=>{
       let activeFilters=requestedFilters
+      let finalSuccess=true
       while(activeFilters){
         requestState.activeFilterKey=JSON.stringify(activeFilters)
         requestState.pendingFilters=null
@@ -727,6 +793,7 @@ export default function AdminEmployeesPage(){
             MANAGEMENT_RISK_REQUEST_TIMEOUT_MS,
             'MANAGEMENT_RISK_TIMEOUT',
           )
+          if(!pageMountedRef.current)return false
           if(error||data?.error) throw new Error(readableErrorMessage(error||data?.error)||'管理风险分析读取失败')
           responseData=data
         }catch(e){
@@ -736,12 +803,15 @@ export default function AdminEmployeesPage(){
         }
 
         const pendingFilters=requestState.pendingFilters
+        finalSuccess=!responseError
+        requestState.failureMessage=responseError
         if(!pendingFilters){
           if(responseError) setManagementRisk(current=>({...current,loading:false,error:responseError}))
           else setManagementRisk({...responseData,loading:false,error:''})
         }
         activeFilters=pendingFilters
       }
+      return finalSuccess
     }
 
     requestState.inFlight=drainRequests().finally(()=>{
@@ -749,18 +819,34 @@ export default function AdminEmployeesPage(){
       requestState.activeFilterKey=''
       requestState.pendingFilters=null
     })
-    return requestState.inFlight
+    return announceFailure?announceRequestFailure(requestState.inFlight):requestState.inFlight
   }
 
-  const loadResignationAnalytics=async(nextFilters=appliedResignationAnalyticsFilters)=>{
+  const announceUserManagementRisk=(task,nextFilters,operation='查询管理风险')=>task.then(success=>{
+    if(!success)publishEmployeeFailure(operation,managementRiskRequestRef.current.failureMessage||'管理风险分析读取失败，筛选条件已保留，请重试。',{
+      retry:()=>loadManagementRisk(nextFilters,{announceFailure:true,operation}),
+    })
+    return success
+  })
+
+  const loadResignationAnalytics=async(nextFilters=appliedResignationAnalyticsFilters,{announceFailure=false,operation='查询离职分析'}={})=>{
+    if(!pageMountedRef.current)return false
     setResignationAnalytics(v=>({...v,loading:true,error:''}))
     try{
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const data=await invoke({action:'analytics',today,filters:nextFilters})
+      if(!pageMountedRef.current)return false
       setResignationAnalytics({...data,loading:false,error:''})
+      return true
     }catch(e){
+      if(!pageMountedRef.current)return false
+      const message=employeeRequestError(e,'离职分析读取失败，请重试。')
       setResignationAnalytics(v=>({...v,loading:false,error:employeeRequestError(e,'离职分析读取失败，请重试。')}))
+      if(announceFailure)publishEmployeeFailure(operation,message,{
+        retry:()=>loadResignationAnalytics(nextFilters,{announceFailure:true,operation}),
+      })
+      return false
     }
   }
 
@@ -793,7 +879,7 @@ export default function AdminEmployeesPage(){
 
   const executeEmployeeDirectoryRequest=async request=>{
     const state=employeeDirectoryRequestRef.current
-    const sameIdentity=()=>employeeBootstrapRef.current.epoch===request.epoch
+    const sameIdentity=()=>pageMountedRef.current&&employeeBootstrapRef.current.epoch===request.epoch
     const isCurrent=()=>sameIdentity()&&!state.pending
     try{
       if(request.kind==='meta'){
@@ -831,7 +917,13 @@ export default function AdminEmployeesPage(){
         return false
       }
       if(isCurrent()&&!request.silent){
+        const message=employeeRequestError(e,rows.length?'员工档案刷新失败，已保留当前列表，请稍后重试。':'员工档案读取失败，请稍后重试。')
         setError(employeeRequestError(e,rows.length?'员工档案刷新失败，已保留当前列表，请稍后重试。':'员工档案读取失败，请稍后重试。'))
+        if(request.announceFailure)publishEmployeeFailure(request.operation||'查询员工档案',message,{
+          retry:()=>loadEmployeeDirectory(request.page,request.pageSize,{
+            nextFilters:request.filters,announceFailure:true,operation:request.operation||'查询员工档案',
+          }),
+        })
       }
       return false
     }
@@ -845,8 +937,15 @@ export default function AdminEmployeesPage(){
       key:JSON.stringify([request.kind,request.page,request.pageSize,request.filters,employeeBootstrapRef.current.epoch]),
     }
     if(state.inFlight){
-      if(state.pending?.key===queued.key)return state.inFlight
+      if(state.pending?.key===queued.key){
+        if(queued.announceFailure)state.pending=queued
+        return state.inFlight
+      }
       if(state.activeKey===queued.key){
+        if(queued.announceFailure){
+          state.pending=queued
+          return state.inFlight
+        }
         // The newest intent returned to the request already in flight. Drop a
         // superseded queued request so the active result may be applied.
         state.pending=null
@@ -878,46 +977,55 @@ export default function AdminEmployeesPage(){
     return task
   }
 
-  const loadBootstrap=async(nextPage=1,nextSize=pageSize,{silent=false,nextFilters=appliedFilters}={})=>{
+  const loadBootstrap=async(nextPage=1,nextSize=pageSize,{silent=false,nextFilters=appliedFilters,announceFailure=false,operation='查询员工档案'}={})=>{
+    if(!pageMountedRef.current)return false
     if(!silent){setLoading(true);setError('')}
     try{
-      return await enqueueEmployeeDirectoryRequest({kind:'bootstrap',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+      return await enqueueEmployeeDirectoryRequest({kind:'bootstrap',page:nextPage,pageSize:nextSize,filters:nextFilters,silent,announceFailure,operation})
     }finally{
-      if(!silent)setLoading(false)
+      if(!silent&&pageMountedRef.current)setLoading(false)
     }
   }
 
-  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters}={})=>{
+  const loadList=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters,announceFailure=false,operation='查询员工档案'}={})=>{
+    if(!pageMountedRef.current)return false
     if(!silent){setLoading(true);setError('')}
     try{
-      return await enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+      return await enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent,announceFailure,operation})
     }finally{
-      if(!silent)setLoading(false)
+      if(!silent&&pageMountedRef.current)setLoading(false)
     }
   }
 
-  const loadEmployeeDirectory=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters,refreshMeta=true}={})=>{
+  const loadEmployeeDirectory=async(nextPage=page,nextSize=pageSize,{silent=false,nextFilters=appliedFilters,refreshMeta=true,announceFailure=false,operation='查询员工档案'}={})=>{
+    if(!pageMountedRef.current)return false
     const usesSpecialReader=Boolean(text(nextFilters?.risk_level)||text(nextFilters?.account_status))
-    if(!usesSpecialReader) return loadBootstrap(nextPage,nextSize,{silent,nextFilters})
+    if(!usesSpecialReader) return loadBootstrap(nextPage,nextSize,{silent,nextFilters,announceFailure,operation})
     if(!silent){setLoading(true);setError('')}
     try{
-      if(!refreshMeta) return await enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+      if(!refreshMeta) return await enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent,announceFailure,operation})
       // The regular bootstrap list cannot apply risk/account filters. Queue a
       // metadata-only request followed by the dedicated filtered reader, so an
       // unfiltered bootstrap response can never replace the requested result.
       const metaRequest=enqueueEmployeeDirectoryRequest({kind:'meta',page:nextPage,pageSize:nextSize,filters:nextFilters,silent:true})
-      const listRequest=enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent})
+      const listRequest=enqueueEmployeeDirectoryRequest({kind:'list',page:nextPage,pageSize:nextSize,filters:nextFilters,silent,announceFailure,operation})
       const results=await Promise.all([metaRequest,listRequest])
       return results[results.length-1]
     }finally{
-      if(!silent)setLoading(false)
+      if(!silent&&pageMountedRef.current)setLoading(false)
     }
   }
 
-  const loadHistory=async(nextPage=historyPage,nextSize=historyPageSize,nextFilters=historyFilters,{silent=false}={})=>{
+  const loadHistory=async(nextPage=historyPage,nextSize=historyPageSize,nextFilters=historyFilters,{silent=false,announceFailure=false,operation='查询离职记录'}={})=>{
+    const readIntent=historyReadIntentRef.current
+    historyReadIntentRef.current=''
+    const shouldAnnounceFailure=announceFailure||Boolean(readIntent)
+    const readOperation=readIntent||operation
+    if(!pageMountedRef.current)return false
     if(!silent){ setHistoryLoading(true); setError('') }
     try{
       const data=await invoke({action:'history_list',page:nextPage,page_size:nextSize,filters:nextFilters})
+      if(!pageMountedRef.current)return false
       const rawRows=data.rows||[]
       const productionRows=rawRows.filter(r=>!isTestEmployeeNo(r.employee_no))
       const cleaned=dedupeAnalysisRows(productionRows)
@@ -925,21 +1033,46 @@ export default function AdminEmployeesPage(){
       setHistoryPermissions(data.permissions||{can_edit:false,can_restore:false,can_delete:false})
       const hiddenTest=rawRows.length-productionRows.length
       setHistoryTotal(Math.max(0,(data.total||0)-hiddenTest-(productionRows.length-cleaned.length)))
-    }catch(e){ if(!silent) setError(e.message) }
-    finally{ if(!silent) setHistoryLoading(false) }
+      return true
+    }catch(e){
+      if(!pageMountedRef.current)return false
+      if(!silent){
+        const message=employeeRequestError(e,'离职记录读取失败，请重试。')
+        setError(message)
+        if(shouldAnnounceFailure)publishEmployeeFailure(readOperation,message,{
+          retry:()=>loadHistory(nextPage,nextSize,nextFilters,{announceFailure:true,operation:readOperation}),
+        })
+      }
+      return false
+    }
+    finally{ if(!silent&&pageMountedRef.current) setHistoryLoading(false) }
   }
 
-  const loadAudit=async(nextPage=auditPage,nextSize=auditPageSize,nextFilters=auditFilters,{silent=false}={})=>{
+  const loadAudit=async(nextPage=auditPage,nextSize=auditPageSize,nextFilters=auditFilters,{silent=false,announceFailure=false,operation='查询员工操作日志'}={})=>{
+    if(!pageMountedRef.current)return false
     if(!silent){ setAuditLoading(true); setError('') }
     try{
       const data=await writeEmployee({action:'audit_list',page:nextPage,page_size:nextSize,filters:nextFilters})
+      if(!pageMountedRef.current)return false
       setAuditRows(data.rows||[])
       setAuditTotal(data.total||0)
-    }catch(e){ if(!silent) setError(e.message) }
-    finally{ if(!silent) setAuditLoading(false) }
+      return true
+    }catch(e){
+      if(!pageMountedRef.current)return false
+      if(!silent){
+        const message=employeeRequestError(e,'员工操作日志读取失败，请重试。')
+        setError(message)
+        if(announceFailure)publishEmployeeFailure(operation,message,{
+          retry:()=>loadAudit(nextPage,nextSize,nextFilters,{announceFailure:true,operation}),
+        })
+      }
+      return false
+    }
+    finally{ if(!silent&&pageMountedRef.current) setAuditLoading(false) }
   }
 
-  const refreshEmployeeData=async({silent=false}={})=>{
+  const refreshEmployeeData=async({silent=false,announceFailure=false}={})=>{
+    if(!pageMountedRef.current)return false
     if(!silent) setRefreshing(true)
     try{
       const jobs=[]
@@ -969,12 +1102,27 @@ export default function AdminEmployeesPage(){
             return mergeEmployeeDetailRefresh(prev,d)
           })
           setDetailError(employeeDetailPartialError(d))
-        }).catch(()=>{}))
+          return true
+        }).catch(()=>false))
       }
-      await Promise.all(jobs)
+      const outcomes=await Promise.all(jobs)
+      if(!pageMountedRef.current)return false
       lastAutoRefreshAtRef.current=Date.now()
+      const success=outcomes.every(outcome=>outcome!==false)
+      if(!silent&&announceFailure&&!success)publishEmployeeFailure(`刷新${tab||'员工数据'}`,'部分数据刷新失败，已保留成功读取的内容；请查看页面内错误后重试。',{
+        retry:()=>refreshEmployeeDataRef.current?.({announceFailure:true}),
+      })
+      return success
+    }catch(e){
+      if(!pageMountedRef.current)return false
+      const message=employeeRequestError(e,'员工数据刷新失败，请稍后重试。')
+      if(!silent)setError(message)
+      if(!silent&&announceFailure)publishEmployeeFailure(`刷新${tab||'员工数据'}`,message,{
+        retry:()=>refreshEmployeeDataRef.current?.({announceFailure:true}),
+      })
+      return false
     }finally{
-      if(!silent) setRefreshing(false)
+      if(!silent&&pageMountedRef.current) setRefreshing(false)
     }
   }
   refreshEmployeeDataRef.current=refreshEmployeeData
@@ -1104,19 +1252,20 @@ export default function AdminEmployeesPage(){
   }
 
   const setPageSize=n=>{
-    setPageSizeState(n); setPage(1); loadList(1,n,{nextFilters:appliedFilters})
+    setPageSizeState(n); setPage(1); loadList(1,n,{nextFilters:appliedFilters,announceFailure:true})
   }
   const setHistoryPageSize=n=>{
     localStorage.setItem('wfh_history_page_size',String(n))
-    setHistoryPageSizeState(n); setHistoryPage(1); loadHistory(1,n,historyFilters)
+    setHistoryPageSizeState(n); setHistoryPage(1); loadHistory(1,n,historyFilters,{announceFailure:true})
   }
   const changeAuditPageSize=n=>{
-    setAuditPageSize(n); setAuditPage(1); loadAudit(1,n,auditFilters)
+    setAuditPageSize(n); setAuditPage(1); loadAudit(1,n,auditFilters,{announceFailure:true})
   }
   const applyHistoryFilters=()=>{
     const next={...historyDraftFilters}
     setHistoryFilters(next)
     setHistoryPage(1)
+    historyReadIntentRef.current='查询离职记录'
     loadHistory(1,historyPageSize,next)
   }
   const resetHistoryFilters=()=>{
@@ -1124,16 +1273,18 @@ export default function AdminEmployeesPage(){
     setHistoryDraftFilters(next)
     setHistoryFilters(next)
     setHistoryPage(1)
+    historyReadIntentRef.current='重置离职记录查询'
     loadHistory(1,historyPageSize,next)
   }
 
   const openDetail=async row=>{
+    if(!pageMountedRef.current)return
     setSelected({employee:row,missing_fields:row.missing_fields||[]})
     const requestId=++detailRequestRef.current
     setDetailLoading(true);setDetailError('')
     try{
       const detail=await withEmployeeDetailTimeout(invoke({action:'detail',employee_id:row.id}))
-      if(detailRequestRef.current!==requestId)return
+      if(!pageMountedRef.current||detailRequestRef.current!==requestId)return
       detail.employee={
         ...row,
         ...(detail.employee||{}),
@@ -1152,11 +1303,15 @@ export default function AdminEmployeesPage(){
       }
     }
     catch(e){
-      if(detailRequestRef.current===requestId){
-        setDetailError(`${employeeRequestError(e,'完整档案读取失败，已保留当前可见资料。')}请重试。`)
+      if(pageMountedRef.current&&detailRequestRef.current===requestId){
+        const message=`${employeeRequestError(e,'完整档案读取失败，已保留当前可见资料。')}请重试。`
+        setDetailError(message)
+        publishEmployeeFailure('读取员工详情',message,{
+          retry:()=>openDetail(row),scope:text(row?.id||row?.employee_no),
+        })
       }
     }
-    finally{ if(detailRequestRef.current===requestId)setDetailLoading(false) }
+    finally{ if(pageMountedRef.current&&detailRequestRef.current===requestId)setDetailLoading(false) }
   }
 
   const openCreate=()=>{
@@ -1189,18 +1344,27 @@ export default function AdminEmployeesPage(){
   }
 
   const saveEmployee=async()=>{
-    if(!employeeModal) return
+    if(!pageMountedRef.current||!employeeModal) return
     const operationEpoch=employeeBootstrapRef.current.epoch
     const {mode,employee_id,form,original_employee_no,original_full_name}=employeeModal
+    const operation=mode==='create'?'新增员工':'编辑员工'
+    const toastScope=text(employee_id||form?.employee?.employee_no)
     const capabilities=employeeModal.capabilities||{basic:false,sensitiveEmployee:false,compensation:false,payment:false}
-    if(!capabilities.basic) return setError('当前账号没有保存员工资料的权限')
+    if(!capabilities.basic){
+      const message='当前账号没有保存员工资料的权限'
+      setError(message);publishEmployeeFailure(operation,message,{scope:toastScope});return
+    }
     const employeeNo=text(form.employee.employee_no).toUpperCase()
     if(!employeeNo||!text(form.employee.full_name)){
-      return setError('员工ID和姓名必须填写')
+      const message='员工ID和姓名必须填写'
+      setError(message);publishEmployeeFailure(operation,message,{scope:toastScope});return
     }
     if(mode==='create'&&(employeeNo==='SYSTEM'||employeeNo==='ADMIN')){
-      return setError('SYSTEM / ADMIN 是系统保留ID，不能用于员工。TEST 开头的ID可用于正式表流程测试，但不会计入统计KPI。')
+      const message='SYSTEM / ADMIN 是系统保留ID，不能用于员工。TEST 开头的ID可用于正式表流程测试，但不会计入统计KPI。'
+      setError(message);publishEmployeeFailure(operation,message,{scope:employeeNo});return
     }
+    let failureOperation=operation
+    let writeCompleted=false
     try{
       const initialForm=employeeModal.initial_form||emptyForm()
       const {work_tg,backend_accounts,...ordinaryEmployee}=form.employee
@@ -1234,50 +1398,73 @@ export default function AdminEmployeesPage(){
       if(payload.sections.compensation) payload.compensation=compensationPatch
       if(payload.sections.payment) payload.payment=paymentPatch
       const data=await writeEmployee(payload)
-      if(employeeBootstrapRef.current.epoch!==operationEpoch)return
+      if(!pageMountedRef.current||employeeBootstrapRef.current.epoch!==operationEpoch)return
+      writeCompleted=true
       if(mode==='create'&&!sheetSyncSucceeded(data?.sync)){
         let rollbackOk=false
         try{
           await invoke({action:'cancel_new_hire',employee_id:data?.employee_id,confirm_employee_no:employeeNo})
+          if(!pageMountedRef.current)return
           rollbackOk=true
         }catch(_){ rollbackOk=false }
+        failureOperation=rollbackOk?'同步新增员工':'撤销未同步新增员工'
         throw new Error(`新增失败：正式 Google Sheet 没有写入。${rollbackOk?'Supabase 新增已自动撤销，不会留下半条员工。':'Supabase 自动撤销失败，请立即检查。'} 原因：${sheetSyncMessage(data?.sync)}`)
       }
       if(mode==='edit'&&!sheetSyncSucceeded(data?.sync)){
+        failureOperation='同步员工修改'
         throw new Error(`Supabase 已保存，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}。请重新保存一次，直到两边同时成功。`)
       }
       setEmployeeModal(null)
+      publishEmployeeSuccess(operation,mode==='create'?'员工档案与正式 Google Sheet 已新增。':'员工档案与正式 Google Sheet 已更新。',employeeNo)
       if(mode==='create'){
         // 新增成功只刷新，不再把新员工 ID 自动塞进搜索框。
         setPage(1)
-        await Promise.all([
+        failureOperation='刷新新增员工结果'
+        const refreshOutcomes=await Promise.all([
           loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),
           loadArchiveStats(),
         ])
+        if(!pageMountedRef.current)return
+        if(!employeeRefreshSucceeded(refreshOutcomes))throw new Error('员工已新增，但列表或统计刷新失败；请刷新确认最新结果。')
         if(data?.employee_id&&employeeBootstrapRef.current.epoch===operationEpoch){
+          failureOperation='读取新增员工详情'
           const detail=await invoke({action:'detail',employee_id:data.employee_id})
-          if(employeeBootstrapRef.current.epoch===operationEpoch)setSelected(detail)
+          if(pageMountedRef.current&&employeeBootstrapRef.current.epoch===operationEpoch)setSelected(detail)
         }
       }else{
-        await Promise.all([
+        failureOperation='刷新员工修改结果'
+        const refreshOutcomes=await Promise.all([
           loadEmployeeDirectory(page,pageSize,{nextFilters:appliedFilters}),
           loadArchiveStats(),
         ])
+        if(!pageMountedRef.current)return
+        if(!employeeRefreshSucceeded(refreshOutcomes))throw new Error('员工修改已保存，但列表或统计刷新失败；请刷新确认最新结果。')
         if(employee_id&&employeeBootstrapRef.current.epoch===operationEpoch){
+          failureOperation='读取修改后员工详情'
           const detail=await invoke({action:'detail',employee_id})
-          if(employeeBootstrapRef.current.epoch===operationEpoch)setSelected(detail)
+          if(pageMountedRef.current&&employeeBootstrapRef.current.epoch===operationEpoch)setSelected(detail)
         }
       }
-    }catch(e){ setError(e.message) }
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,`${operation}失败，请稍后重试。`)
+      setError(message)
+      if(writeCompleted)publishEmployeeFailure(failureOperation,message,{
+        retry:refreshMutationConfirmation,retryLabel:'刷新确认',scope:employeeNo,
+      })
+      else publishMutationFailure(failureOperation,message,employeeNo)
+    }
   }
 
   const openHistoryDetail=async row=>{
+    if(!pageMountedRef.current)return
     setDetailLoading(true)
     try{
       let employeeId=text(row?.employee_id)
       // Some lifecycle rows are historical and can miss employee_id. Resolve by exact employee number.
       if(!employeeId&&text(row?.employee_no)){
         const found=await invoke({action:'list',page:1,page_size:5,filters:{employee_no:text(row.employee_no),status:''}})
+        if(!pageMountedRef.current)return
         const exact=(found.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(row.employee_no).toUpperCase())
         employeeId=text(exact?.id||exact?.employee_id)
       }
@@ -1285,19 +1472,29 @@ export default function AdminEmployeesPage(){
       setSelected({employee:{id:employeeId,employee_no:row?.employee_no,full_name:row?.full_name,status:row?.event_type==='resign'?'resigned':'active'}})
       try{
         const detail=await invoke({action:'detail',employee_id:employeeId})
+        if(!pageMountedRef.current)return
         setSelected({...detail,resignation_reason:text(row?.reason)})
       }catch(firstError){
         // Lifecycle data can carry a stale id after test cleanup; retry once by employee number.
         if(!text(row?.employee_no)) throw firstError
         const found=await invoke({action:'list',page:1,page_size:5,filters:{employee_no:text(row.employee_no),status:''}})
+        if(!pageMountedRef.current)return
         const exact=(found.rows||[]).find(x=>text(x.employee_no).toUpperCase()===text(row.employee_no).toUpperCase())
         const fallbackId=text(exact?.id||exact?.employee_id)
         if(!fallbackId||fallbackId===employeeId) throw firstError
         const detail=await invoke({action:'detail',employee_id:fallbackId})
+        if(!pageMountedRef.current)return
         setSelected({...detail,resignation_reason:text(row?.reason)})
       }
-    }catch(e){ setError(e.message); setSelected(null) }
-    finally{ setDetailLoading(false) }
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'员工档案详情读取失败，请重试。')
+      setError(message); setSelected(null)
+      publishEmployeeFailure('读取员工详情',message,{
+        retry:()=>openHistoryDetail(row),scope:text(row?.employee_id||row?.employee_no),
+      })
+    }
+    finally{ if(pageMountedRef.current)setDetailLoading(false) }
   }
 
   const drillToEmployees=patch=>{
@@ -1309,17 +1506,20 @@ export default function AdminEmployeesPage(){
   }
 
   const openAnalysisDetail=async({title,event_type='all',dimension='',value='',date_from='',date_to='',filters:detailFilters})=>{
+    if(!pageMountedRef.current)return
     const sourceFilters=detailFilters||appliedAnalysisFilters
     setAnalysisDetail({title,event_type,dimension,value,date_from,date_to,rows:[],total:0})
     setAnalysisDetailLoading(true)
     try{
       const data=await invoke({action:'analytics_event_details',event_type,dimension,value,date_from,date_to,limit:2000,filters:sourceFilters})
+      if(!pageMountedRef.current)return
       const productionRows=(data.rows||[]).filter(r=>!isTestEmployeeNo(r.employee_no))
       const uniqueRows=dedupeAnalysisRows(productionRows)
       const employeeNos=Array.from(new Set(uniqueRows.map(r=>text(r.employee_no)).filter(Boolean)))
       let dateRows=[]
       if(employeeNos.length){
         const {data:dateData,error:dateError}=await supabase.functions.invoke('admin-employee-dates',{body:{employee_nos:employeeNos}})
+        if(!pageMountedRef.current)return
         if(error||dateData?.error) throw new Error(await edgeFunctionErrorMessage({data:dateData,error:dateError,fallback:'员工入离职日期读取失败'}))
         dateRows=dateData?.rows||[]
       }
@@ -1329,29 +1529,49 @@ export default function AdminEmployeesPage(){
         return {...r,hire_date:text(d.hire_date).slice(0,10),resign_date:r.event_type==='resign'?(text(r.date).slice(0,10)||text(d.resign_date).slice(0,10)):text(d.resign_date).slice(0,10)}
       })
       setAnalysisDetail(v=>({...v,...data,rows:enrichedRows,total:enrichedRows.length,title}))
-    }catch(e){ setError(e.message); setAnalysisDetail(null) }
-    finally{ setAnalysisDetailLoading(false) }
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'人员明细读取失败，请重试。')
+      setError(message); setAnalysisDetail(null)
+      publishEmployeeFailure('读取人员分析明细',message,{
+        retry:()=>openAnalysisDetail({title,event_type,dimension,value,date_from,date_to,filters:sourceFilters}),
+        scope:[event_type,dimension,value,date_from,date_to].join(':'),
+      })
+    }
+    finally{ if(pageMountedRef.current)setAnalysisDetailLoading(false) }
   }
 
   const openArchiveTenureDetail=async(bucket,label)=>{
+    if(!pageMountedRef.current)return
     setAnalysisDetail({title:`${label} · 在职员工`,event_type:'active',dimension:'',value:'',date_from:'',date_to:'',rows:[],total:0})
     setAnalysisDetailLoading(true)
     try{
       const d=new Date()
       const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'tenure_details',bucket,today,include_test:true}})
+      if(!pageMountedRef.current)return
       if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'入职时长人员读取失败'}))
       const uniqueRows=dedupeAnalysisRows(data.rows||[])
       setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title:`${label} · 在职员工`}))
-    }catch(e){ setError(e.message); setAnalysisDetail(null) }
-    finally{ setAnalysisDetailLoading(false) }
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'入职时长人员读取失败，请重试。')
+      setError(message); setAnalysisDetail(null)
+      publishEmployeeFailure('读取入职时长明细',message,{
+        retry:()=>openArchiveTenureDetail(bucket,label),scope:text(bucket),
+      })
+    }
+    finally{ if(pageMountedRef.current)setAnalysisDetailLoading(false) }
   }
 
   const submitResignEdit=async()=>{
-    if(!editResignModal?.event_id) return
+    if(!pageMountedRef.current||!editResignModal?.event_id) return
     if(!editResignModal.resign_date||!text(editResignModal.reason)){
-      return setError('离职日期和离职原因必须填写')
+      const message='离职日期和离职原因必须填写'
+      setError(message);publishEmployeeFailure('编辑离职记录',message,{scope:text(editResignModal.employee_id)});return
     }
+    const toastScope=text(editResignModal.employee_id||editResignModal.employee_no)
+    let failureOperation='编辑离职记录'
     try{
       const data=await invoke({
         action:'update_resignation',
@@ -1360,89 +1580,156 @@ export default function AdminEmployeesPage(){
         resign_date:editResignModal.resign_date,
         reason:editResignModal.reason,
       })
+      if(!pageMountedRef.current)return
       setEditResignModal(null)
+      const syncError=!sheetSyncSucceeded(data?.sync)
+        ? `离职记录已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`
+        : ''
+      if(!syncError)publishEmployeeSuccess('编辑离职记录','离职记录与正式 Google Sheet 已更新。',toastScope)
+      failureOperation='刷新离职记录修改结果'
       const refreshes=[loadHistory(historyPage,historyPageSize)]
       if(canViewEmployees) refreshes.push(loadEmployeeDirectory(page,pageSize,{nextFilters:appliedFilters}),loadArchiveStats())
       else refreshes.push(loadPageFilterOptions())
-      await Promise.all(refreshes)
-      if(!sheetSyncSucceeded(data?.sync)) setError(`离职记录已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
-    }catch(e){ setError(e.message) }
+      const refreshOutcomes=await Promise.all(refreshes)
+      if(!pageMountedRef.current)return
+      if(syncError){
+        failureOperation='同步离职记录修改'
+        throw new Error(`${syncError}${employeeRefreshSucceeded(refreshOutcomes)?'':'；页面结果刷新也失败，请刷新确认。'}`)
+      }
+      if(!employeeRefreshSucceeded(refreshOutcomes))throw new Error('离职记录已更新，但页面结果刷新失败；请刷新确认最新结果。')
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'编辑离职记录失败，请稍后重试。')
+      setError(message);publishMutationFailure(failureOperation,message,toastScope)
+    }
   }
 
   const submitResign=async()=>{
-    if(!resignModal?.employee_id) return
+    if(!pageMountedRef.current||!resignModal?.employee_id) return
     if(!resignModal.resign_date||!text(resignModal.reason)){
-      return setError('离职日期和离职原因必须填写')
+      const message='离职日期和离职原因必须填写'
+      setError(message);publishEmployeeFailure('办理离职',message,{scope:text(resignModal.employee_id)});return
     }
+    const toastScope=text(resignModal.employee_id||resignModal.employee_no)
+    let failureOperation='办理离职'
     try{
       const resignedEmployeeId=resignModal.employee_id
       const data=await invoke({action:'resign_employee',...resignModal})
+      if(!pageMountedRef.current)return
       // 先从当前在职列表立即移除，再用后端刷新做最终校验，不需要用户 F5。
       setRows(prev=>prev.filter(r=>text(r.id)!==text(resignedEmployeeId)))
       setTotal(prev=>Math.max(0,prev-1))
       setResignModal(null); setSelected(null)
+      const syncError=!sheetSyncSucceeded(data?.sync)
+        ? `离职已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`
+        : ''
+      if(!syncError)publishEmployeeSuccess('办理离职','离职状态与正式 Google Sheet 已保存。',toastScope)
+      failureOperation='刷新离职结果'
       const refreshes=[loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),loadArchiveStats()]
       if(canViewResignations){
         setHistoryPage(1)
         setTab('离职记录')
         refreshes.push(loadHistory(1,historyPageSize,historyFilters))
       }
-      await Promise.all(refreshes)
-      if(!sheetSyncSucceeded(data?.sync)) setError(`离职已保存到 Supabase，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
-    }catch(e){ setError(e.message) }
+      const refreshOutcomes=await Promise.all(refreshes)
+      if(!pageMountedRef.current)return
+      if(syncError){
+        failureOperation='同步员工离职'
+        throw new Error(`${syncError}${employeeRefreshSucceeded(refreshOutcomes)?'':'；页面结果刷新也失败，请刷新确认。'}`)
+      }
+      if(!employeeRefreshSucceeded(refreshOutcomes))throw new Error('离职已保存，但页面结果刷新失败；请刷新确认最新状态。')
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'办理离职失败，请稍后重试。')
+      setError(message);publishMutationFailure(failureOperation,message,toastScope)
+    }
   }
 
   const submitRestore=async()=>{
-    if(!restoreModal?.employee_id) return
+    if(!pageMountedRef.current||!restoreModal?.employee_id) return
+    const toastScope=text(restoreModal.employee_id||restoreModal.employee_no)
+    let failureOperation='恢复员工在职'
     try{
       const data=await invoke({
         action:'undo_resignation',
         employee_id:restoreModal.employee_id,
         restore_portal:restoreModal.restore_portal!==false,
       })
+      if(!pageMountedRef.current)return
       setRestoreModal(null)
       setSelected(null)
+      const syncError=!sheetSyncSucceeded(data?.sync)
+        ? `已恢复 Supabase 在职状态，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`
+        : ''
+      if(!syncError)publishEmployeeSuccess('恢复员工在职','在职状态、Portal 设置与正式 Google Sheet 已更新。',toastScope)
+      failureOperation='刷新恢复在职结果'
       const refreshes=[loadHistory(1,historyPageSize,historyFilters)]
       if(canViewEmployees) refreshes.push(loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),loadArchiveStats())
       else refreshes.push(loadPageFilterOptions())
-      await Promise.all(refreshes)
-      if(!sheetSyncSucceeded(data?.sync)) setError(`已恢复 Supabase 在职状态，但正式 Google Sheet 同步失败：${sheetSyncMessage(data?.sync)}`)
-    }catch(e){ setError(e.message) }
+      const refreshOutcomes=await Promise.all(refreshes)
+      if(!pageMountedRef.current)return
+      if(syncError){
+        failureOperation='同步恢复在职'
+        throw new Error(`${syncError}${employeeRefreshSucceeded(refreshOutcomes)?'':'；页面结果刷新也失败，请刷新确认。'}`)
+      }
+      if(!employeeRefreshSucceeded(refreshOutcomes))throw new Error('员工已恢复在职，但页面结果刷新失败；请刷新确认最新状态。')
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'恢复员工在职失败，请稍后重试。')
+      setError(message);publishMutationFailure(failureOperation,message,toastScope)
+    }
   }
 
   const submitCancelHire=async()=>{
-    if(!cancelHireModal?.employee_id) return
+    if(!pageMountedRef.current||!cancelHireModal?.employee_id) return
     if(text(cancelHireModal.confirm_text)!==text(cancelHireModal.employee_no)){
-      return setError('请输入完整员工ID确认撤销入职')
+      const message='请输入完整员工ID确认撤销入职'
+      setError(message);publishEmployeeFailure('撤销员工入职',message,{scope:text(cancelHireModal.employee_id)});return
     }
+    const toastScope=text(cancelHireModal.employee_id||cancelHireModal.employee_no)
+    let failureOperation='撤销员工入职'
     try{
       const data=await writeEmployee({
         action:'cancel_new_hire_any_state',
         employee_id:cancelHireModal.employee_id,
         confirm_employee_no:cancelHireModal.confirm_text,
       })
+      if(!pageMountedRef.current)return
       setCancelHireModal(null)
       setSelected(null)
+      if(!data?.sheet_warning)publishEmployeeSuccess('撤销员工入职','员工档案已撤销，历史审计记录保留。',toastScope)
+      failureOperation='刷新撤销入职结果'
       const refreshes=[loadEmployeeDirectory(1,pageSize,{nextFilters:appliedFilters}),loadArchiveStats()]
       if(canViewResignations) refreshes.push(loadHistory(1,historyPageSize,historyFilters))
       if(canViewAudit) refreshes.push(loadAudit(1,auditPageSize,auditFilters,{silent:true}))
-      await Promise.all(refreshes)
-      if(data?.sheet_warning) setError(data.sheet_warning)
-    }catch(e){ setError(e.message) }
+      const refreshOutcomes=await Promise.all(refreshes)
+      if(!pageMountedRef.current)return
+      if(data?.sheet_warning){
+        failureOperation='同步撤销入职'
+        throw new Error(`${data.sheet_warning}${employeeRefreshSucceeded(refreshOutcomes)?'':'；页面结果刷新也失败，请刷新确认。'}`)
+      }
+      if(!employeeRefreshSucceeded(refreshOutcomes))throw new Error('员工入职已撤销，但页面结果刷新失败；请刷新确认最新状态。')
+    }catch(e){
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'撤销员工入职失败，请稍后重试。')
+      setError(message);publishMutationFailure(failureOperation,message,toastScope)
+    }
   }
 
   const generateCode=async employeeNo=>{
+    if(!pageMountedRef.current)return
     const target=text(employeeNo)
     setGenerated(null); setActivationError(''); setActivationCopyStatus(''); setActivationLoading(target)
     try{
       const {data,error}=await supabase.functions.invoke('admin-accounts',{body:{action:'generate_activation_code',employee_no:target,valid_hours:72}})
+      if(!pageMountedRef.current)return
       if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'激活码生成失败'}))
       if(!text(data?.activation_code)) throw new Error('激活码生成成功，但服务未返回可复制的激活码')
       setGenerated(data)
     }catch(e){
-      setActivationError(e.message||'激活码生成失败')
+      if(pageMountedRef.current)setActivationError(e.message||'激活码生成失败')
     }finally{
-      setActivationLoading('')
+      if(pageMountedRef.current)setActivationLoading('')
     }
   }
 
@@ -1476,7 +1763,7 @@ export default function AdminEmployeesPage(){
   }
 
   const exportEmployeeArchive=async()=>{
-    if(exporting||!canExportEmployees)return
+    if(!pageMountedRef.current||exporting||!canExportEmployees)return
     setExporting(true)
     setError('')
     try{
@@ -1485,6 +1772,7 @@ export default function AdminEmployeesPage(){
       let expectedPages=1
       while(nextPage<=expectedPages){
         const data=await fetchEmployeeListData(nextPage,EMPLOYEE_EXPORT_PAGE_SIZE,appliedFilters,true)
+        if(!pageMountedRef.current)return
         expectedPages=Math.max(1,Number(data?.pages||Math.ceil(Number(data?.total||0)/EMPLOYEE_EXPORT_PAGE_SIZE)||1))
         if(expectedPages>EMPLOYEE_EXPORT_MAX_PAGES) throw new Error(`当前筛选超过 ${EMPLOYEE_EXPORT_PAGE_SIZE*EMPLOYEE_EXPORT_MAX_PAGES} 条，请缩小筛选范围后再导出。`)
         const visibleRows=(data?.rows||[]).filter(row=>text(row.source_type)!=='google_deleted')
@@ -1536,9 +1824,14 @@ export default function AdminEmployeesPage(){
       anchor.remove()
       URL.revokeObjectURL(url)
     }catch(e){
-      setError(employeeRequestError(e,'员工档案导出失败，请稍后重试。'))
+      if(!pageMountedRef.current)return
+      const message=employeeRequestError(e,'员工档案导出失败，请稍后重试。')
+      setError(message)
+      publishEmployeeFailure('导出员工档案',message,{
+        retry:exportEmployeeArchive,scope:JSON.stringify(appliedFilters),
+      })
     }finally{
-      setExporting(false)
+      if(pageMountedRef.current)setExporting(false)
     }
   }
 
@@ -1549,14 +1842,14 @@ export default function AdminEmployeesPage(){
     const next={...filters}
     setAppliedFilters(next)
     setPage(1)
-    loadList(1,pageSize,{nextFilters:next})
+    loadList(1,pageSize,{nextFilters:next,announceFailure:true})
   }
   const resetEmployeeFilters=()=>{
     const next=blankEmployeeFilters()
     setFilters(next)
     setAppliedFilters(next)
     setPage(1)
-    loadList(1,pageSize,{nextFilters:next})
+    loadList(1,pageSize,{nextFilters:next,announceFailure:true})
   }
   const applyAnalysisFilters=()=>{
     const next={...blankPeopleFilters(),date_from:analysisFilters.date_from,date_to:analysisFilters.date_to}
@@ -1566,31 +1859,33 @@ export default function AdminEmployeesPage(){
     if(analysisView==='国家分析') next.country=analysisFilters.country
     if(analysisView==='班次分析') next.shift_name=analysisFilters.shift_name
     setAppliedAnalysisFilters(next)
-    loadPeopleAnalytics(next)
+    loadPeopleAnalytics(next,{announceFailure:true})
   }
   const resetAnalysisFilters=()=>{
     const next=blankPeopleFilters()
     setAnalysisFilters(next)
     setAppliedAnalysisFilters(next)
-    loadPeopleAnalytics(next)
+    loadPeopleAnalytics(next,{announceFailure:true})
   }
   const applyManagementRiskFilters=()=>{
     const next={...managementRiskFilters}
     if(next.date_from&&next.date_to&&next.date_from>next.date_to){
-      setManagementRisk(current=>({...current,error:'分析开始日期不能晚于结束日期。'}))
+      const message='分析开始日期不能晚于结束日期。'
+      setManagementRisk(current=>({...current,error:message}))
+      publishEmployeeFailure('查询管理风险',message)
       return
     }
-    loadManagementRisk(next)
+    void announceUserManagementRisk(loadManagementRisk(next),next)
   }
   const resetManagementRiskFilters=()=>{
     const next=blankManagementRiskFilters()
     setManagementRiskFilters(next)
-    loadManagementRisk(next)
+    void announceUserManagementRisk(loadManagementRisk(next),next)
   }
   const setManagementRiskRange=preset=>{
     const next={...managementRiskFilters,...managementRiskDatePreset(preset)}
     setManagementRiskFilters(next)
-    loadManagementRisk(next)
+    void announceUserManagementRisk(loadManagementRisk(next),next)
   }
   const changeAnalysisView=view=>{
     const next={...blankPeopleFilters(),date_from:analysisFilters.date_from,date_to:analysisFilters.date_to}
@@ -1606,13 +1901,13 @@ export default function AdminEmployeesPage(){
   const applyResignationAnalyticsFilters=()=>{
     const next={...resignationAnalyticsFilters}
     setAppliedResignationAnalyticsFilters(next)
-    loadResignationAnalytics(next)
+    loadResignationAnalytics(next,{announceFailure:true})
   }
   const resetResignationAnalyticsFilters=()=>{
     const next=blankResignationAnalyticsFilters()
     setResignationAnalyticsFilters(next)
     setAppliedResignationAnalyticsFilters(next)
-    loadResignationAnalytics(next)
+    loadResignationAnalytics(next,{announceFailure:true})
   }
 
   const filteredTeams=useMemo(()=>{
@@ -1645,7 +1940,7 @@ export default function AdminEmployeesPage(){
         <h1>{sectionTitle}</h1>
       </div>
       <div className="employee-title-actions">
-        {visibleTab&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData()} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>}
+        {visibleTab&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<button className="secondary-action employee-refresh-action" onClick={()=>refreshEmployeeData({announceFailure:true})} disabled={refreshing}>{refreshing?'刷新中…':'↻ 刷新数据'}</button>}
         {visibleTab==='员工档案'&&meta.actions?.can_create&&<button className="primary-action" onClick={openCreate}>+ 新增员工</button>}
       </div>
     </div>
@@ -1653,7 +1948,7 @@ export default function AdminEmployeesPage(){
     <AdminModuleNav />
 
     {error&&!['停电 / 断网记录','预警记录'].includes(visibleTab)&&<div className="page-error employee-notice">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {metaError&&['员工档案','人员分析','离职记录','操作日志'].includes(visibleTab)&&<div className="employee-inline-sync-note" role="status"><span>{metaError}</span><button type="button" onClick={()=>canViewEmployees&&visibleTab==='员工档案'?loadEmployeeDirectory(page,pageSize,{nextFilters:appliedFilters}):loadPageFilterOptions(visibleTab==='离职记录')}>重新读取</button></div>}
+    {metaError&&['员工档案','人员分析','离职记录','操作日志'].includes(visibleTab)&&<div className="employee-inline-sync-note" role="status"><span>{metaError}</span><button type="button" onClick={()=>canViewEmployees&&visibleTab==='员工档案'?loadEmployeeDirectory(page,pageSize,{nextFilters:appliedFilters,announceFailure:true,operation:'重新读取员工档案'}):loadPageFilterOptions(visibleTab==='离职记录',{announceFailure:true})}>重新读取</button></div>}
     {visibleTab==='员工档案'&&<>
       <div className="archive-compact-head">
         <div><h2>员工档案</h2><span>当前仅显示在职员工 · 当前筛选共 {total} 人</span></div>
@@ -1707,7 +2002,7 @@ export default function AdminEmployeesPage(){
             })}</tbody>
           </table>
         </div>}
-        <Pagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={p=>{setPage(p);loadList(p,pageSize)}} onPageSize={setPageSize}/>
+        <Pagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={p=>{setPage(p);loadList(p,pageSize,{announceFailure:true})}} onPageSize={setPageSize}/>
       </div>
       {generated&&<ActivationCodeModal data={generated} copyStatus={activationCopyStatus} onCopy={copyActivationCode} onClose={closeActivationCode}/>}
     </>}
@@ -1726,7 +2021,7 @@ export default function AdminEmployeesPage(){
         {analysisViews.map(x=><button type="button" key={x} className={analysisView===x?'active':''} onClick={()=>changeAnalysisView(x)}>{x}</button>)}
       </div>
 
-      {(analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error)&&<div className="employee-inline-sync-note is-error" role="alert"><span>{analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error}</span><button type="button" onClick={()=>analysisView==='管理风险'?loadManagementRisk(appliedManagementRiskFilters):analysisView==='离职分析'?loadResignationAnalytics(appliedResignationAnalyticsFilters):loadPeopleAnalytics(appliedAnalysisFilters)}>重新读取</button></div>}
+      {(analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error)&&<div className="employee-inline-sync-note is-error" role="alert"><span>{analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error}</span><button type="button" onClick={()=>analysisView==='管理风险'?loadManagementRisk(appliedManagementRiskFilters,{announceFailure:true,operation:'重新读取管理风险'}):analysisView==='离职分析'?loadResignationAnalytics(appliedResignationAnalyticsFilters,{announceFailure:true,operation:'重新读取离职分析'}):loadPeopleAnalytics(appliedAnalysisFilters,{announceFailure:true,operation:'重新读取人员分析'})}>重新读取</button></div>}
 
       {!['离职分析','管理风险'].includes(analysisView)&&<div className="analytics-filter-panel v24-analytics-filter-panel">
         <div className={`people-filter-grid view-${analysisView}`}>
@@ -1887,7 +2182,7 @@ export default function AdminEmployeesPage(){
           </tr>
         })}</tbody>
       </table>{historyLoading&&<div className="history-loading-overlay" aria-live="polite"><span>读取离职记录...</span></div>}</div>}
-      <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize,historyFilters)}} onPageSize={setHistoryPageSize}/>
+      <Pagination page={historyPage} pages={historyPages} total={historyTotal} pageSize={historyPageSize} loading={historyLoading} onPage={p=>{setHistoryPage(p);loadHistory(p,historyPageSize,historyFilters,{announceFailure:true})}} onPageSize={setHistoryPageSize}/>
     </div>}
 
     {visibleTab==='操作日志'&&<>
@@ -1905,7 +2200,7 @@ export default function AdminEmployeesPage(){
         <label className="resign-filter-field"><span>操作类型</span><FilterCombo value={auditDraftFilters.action?auditActionLabel(auditDraftFilters.action):''} options={auditActionOptions.map(x=>x.label)} onChange={label=>setAuditDraftFilters({...auditDraftFilters,action:auditActionValueByLabel(label)})} placeholder="全部操作 / 输入搜索" listId="audit-action-filter"/></label>
         <label className="resign-filter-field"><span>操作账号</span><input value={auditDraftFilters.actor} onChange={e=>setAuditDraftFilters({...auditDraftFilters,actor:e.target.value})} placeholder="后台账号 / Google 邮箱"/></label>
         <label className="resign-filter-field v25-resign-date"><span>操作日期区间</span><div className="pro-date-range"><input type="date" value={auditDraftFilters.date_from} onChange={e=>setAuditDraftFilters({...auditDraftFilters,date_from:e.target.value})}/><b>—</b><input type="date" value={auditDraftFilters.date_to} onChange={e=>setAuditDraftFilters({...auditDraftFilters,date_to:e.target.value})}/></div></label>
-        <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={()=>{const next={...auditDraftFilters};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>{auditLoading?'查询中…':'查询'}</button><button className="secondary-action" onClick={()=>{const next=blankAuditFilters();setAuditDraftFilters(next);setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next)}} disabled={auditLoading}>重置</button></div>
+        <div className="resign-filter-actions v25-resign-actions"><button className="primary-action resignation-query-action" onClick={()=>{const next={...auditDraftFilters};setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next,{announceFailure:true})}} disabled={auditLoading}>{auditLoading?'查询中…':'查询'}</button><button className="secondary-action" onClick={()=>{const next=blankAuditFilters();setAuditDraftFilters(next);setAuditFilters(next);setAuditPage(1);loadAudit(1,auditPageSize,next,{announceFailure:true})}} disabled={auditLoading}>重置</button></div>
       </div>
       {auditLoading&&!auditRows.length?<div className="empty-state">读取操作日志...</div>:!auditRows.length?<div className="empty-state">暂无操作日志</div>:<div className="table-scroll"><table className="data-table">
         <thead><tr><th>时间</th><th>操作账号</th><th>员工ID</th><th>姓名</th><th>操作</th><th>详细变更</th><th>来源</th></tr></thead>
@@ -1913,7 +2208,7 @@ export default function AdminEmployeesPage(){
           <td style={{whiteSpace:'nowrap'}}>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.actor_username)}</span></td><td><strong>{r.employee_no||'—'}</strong></td><td>{r.full_name||'—'}</td><td>{auditActionLabel(r.action)}</td><td className="reason-cell"><AuditChanges row={r} meta={meta}/></td><td style={{whiteSpace:'nowrap'}}>{auditSourceLabel(r)}</td>
         </tr>)}</tbody>
       </table></div>}
-      <Pagination page={auditPage} pages={auditPages} total={auditTotal} pageSize={auditPageSize} loading={auditLoading} onPage={p=>{setAuditPage(p);loadAudit(p,auditPageSize,auditFilters)}} onPageSize={changeAuditPageSize}/>
+      <Pagination page={auditPage} pages={auditPages} total={auditTotal} pageSize={auditPageSize} loading={auditLoading} onPage={p=>{setAuditPage(p);loadAudit(p,auditPageSize,auditFilters,{announceFailure:true})}} onPageSize={changeAuditPageSize}/>
       </div>}
       {auditSubview==='adjustment'&&<AdminDataEntryLogs category="adjustment"/>}
       {auditSubview==='attendance'&&<AdminDataEntryLogs category="attendance"/>}
@@ -2196,6 +2491,7 @@ function privateNoteError(error){
 }
 
 function EmployeePrivateNotesPanel({employeeId,canManage}){
+  const {notify}=useAppToast()
   const [state,setState]=useState({loading:true,error:'',rows:[],total:0})
   const [form,setForm]=useState(null)
   const [saving,setSaving]=useState(false)
@@ -2204,7 +2500,8 @@ function EmployeePrivateNotesPanel({employeeId,canManage}){
   const mountedRef=useRef(true)
   const employeeRef=useRef(employeeId)
   employeeRef.current=employeeId
-  const load=async({clear=false}={})=>{
+  const load=async({clear=false,announceFailure=false,operation='读取内部备注'}={})=>{
+    if(!mountedRef.current)return false
     const targetEmployeeId=employeeId
     const requestId=++requestRef.current
     setState(current=>clear
@@ -2212,9 +2509,15 @@ function EmployeePrivateNotesPanel({employeeId,canManage}){
       : {...current,loading:true,error:''})
     const {data,error}=await supabase.rpc('admin_employee_private_notes',{p_employee_id:targetEmployeeId,p_page:1,p_page_size:100})
     if(!mountedRef.current||requestRef.current!==requestId||employeeRef.current!==targetEmployeeId)return false
+    const message=error?privateNoteError(error):''
     setState(error
-      ? {loading:false,error:privateNoteError(error),rows:[],total:0}
+      ? {loading:false,error:message,rows:[],total:0}
       : {loading:false,error:'',rows:data?.rows||[],total:Number(data?.total||0)})
+    if(error&&announceFailure)notify({
+      type:'error',module:EMPLOYEE_TOAST_MODULE,operation,reason:message,
+      dedupeKey:employeeToastDedupeKey(operation,'error',targetEmployeeId),
+      retry:()=>load({announceFailure:true,operation}),retryLabel:'重试',
+    })
     return !error
   }
   useEffect(()=>{
@@ -2237,7 +2540,14 @@ function EmployeePrivateNotesPanel({employeeId,canManage}){
     event.preventDefault()
     const targetEmployeeId=employeeId
     const note=text(form?.note_text)
-    if(!note){setMessage('请填写备注内容。');return}
+    const editing=Boolean(form?.id)
+    const operation=editing?'编辑内部备注':'保存内部备注'
+    if(!note){
+      const message='请填写备注内容。'
+      setMessage(message)
+      notify({type:'error',module:EMPLOYEE_TOAST_MODULE,operation,reason:message,dedupeKey:employeeToastDedupeKey(operation,'error',targetEmployeeId)})
+      return
+    }
     setSaving(true);setMessage('')
     const args=form.id
       ? {p_note_id:form.id,p_expected_version:form.version,p_note:note,p_category:form.category,p_incident_date:form.incident_date||null}
@@ -2246,8 +2556,20 @@ function EmployeePrivateNotesPanel({employeeId,canManage}){
     const {error}=await supabase.rpc(rpc,args)
     if(!mountedRef.current||employeeRef.current!==targetEmployeeId)return
     setSaving(false)
-    if(error){setMessage(privateNoteError(error));return}
-    setForm(null);setMessage(form.id?'备注已更新。':'备注已保存。');await load()
+    if(error){
+      const message=privateNoteError(error)
+      setMessage(message)
+      notify({
+        type:'error',module:EMPLOYEE_TOAST_MODULE,operation,reason:message,
+        dedupeKey:employeeToastDedupeKey(operation,'error',targetEmployeeId),
+        retry:()=>load({announceFailure:true,operation:'刷新内部备注确认'}),retryLabel:'刷新确认',
+      })
+      return
+    }
+    const successMessage=editing?'备注已更新。':'备注已保存。'
+    setForm(null);setMessage(successMessage)
+    notify({type:'success',module:EMPLOYEE_TOAST_MODULE,operation,reason:successMessage,dedupeKey:employeeToastDedupeKey(operation,'success',targetEmployeeId)})
+    await load({announceFailure:true,operation:`刷新${operation}结果`})
   }
   const archive=async note=>{
     if(!window.confirm('确定归档这条内部备注？记录及修订历史会保留，不会删除。'))return
@@ -2256,9 +2578,21 @@ function EmployeePrivateNotesPanel({employeeId,canManage}){
     const {error}=await supabase.rpc('admin_employee_private_note_archive',{p_note_id:note.id,p_expected_version:Number(note.version||0)})
     if(!mountedRef.current||employeeRef.current!==targetEmployeeId)return
     setSaving(false)
-    if(error){setMessage(privateNoteError(error));return}
+    if(error){
+      const message=privateNoteError(error)
+      setMessage(message)
+      notify({
+        type:'error',module:EMPLOYEE_TOAST_MODULE,operation:'归档内部备注',reason:message,
+        dedupeKey:employeeToastDedupeKey('归档内部备注','error',targetEmployeeId),
+        retry:()=>load({announceFailure:true,operation:'刷新内部备注确认'}),retryLabel:'刷新确认',
+      })
+      return
+    }
     if(form?.id===note.id)setForm(null)
-    setMessage('备注已归档，历史审计仍保留。');await load()
+    const successMessage='备注已归档，历史审计仍保留。'
+    setMessage(successMessage)
+    notify({type:'success',module:EMPLOYEE_TOAST_MODULE,operation:'归档内部备注',reason:successMessage,dedupeKey:employeeToastDedupeKey('归档内部备注','success',targetEmployeeId)})
+    await load({announceFailure:true,operation:'刷新归档内部备注结果'})
   }
   return <section className="detail-panel employee-private-notes-panel">
     <div className="detail-panel-head"><div><h3>内部备注</h3><p>仅授权后台账号可见；员工前端不会收到或显示这些内容。</p></div><div className="employee-private-note-head-actions"><span>{state.total} 条</span>{canManage&&!form&&<button type="button" onClick={startCreate}>+ 新增备注</button>}</div></div>
@@ -2268,7 +2602,7 @@ function EmployeePrivateNotesPanel({employeeId,canManage}){
       <label>备注内容<textarea autoFocus rows="5" maxLength="2000" value={form.note_text} onChange={event=>setForm({...form,note_text:event.target.value})} placeholder="记录需要后续授权人员留意的事实、核验结果或历史情况。"/></label>
       <footer><span>{text(form.note_text).length} / 2000</span><div><button type="button" disabled={saving} onClick={()=>setForm(null)}>取消</button><button className="primary-action" type="submit" disabled={saving}>{saving?'保存中…':form.id?'保存修改':'保存备注'}</button></div></footer>
     </form>}
-    {state.loading?<div className="employee-section-placeholder"><p>正在读取内部备注…</p></div>:state.error?<div className="employee-section-placeholder"><p>{state.error}</p><button type="button" onClick={load}>重新读取</button></div>:state.rows.length?<div className="employee-private-note-list">{state.rows.map(note=><article key={note.id}>
+    {state.loading?<div className="employee-section-placeholder"><p>正在读取内部备注…</p></div>:state.error?<div className="employee-section-placeholder"><p>{state.error}</p><button type="button" onClick={()=>load({announceFailure:true})}>重新读取</button></div>:state.rows.length?<div className="employee-private-note-list">{state.rows.map(note=><article key={note.id}>
       <header><div><b>{PRIVATE_NOTE_CATEGORIES[note.category]||'其他'}</b>{note.incident_date&&<time>事件日期 · {text(note.incident_date).slice(0,10)}</time>}</div>{canManage&&<div><button type="button" disabled={saving} onClick={()=>startEdit(note)}>编辑</button><button type="button" className="danger-outline" disabled={saving} onClick={()=>archive(note)}>归档</button></div>}</header>
       <p>{note.note_text}</p>
       <footer><span>创建：{note.created_by_username||'后台账号'} · {formatDateTime(note.created_at)}</span><span>更新：{note.updated_by_username||'后台账号'} · {formatDateTime(note.updated_at)} · v{note.version}</span></footer>
@@ -2532,10 +2866,16 @@ function EmployeeErrorPanel({data,loading,error}){
 }
 
 function EmployeeExamPanel({data,loading,error}){
+  const {notify}=useAppToast()
   const summary=data?.summary||{}, rows=data?.history||[]
   const [examDetail,setExamDetail]=useState(null)
   const [detailLoading,setDetailLoading]=useState(false)
   const [detailError,setDetailError]=useState('')
+  const mountedRef=useRef(true)
+  useEffect(()=>{
+    mountedRef.current=true
+    return()=>{mountedRef.current=false}
+  },[])
   const examStatus=x=>({in_progress:'答题中',submitted:'待批改',grading:'批改中',graded:'已完成',expired:'已过期'}[x]||x||'—')
   const result=x=>x.status==='graded'?(x.passed?'通过':'未通过'):examStatus(x.status)
   const answerResult=x=>{
@@ -2552,10 +2892,20 @@ function EmployeeExamPanel({data,loading,error}){
     return parts.join(' · ')
   }
   const openExam=async row=>{
+    if(!mountedRef.current)return
     setExamDetail({session:row,answers:[]});setDetailLoading(true);setDetailError('')
     const fn=row.source_system==='legacy'?'admin_employee_exam_legacy_detail':'admin_employee_exam_session_detail'
     const {data:detail,error:e}=await supabase.rpc(fn,{p_session_id:row.id})
-    if(e)setDetailError(e.message);else setExamDetail(detail)
+    if(!mountedRef.current)return
+    if(e){
+      const message=employeeRequestError(e,'考试详情读取失败，请重试。')
+      setDetailError(message)
+      notify({
+        type:'error',module:EMPLOYEE_TOAST_MODULE,operation:'读取考试详情',reason:message,
+        dedupeKey:employeeToastDedupeKey('读取考试详情','error',row.id),
+        retry:()=>openExam(row),retryLabel:'重试',
+      })
+    }else setExamDetail(detail)
     setDetailLoading(false)
   }
   return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{summary.attempts||0} 次</span></div>

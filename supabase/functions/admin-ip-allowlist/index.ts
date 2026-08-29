@@ -64,38 +64,43 @@ function safeMeta(error: any) {
   }
 }
 
-function databaseErrorMessage(error: any) {
+const databaseMessages: Record<string, string> = {
+  permission_denied: '当前账号没有管理后台登录IP白名单的权限',
+  session_not_current: '当前浏览器会话已失效，请重新登录',
+  ip_session_not_verified: '当前会话的IP验证已失效，请重新验证',
+  invalid_ip_network: 'IP/CIDR 格式不正确',
+  ip_network_required: '请填写 IP 或 CIDR',
+  invalid_label: '标签必填，最多 80 个字符',
+  notes_too_long: '备注最多 500 个字符',
+  invalid_entry_id: '白名单记录不存在',
+  invalid_entry_update: '白名单状态不正确',
+  invalid_enabled: '白名单状态不正确',
+  entry_not_found: '白名单记录不存在',
+  network_already_exists: '该 IP/CIDR 已经存在',
+  cannot_enable_without_entries: '请先加入并启用当前IP，再开启白名单',
+  current_ip_not_allowed: '当前IP尚未在启用的白名单中，不能开启',
+  current_ip_would_be_denied: '此操作会把当前IP移出白名单；请先加入新的当前IP',
+  last_enabled_entry: '白名单开启时不能停用或删除最后一条；请先关闭白名单',
+  client_ip_unavailable: '服务端无法从可信代理读取当前IP，已拒绝操作',
+  invalid_enforced: '白名单开关状态不正确',
+  invalid_action: '不支持的操作',
+  invalid_portal: '登录入口类型不正确',
+  invalid_portal_scope: '适用范围不正确',
+  cannot_enable_without_admin_entries: '请先添加至少一条“后台”或“两者”IP，再开启后台限制',
+  cannot_enable_without_staff_entries: '请先添加至少一条“员工前端”或“两者”IP，再开启员工前端限制',
+  last_enabled_admin_entry: '后台限制开启时，不能移除最后一条后台可用网络',
+  last_enabled_staff_entry: '员工前端限制开启时，不能移除最后一条员工可用网络',
+  configuration_busy: '另一项白名单配置正在保存，请稍后重试',
+}
+
+function databaseErrorReason(error: any) {
   const message = String(error?.message || '')
-  const messages: Record<string, string> = {
-    permission_denied: '当前账号没有管理后台登录IP白名单的权限',
-    session_not_current: '当前浏览器会话已失效，请重新登录',
-    ip_session_not_verified: '当前会话的IP验证已失效，请重新验证',
-    invalid_ip_network: 'IP/CIDR 格式不正确',
-    ip_network_required: '请填写 IP 或 CIDR',
-    invalid_label: '标签必填，最多 80 个字符',
-    notes_too_long: '备注最多 500 个字符',
-    invalid_entry_id: '白名单记录不存在',
-    invalid_entry_update: '白名单状态不正确',
-    invalid_enabled: '白名单状态不正确',
-    entry_not_found: '白名单记录不存在',
-    network_already_exists: '该 IP/CIDR 已经存在',
-    cannot_enable_without_entries: '请先加入并启用当前IP，再开启白名单',
-    current_ip_not_allowed: '当前IP尚未在启用的白名单中，不能开启',
-    current_ip_would_be_denied: '此操作会把当前IP移出白名单；请先加入新的当前IP',
-    last_enabled_entry: '白名单开启时不能停用或删除最后一条；请先关闭白名单',
-    client_ip_unavailable: '服务端无法从可信代理读取当前IP，已拒绝操作',
-    invalid_enforced: '白名单开关状态不正确',
-    invalid_action: '不支持的操作',
-    invalid_portal: '登录入口类型不正确',
-    invalid_portal_scope: '适用范围不正确',
-    cannot_enable_without_admin_entries: '请先添加至少一条“后台”或“两者”IP，再开启后台限制',
-    cannot_enable_without_staff_entries: '请先添加至少一条“员工前端”或“两者”IP，再开启员工前端限制',
-    last_enabled_admin_entry: '后台限制开启时，不能移除最后一条后台可用网络',
-    last_enabled_staff_entry: '员工前端限制开启时，不能移除最后一条员工可用网络',
-    configuration_busy: '另一项白名单配置正在保存，请稍后重试',
-  }
-  const key = Object.keys(messages).find(code => message.includes(code))
-  return key ? messages[key] : '白名单保存失败'
+  return Object.keys(databaseMessages).find(code => message.includes(code)) || 'mutation_failed'
+}
+
+function databaseErrorMessage(error: any) {
+  const reason = databaseErrorReason(error)
+  return databaseMessages[reason] || '白名单保存失败；本次配置未生效，请刷新后重试'
 }
 
 async function effectivePermissions(admin: any, caller: any) {
@@ -377,8 +382,24 @@ export async function handleRequest(req: Request) {
       p_payload: payload,
     })
     if (mutationError) {
-      return json(req, { error: databaseErrorMessage(mutationError) },
-        String(mutationError.code || '') === '42501' ? 403 : 400)
+      const reason = databaseErrorReason(mutationError)
+      const requestId = crypto.randomUUID()
+      console.error('ADMIN_IP_ALLOWLIST_MUTATION_ERROR', {
+        request_id: requestId,
+        action: mutationAction,
+        reason,
+        retryable: reason === 'configuration_busy',
+        ...safeMeta(mutationError),
+        database_message: String(mutationError?.message || '').slice(0, 160),
+      })
+      return json(req, {
+        error: databaseErrorMessage(mutationError),
+        reason,
+        request_id: requestId,
+        retryable: reason === 'configuration_busy',
+      }, String(mutationError.code || '') === '42501'
+        ? 403
+        : String(mutationError.code || '') === '23505' ? 409 : 400)
     }
 
     // Do not keep a successful save waiting on the full list snapshot. The

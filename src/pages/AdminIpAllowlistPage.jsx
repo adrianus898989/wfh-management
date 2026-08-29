@@ -1,11 +1,34 @@
 import React, { useEffect, useState } from 'react'
 import AdminModuleNav from '../components/AdminModuleNav'
+import { useAppToast } from '../components/AppToastProvider'
 import { useAdminAccess } from '../lib/adminAccess'
 import { withAbortTimeout } from '../lib/abortableRequest'
 import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { supabase } from '../lib/supabase'
 
 const IP_ALLOWLIST_REQUEST_TIMEOUT_MS = 15 * 1000
+const IP_ALLOWLIST_TOAST_MODULE = '登录IP白名单'
+
+const mutationOperation = body => {
+  const portal = body?.portal === 'staff' ? '员工前端' : '后台'
+  return ({
+    add_current_ip:'加入当前IP',
+    create:'新增白名单',
+    update:'更新白名单',
+    set_enabled:body?.enabled ? '启用白名单条目' : '停用白名单条目',
+    set_enforced:`${body?.enforced ? '开启' : '关闭'}${portal}限制`,
+    delete:'删除白名单条目',
+  })[body?.action] || '保存白名单'
+}
+
+const mutationToastKey = (body, type) => [
+  'ip-allowlist',
+  body?.action || 'mutation',
+  body?.portal || body?.portal_scope || '',
+  type,
+].join(':')
+
+const canRefreshAfterMutationFailure = message => /超时|可能已经完成|连接失败|网络|暂时不可用|稍后重试/i.test(String(message || ''))
 
 const blankEntry = () => ({
   id: '',
@@ -27,6 +50,7 @@ const dateTime = value => {
 
 export default function AdminIpAllowlistPage() {
   const access = useAdminAccess()
+  const { notify } = useAppToast()
   const [snapshot, setSnapshot] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -58,19 +82,57 @@ export default function AdminIpAllowlistPage() {
     }
   }
 
-  const load = async ({ background = false } = {}) => {
+  const load = async ({ background = false, announceSuccess = false } = {}) => {
     if (!background) setLoading(true)
     setError('')
     try {
       setSnapshot(await call({ action: 'list' }))
+      if (announceSuccess) notify({
+        type:'success',
+        module:IP_ALLOWLIST_TOAST_MODULE,
+        operation:'刷新白名单',
+        reason:'白名单、网络覆盖与开关状态已更新。',
+        dedupeKey:'ip-allowlist:list:success',
+      })
     } catch (loadError) {
-      setError(loadError.message)
+      const message = loadError?.message || '白名单读取失败，请稍后重试'
+      setError(message)
+      notify({
+        type:'error',
+        module:IP_ALLOWLIST_TOAST_MODULE,
+        operation:'读取白名单',
+        reason:message,
+        dedupeKey:'ip-allowlist:list:error',
+        retry:() => load({ announceSuccess:true }),
+        retryLabel:'重试',
+      })
     } finally {
       if (!background) setLoading(false)
     }
   }
 
   useEffect(() => { load() }, [])
+
+  const publishMutationSuccess = (body, message) => notify({
+    type:'success',
+    module:IP_ALLOWLIST_TOAST_MODULE,
+    operation:mutationOperation(body),
+    reason:message,
+    dedupeKey:mutationToastKey(body, 'success'),
+  })
+
+  const publishMutationFailure = (body, message) => {
+    const refreshSafe = canRefreshAfterMutationFailure(message)
+    notify({
+      type:'error',
+      module:IP_ALLOWLIST_TOAST_MODULE,
+      operation:mutationOperation(body),
+      reason:message,
+      dedupeKey:mutationToastKey(body, 'error'),
+      retry:refreshSafe ? () => load({ announceSuccess:true }) : undefined,
+      retryLabel:'刷新确认',
+    })
+  }
 
   const mutate = async (body, successMessage) => {
     setSaving(true)
@@ -86,10 +148,12 @@ export default function AdminIpAllowlistPage() {
         void load({ background: true })
       }
       setNotice(successMessage)
+      publishMutationSuccess(body, successMessage)
       return { ok: true, error: '' }
     } catch (mutationError) {
       const message = mutationError?.message || '保存失败，请稍后重试'
       setError(message)
+      publishMutationFailure(body, message)
       return { ok: false, error: message }
     } finally {
       setSaving(false)
@@ -180,7 +244,7 @@ export default function AdminIpAllowlistPage() {
         <p>同一份网络清单可分别用于后台、员工前端或两者；两个入口独立开启，员工前端默认关闭。</p>
       </div>
       <div className="ip-allowlist-head-actions">
-        <button type="button" className="secondary-action" onClick={load} disabled={loading || saving}>刷新</button>
+        <button type="button" className="secondary-action" onClick={() => load({ announceSuccess:true })} disabled={loading || saving}>刷新</button>
         <button type="button" className="secondary-action" onClick={addCurrentIp} disabled={loading || saving || !snapshot?.current_ip}>一键加入当前IP</button>
         <button type="button" className="primary-action" onClick={() => setModal({ mode: 'create', form: blankEntry(), error: '', saving: false })} disabled={saving}>新增白名单</button>
       </div>

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useStaffLocale } from '../lib/staffI18n'
 import { ExamImageGallery } from '../components/ExamImageGallery'
+import { useAppToast } from '../components/AppToastProvider'
+import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 
 const copy = {
   eyebrow: ['WFH · 学习中心', 'WFH · LEARNING CENTER', 'WFH · TRUNG TÂM HỌC TẬP', 'WFH · PUSAT BELAJAR'],
@@ -141,6 +143,7 @@ function answerBreakdown(item, tr) {
 
 export default function StaffExamPage() {
   const { locale, setLocale, tr, languageLabel } = useExamText()
+  const { notify } = useAppToast()
   const [home, setHome] = useState(null)
   const [session, setSession] = useState(null)
   const [resultState, setResultState] = useState(null)
@@ -207,14 +210,31 @@ export default function StaffExamPage() {
   const start = async exam => {
     if (!exam) return
     if (!exam.resume_session_id && !window.confirm(tr('startConfirm', { platform: exam.series_name || '—', position: exam.position_name || '—' }))) return
-    const { data, error: requestError } = await supabase.rpc('staff_exam_start_open', {
-      p_team: exam.team_name,
-      p_series: exam.series_name,
-      p_position: exam.position_name,
-    })
-    if (requestError) return setError(msg(requestError))
-    setSession(data)
-    setAnswers(data?.saved_answers || {})
+    const operation = exam.resume_session_id ? tr('resume') : tr('start')
+    try {
+      const { data, error: requestError } = await supabase.rpc('staff_exam_start_open', {
+        p_team: exam.team_name,
+        p_series: exam.series_name,
+        p_position: exam.position_name,
+      })
+      if (requestError) throw requestError
+      setSession(data)
+      setAnswers(data?.saved_answers || {})
+      setError('')
+      notify(writeSuccessToast({
+        module:tr('title'), operation,
+        reason:exam.resume_session_id ? tr('resume') : tr('runningExam'),
+        dedupeKey:`staff-exam:start:${data?.id || exam.resume_session_id || optionKey(exam)}:success`,
+      }))
+    } catch (cause) {
+      const reason = msg(cause)
+      setError(reason)
+      notify(writeFailureToast({
+        module:tr('title'), operation, error:cause, reason,
+        dedupeKey:`staff-exam:start:${exam.resume_session_id || optionKey(exam)}:error`,
+        refresh:load,
+      }))
+    }
   }
 
   const viewResult = async item => {
@@ -231,7 +251,13 @@ export default function StaffExamPage() {
 
   const closeResult = () => { resultRequest.current += 1; setResultState(null) }
 
-  if (session) return <ExamRunner session={session} answers={answers} setAnswers={setAnswers} onDone={() => { setSession(null); load() }} />
+  if (session) return <ExamRunner
+    session={session}
+    answers={answers}
+    setAnswers={setAnswers}
+    onDone={() => { setSession(null); load() }}
+    onRefreshStatus={async () => { setSession(null); await load() }}
+  />
 
   const attempts = Number(selectedExam?.attempts || 0)
   const maxAttempts = Number(selectedExam?.max_attempts || 0)
@@ -366,14 +392,16 @@ function QuestionTranslations({ question, locale, label }) {
   return <details><summary>{label}</summary>{rows.map(([language, value]) => <p key={language}><b>{language}</b><span>{value}</span></p>)}</details>
 }
 
-function ExamRunner({ session, answers, setAnswers, onDone }) {
+function ExamRunner({ session, answers, setAnswers, onDone, onRefreshStatus }) {
   const { locale, tr } = useExamText()
+  const { notify } = useAppToast()
   const questions = session.question_snapshot || []
   const [index, setIndex] = useState(0)
   const [remaining, setRemaining] = useState(Math.max(0, Math.floor((new Date(session.expires_at) - Date.now()) / 1000)))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const submitting = useRef(false)
+  const saveFailureNotified = useRef(false)
   const question = questions[index]
   const answer = answers[question?.id] || ''
 
@@ -383,11 +411,25 @@ function ExamRunner({ session, answers, setAnswers, onDone }) {
   const save = async (targetQuestion = question, value = answer) => {
     if (!targetQuestion) return true
     setSaving(true)
-    const { error: requestError } = await supabase.rpc('staff_exam_save_answer', { p_session_id: session.id, p_question_id: targetQuestion.id, p_answer: value, p_attachments: [] })
-    setSaving(false)
-    if (requestError) { setError(tr('saveFailed', { error: msg(requestError) })); return false }
-    setError('')
-    return true
+    try {
+      const { error: requestError } = await supabase.rpc('staff_exam_save_answer', { p_session_id: session.id, p_question_id: targetQuestion.id, p_answer: value, p_attachments: [] })
+      if (requestError) throw requestError
+      setError('')
+      return true
+    } catch (cause) {
+      const reason = tr('saveFailed', { error: msg(cause) })
+      setError(reason)
+      if (!saveFailureNotified.current) {
+        saveFailureNotified.current = true
+        notify(writeFailureToast({
+          module:tr('title'), operation:tr('saving'), error:cause, reason,
+          dedupeKey:`staff-exam:save:${session.id}:error`,
+        }))
+      }
+      return false
+    } finally {
+      setSaving(false)
+    }
   }
 
   const go = async nextIndex => { await save(); setIndex(nextIndex) }
@@ -395,12 +437,28 @@ function ExamRunner({ session, answers, setAnswers, onDone }) {
     if (submitting.current) return
     if (!automatic && !window.confirm(tr('submitConfirm'))) return
     submitting.current = true
-    const saved = await save()
-    if (!saved && !automatic) { submitting.current = false; return }
-    const { error: requestError } = await supabase.rpc('staff_exam_submit', { p_session_id: session.id })
-    if (requestError) { submitting.current = false; setError(msg(requestError)); return }
-    window.alert(automatic ? tr('autoSubmitted') : tr('submitted'))
-    onDone()
+    try {
+      const saved = await save()
+      if (!saved && !automatic) return
+      const { error: requestError } = await supabase.rpc('staff_exam_submit', { p_session_id: session.id })
+      if (requestError) throw requestError
+      if (automatic) window.alert(tr('autoSubmitted'))
+      else notify(writeSuccessToast({
+        module:tr('title'), operation:tr('submit'), reason:tr('submitted'),
+        dedupeKey:`staff-exam:submit:${session.id}:success`,
+      }))
+      onDone()
+    } catch (cause) {
+      const reason = msg(cause)
+      setError(reason)
+      if (!automatic) notify(writeFailureToast({
+        module:tr('title'), operation:tr('submit'), error:cause, reason,
+        dedupeKey:`staff-exam:submit:${session.id}:error`,
+        refresh:onRefreshStatus,
+      }))
+    } finally {
+      submitting.current = false
+    }
   }
 
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0')

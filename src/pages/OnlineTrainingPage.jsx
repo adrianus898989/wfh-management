@@ -13,11 +13,13 @@ import {
 import {businessTodayRange} from '../lib/adminQueryDefaults'
 import {Pagination} from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
+import {useAppToast} from '../components/AppToastProvider'
 import {EmployeeDrawer} from './AdminEmployeesPage'
 import {edgeFunctionErrorMessage} from '../lib/edgeFunctionError'
 import '../styles-online-training.css'
 
 const BUCKET='online-training'
+const ONLINE_TRAINING_TOAST_MODULE='线上培训日报'
 const RPC_PAGE_SIZE=50
 const MAX_ATTACHMENTS=6
 const MAX_IMAGE_BYTES=4*1024*1024
@@ -191,6 +193,7 @@ function OverlayPortal({children}){
 }
 
 export default function OnlineTrainingPage(){
+  const {notify}=useAppToast()
   const [bootstrap,setBootstrap]=useState(null)
   const [mode,setMode]=useState('reports')
   const [filters,setFilters]=useState(defaultFilters)
@@ -219,6 +222,7 @@ export default function OnlineTrainingPage(){
   const profileRequestRef=useRef(0)
   const viewingRequestRef=useRef(0)
   const editorRequestRef=useRef(0)
+  const listIntentRef=useRef('')
 
   const hydrateAttachments=async rows=>{
     const paths=uniq((rows||[]).flatMap(row=>(row.attachments||[]).map(item=>item.path)))
@@ -250,20 +254,32 @@ export default function OnlineTrainingPage(){
     throw lastError
   }
 
-  const loadBootstrap=async()=>{
+  const loadBootstrap=async({announceFailure=false}={})=>{
     setLoading(true)
     try{
       const data=await readCall('online_training_context')
       setBootstrap(data)
       setError('')
       return data
-    }catch(err){setError(readableError(err,'线上培训模块读取失败'));return null}
+    }catch(err){
+      const reason=readableError(err,'线上培训模块读取失败')
+      setError(reason)
+      if(announceFailure)listIntentRef.current=''
+      if(announceFailure)notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'刷新模块数据',reason,
+        dedupeKey:'online-training:bootstrap:read:error',
+        retry:()=>{listIntentRef.current='刷新线上培训记录';return loadBootstrap({announceFailure:true})},retryLabel:'重试',
+      })
+      return null
+    }
     finally{setLoading(false)}
   }
 
-  const loadList=async({silent=false,nextPage=page}={})=>{
+  const loadList=async({silent=false,nextPage=page,announceFailure=false,operation='',throwOnError=false}={})=>{
     const requestId=++listRequestRef.current
     const requestedMode=mode
+    const requestedOperation=operation||(announceFailure?'查询线上培训记录':listIntentRef.current)
+    listIntentRef.current=''
     if(silent)setSearching(true);else setLoading(true)
     try{
       const data=await readCall(
@@ -277,8 +293,19 @@ export default function OnlineTrainingPage(){
       setResult({...data,rows,report_total:Number(data?.report_total||0)})
       if(safePage!==nextPage)setPage(safePage)
       setError('')
+      return true
     }catch(err){
-      if(requestId===listRequestRef.current)setError(readableError(err,'线上培训记录读取失败'))
+      const reason=readableError(err,'线上培训记录读取失败')
+      if(requestId===listRequestRef.current){
+        setError(reason)
+        if(requestedOperation)notify({
+          type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:requestedOperation,reason,
+          dedupeKey:'online-training:list:read:error',
+          retry:()=>loadList({silent:true,announceFailure:true,operation:'刷新线上培训记录'}),retryLabel:'重试',
+        })
+      }
+      if(throwOnError)throw err
+      return false
     }finally{
       if(requestId===listRequestRef.current){setLoading(false);setSearching(false)}
     }
@@ -376,6 +403,10 @@ export default function OnlineTrainingPage(){
       if(requestId!==trainerRequestRef.current)return
       const message=readableError(err,'线上培训人员读取失败')
       setEditor(current=>current?.assignmentMode==='admin'&&text(current.draft?.manager_filter)===text(value)?({...current,rosterLoading:false,rosterError:message}):current)
+      notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'读取培训人员',reason:message,
+        dedupeKey:'online-training:trainer-roster:read:error',retry:()=>selectAdminTrainer(value),retryLabel:'重试',
+      })
     }
   }
 
@@ -426,6 +457,9 @@ export default function OnlineTrainingPage(){
     setSaving(true);setError('');setEditor(current=>({...current,validation:null}))
     const uploaded=[]
     let reportSaved=false
+    let cleanupWarning=''
+    const saveOperation=editor.original?'编辑线上培训日报':'提交线上培训日报'
+    const saveDedupeKey=`online-training:report:${editor.original?'update':'create'}`
     try{
       for(const item of pendingFiles){
         const path=`${bootstrap.access.user_id}/${editor.draft.id}/${crypto.randomUUID()}-${safeFileName(item.file.name)}`
@@ -438,8 +472,11 @@ export default function OnlineTrainingPage(){
       const members=editor.members.map((member,index)=>({...member,sort_order:index,metrics:member.metrics||{}}))
       await call('online_training_save_report',{p_report:report,p_members:members})
       reportSaved=true
+      notify({
+        type:'success',module:ONLINE_TRAINING_TOAST_MODULE,operation:saveOperation,
+        reason:'日报及人员记录已保存。',dedupeKey:`${saveDedupeKey}:success`,
+      })
 
-      let cleanupWarning=''
       if(editor.original){
         const keptPaths=new Set(kept.map(item=>item.path))
         const removed=(editor.original.attachments||[]).map(item=>item.path).filter(path=>path&&!keptPaths.has(path))
@@ -448,19 +485,35 @@ export default function OnlineTrainingPage(){
           if(removeError)cleanupWarning='日报已保存，但旧附件未能自动清理；附件已从日报隐藏，请联系管理员清理存储文件。'
         }
       }
-      discardEditor();await loadList({silent:true,nextPage:1});setPage(1)
+      if(cleanupWarning)notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'清理旧附件',reason:cleanupWarning,
+        dedupeKey:'online-training:attachment:cleanup:error',
+      })
+      discardEditor();await loadList({silent:true,nextPage:1,throwOnError:true});setPage(1)
       if(cleanupWarning)setError(cleanupWarning)
     }catch(err){
       if(reportSaved){
         discardEditor()
-        setError(`日报已经保存，但列表刷新失败：${err.message||'请稍后刷新重试'}`)
+        const reason=`日报已经保存，但列表刷新失败：${err.message||'请稍后刷新重试'}`
+        setError(reason)
+        notify({
+          type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'保存后刷新日报列表',reason,
+          dedupeKey:'online-training:report:post-save-refresh:error',
+          retry:()=>loadList({silent:true,announceFailure:true,operation:'刷新线上培训记录'}),retryLabel:'刷新确认',
+        })
       }else{
         let rollbackError=null
         if(uploaded.length){
           rollbackError=await removeStoredPaths(uploaded.map(item=>item.path))
         }
         const rollbackNotice=rollbackError?'；新上传附件未能自动回滚，请联系管理员清理存储文件':''
-        setEditor(current=>current?({...current,validation:{message:`${err.message||'线上培训日报保存失败'}${rollbackNotice}`,issues:[]}}):current)
+        const reason=`${err.message||'线上培训日报保存失败'}${rollbackNotice}`
+        setEditor(current=>current?({...current,validation:{message:reason,issues:[]}}):current)
+        notify({
+          type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:saveOperation,reason,
+          dedupeKey:`${saveDedupeKey}:error`,
+          retry:()=>loadList({silent:true,announceFailure:true,operation:'刷新确认日报状态'}),retryLabel:'刷新确认',
+        })
       }
     }finally{setSaving(false)}
   }
@@ -472,16 +525,33 @@ export default function OnlineTrainingPage(){
     const deletingViewedReport=Boolean(viewing?.id&&viewing.id===target.id)
     setSaving(true)
     setDeleteError('')
+    let reportArchived=false
     try{
       await call('online_training_archive_report',{p_report_id:target.id})
       if(deletingViewedReport)closeViewer()
+      reportArchived=true
+      notify({
+        type:'success',module:ONLINE_TRAINING_TOAST_MODULE,operation:'删除线上培训日报',
+        reason:'日报已归档并从正常列表移除。',dedupeKey:'online-training:report:archive:success',
+      })
       setDeleteTarget(null)
       setDeleteError('')
       if(history?.person)await loadHistory(history.person,history.period,history.basePeriod)
       if(openTrainer)await loadTrainerHistory(openTrainer)
-      await loadList({silent:true})
+      await loadList({silent:true,throwOnError:true})
     }
-    catch(err){setDeleteError(readableError(err,'报告删除失败'))}
+    catch(err){
+      const reason=reportArchived
+        ?`日报已经删除，但列表刷新失败：${readableError(err,'请稍后刷新确认')}`
+        :readableError(err,'报告删除失败')
+      if(reportArchived)setError(reason)
+      else setDeleteError(reason)
+      notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:reportArchived?'删除后刷新日报列表':'删除线上培训日报',reason,
+        dedupeKey:`online-training:report:${reportArchived?'post-archive-refresh':'archive'}:error`,
+        retry:()=>loadList({silent:true,announceFailure:true,operation:'刷新确认删除结果'}),retryLabel:'刷新确认',
+      })
+    }
     finally{setSaving(false)}
   }
 
@@ -496,11 +566,27 @@ export default function OnlineTrainingPage(){
   }
 
   const reviewReport=async(status,note)=>{
+    let reviewSaved=false
     try{
       await call('online_training_review_report',{p_report_id:viewing.id,p_status:status,p_note:note||''})
+      reviewSaved=true
+      notify({
+        type:'success',module:ONLINE_TRAINING_TOAST_MODULE,operation:'保存日报批注',
+        reason:'查看状态与批注已保存。',dedupeKey:'online-training:review:save:success',
+      })
       setViewing(current=>({...current,review_status:status,review_note:note||''}))
-      await loadList({silent:true})
-    }catch(err){setError(err.message||'批注保存失败')}
+      await loadList({silent:true,throwOnError:true})
+    }catch(err){
+      const reason=reviewSaved
+        ?`批注已经保存，但列表刷新失败：${err.message||'请稍后刷新确认'}`
+        :(err.message||'批注保存失败')
+      setError(reason)
+      notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:reviewSaved?'保存批注后刷新列表':'保存日报批注',reason,
+        dedupeKey:`online-training:review:${reviewSaved?'post-save-refresh':'save'}:error`,
+        retry:()=>loadList({silent:true,announceFailure:true,operation:'刷新确认批注状态'}),retryLabel:'刷新确认',
+      })
+    }
   }
 
   const openProfile=async employeeId=>{
@@ -513,7 +599,12 @@ export default function OnlineTrainingPage(){
       setProfile({loading:false,detail:data,error:''})
     }catch(err){
       if(requestId!==profileRequestRef.current)return
-      setProfile({loading:false,detail:null,error:readableError(err,'员工完整档案读取失败')})
+      const reason=readableError(err,'员工完整档案读取失败')
+      setProfile({loading:false,detail:null,error:reason})
+      notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'读取员工档案',reason,
+        dedupeKey:'online-training:employee-profile:read:error',retry:()=>openProfile(employeeId),retryLabel:'重试',
+      })
     }
   }
   const closeProfile=()=>{profileRequestRef.current+=1;setProfile(null)}
@@ -550,7 +641,12 @@ export default function OnlineTrainingPage(){
       setHistory({person,period,basePeriod,loading:false,rows:visibleRows,total:Number(first?.total||visibleRows.length),error:''})
     }catch(err){
       if(requestId!==historyRequestRef.current)return
-      setHistory({person,period,basePeriod,loading:false,rows:[],total:0,error:readableError(err,'员工历史记录读取失败')})
+      const reason=readableError(err,'员工历史记录读取失败')
+      setHistory({person,period,basePeriod,loading:false,rows:[],total:0,error:reason})
+      notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'读取员工历史记录',reason,
+        dedupeKey:'online-training:employee-history:read:error',retry:()=>loadHistory(person,period,basePeriod),retryLabel:'重试',
+      })
     }
   }
 
@@ -596,7 +692,12 @@ export default function OnlineTrainingPage(){
       setTrainerHistory({trainer,loading:false,rows:exact,error:''})
     }catch(err){
       if(requestId!==trainerHistoryRequestRef.current)return
-      setTrainerHistory({trainer,loading:false,rows:[],error:readableError(err,'培训日报读取失败')})
+      const reason=readableError(err,'培训日报读取失败')
+      setTrainerHistory({trainer,loading:false,rows:[],error:reason})
+      notify({
+        type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'读取培训老师日报',reason,
+        dedupeKey:'online-training:trainer-history:read:error',retry:()=>loadTrainerHistory(trainer),retryLabel:'重试',
+      })
     }
   }
 
@@ -612,6 +713,7 @@ export default function OnlineTrainingPage(){
     listRequestRef.current+=1
     historyRequestRef.current+=1
     trainerHistoryRequestRef.current+=1
+    listIntentRef.current='切换线上培训视图'
     setHistory(null);setTrainerHistory(null);setError('')
     setMode(nextMode);setPage(1);setResult({rows:[],total:0,pages:1,report_total:0});setSearching(true)
   }
@@ -640,9 +742,11 @@ export default function OnlineTrainingPage(){
   const queryFilters=()=>{
     if(draftFilters.from&&draftFilters.to&&draftFilters.from>draftFilters.to){setError('日期起不能晚于日期止');return}
     const next=Object.fromEntries(Object.entries(draftFilters).map(([key,value])=>[key,text(value)]))
+    listIntentRef.current='查询线上培训记录'
     setFilters(next);setPage(1);setSearchVersion(version=>version+1)
   }
-  const clearFilters=()=>{const next=defaultFilters();setDraftFilters(next);setFilters(next);setPage(1);setSearchVersion(version=>version+1)}
+  const clearFilters=()=>{const next=defaultFilters();listIntentRef.current='重置线上培训查询';setDraftFilters(next);setFilters(next);setPage(1);setSearchVersion(version=>version+1)}
+  const refreshPage=()=>{listIntentRef.current='刷新线上培训记录';return loadBootstrap({announceFailure:true})}
   const filterDirty=JSON.stringify(draftFilters)!==JSON.stringify(filters)
   const activeFilterCount=Object.values(filters).filter(Boolean).length
   const pagePresentation=adminPagePresentation('/admin/daily','线上培训报告')
@@ -652,14 +756,14 @@ export default function OnlineTrainingPage(){
       <div><div className="module-kicker">ATTENDANCE · EXAMS · REWARDS</div><h1>{pagePresentation.sectionLabel||'考勤考试奖惩统计'}</h1><p>{pagePresentation.itemLabel||'线上培训日报记录表'}</p></div>
       <div className="ot-header-actions">
         <span className={`ot-access ${canOpenSubmit?'ok':'read'}`}>{myRoster.length?`已关联 ${myRoster.length} 名组员`:canAdminSelect?'管理员代填':'仅查看'}</span>
-        <button onClick={loadBootstrap} disabled={loading||searching}>{loading?'读取中…':'刷新'}</button>
+        <button onClick={refreshPage} disabled={loading||searching}>{loading?'读取中…':'刷新'}</button>
         {canOpenSubmit&&<button className="primary" onClick={openCreate}>＋ 提交线上培训日报</button>}
       </div>
     </header>
 
     <AdminModuleNav />
 
-    {error&&<div className="ot-error"><span>{error}</span><div>{error.includes('重新读取')&&<button className="retry" onClick={loadBootstrap}>重新读取</button>}<button className="close" onClick={()=>setError('')}>×</button></div></div>}
+    {error&&<div className="ot-error"><span>{error}</span><div>{error.includes('重新读取')&&<button className="retry" onClick={refreshPage}>重新读取</button>}<button className="close" onClick={()=>setError('')}>×</button></div></div>}
 
     <section className="ot-kpis">
       <div><span>我负责的培训人员</span><strong>{myRoster.length||'—'}</strong><small>{myRoster.length?'按账号档案自动匹配':'主管账号仅查看或代填'}</small></div>
@@ -698,7 +802,7 @@ export default function OnlineTrainingPage(){
       :<PeopleList rows={result.rows} onHistory={openHistory}/>
     }
 
-    {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={pageSize} pageSizeOptions={[20,30,50,100]} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>}
+    {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={pageSize} pageSizeOptions={[20,30,50,100]} onPage={next=>{listIntentRef.current='查询线上培训分页';setPage(next);setSearchVersion(version=>version+1)}} onPageSize={next=>{listIntentRef.current='调整线上培训分页';setPageSize(next);setPage(1);setSearchVersion(version=>version+1)}}/>}
 
     {editor&&<OverlayPortal><EditorModal editor={editor} updateDraft={updateDraft} updateMember={updateMember} updateMetric={updateMetric}
       assignment={bootstrap.auto_assignment||{}} trainerOptions={bootstrap.manager_options||[]} onSelectTrainer={selectAdminTrainer}

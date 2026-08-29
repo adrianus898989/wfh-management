@@ -42,7 +42,7 @@ test('IP allowlist requests abort and always release both saving locks', () => {
   assert.match(allowlistPage, /const mutate = async[\s\S]{0,900}?finally \{\s*setSaving\(false\)/)
   assert.match(allowlistPage, /const saveEntry = async[\s\S]{0,1300}?finally \{\s*setModal\(current => current \? \(\{ \.\.\.current, saving: false \}\) : current\)/)
   assert.match(allowlistPage, /response\?\.refresh_required[\s\S]{0,220}?void load\(\{ background: true \}\)/)
-  assert.match(allowlistPage, /const load = async \(\{ background = false \} = \{\}\)[\s\S]{0,220}?if \(!background\) setLoading\(false\)/)
+  assert.match(allowlistPage, /const load = async \(\{ background = false, announceSuccess = false \} = \{\}\)[\s\S]{0,900}?finally \{\s*if \(!background\) setLoading\(false\)/)
 })
 
 test('IP allowlist Edge dependencies are bounded and rely on gateway-verified JWT identity', () => {
@@ -56,6 +56,17 @@ test('IP allowlist Edge dependencies are bounded and rely on gateway-verified JW
   assert.match(allowlistEdge, /if \(heartbeatError\)[\s\S]{0,220}?service_unavailable[\s\S]{0,40}?503/)
   assert.match(allowlistEdge, /return json\(req, \{ ok: true, mutation, refresh_required: true \}\)/)
   assert.equal(allowlistEdge.match(/await snapshot\(admin, clientIp\)/g)?.length, 1)
+})
+
+test('IP allowlist mutation failures return a safe traceable reason without exposing raw database details', () => {
+  assert.match(allowlistEdge, /const requestId = crypto\.randomUUID\(\)/)
+  assert.match(allowlistEdge, /ADMIN_IP_ALLOWLIST_MUTATION_ERROR/)
+  assert.match(allowlistEdge, /request_id: requestId/)
+  assert.match(allowlistEdge, /reason,/)
+  assert.match(allowlistEdge, /retryable: reason === 'configuration_busy'/)
+  assert.match(allowlistEdge, /error: databaseErrorMessage\(mutationError\)/)
+  assert.match(allowlistEdge, /'白名单保存失败；本次配置未生效，请刷新后重试'/)
+  assert.doesNotMatch(allowlistEdge, /return json\(req, \{[^}]*database_message/s)
 })
 
 test('only an explicit non-allowlisted decision is terminal in React', () => {

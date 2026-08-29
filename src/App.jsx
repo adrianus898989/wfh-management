@@ -33,6 +33,7 @@ import AdminManualPage from './pages/AdminManualPage'
 import AdminActivityLogPage from './pages/AdminActivityLogPage'
 import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
+import { AppToastProvider } from './components/AppToastProvider'
 import { StaffI18nProvider, useStaffLocale } from './lib/staffI18n'
 import { AdminI18nProvider } from './lib/adminI18n'
 import {
@@ -512,5 +513,5 @@ function AppRoutes() {
 }
 
 export default function App() {
-  return <AdminI18nProvider><StaffI18nProvider><ReleaseSessionBoundary><AppRoutes /></ReleaseSessionBoundary></StaffI18nProvider></AdminI18nProvider>
+  return <AdminI18nProvider><StaffI18nProvider><AppToastProvider><ReleaseSessionBoundary><AppRoutes /></ReleaseSessionBoundary></AppToastProvider></StaffI18nProvider></AdminI18nProvider>
 }

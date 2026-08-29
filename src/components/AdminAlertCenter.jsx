@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Pagination } from './DataPageControls'
 import { AdminSyncDiagnosticsPanel } from './AdminSyncDiagnosticsPanel'
+import { useAppToast } from './AppToastProvider'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import {
@@ -37,6 +38,7 @@ import {
   writeAdminAlertBadgeCache,
 } from '../lib/adminAlertBadgePreload'
 import { supabase } from '../lib/supabase'
+import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 import { PERMISSIONS } from '../config/permissions'
 import '../styles-admin-alerts.css'
 
@@ -227,7 +229,8 @@ async function updateAlertFollowUp(alertId, action, note = null) {
   return data?.follow_up || { status:'pending' }
 }
 
-function AlertFollowUpPanel({ row, locale, onUpdated }) {
+function AlertFollowUpPanel({ row, locale, onUpdated, onRefresh }) {
+  const { notify } = useAppToast()
   const workflow = adminAlertFollowUpState(row, locale)
   const [note, setNote] = useState(workflow.note)
   const [busy, setBusy] = useState(false)
@@ -249,8 +252,28 @@ function AlertFollowUpPanel({ row, locale, onUpdated }) {
     try {
       const followUp = await updateAlertFollowUp(row.id, action, action === 'handle' ? clean(note) : null)
       onUpdated(followUp)
+      const operation = action === 'confirm'
+        ? (locale === 'en' ? 'Confirm follow-up' : '确认预警跟进')
+        : (locale === 'en' ? 'Save follow-up result' : '保存预警跟进结果')
+      notify(writeSuccessToast({
+        module:locale === 'en' ? 'Warning center' : '预警中心',
+        operation,
+        reason:locale === 'en' ? 'The follow-up record has been saved.' : '跟进记录已保存。',
+        dedupeKey:`alerts:follow-up:${row.id}:${action}:success`,
+      }))
     } catch (cause) {
-      setError(alertErrorMessage(cause, locale, locale === 'en' ? 'Unable to update the follow-up.' : '预警跟进状态更新失败'))
+      const reason = alertErrorMessage(cause, locale, locale === 'en' ? 'Unable to update the follow-up.' : '预警跟进状态更新失败')
+      setError(reason)
+      notify(writeFailureToast({
+        module:locale === 'en' ? 'Warning center' : '预警中心',
+        operation:action === 'confirm'
+          ? (locale === 'en' ? 'Confirm follow-up' : '确认预警跟进')
+          : (locale === 'en' ? 'Save follow-up result' : '保存预警跟进结果'),
+        error:cause,
+        reason,
+        dedupeKey:`alerts:follow-up:${row.id}:${action}:error`,
+        refresh:onRefresh,
+      }))
     } finally {
       setBusy(false)
     }
@@ -284,6 +307,7 @@ function AlertFollowUpPanel({ row, locale, onUpdated }) {
 
 export function AdminAlertBell({ access }) {
   const { locale } = useAdminI18n()
+  const { notify } = useAppToast()
   const navigate = useNavigate()
   const rootRef = useRef(null)
   const requestRef = useRef(0)
@@ -511,8 +535,23 @@ export function AdminAlertBell({ access }) {
     try {
       await markAlertsRead()
       setState(current => ({ ...current, unread:0, rows:current.rows.map(row => ({ ...row, unread:false })) }))
+      notify(writeSuccessToast({
+        module:locale === 'en' ? 'Warning center' : '预警中心',
+        operation:locale === 'en' ? 'Mark all read' : '全部标为已读',
+        reason:locale === 'en' ? 'All visible warnings were marked as read.' : '当前权限范围内的预警已全部标为已读。',
+        dedupeKey:'alerts:bell:mark-all:success',
+      }))
     } catch (error) {
-      setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') }))
+      const reason = alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败')
+      setState(current => ({ ...current, error:reason }))
+      notify(writeFailureToast({
+        module:locale === 'en' ? 'Warning center' : '预警中心',
+        operation:locale === 'en' ? 'Mark all read' : '全部标为已读',
+        error,
+        reason,
+        dedupeKey:'alerts:bell:mark-all:error',
+        refresh:() => load({ kind:'details' }),
+      }))
     }
   }
 
@@ -658,6 +697,7 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
 export function AdminAlertRecordsPage() {
   const access = useAdminAccess()
   const { locale } = useAdminI18n()
+  const { notify } = useAppToast()
   const location = useLocation()
   const navigate = useNavigate()
   const requestRef = useRef(0)
@@ -759,8 +799,26 @@ export function AdminAlertRecordsPage() {
     catch (error) { setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') })) }
   }
   const markAll = async () => {
-    try { await markAlertsRead() }
-    catch (error) { setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') })) }
+    try {
+      await markAlertsRead()
+      notify(writeSuccessToast({
+        module:locale === 'en' ? 'Warning center' : '预警中心',
+        operation:locale === 'en' ? 'Mark all read' : '全部标为已读',
+        reason:locale === 'en' ? 'All warnings in your current scope were marked as read.' : '当前权限范围内的预警已全部标为已读。',
+        dedupeKey:'alerts:records:mark-all:success',
+      }))
+    } catch (error) {
+      const reason = alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败')
+      setState(current => ({ ...current, error:reason }))
+      notify(writeFailureToast({
+        module:locale === 'en' ? 'Warning center' : '预警中心',
+        operation:locale === 'en' ? 'Mark all read' : '全部标为已读',
+        error,
+        reason,
+        dedupeKey:'alerts:records:mark-all:error',
+        refresh:() => load(page, pageSize, filters),
+      }))
+    }
   }
   const toggleRow = row => {
     const opening = String(expandedId) !== String(row.id)
@@ -847,7 +905,7 @@ export function AdminAlertRecordsPage() {
                 <AlertAttendanceDetails row={row} locale={locale}/>
                 <AlertAdjustmentDetails row={row} locale={locale}/>
                 <AlertErrorFrequencyDetails row={row} locale={locale}/>
-                <AlertFollowUpPanel row={row} locale={locale} onUpdated={canFollowUp ? followUp => updateRowFollowUp(row.id, followUp) : undefined}/>
+                <AlertFollowUpPanel row={row} locale={locale} onUpdated={canFollowUp ? followUp => updateRowFollowUp(row.id, followUp) : undefined} onRefresh={() => load(page, pageSize, filters)}/>
                 <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{row.is_active ? (locale === 'en' ? 'Last updated' : '最后更新') : (locale === 'en' ? 'Resolved' : '解除时间')} <b data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</b></span></div>
               </div>}
             </article>

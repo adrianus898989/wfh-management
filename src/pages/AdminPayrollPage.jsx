@@ -3,10 +3,12 @@ import { useSearchParams } from 'react-router-dom'
 import { Pagination } from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { AdminPayoutChangeWorkspace } from '../components/PaymentChangeWorkflow'
+import { useAppToast } from '../components/AppToastProvider'
 import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
+import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 import { PAYROLL_CURRENCY_OPTIONS, payrollCurrencyLabel } from '../lib/payrollCurrency'
 import { filterPayrollBatches, payrollBatchIdentity, payrollMatchState, summarizePayrollRows } from '../lib/payrollImportState'
 import { supabase } from '../lib/supabase'
@@ -183,6 +185,7 @@ export default function AdminPayrollPage(){
   const [params,setParams]=useSearchParams()
   const access=useAdminAccess()
   const {t:adminT}=useAdminI18n()
+  const {notify}=useAppToast()
   const routeTab=params.get('tab')
   const urlTab=canonicalAdminTab('/admin/payroll',routeTab)
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
@@ -279,50 +282,77 @@ export default function AdminPayrollPage(){
     }catch(error){setFileState({file,rows:[],error:error.message||'文件读取失败',loading:false})}
   }
 
+  const refreshImportHistory=async()=>{
+    setTabState('导入记录')
+    setParams(adminTabParams('/admin/payroll','导入记录'))
+    await load(PAYROLL_SUMMARY_ONLY_BATCH_ID,'导入记录')
+  }
+
   const importRows=async()=>{
     if(!fileState.rows.length)return
     setSaving(true);setMessage('')
-    const payload={
-      period_start:`${form.period}-01`,title:form.title||`${form.period} 工资`,currency:form.currency,
-      source_type:'upload',source_file_name:fileState.file?.name||'',notes:form.notes,
-    }
-    const {data,error}=await supabase.rpc('admin_payroll_import',{p_batch:payload,p_rows:fileState.rows})
-    setSaving(false)
-    if(error){setMessage(`导入失败：${error.message}`);return}
-    const resignedText=Number(data.resigned||0)>0?`，其中离职员工 ${data.resigned} 人`:''
-    setMessage(`导入完成：${data.rows} 人，已识别 ${data.matched} 人${resignedText}，未匹配 ${data.unmatched} 人。`)
-    setBatchId(data.batch_id);setFileState({file:null,rows:[],error:'',loading:false});if(fileRef.current)fileRef.current.value=''
-    if(access.hasPermission(PERMISSIONS.PAYROLL_PENDING_VIEW)){
-      await load(data.batch_id,'待发布')
-      setTabState('待发布');setParams(adminTabParams('/admin/payroll','待发布'))
-    }else{
-      await load(PAYROLL_SUMMARY_ONLY_BATCH_ID,'导入记录')
-    }
+    try{
+      const payload={
+        period_start:`${form.period}-01`,title:form.title||`${form.period} 工资`,currency:form.currency,
+        source_type:'upload',source_file_name:fileState.file?.name||'',notes:form.notes,
+      }
+      const {data,error}=await supabase.rpc('admin_payroll_import',{p_batch:payload,p_rows:fileState.rows})
+      if(error)throw error
+      const resignedText=Number(data?.resigned||0)>0?`，其中离职员工 ${data.resigned} 人`:''
+      const success=`导入完成：${data?.rows||0} 人，已识别 ${data?.matched||0} 人${resignedText}，未匹配 ${data?.unmatched||0} 人。`
+      setMessage(success)
+      notify(writeSuccessToast({module:'工资统计',operation:'导入工资',reason:success,dedupeKey:`payroll:import:${data?.batch_id||form.period}:success`}))
+      setBatchId(data?.batch_id||null);setFileState({file:null,rows:[],error:'',loading:false});if(fileRef.current)fileRef.current.value=''
+      if(access.hasPermission(PERMISSIONS.PAYROLL_PENDING_VIEW)){
+        await load(data?.batch_id||null,'待发布')
+        setTabState('待发布');setParams(adminTabParams('/admin/payroll','待发布'))
+      }else{
+        await load(PAYROLL_SUMMARY_ONLY_BATCH_ID,'导入记录')
+      }
+    }catch(error){
+      const reason=`导入失败：${error?.message||'服务暂时不可用，请稍后重试'}`
+      setMessage(reason)
+      notify(writeFailureToast({module:'工资统计',operation:'导入工资',error,reason,dedupeKey:`payroll:import:${form.period}:error`,refresh:refreshImportHistory}))
+    }finally{setSaving(false)}
   }
 
   const publish=async id=>{
     setSaving(true);setMessage('')
-    const {data,error}=await supabase.rpc('admin_payroll_publish',{p_batch_id:id})
-    setSaving(false)
-    if(error){setMessage(`发布失败：${error.message}`);return}
-    const excluded=Number(data.excluded_rows||0)
-    setMessage(`已发布 ${data.rows} 份工资单${excluded?`，另有 ${excluded} 份离职、停用或未匹配记录仅保留在后台`:''}。`)
-    if(access.hasPermission(PERMISSIONS.PAYROLL_PUBLISHED_VIEW)){
-      await load(id,'已发布');setTabState('已发布');setParams(adminTabParams('/admin/payroll','已发布'))
-    }else{
-      await load(null,'待发布')
-    }
+    try{
+      const {data,error}=await supabase.rpc('admin_payroll_publish',{p_batch_id:id})
+      if(error)throw error
+      const excluded=Number(data?.excluded_rows||0)
+      const success=`已发布 ${data?.rows||0} 份工资单${excluded?`，另有 ${excluded} 份离职、停用或未匹配记录仅保留在后台`:''}。`
+      setMessage(success)
+      notify(writeSuccessToast({module:'工资统计',operation:'发布工资',reason:success,dedupeKey:`payroll:publish:${id}:success`}))
+      if(access.hasPermission(PERMISSIONS.PAYROLL_PUBLISHED_VIEW)){
+        await load(id,'已发布');setTabState('已发布');setParams(adminTabParams('/admin/payroll','已发布'))
+      }else{
+        await load(null,'待发布')
+      }
+    }catch(error){
+      const reason=`发布失败：${error?.message||'服务暂时不可用，请稍后重试'}`
+      setMessage(reason)
+      notify(writeFailureToast({module:'工资统计',operation:'发布工资',error,reason,dedupeKey:`payroll:publish:${id}:error`,refresh:()=>load(id,'待发布')}))
+    }finally{setSaving(false)}
   }
 
   const deleteBatch=async batch=>{
     if(batch.status!=='draft')return
     if(!window.confirm(`确认移除草稿“${batch.title}”？\n工资记录不会被物理删除，将保留在“导入记录”并可恢复。`))return
     setSaving(true);setMessage('')
-    const {data,error}=await supabase.rpc('admin_payroll_delete',{p_batch_id:batch.id})
-    setSaving(false)
-    if(error){setMessage(`删除失败：${error.message}`);return}
-    setMessage(`已移除草稿“${batch.title}”；${data.rows||batch.row_count} 份工资记录仍保留在导入记录中，可随时恢复。`)
-    setBatchId(null);setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');await load(null)
+    try{
+      const {data,error}=await supabase.rpc('admin_payroll_delete',{p_batch_id:batch.id})
+      if(error)throw error
+      const success=`已移除草稿“${batch.title}”；${data?.rows||batch.row_count} 份工资记录仍保留在导入记录中，可随时恢复。`
+      setMessage(success)
+      notify(writeSuccessToast({module:'工资统计',operation:'移除工资草稿',reason:success,dedupeKey:`payroll:delete:${batch.id}:success`}))
+      setBatchId(null);setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');await load(null)
+    }catch(error){
+      const reason=`删除失败：${error?.message||'服务暂时不可用，请稍后重试'}`
+      setMessage(reason)
+      notify(writeFailureToast({module:'工资统计',operation:'移除工资草稿',error,reason,dedupeKey:`payroll:delete:${batch.id}:error`,refresh:()=>load(batch.id,'待发布')}))
+    }finally{setSaving(false)}
   }
 
   const batches=state.data?.batches||[]
@@ -490,6 +520,7 @@ function PayrollUploadWorkspace({fileRef,fileState,form,saving,setForm,onFile,on
 }
 
 function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
+  const {notify}=useAppToast()
   const requestRef=useRef(0)
   const [panel,setPanel]=useState(null)
   const [editForm,setEditForm]=useState({title:'',notes:''})
@@ -569,10 +600,33 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
       const {data,error}=await supabase.rpc(rpc,args)
       if(error)throw error
       const nextMessage=typeof success==='function'?success(data||{}):success
+      const operation={
+        admin_payroll_update_batch:'更新工资批次',
+        admin_payroll_delete:'移除工资草稿',
+        admin_payroll_void_batch:'作废工资批次',
+        admin_payroll_restore_batch:'恢复工资批次',
+        admin_payroll_clone_correction:'创建纠正草稿',
+      }[rpc]||'管理工资批次'
+      notify(writeSuccessToast({module:'工资统计',operation,reason:nextMessage,dedupeKey:`payroll:batch:${selected?.id||'unknown'}:${rpc}:success`}))
       if(onChanged)await onChanged(nextMessage)
       if(close){closePanel();return}
       await openBatch({...selected,...data})
-    }catch(error){setActionError(error?.message||'批次操作失败')}
+    }catch(error){
+      const reason=error?.message||'批次操作失败'
+      const operation={
+        admin_payroll_update_batch:'更新工资批次',
+        admin_payroll_delete:'移除工资草稿',
+        admin_payroll_void_batch:'作废工资批次',
+        admin_payroll_restore_batch:'恢复工资批次',
+        admin_payroll_clone_correction:'创建纠正草稿',
+      }[rpc]||'管理工资批次'
+      setActionError(reason)
+      notify(writeFailureToast({
+        module:'工资统计',operation,error,reason,
+        dedupeKey:`payroll:batch:${selected?.id||'unknown'}:${rpc}:error`,
+        refresh:selected?()=>openBatch(selected):undefined,
+      }))
+    }
     finally{setActionBusy('')}
   }
   const saveBatch=()=>runBatchAction('save','admin_payroll_update_batch',{

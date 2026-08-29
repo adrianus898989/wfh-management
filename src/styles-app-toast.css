@@ -1,0 +1,10 @@
+.app-toast-viewport{position:fixed;z-index:4600;top:72px;right:24px;display:grid;width:min(420px,calc(100vw - 32px));gap:10px;pointer-events:none}
+.app-toast{display:grid;grid-template-columns:24px minmax(0,1fr) 26px;align-items:start;gap:10px;padding:12px 12px 12px 14px;border:1px solid;border-radius:12px;background:#fff;box-shadow:0 16px 38px rgba(24,48,78,.18);pointer-events:auto;animation:app-toast-enter .18s ease-out}
+.app-toast.is-success{border-color:#a9e5cb;background:#effcf6;color:#126e48}.app-toast.is-error{border-color:#efbcbc;background:#fff2f2;color:#a92f35}
+.app-toast-icon{display:grid;width:22px;height:22px;place-items:center;border-radius:50%;color:#fff;font-size:13px;font-weight:900}.app-toast.is-success .app-toast-icon{background:#19a567}.app-toast.is-error .app-toast-icon{background:#d64b53}
+.app-toast-copy{min-width:0}.app-toast-copy strong{display:block;font-size:12px;line-height:1.45}.app-toast-copy p{margin:3px 0 0;overflow-wrap:anywhere;font-size:11px;font-weight:650;line-height:1.55}
+.app-toast-retry{min-height:28px;margin-top:8px;padding:4px 9px;border:1px solid currentColor;border-radius:8px;background:rgba(255,255,255,.74);color:inherit;font-size:10px;font-weight:850}.app-toast-retry:hover{background:#fff}
+.app-toast-close{display:grid;width:26px;height:26px;place-items:center;border:0;border-radius:7px;background:transparent;color:inherit;font-size:18px;line-height:1}.app-toast-close:hover{background:rgba(255,255,255,.72)}
+@keyframes app-toast-enter{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:760px){.app-toast-viewport{top:72px;right:12px;width:calc(100vw - 24px)}}
+@media(prefers-reduced-motion:reduce){.app-toast{animation:none}}

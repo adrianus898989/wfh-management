@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useAppToast } from './AppToastProvider'
 import { useAdminI18n } from '../lib/adminI18n'
+import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 import { supabase } from '../lib/supabase'
 import '../payment-change-workflow.css'
 
@@ -125,6 +127,7 @@ function PaymentFacts({ kind, value, masked = false }) {
 
 export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
   const copy = COPY[locale] || COPY.en
+  const { notify } = useAppToast()
   const [state, setState] = useState({ loading: true, error: '', data: null })
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -187,11 +190,20 @@ export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
       setOpen(false)
       reset()
       setMessage(copy.success)
+      notify(writeSuccessToast({
+        module:'收款资料',operation:'提交修改申请',reason:copy.success,
+        dedupeKey:`payment-change:staff:${requestId}:success`,
+      }))
       await load()
       onChanged?.()
     } catch (error) {
       if (uploaded.length) await supabase.storage.from(BUCKET).remove(uploaded)
-      setMessage(requestError(error))
+      const reason=requestError(error)
+      setMessage(reason)
+      notify(writeFailureToast({
+        module:'收款资料',operation:'提交修改申请',error,reason,
+        dedupeKey:'payment-change:staff:submit:error',refresh:load,
+      }))
     } finally {
       setSaving(false)
     }
@@ -227,6 +239,7 @@ export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
 
 export function AdminPayoutChangeWorkspace({ mode = 'pending', canReview = false }) {
   const { locale, t: adminT } = useAdminI18n()
+  const { notify } = useAppToast()
   const adminCopy = locale === 'en' ? COPY.en : COPY.zh
   const [filters, setFilters] = useState({ status: mode === 'pending' ? 'pending' : '', search: '' })
   const [appliedSearch, setAppliedSearch] = useState('')
@@ -264,11 +277,23 @@ export function AdminPayoutChangeWorkspace({ mode = 'pending', canReview = false
   const decide = async (decision, note = '') => {
     if (!review?.id) return
     setSaving(true); setMessage('')
-    const { error } = await supabase.rpc('admin_review_payout_change_request', { p_request_id: review.id, p_decision: decision, p_review_note: clean(note) || null })
-    setSaving(false)
-    if (error) { setMessage(adminT(requestError(error))); return }
-    setMessage(adminT(decision === 'approved' ? '申请已审核通过；自动修改已关闭，请助理人工核对并修改实际收款资料。' : '申请已驳回，员工可在前端查看原因。'))
-    setReview(null); setDetail(null); await load()
+    const requestId=review.id
+    const operation=decision==='approved'?'审核通过收款资料':'驳回收款资料申请'
+    try{
+      const { error } = await supabase.rpc('admin_review_payout_change_request', { p_request_id: requestId, p_decision: decision, p_review_note: clean(note) || null })
+      if(error)throw error
+      const success=adminT(decision === 'approved' ? '申请已审核通过；自动修改已关闭，请助理人工核对并修改实际收款资料。' : '申请已驳回，员工可在前端查看原因。')
+      setMessage(success)
+      notify(writeSuccessToast({module:'工资统计',operation,reason:success,dedupeKey:`payment-change:review:${requestId}:${decision}:success`}))
+      setReview(null); setDetail(null); await load()
+    }catch(error){
+      const reason=adminT(requestError(error))
+      setMessage(reason)
+      notify(writeFailureToast({
+        module:'工资统计',operation,error,reason,
+        dedupeKey:`payment-change:review:${requestId}:${decision}:error`,refresh:load,
+      }))
+    }finally{setSaving(false)}
   }
   const rows = state.data?.rows || []
   const pages = Math.max(1, Number(state.data?.pages || 1))

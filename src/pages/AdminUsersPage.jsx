@@ -3,10 +3,12 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { Pagination } from '../components/DataPageControls'
+import { useAppToast } from '../components/AppToastProvider'
 import { adminLocalPageTabs } from '../config/navigation'
 import { buildRolePermissionSections, uniquePermissionIds } from '../config/rolePermissionCatalog'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
+import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 import { assignedScopeCandidates, pruneAssignedScopeSelection } from '../lib/adminAccountScopeSelection'
 import { accountControlPatch, patchAccountRows } from '../lib/adminAccountRowUpdate'
 
@@ -87,6 +89,7 @@ function scopeLabel(scope) {
 export default function AdminUsersPage() {
   const sharedAccess = useAdminAccess()
   const { t: adminT } = useAdminI18n()
+  const { notify } = useAppToast()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const [tab, setTabState] = useState(USER_TABS.includes(requestedTab) ? requestedTab : 'backend')
@@ -104,7 +107,6 @@ export default function AdminUsersPage() {
   const [accessSearchQuery, setAccessSearchQuery] = useState(blankAccessSearch)
   const [deletingAccountId, setDeletingAccountId] = useState('')
   const [mutatingAccountId, setMutatingAccountId] = useState('')
-  const [accountToast, setAccountToast] = useState(null)
   const [accountPage, setAccountPage] = useState(1)
   const [accountPageSize, setAccountPageSize] = useState(20)
 
@@ -113,7 +115,10 @@ export default function AdminUsersPage() {
     if (error) {
       let detail = ''
       try { detail = (await error.context?.json())?.error || '' } catch {}
-      throw new Error(detail || data?.error || error?.message || '操作失败')
+      const failure = new Error(detail || data?.error || error?.message || '操作失败')
+      const status = Number(error?.status || error?.context?.status || 0)
+      if (status) failure.status = status
+      throw failure
     }
     if (data?.error) throw new Error(data.error)
     return data
@@ -175,11 +180,6 @@ export default function AdminUsersPage() {
   }
 
   useEffect(() => { load() }, [])
-  useEffect(() => {
-    if (!accountToast) return undefined
-    const timer = window.setTimeout(() => setAccountToast(null), 3600)
-    return () => window.clearTimeout(timer)
-  }, [accountToast])
   useEffect(() => {
     setTabState(USER_TABS.includes(requestedTab) ? requestedTab : 'backend')
   }, [requestedTab])
@@ -469,14 +469,19 @@ export default function AdminUsersPage() {
 
   const saveAccount = async () => {
     const { mode, form } = accountModal
+    const accounts = mode === 'create'
+      ? recoveryAccountMode ? [form] : accountModal.batch.length ? accountModal.batch : [form]
+      : []
+    const validationError = mode === 'create' && accounts.length === 1 && !accountModal.batch.length
+      ? validateAccountDraft(form)
+      : ''
+    if (validationError) {
+      setAccountModal(x => ({ ...x, error: validationError, saving: false }))
+      return
+    }
     setAccountModal(x => ({ ...x, error: '', saving: true }))
     try {
       if (mode === 'create') {
-        const accounts = recoveryAccountMode
-          ? [form]
-          : accountModal.batch.length ? accountModal.batch : [form]
-        const validationError = accounts.length === 1 && !accountModal.batch.length ? validateAccountDraft(form) : ''
-        if (validationError) throw new Error(validationError)
         if (recoveryAccountMode) {
           await call({
             action:'create_backend',
@@ -487,6 +492,10 @@ export default function AdminUsersPage() {
             data_scope:form.data_scope,
             otp_required:form.otp_required,
           })
+          notify(writeSuccessToast({
+            module:'后台账号',operation:'创建后台账号',reason:`${form.username || '后台账号'} 已创建。`,
+            dedupeKey:`accounts:create:${form.username || form.employee_id}:success`,
+          }))
           setAccountModal(null)
           await load()
           return
@@ -494,12 +503,17 @@ export default function AdminUsersPage() {
         const result = await call({ action: 'create_backend_batch', accounts })
         const failed = (result?.results || []).filter(item => !item.ok)
         if (failed.length) {
+          const partialMessage=`已成功创建 ${result.created_count || 0} 个，${failed.length} 个失败；失败账号已保留在清单中。`
           setAccountModal(current => current ? ({
             ...current,
             saving: false,
             batch: failed.map(item => ({ ...accounts[item.index], batch_error: item.error })),
-            error: `已成功创建 ${result.created_count || 0} 个，${failed.length} 个失败；失败账号已保留在清单中。`,
+            error: partialMessage,
           }) : current)
+          notify(writeFailureToast({
+            module:'后台账号',operation:'批量创建后台账号',reason:partialMessage,
+            dedupeKey:'accounts:create-batch:partial',
+          }))
           await load()
           return
         }
@@ -515,10 +529,21 @@ export default function AdminUsersPage() {
           employee_ids: form.employee_ids,
         })
       }
+      const operation=mode==='create'?'创建后台账号':'编辑后台账号'
+      notify(writeSuccessToast({
+        module:'后台账号',operation,
+        reason:mode==='create'?`已创建 ${accounts.length} 个后台账号。`:`${form.username || '后台账号'} 的资料已保存。`,
+        dedupeKey:`accounts:${mode}:${form.auth_user_id || form.username || 'batch'}:success`,
+      }))
       setAccountModal(null)
       await load()
     } catch (e) {
       setAccountModal(x => ({ ...x, error: e.message, saving: false }))
+      notify(writeFailureToast({
+        module:'后台账号',operation:mode==='create'?'创建后台账号':'编辑后台账号',error:e,
+        reason:e.message,dedupeKey:`accounts:${mode}:${form.auth_user_id || form.username || 'batch'}:error`,
+        refresh:refreshAccountSnapshot,
+      }))
     }
   }
 
@@ -545,6 +570,10 @@ export default function AdminUsersPage() {
       setLoading(false)
     }
   }
+
+  const refreshAccountSnapshot = () => recoveryAccountMode && visibleTab === 'backend'
+    ? refreshRecoveryAccountPage(accessSearchQuery, accountPage, accountPageSize)
+    : load()
 
   const applyAccessSearch = () => {
     const next = { ...accessSearchDraft }
@@ -575,25 +604,40 @@ export default function AdminUsersPage() {
     }
     try {
       await call({ action: 'create_staff', ...staffModal.form })
+      notify(writeSuccessToast({
+        module:'员工账号',operation:'创建员工账号',reason:`${staffModal.form.email || '员工账号'} 已创建。`,
+        dedupeKey:`accounts:create-staff:${staffModal.form.employee_id}:success`,
+      }))
       setStaffModal(null)
       await load()
-    } catch (e) { setStaffModal(x => ({ ...x, error: e.message, saving: false })) }
+    } catch (e) {
+      setStaffModal(x => ({ ...x, error: e.message, saving: false }))
+      notify(writeFailureToast({
+        module:'员工账号',operation:'创建员工账号',error:e,reason:e.message,
+        dedupeKey:`accounts:create-staff:${staffModal.form.employee_id}:error`,refresh:refreshAccountSnapshot,
+      }))
+    }
   }
 
   const toggleOtp = async (a) => {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
-    setAccountToast(null)
     try {
       const requestedOtp = !a.otp_required
       const result = await call({ action: 'toggle_otp', auth_user_id: a.auth_user_id, otp_required: requestedOtp })
       const controls = accountControlPatch(result?.saved, { otp_required:requestedOtp })
       setData(current => patchAccountRows(current, a.auth_user_id, controls))
-      setAccountToast({ type:'success', message:`${a.login_username || '账号'} 的登录 OTP 已${a.otp_required ? '关闭' : '开启'}。` })
+      notify(writeSuccessToast({
+        module:'后台账号',operation:'设置登录 OTP',reason:`${a.login_username || '账号'} 的登录 OTP 已${a.otp_required ? '关闭' : '开启'}。`,
+        dedupeKey:`accounts:otp:${a.auth_user_id}:success`,
+      }))
     } catch (e) {
       setError(e.message)
-      setAccountToast({ type:'error', message:`OTP 设置失败：${e.message}` })
+      notify(writeFailureToast({
+        module:'后台账号',operation:'设置登录 OTP',error:e,reason:`OTP 设置失败：${e.message}`,
+        dedupeKey:`accounts:otp:${a.auth_user_id}:error`,refresh:refreshAccountSnapshot,
+      }))
     }
     finally { setMutatingAccountId('') }
   }
@@ -602,7 +646,6 @@ export default function AdminUsersPage() {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
-    setAccountToast(null)
     try {
       const requestedActive = !a.active
       const result = await call({ action: 'toggle_active', auth_user_id: a.auth_user_id, active: requestedActive })
@@ -614,10 +657,16 @@ export default function AdminUsersPage() {
           (statusFilter === 'inactive' && !a.active && controls.active))
       )
       setData(current => patchAccountRows(current, a.auth_user_id, controls, leavesFilteredPage ? -1 : 0))
-      setAccountToast({ type:'success', message:`${a.login_username || a.login_email || '账号'} 已${a.active ? '停用' : '启用'}。` })
+      notify(writeSuccessToast({
+        module:'后台账号',operation:a.active?'停用账号':'启用账号',reason:`${a.login_username || a.login_email || '账号'} 已${a.active ? '停用' : '启用'}。`,
+        dedupeKey:`accounts:active:${a.auth_user_id}:success`,
+      }))
     } catch (e) {
       setError(e.message)
-      setAccountToast({ type:'error', message:`账号状态修改失败：${e.message}` })
+      notify(writeFailureToast({
+        module:'后台账号',operation:a.active?'停用账号':'启用账号',error:e,reason:`账号状态修改失败：${e.message}`,
+        dedupeKey:`accounts:active:${a.auth_user_id}:error`,refresh:refreshAccountSnapshot,
+      }))
     }
     finally { setMutatingAccountId('') }
   }
@@ -628,13 +677,18 @@ export default function AdminUsersPage() {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
-    setAccountToast(null)
     try {
       await call({ action: 'reset_password', auth_user_id: a.auth_user_id, password })
-      setAccountToast({ type:'success', message:`${a.login_username || a.login_email || '账号'} 的密码已重置。` })
+      notify(writeSuccessToast({
+        module:'后台账号',operation:'重置密码',reason:`${a.login_username || a.login_email || '账号'} 的密码已重置。`,
+        dedupeKey:`accounts:password:${a.auth_user_id}:success`,
+      }))
     } catch (e) {
       setError(e.message)
-      setAccountToast({ type:'error', message:`密码重置失败：${e.message}` })
+      notify(writeFailureToast({
+        module:'后台账号',operation:'重置密码',error:e,reason:`密码重置失败：${e.message}`,
+        dedupeKey:`accounts:password:${a.auth_user_id}:error`,
+      }))
     }
     finally { setMutatingAccountId('') }
   }
@@ -644,13 +698,18 @@ export default function AdminUsersPage() {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
-    setAccountToast(null)
     try {
       await call({ action: 'reset_mfa', auth_user_id: a.auth_user_id })
-      setAccountToast({ type:'success', message:`${a.login_username || a.login_email || '账号'} 的 OTP 已重置。` })
+      notify(writeSuccessToast({
+        module:'后台账号',operation:'重置 OTP',reason:`${a.login_username || a.login_email || '账号'} 的 OTP 已重置。`,
+        dedupeKey:`accounts:mfa:${a.auth_user_id}:success`,
+      }))
     } catch (e) {
       setError(e.message)
-      setAccountToast({ type:'error', message:`OTP 重置失败：${e.message}` })
+      notify(writeFailureToast({
+        module:'后台账号',operation:'重置 OTP',error:e,reason:`OTP 重置失败：${e.message}`,
+        dedupeKey:`accounts:mfa:${a.auth_user_id}:error`,refresh:refreshAccountSnapshot,
+      }))
     }
     finally { setMutatingAccountId('') }
   }
@@ -660,7 +719,6 @@ export default function AdminUsersPage() {
     if (!window.confirm('只删除登录账号，员工资料会保留。确认继续？')) return
     setDeletingAccountId(a.auth_user_id)
     setError('')
-    setAccountToast(null)
     try {
       await call({ action: 'delete_account', auth_user_id: a.auth_user_id })
       setData(current => current ? ({
@@ -668,10 +726,17 @@ export default function AdminUsersPage() {
         backend_accounts: (current.backend_accounts || []).filter(account => account.auth_user_id !== a.auth_user_id),
         employee_accounts: (current.employee_accounts || []).filter(account => account.auth_user_id !== a.auth_user_id),
       }) : current)
-      setAccountToast({ type: 'success', message: accountKind === 'staff' ? '员工登录账号已删除，员工档案已保留。' : '后台账号已删除，员工档案已保留。' })
+      const reason=accountKind === 'staff' ? '员工登录账号已删除，员工档案已保留。' : '后台账号已删除，员工档案已保留。'
+      notify(writeSuccessToast({
+        module:accountKind==='staff'?'员工账号':'后台账号',operation:'删除登录账号',reason,
+        dedupeKey:`accounts:delete:${a.auth_user_id}:success`,
+      }))
     } catch (e) {
       setError(e.message)
-      setAccountToast({ type: 'error', message: `删除失败：${e.message}` })
+      notify(writeFailureToast({
+        module:accountKind==='staff'?'员工账号':'后台账号',operation:'删除登录账号',error:e,reason:`删除失败：${e.message}`,
+        dedupeKey:`accounts:delete:${a.auth_user_id}:error`,refresh:refreshAccountSnapshot,
+      }))
     } finally {
       setDeletingAccountId('')
     }
@@ -681,12 +746,11 @@ export default function AdminUsersPage() {
     if (recoveryRoleMode || !callerFounder || creatingRole) return
     const name = newRoleName.trim()
     if (name.length < 2 || name.length > 40) {
-      setAccountToast({ type: 'error', message: '请先输入 2–40 个字的角色名称。' })
+      setError('请先输入 2–40 个字的角色名称。')
       return
     }
     setCreatingRole(true)
     setError('')
-    setAccountToast(null)
     try {
       const created = await call({ action: 'create_role', name })
       setNewRoleName('')
@@ -694,10 +758,16 @@ export default function AdminUsersPage() {
       setSearchQuery('')
       await load()
       if (created?.role) openRole(created.role)
-      setAccountToast({ type: 'success', message: `角色「${name}」已新增，请继续勾选并保存权限。` })
+      notify(writeSuccessToast({
+        module:'后台权限',operation:'新增角色',reason:`角色「${name}」已新增，请继续勾选并保存权限。`,
+        dedupeKey:`roles:create:${created?.role?.id || name}:success`,
+      }))
     } catch (e) {
       setError(e.message)
-      setAccountToast({ type: 'error', message: `新增角色失败：${e.message}` })
+      notify(writeFailureToast({
+        module:'后台权限',operation:'新增角色',error:e,reason:`新增角色失败：${e.message}`,
+        dedupeKey:`roles:create:${name}:error`,refresh:load,
+      }))
     } finally {
       setCreatingRole(false)
     }
@@ -748,10 +818,18 @@ export default function AdminUsersPage() {
           }) : current)
         }
       }
+      notify(writeSuccessToast({
+        module:'后台权限',operation:'保存角色权限',reason:`角色「${roleModal.name || roleModal.role.name}」的权限已保存。`,
+        dedupeKey:`roles:save:${roleModal.role.id}:success`,
+      }))
       setRoleModal(null)
       if (!recoveryRoleMode) await load()
     } catch (e) {
       setRoleModal(x => x ? ({ ...x, error: e.message, saving: false }) : x)
+      notify(writeFailureToast({
+        module:'后台权限',operation:'保存角色权限',error:e,reason:e.message,
+        dedupeKey:`roles:save:${roleModal.role.id}:error`,refresh:load,
+      }))
     }
   }
 
@@ -760,8 +838,18 @@ export default function AdminUsersPage() {
     if (!window.confirm(`确认删除角色「${role.name}」？`)) return
     try {
       await call({ action: 'delete_role', role_id: role.id })
+      notify(writeSuccessToast({
+        module:'后台权限',operation:'删除角色',reason:`角色「${role.name}」已删除。`,
+        dedupeKey:`roles:delete:${role.id}:success`,
+      }))
       await load()
-    } catch (e) { setError(e.message) }
+    } catch (e) {
+      setError(e.message)
+      notify(writeFailureToast({
+        module:'后台权限',operation:'删除角色',error:e,reason:e.message,
+        dedupeKey:`roles:delete:${role.id}:error`,refresh:load,
+      }))
+    }
   }
 
   const roleIsLocked = roleModal?.role.code === 'founder'
@@ -908,8 +996,6 @@ export default function AdminUsersPage() {
       </div>
 
       <AdminModuleNav />
-
-      {accountToast && <div className={`access-toast ${accountToast.type === 'error' ? 'error' : ''}`} role="status" aria-live="polite"><span>{accountToast.message}</span><button type="button" aria-label="关闭提示" onClick={() => setAccountToast(null)}>×</button></div>}
 
       {error && <div className="page-error">{error}</div>}
 
