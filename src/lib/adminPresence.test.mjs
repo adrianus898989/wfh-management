@@ -69,12 +69,17 @@ test('recovery online presence is count-only without loading an account or emplo
   assert.match(component, /timeout:12000/)
 })
 
-test('alerts remain on demand and cancel/single-flight a closed popover read', () => {
+test('alerts preload only counts at low frequency and keep detail reads click-bound', () => {
   assert.doesNotMatch(alertCenter, /setInterval\([^\n]*admin_alert_center|setInterval\(load/)
-  assert.match(alertCenter, /if \(flightRef\.current\) return flightRef\.current\.promise/)
+  assert.doesNotMatch(alertCenter, /addEventListener\('focus'/)
+  assert.match(alertCenter, /summaryOnly \? 1 : 8/)
+  assert.match(alertCenter, /if \(summaryOnly \|\| currentFlight\.kind === 'details'\) return currentFlight\.promise/)
   assert.match(alertCenter, /query\.abortSignal\(signal\)/)
-  assert.match(alertCenter, /if \(!open && flightRef\.current\)/)
-  assert.match(alertCenter, /openRef\.current && !document\.hidden/)
+  assert.match(alertCenter, /if \(!open && flightRef\.current\?\.kind === 'details'\)/)
+  assert.match(alertCenter, /load\(\{ kind:'summary', quiet:true \}\)/)
+  assert.match(alertCenter, /load\(\{ kind:'details' \}\)/)
+  assert.match(alertCenter, /document\.visibilityState !== 'visible'/)
+  assert.match(alertCenter, /adminAlertBadgeRefreshDelay\(succeeded \? 0 : failureCountRef\.current\)/)
 })
 
 test('Supabase transient retries are disabled so a timeout cannot multiply statements', () => {

@@ -10,6 +10,18 @@ import {
   adminAlertKeyAttendanceEvidence,
   adminAlertReadState,
 } from './adminAlertDetails.js'
+import {
+  ADMIN_ALERT_BADGE_CACHE_FRESH_MS,
+  ADMIN_ALERT_BADGE_MAX_BACKOFF_MS,
+  ADMIN_ALERT_BADGE_REFRESH_MS,
+  acquireAdminAlertBadgePreloadLease,
+  adminAlertBadgeRefreshDelay,
+  adminAlertBadgeStorageKey,
+  classifyAdminAlertBadgeFailure,
+  readAdminAlertBadgeCache,
+  releaseAdminAlertBadgePreloadLease,
+  writeAdminAlertBadgeCache,
+} from './adminAlertBadgePreload.js'
 
 const employeeHistoryMigration = readFileSync(new URL(
   '../../supabase/migrations/20260826152500_admin_alert_employee_history_filter.sql',
@@ -153,14 +165,71 @@ test('error-frequency migration is server-authoritative, deduplicated and scope-
   assert.match(alertCenterComponent, /<AlertErrorFrequencyDetails row=\{row\} locale=\{locale\}\/>/)
 })
 
-test('alert bell is on-demand and cannot create a background polling storm', () => {
+test('alert bell preloads only a bounded summary and keeps rows click-loaded', () => {
   const bell = alertCenterComponent.slice(
     alertCenterComponent.indexOf('export function AdminAlertBell'),
     alertCenterComponent.indexOf('export function EmployeeAlertHistoryPanel'),
   )
   assert.doesNotMatch(bell, /setInterval\(/)
   assert.doesNotMatch(bell, /addEventListener\('focus'/)
-  assert.match(bell, /onClick=\{\(\) => \{ setOpen\(value => !value\); if \(!open\) load\(\{ quiet:true \}\) \}\}/)
+  assert.match(bell, /summaryOnly \? 1 : 8/)
+  assert.match(bell, /setTimeout\(runSummary/)
+  assert.match(bell, /document\.visibilityState !== 'visible'/)
+  assert.match(bell, /load\(\{ kind:'summary', quiet:true \}\)/)
+  assert.match(bell, /onClick=\{\(\) => \{ setOpen\(value => !value\); if \(!open\) load\(\{ kind:'details' \}\) \}\}/)
+  assert.match(bell, /error:summaryOnly[\s\S]{0,100}\? current\.error/)
+  assert.doesNotMatch(bell, /signOut|clearSession|removeItem\([^)]*auth/i)
+})
+
+test('alert badge cache and lease coalesce permission-success preloads across tabs', () => {
+  const values = new Map()
+  const storage = {
+    getItem:key => values.get(key) || null,
+    setItem:(key, value) => values.set(key, value),
+    removeItem:key => values.delete(key),
+  }
+  const access = {
+    authUserId:'admin-1', dataScope:'assigned_teams', teamId:'team-1',
+    permissions:['alert.view', 'alert.error_spike.view'],
+  }
+  const key = adminAlertBadgeStorageKey(access)
+  assert.ok(key.includes('admin-1'))
+  assert.notEqual(key, adminAlertBadgeStorageKey({ ...access, permissions:['alert.view'] }))
+
+  assert.equal(writeAdminAlertBadgeCache(storage, key, { unread:7, active:9 }, 100_000), true)
+  assert.deepEqual(readAdminAlertBadgeCache(storage, key, 100_001), {
+    unread:7, active:9, updatedAt:100_000, fresh:true,
+  })
+  assert.equal(readAdminAlertBadgeCache(storage, key, 100_000 + ADMIN_ALERT_BADGE_CACHE_FRESH_MS + 1)?.fresh, false)
+
+  const first = acquireAdminAlertBadgePreloadLease(storage, key, { now:200_000, random:() => 0.1 })
+  assert.ok(first)
+  assert.equal(acquireAdminAlertBadgePreloadLease(storage, key, { now:200_001, random:() => 0.2 }), '')
+  assert.equal(releaseAdminAlertBadgePreloadLease(storage, key, 'not-owner'), false)
+  assert.equal(releaseAdminAlertBadgePreloadLease(storage, key, first), true)
+})
+
+test('badge refresh is five-minute setTimeout scheduling with bounded failure backoff', () => {
+  assert.equal(adminAlertBadgeRefreshDelay(0, () => 0), ADMIN_ALERT_BADGE_REFRESH_MS)
+  assert.equal(adminAlertBadgeRefreshDelay(1, () => 0), ADMIN_ALERT_BADGE_REFRESH_MS * 2)
+  assert.equal(adminAlertBadgeRefreshDelay(2, () => 0), ADMIN_ALERT_BADGE_MAX_BACKOFF_MS)
+  assert.equal(adminAlertBadgeRefreshDelay(20, () => 0), ADMIN_ALERT_BADGE_MAX_BACKOFF_MS)
+  assert.equal(adminAlertBadgeRefreshDelay(2, () => 0.999), ADMIN_ALERT_BADGE_MAX_BACKOFF_MS)
+})
+
+test('badge failures distinguish 401/403 while 503 and timeout stay transient', () => {
+  assert.deepEqual(classifyAdminAlertBadgeFailure({ status:401 }), {
+    status:401, auth:'unauthorized', timedOut:false, transient:false,
+  })
+  assert.deepEqual(classifyAdminAlertBadgeFailure({ context:{ status:403 } }), {
+    status:403, auth:'forbidden', timedOut:false, transient:false,
+  })
+  assert.deepEqual(classifyAdminAlertBadgeFailure({ status:503 }), {
+    status:503, auth:'', timedOut:false, transient:true,
+  })
+  assert.deepEqual(classifyAdminAlertBadgeFailure({ code:'ADMIN_ALERT_BADGE_TIMEOUT' }), {
+    status:0, auth:'', timedOut:true, transient:true,
+  })
 })
 
 test('stable alert restore rolls back experimental thresholds and keeps refresh manual', () => {

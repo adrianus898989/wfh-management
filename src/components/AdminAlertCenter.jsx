@@ -21,6 +21,19 @@ import {
   adminAlertMonthlyLeaveRule,
   adminAlertReadState,
 } from '../lib/adminAlertDetails'
+import {
+  ADMIN_ALERT_BADGE_CACHE_FRESH_MS,
+  ADMIN_ALERT_BADGE_PRELOAD_JITTER_MS,
+  ADMIN_ALERT_BADGE_REFRESH_JITTER_MS,
+  ADMIN_ALERT_BADGE_REQUEST_TIMEOUT_MS,
+  acquireAdminAlertBadgePreloadLease,
+  adminAlertBadgeRefreshDelay,
+  adminAlertBadgeStorageKey,
+  classifyAdminAlertBadgeFailure,
+  readAdminAlertBadgeCache,
+  releaseAdminAlertBadgePreloadLease,
+  writeAdminAlertBadgeCache,
+} from '../lib/adminAlertBadgePreload'
 import { supabase } from '../lib/supabase'
 import '../styles-admin-alerts.css'
 
@@ -66,6 +79,7 @@ const alertDetailsTarget = row => {
 }
 
 const alertErrorMessage = (error, locale, fallback) => {
+  const failure = classifyAdminAlertBadgeFailure(error)
   const raw = clean(error?.message)
   const messages = {
     not_authenticated: { zh:'请重新登录后再试。', en:'Please sign in again.' },
@@ -77,6 +91,8 @@ const alertErrorMessage = (error, locale, fallback) => {
     handling_note_too_long: { zh:'处理说明不能超过 2000 个字符。', en:'The handling note cannot exceed 2,000 characters.' },
     alert_confirmation_required: { zh:'请先确认跟进，再标记为已处理。', en:'Confirm the follow-up before marking it handled.' },
   }
+  if (failure.auth === 'unauthorized') return messages.not_authenticated[locale]
+  if (failure.auth === 'forbidden') return messages.permission_denied[locale]
   if (messages[raw]) return messages[raw][locale]
   // Supabase's SDK wrapper text is diagnostic, not actionable UI copy. Keep
   // alert failures inside the alert surface and use the localized operation
@@ -239,32 +255,75 @@ export function AdminAlertBell({ access }) {
   const rootRef = useRef(null)
   const requestRef = useRef(0)
   const flightRef = useRef(null)
-  const openRef = useRef(false)
+  const mountedRef = useRef(false)
+  const cacheKeyRef = useRef('')
+  const failureCountRef = useRef(0)
   const [open, setOpen] = useState(false)
   const [state, setState] = useState({ loading:false, error:'', rows:[], unread:0, active:0 })
   const enabled = Boolean(access && !access.loading && !access.error && (
     access.founder || access.permissions?.includes('*') || access.permissions?.includes('alert.view')
   ))
   const canMarkRead = Boolean(access?.founder || access?.permissions?.includes('*') || access?.permissions?.includes('alert.mark_read'))
+  const badgeCacheKey = adminAlertBadgeStorageKey(access)
 
-  const load = ({ quiet=false } = {}) => {
+  const load = ({ kind='details', quiet=false } = {}) => {
     if (!enabled) return Promise.resolve(false)
-    if (flightRef.current) return flightRef.current.promise
+    const summaryOnly = kind === 'summary'
+    const currentFlight = flightRef.current
+    if (currentFlight) {
+      if (summaryOnly || currentFlight.kind === 'details') return currentFlight.promise
+      // A click always wins over the lightweight preload. The detail response
+      // also carries the current summary, so running both would only add load.
+      requestRef.current += 1
+      currentFlight.controller.abort()
+      flightRef.current = null
+    }
     const requestId = ++requestRef.current
     const controller = new AbortController()
     if (!quiet) setState(current => ({ ...current, loading:true, error:'' }))
-    const entry = { controller, promise:null }
+    const entry = { kind, controller, promise:null, timer:0, timedOut:false }
+    entry.timer = window.setTimeout(() => {
+      entry.timedOut = true
+      controller.abort()
+    }, ADMIN_ALERT_BADGE_REQUEST_TIMEOUT_MS)
     const promise = (async () => {
       try {
-        const data = await loadAlertPage({ status:'active' }, 1, 8, controller.signal)
-        if (requestId !== requestRef.current) return false
-        setState({ loading:false, error:'', rows:Array.isArray(data.rows) ? data.rows : [], unread:numeric(data.unread_total), active:numeric(data.active_total) })
+        // The mount/periodic path requests the smallest supported page and
+        // discards its row. Full notification rows remain click-loaded.
+        const data = await loadAlertPage({ status:'active' }, 1, summaryOnly ? 1 : 8, controller.signal)
+        if (!mountedRef.current || requestId !== requestRef.current) return false
+        const summary = { unread:numeric(data.unread_total), active:numeric(data.active_total) }
+        failureCountRef.current = 0
+        setState(current => summaryOnly
+          ? { ...current, loading:false, error:'', ...summary }
+          : { loading:false, error:'', rows:Array.isArray(data.rows) ? data.rows : [], ...summary })
+        let storage = null
+        try { storage = window.localStorage } catch { storage = null }
+        writeAdminAlertBadgeCache(storage, cacheKeyRef.current, summary)
         return true
       } catch (error) {
-        if (controller.signal.aborted || requestId !== requestRef.current) return false
-        setState(current => ({ ...current, loading:false, error:alertErrorMessage(error, locale, locale === 'en' ? 'Unable to load notifications.' : '通知读取失败') }))
+        if ((controller.signal.aborted && !entry.timedOut) || !mountedRef.current || requestId !== requestRef.current) return false
+        const handledError = entry.timedOut
+          ? Object.assign(new Error('ADMIN_ALERT_BADGE_TIMEOUT'), { code:'ADMIN_ALERT_BADGE_TIMEOUT' })
+          : error
+        const failure = classifyAdminAlertBadgeFailure(handledError)
+        if (summaryOnly) failureCountRef.current = Math.min(2, failureCountRef.current + 1)
+        // Background summary failures (including 503 and client timeout) keep
+        // both the last badge and the existing rows. Only an explicit click
+        // surfaces a read error. 401/403 wording remains distinct, while the
+        // shared authenticated fetch owns any session verification.
+        setState(current => ({
+          ...current,
+          loading:false,
+          error:summaryOnly
+            ? current.error
+            : failure.transient
+              ? (locale === 'en' ? 'Unable to load notifications.' : '通知读取失败')
+              : alertErrorMessage(handledError, locale, locale === 'en' ? 'Unable to load notifications.' : '通知读取失败'),
+        }))
         return false
       } finally {
+        window.clearTimeout(entry.timer)
         if (flightRef.current === entry) flightRef.current = null
       }
     })()
@@ -275,25 +334,110 @@ export function AdminAlertBell({ access }) {
 
   useEffect(() => {
     if (!enabled) return undefined
-    // The alert reader is intentionally on-demand. Mount/focus/minute polling
-    // across several admin tabs can multiply one slow database call into a
-    // request storm that starves login and ordinary page traffic.
-    const refresh = () => { if (openRef.current && !document.hidden) load({ quiet:true }) }
+    mountedRef.current = true
+    cacheKeyRef.current = badgeCacheKey
+    let storage = null
+    try { storage = window.localStorage } catch { storage = null }
+    let timer = 0
+    let stopped = false
+
+    const applyCachedSummary = cached => {
+      if (!cached || stopped) return
+      setState(current => ({ ...current, unread:cached.unread, active:cached.active }))
+    }
+    const clearTimer = () => {
+      window.clearTimeout(timer)
+      timer = 0
+    }
+    const schedule = delay => {
+      clearTimer()
+      if (stopped || document.visibilityState !== 'visible') return
+      timer = window.setTimeout(runSummary, Math.max(0, delay))
+    }
+    const scheduleFromCache = cached => {
+      if (!cached?.fresh) {
+        schedule(Math.floor(Math.random() * ADMIN_ALERT_BADGE_PRELOAD_JITTER_MS))
+        return
+      }
+      schedule(
+        Math.max(0, cached.updatedAt + ADMIN_ALERT_BADGE_CACHE_FRESH_MS - Date.now())
+        + Math.floor(Math.random() * ADMIN_ALERT_BADGE_REFRESH_JITTER_MS),
+      )
+    }
+    const runSummary = async () => {
+      if (stopped || document.visibilityState !== 'visible') return
+      const latest = readAdminAlertBadgeCache(storage, badgeCacheKey)
+      if (latest?.fresh) {
+        applyCachedSummary(latest)
+        scheduleFromCache(latest)
+        return
+      }
+
+      const token = badgeCacheKey && storage
+        ? acquireAdminAlertBadgePreloadLease(storage, badgeCacheKey)
+        : 'no-shared-storage'
+      if (!token) {
+        // Another visible tab owns this cycle. Its cache write will update this
+        // tab through the storage event; this fallback stays deliberately slow.
+        schedule(adminAlertBadgeRefreshDelay(0))
+        return
+      }
+      const succeeded = await load({ kind:'summary', quiet:true })
+      if (badgeCacheKey && storage) releaseAdminAlertBadgePreloadLease(storage, badgeCacheKey, token)
+      if (!stopped) schedule(adminAlertBadgeRefreshDelay(succeeded ? 0 : failureCountRef.current))
+    }
+
+    const cached = readAdminAlertBadgeCache(storage, badgeCacheKey)
+    applyCachedSummary(cached)
+    scheduleFromCache(cached)
+
+    // Alert mutations request a near-term summary refresh. They never load
+    // rows in the background and coalesce with any in-flight detail request.
+    const refresh = () => {
+      if (document.visibilityState === 'visible') {
+        schedule(Math.floor(Math.random() * ADMIN_ALERT_BADGE_PRELOAD_JITTER_MS))
+      }
+    }
+    const storageChanged = event => {
+      if (!badgeCacheKey || event.key !== badgeCacheKey) return
+      const next = readAdminAlertBadgeCache(storage, badgeCacheKey)
+      if (!next) return
+      failureCountRef.current = 0
+      applyCachedSummary(next)
+      scheduleFromCache(next)
+    }
+    const visibilityChanged = () => {
+      if (document.visibilityState !== 'visible') {
+        clearTimer()
+        if (flightRef.current?.kind === 'summary') flightRef.current.controller.abort()
+        return
+      }
+      const latest = readAdminAlertBadgeCache(storage, badgeCacheKey)
+      applyCachedSummary(latest)
+      scheduleFromCache(latest)
+    }
     window.addEventListener('wfh-admin-alerts-changed', refresh)
+    window.addEventListener('storage', storageChanged)
+    document.addEventListener('visibilitychange', visibilityChanged)
     return () => {
+      stopped = true
+      mountedRef.current = false
       requestRef.current += 1
+      clearTimer()
       flightRef.current?.controller.abort()
       flightRef.current = null
       window.removeEventListener('wfh-admin-alerts-changed', refresh)
+      window.removeEventListener('storage', storageChanged)
+      document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [enabled, locale])
+  }, [enabled, locale, badgeCacheKey])
 
   useEffect(() => {
-    openRef.current = open
-    if (!open && flightRef.current) {
+    if (!open && flightRef.current?.kind === 'details') {
       requestRef.current += 1
       flightRef.current.controller.abort()
       flightRef.current = null
+      setState(current => ({ ...current, loading:false }))
     }
   }, [open])
 
@@ -317,18 +461,30 @@ export function AdminAlertBell({ access }) {
 
   if (!enabled) return null
   const openAlert = async row => {
-    try { if (canMarkRead && row.unread) await markAlertsRead(row.id) } catch { /* navigation remains available */ }
+    try {
+      if (canMarkRead && row.unread) {
+        await markAlertsRead(row.id)
+        setState(current => ({
+          ...current,
+          unread:Math.max(0, current.unread - 1),
+          rows:current.rows.map(item => String(item.id) === String(row.id) ? { ...item, unread:false } : item),
+        }))
+      }
+    } catch { /* navigation remains available */ }
     setOpen(false)
     navigate(alertDetailsTarget(row))
   }
   const markAll = async () => {
-    try { await markAlertsRead() } catch (error) {
+    try {
+      await markAlertsRead()
+      setState(current => ({ ...current, unread:0, rows:current.rows.map(row => ({ ...row, unread:false })) }))
+    } catch (error) {
       setState(current => ({ ...current, error:alertErrorMessage(error, locale, locale === 'en' ? 'The operation failed.' : '操作失败') }))
     }
   }
 
   return <div className="admin-alert-bell" ref={rootRef}>
-    <button type="button" className="admin-alert-bell-button" aria-label={locale === 'en' ? `Notifications, ${state.unread} unread` : `消息通知，${state.unread} 条未读`} aria-expanded={open} aria-controls="admin-alert-popover" onClick={() => { setOpen(value => !value); if (!open) load({ quiet:true }) }}>
+    <button type="button" className="admin-alert-bell-button" aria-label={locale === 'en' ? `Notifications, ${state.unread} unread` : `消息通知，${state.unread} 条未读`} aria-expanded={open} aria-controls="admin-alert-popover" onClick={() => { setOpen(value => !value); if (!open) load({ kind:'details' }) }}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 10.2c0-3.2 1.8-5.4 5.2-5.4s5.2 2.2 5.2 5.4v3.2l1.6 2.4H5.2l1.6-2.4z"/><path d="M10 18.1c.4.7 1.1 1.1 2 1.1s1.6-.4 2-1.1"/></svg>
       {state.unread > 0 && <b aria-live="polite">{state.unread > 99 ? '99+' : state.unread}</b>}
     </button>

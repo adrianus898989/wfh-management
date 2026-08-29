@@ -84,7 +84,10 @@ const blankManagementRiskFilters=()=>({
   ...managementRiskDatePreset('30d'),team:'',group:'',manager:'',manager_role:'',employee_search:'',
 })
 const blankResignationAnalyticsFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
-const blankHistoryFilters=()=>({employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:'',date_to:''})
+const blankHistoryFilters=()=>{
+  const today=localDateIso()
+  return {employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:today,date_to:today}
+}
 const hasFilterValues=filters=>Object.values(filters||{}).some(value=>text(value))
 const statusName = s => ({active:'在职',probation:'试用',suspended:'停用',inactive:'停用',resigned:'离职'}[s] || s || '-')
 const typeOptions = [

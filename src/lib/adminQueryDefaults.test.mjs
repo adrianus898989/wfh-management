@@ -37,6 +37,31 @@ test('high-volume attendance detail views are bounded while the employee archive
   assert.match(trainingPage,/x==='人工批改'\?blankSessionFilters:todaySessionFilters\(\)/)
 })
 
+test('resignation records default and reset to today without overwriting selected filters',()=>{
+  assert.match(
+    employeesPage,
+    /const localDateIso = \(\) => \{\s*const d=new Date\(\)\s*return `\$\{d\.getFullYear\(\)\}-\$\{String\(d\.getMonth\(\)\+1\)\.padStart\(2,'0'\)\}-\$\{String\(d\.getDate\(\)\)\.padStart\(2,'0'\)\}`\s*\}/,
+  )
+  assert.match(
+    employeesPage,
+    /const blankHistoryFilters=\(\)=>\{\s*const today=localDateIso\(\)\s*return \{employee_no:'',full_name:'',team:'',position:'',country:'',reason:'',date_from:today,date_to:today\}\s*\}/,
+  )
+  assert.equal((employeesPage.match(/useState\(blankHistoryFilters\)/g)||[]).length,2)
+  assert.match(
+    employeesPage,
+    /const applyHistoryFilters=\(\)=>\{\s*const next=\{\.\.\.historyDraftFilters\}\s*setHistoryFilters\(next\)[\s\S]*?loadHistory\(1,historyPageSize,next\)\s*\}/,
+  )
+  assert.match(
+    employeesPage,
+    /const resetHistoryFilters=\(\)=>\{\s*const next=blankHistoryFilters\(\)\s*setHistoryDraftFilters\(next\)\s*setHistoryFilters\(next\)[\s\S]*?loadHistory\(1,historyPageSize,next\)\s*\}/,
+  )
+  assert.match(employeesPage,/tab==='离职记录'\) jobs\.push\(loadHistory\(historyPage,historyPageSize,historyFilters,\{silent\}\)\)/)
+  assert.match(
+    employeesPage,
+    /if\(!canViewResignations\|\|tab!=='离职记录'\) return\s*const t=setTimeout\(\(\)=>\{ setHistoryPage\(1\); loadHistory\(1,historyPageSize,historyFilters\) \},80\)/,
+  )
+})
+
 test('monthly attendance keeps pagination metadata during refresh and clamps only after loading',()=>{
   assert.match(attendancePage,/setState\(current=>\(\{\.\.\.current,loading:true,error:''\}\)\)/)
   assert.doesNotMatch(attendancePage,/loading:true,error:'',people:\[\],overview:null,total:0,pages:1/)
