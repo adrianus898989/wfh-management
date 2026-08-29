@@ -85,8 +85,12 @@ export async function handleRequest(req: Request) {
   let body: Record<string, unknown> = {}
   try { body = await req.json() } catch {}
   const action = String(body?.action || 'heartbeat').trim().toLowerCase()
+  const portal = String(body?.portal || 'admin').trim().toLowerCase()
   if (!['claim', 'heartbeat'].includes(action)) {
     return json(req, { ok: false, reason: 'invalid_action' }, 400)
+  }
+  if (portal !== 'admin' && portal !== 'staff') {
+    return json(req, { ok: false, reason: 'invalid_portal' }, 400)
   }
 
   const boundedFetch = timedFetch(DEPENDENCY_TIMEOUT_MS)
@@ -96,7 +100,10 @@ export async function handleRequest(req: Request) {
   })
 
   const clientIp = trustedClientIp(req)
-  const { data: guard, error: guardError } = await admin.rpc('admin_ip_session_attest', {
+  const attestationRpc = portal === 'staff'
+    ? 'staff_ip_session_attest'
+    : 'admin_ip_session_attest'
+  const { data: guard, error: guardError } = await admin.rpc(attestationRpc, {
     // The hosted Functions gateway verifies this JWT before invocation. The
     // RPC independently requires this exact user/session pair in auth.sessions,
     // so a separate Auth /user round-trip only amplifies heartbeat incidents.
@@ -106,14 +113,21 @@ export async function handleRequest(req: Request) {
     p_source: action,
   })
   if (guardError) {
-    console.error('ADMIN_IP_GUARD_ATTEST_ERROR', safeMeta(guardError))
+    console.error('PORTAL_IP_GUARD_ATTEST_ERROR', { portal, ...safeMeta(guardError) })
     return json(req, { ok: false, reason: 'guard_unavailable' }, 503)
   }
   if (!guard?.ok) {
     return json(req, {
       ok: false,
       reason: guard?.reason || 'ip_not_allowed',
-      ip_guard: guard,
+      // Do not forward the privileged RPC payload. It also contains matching
+      // metadata (for example the observed IP and entry id) that the browser
+      // does not need in order to handle an access denial.
+      ip_guard: {
+        enforced: Boolean(guard?.enforced),
+        effective: Boolean(guard?.effective),
+        reason: guard?.reason || 'ip_not_allowed',
+      },
     }, 403)
   }
 
@@ -125,11 +139,11 @@ export async function handleRequest(req: Request) {
     auth: { persistSession: false, autoRefreshToken: false },
   })
   const leaseResult = action === 'claim'
-    ? await userClient.rpc('app_session_claim', { p_portal: 'admin' })
+    ? await userClient.rpc('app_session_claim', { p_portal: portal })
     : await userClient.rpc('app_session_heartbeat')
 
   if (leaseResult.error) {
-    console.error('ADMIN_IP_GUARD_LEASE_ERROR', safeMeta(leaseResult.error))
+    console.error('PORTAL_IP_GUARD_LEASE_ERROR', { portal, ...safeMeta(leaseResult.error) })
     return json(req, { ok: false, reason: 'session_check_unavailable' }, 503)
   }
 

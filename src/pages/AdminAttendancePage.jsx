@@ -112,6 +112,9 @@ const SyncIndicator=({sync})=><div className={`attendance-sync-indicator ${sync?
 export default function AdminAttendancePage(){
   const [params,setParams]=useSearchParams()
   const access=useAdminAccess()
+  const canViewAdjustmentBonus=access.hasPermission(PERMISSIONS.ADJUSTMENT_BONUS_VIEW)
+  const canViewAdjustmentDeduction=access.hasPermission(PERMISSIONS.ADJUSTMENT_DEDUCTION_VIEW)
+  const canViewAdjustments=access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)&&(canViewAdjustmentBonus||canViewAdjustmentDeduction)
   const requestedRouteTab=params.get('tab')
   const requestedTab=canonicalAdminTab('/admin/schedule',requestedRouteTab)
   const visibleTabs=access.loading?[]:TABS.filter(value=>{
@@ -120,7 +123,7 @@ export default function AdminAttendancePage(){
     if(value==='今日考勤')return access.hasPermission(PERMISSIONS.ATTENDANCE_TODAY_VIEW)
     if(value==='考勤记录')return access.hasPermission(PERMISSIONS.ATTENDANCE_RECORDS_VIEW)
     if(value==='请假审批')return access.hasPermission(PERMISSIONS.ATTENDANCE_LEAVE_VIEW)
-    if(value==='奖金 / 扣款')return access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)
+    if(value==='奖金 / 扣款')return canViewAdjustments
     return false
   })
   const tab=access.loading?(TABS.includes(requestedTab)?requestedTab:TABS[0]):(visibleTabs.includes(requestedTab)?requestedTab:(visibleTabs[0]||''))
@@ -232,9 +235,9 @@ export default function AdminAttendancePage(){
       {tab==='请假审批'&&<div className="attendance-readonly-notice"><b>当前为记录视图</b><span>页面默认筛选“请假”，也可以切换公休、回家、半天等真实类别。</span></div>}
       {tab==='今日考勤'&&<div className="attendance-context-note"><b>{todayIso()}</b><span>仅显示今天已经登记的记录；没有记录不等同于正常出勤。</span></div>}
       {tab==='奖金 / 扣款'&&adjustmentNotice&&<div className={`attendance-adjustment-notice ${adjustmentNotice.syncState==='synced'?'synced':'pending'}`} role="status"><div><b>Supabase 已保存</b><span>{adjustmentNotice.syncState==='synced'?'Google 已同步':'Google 待同步；脚本写入并回执后，刷新即可看到“已同步”。'}</span></div><button type="button" onClick={()=>setAdjustmentNotice(null)} aria-label="关闭提示">×</button></div>}
-      <AttendanceFilters tab={tab} draft={draft} setDraft={setDraft} options={options} advanced={advanced} setAdvanced={setAdvanced} loading={state.loading} sync={syncMeta(data)} onQuery={query} onReset={reset}/>
+      <AttendanceFilters tab={tab} draft={draft} setDraft={setDraft} options={options} advanced={advanced} setAdvanced={setAdvanced} loading={state.loading} sync={syncMeta(data)} canViewAdjustmentBonus={canViewAdjustmentBonus} canViewAdjustmentDeduction={canViewAdjustmentDeduction} onQuery={query} onReset={reset}/>
       {state.error&&<div className="attendance-error" role="alert"><span>考勤数据读取失败：{state.error}</span><button type="button" onClick={()=>setRefreshKey(value=>value+1)}>重试</button></div>}
-      <AttendanceSummary scope={tabScope(tab)} summary={data.summary||{}} total={Number(data.total||0)}/>
+      <AttendanceSummary scope={tabScope(tab)} summary={data.summary||{}} total={Number(data.total||0)} canViewAdjustmentBonus={canViewAdjustmentBonus} canViewAdjustmentDeduction={canViewAdjustmentDeduction}/>
       <AttendanceTable rows={rows} scope={tabScope(tab)} loading={state.loading} hasData={Boolean(state.data)} onEmployee={canViewEmployeeDirectory?openEmployee:null} onDetail={setRecordDetail} canEditAdjustment={canEditAdjustment} onEditAdjustment={row=>setAdjustmentEditor({mode:'edit',row})}/>
       <Pagination page={Number(data.page||page)} pages={Math.max(1,Number(data.pages||1))} total={Number(data.total||0)} pageSize={Number(data.page_size||pageSize)} loading={state.loading} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>
     </>}
@@ -245,11 +248,12 @@ export default function AdminAttendancePage(){
   </div>
 }
 
-function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,loading,sync,onQuery,onReset}){
+function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,loading,sync,canViewAdjustmentBonus,canViewAdjustmentDeduction,onQuery,onReset}){
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
-  const allowedKinds=tab==='奖金 / 扣款'?new Set(['bonus','deduction']):ATTENDANCE_EVENT_KINDS
+  const allowedKinds=tab==='奖金 / 扣款'?new Set([canViewAdjustmentBonus&&'bonus',canViewAdjustmentDeduction&&'deduction'].filter(Boolean)):ATTENDANCE_EVENT_KINDS
   const kindOptions=optionEntries(options.event_kinds,attendanceKindLabel).filter(item=>allowedKinds.has(item.value.toLowerCase())).map(item=>({...item,label:attendanceKindLabel(item.value)}))
-  if(draft.event_kind&&!kindOptions.some(item=>item.value===draft.event_kind))kindOptions.unshift({value:draft.event_kind,label:attendanceKindLabel(draft.event_kind),key:`selected-${draft.event_kind}`})
+  if(draft.event_kind&&allowedKinds.has(draft.event_kind.toLowerCase())&&!kindOptions.some(item=>item.value===draft.event_kind))kindOptions.unshift({value:draft.event_kind,label:attendanceKindLabel(draft.event_kind),key:`selected-${draft.event_kind}`})
+  const allKindsLabel=tab!=='奖金 / 扣款'||(canViewAdjustmentBonus&&canViewAdjustmentDeduction)?'全部类别':canViewAdjustmentBonus?'全部奖金':'全部扣款'
   const select=(label,key,values,allLabel,labeler)=><label><span>{label}</span><select value={draft[key]} onChange={event=>update(key,event.target.value)}><option value="">{allLabel}</option>{optionEntries(values,labeler).map(item=><option value={item.value} key={item.key}>{item.label}</option>)}</select></label>
   return <section className="attendance-filter-card">
     <div className="attendance-filter-main">
@@ -264,7 +268,7 @@ function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,load
       <label><span>日期起</span><input type="date" value={draft.date_from} disabled={tab==='今日考勤'} onChange={event=>update('date_from',event.target.value)}/></label>
       <label><span>日期止</span><input type="date" value={draft.date_to} disabled={tab==='今日考勤'} onChange={event=>update('date_to',event.target.value)}/></label>
       <label><span>员工类型</span><select value={draft.source_group} onChange={event=>update('source_group',event.target.value)}><option value="">全部员工类型</option><option value="home">纯居家</option><option value="onsite_to_home">现场转居家</option>{optionEntries(options.source_groups,attendanceSourceGroupLabel).filter(item=>!['home','onsite_to_home'].includes(item.value)).map(item=><option value={item.value} key={item.key}>{item.label}</option>)}</select></label>
-      <label><span>记录类别</span><select value={draft.event_kind} onChange={event=>update('event_kind',event.target.value)}><option value="">全部类别</option>{kindOptions.map(item=><option key={item.key} value={item.value}>{item.label}</option>)}</select></label>
+      <label><span>记录类别</span><select value={allowedKinds.has(draft.event_kind.toLowerCase())?draft.event_kind:''} onChange={event=>update('event_kind',event.target.value)}><option value="">{allKindsLabel}</option>{kindOptions.map(item=><option key={item.key} value={item.value}>{item.label}</option>)}</select></label>
       {tab==='奖金 / 扣款'&&<label><span>币种</span><select value={draft.currency} onChange={event=>update('currency',event.target.value)}><option value="">全部币种（USD + PHP）</option><option value="USD">USD · 美元</option><option value="PHP">PHP · 菲律宾比索</option></select></label>}
       <label><span>员工状态</span><select value={draft.employee_status} onChange={event=>update('employee_status',event.target.value)}><option value="">全部员工状态</option><option value="active">在职</option><option value="probation">试用</option><option value="resigned">离职</option><option value="inactive">停用</option><option value="unmatched">未匹配</option></select></label>
       {select('团队','team',options.teams,'全部团队')}
@@ -277,12 +281,12 @@ function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,load
   </section>
 }
 
-function AttendanceSummary({scope,summary,total}){
+function AttendanceSummary({scope,summary,total,canViewAdjustmentBonus,canViewAdjustmentDeduction}){
   const currencySummary=attendanceCurrencySummary(summary)
   const money=(currency,key)=>currencySummary[currency]?`${currency} ${formatNumber(currencySummary[currency]?.[key]||0)}`:'—'
   const count=(currency,key)=>currencySummary[currency]?currencySummary[currency]?.[key]||0:'—'
   const items=scope==='adjustment'?
-    [['记录总数',total],['USD 奖金',`${count('USD','bonus_count')} 笔 · ${money('USD','bonus_total')}`,'positive'],['USD 扣款',`${count('USD','deduction_count')} 笔 · ${money('USD','deduction_total')}`,'negative'],['USD 净额',money('USD','net_amount')],['PHP 奖金',`${count('PHP','bonus_count')} 笔 · ${money('PHP','bonus_total')}`,'positive'],['PHP 扣款',`${count('PHP','deduction_count')} 笔 · ${money('PHP','deduction_total')}`,'negative'],['PHP 净额',money('PHP','net_amount')],['待核对记录',summary.unmatched||0,'warning'],['币种待核对',summary.currency_review_count||0,'warning'],['金额未解析',summary.incomplete||0,'warning']]:
+    [['记录总数',total],...(canViewAdjustmentBonus?[['USD 奖金',`${count('USD','bonus_count')} 笔 · ${money('USD','bonus_total')}`,'positive'],['PHP 奖金',`${count('PHP','bonus_count')} 笔 · ${money('PHP','bonus_total')}`,'positive']]:[]),...(canViewAdjustmentDeduction?[['USD 扣款',`${count('USD','deduction_count')} 笔 · ${money('USD','deduction_total')}`,'negative'],['PHP 扣款',`${count('PHP','deduction_count')} 笔 · ${money('PHP','deduction_total')}`,'negative']]:[]),...(canViewAdjustmentBonus&&canViewAdjustmentDeduction?[['USD 净额',money('USD','net_amount')],['PHP 净额',money('PHP','net_amount')]]:[]),['待核对记录',summary.unmatched||0,'warning'],['币种待核对',summary.currency_review_count||0,'warning'],['金额未解析',summary.incomplete||0,'warning']]:
     [['记录总数 / Records',total],['公休 / Rest day',summary.public_holiday||0],['回家 / Home leave',summary.home_leave||0],['请假 / Leave',summary.leave||0,'warning'],['半天 / Half day',summary.half_day||0,'warning'],['缺席 / Absent',summary.absence||0,'negative'],['离职 / Resigned',summary.resignation||0]]
   return <section className="attendance-summary-grid">{items.map(([label,value,tone])=><div key={label} className={tone||''}><span>{label}</span><strong>{value}</strong></div>)}</section>
 }

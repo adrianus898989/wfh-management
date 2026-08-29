@@ -63,7 +63,7 @@ test('frontend distinguishes a verified denial from a retryable dependency failu
     functions: {
       invoke: async (name, options) => {
         assert.equal(name, 'admin-ip-preflight')
-        assert.deepEqual(options.body, {})
+        assert.deepEqual(options.body, { portal: 'admin' })
         assert.ok(options.signal instanceof AbortSignal)
         return { data: { allowed: true, enforced: false, reason: 'enforcement_disabled' }, error: null }
       },
@@ -116,8 +116,9 @@ test('Edge preflight is anonymous-only at the gateway but service-role-only at t
   assert.match(edge, /verify_jwt=false/)
   assert.match(edge, /trustedClientIp\(req\)/)
   assert.match(edge, /secretKeys\.default \|\| Deno\.env\.get\('SUPABASE_SERVICE_ROLE_KEY'\)/)
-  assert.match(edge, /admin\.rpc\('admin_ip_prelogin_check'/)
-  assert.doesNotMatch(edge, /await req\.json\(|req\.url|searchParams/)
+  assert.match(edge, /admin\.rpc\('portal_ip_prelogin_check'/)
+  assert.match(edge, /portal !== 'admin' && portal !== 'staff'/)
+  assert.doesNotMatch(edge, /req\.url|searchParams/)
   assert.match(edge, /const DEPENDENCY_TIMEOUT_MS = 8_000/)
   assert.match(edge, /global: \{ fetch: timedFetch\(DEPENDENCY_TIMEOUT_MS\) \}/)
   assert.match(edge, /origin && origin !== ALLOWED_ORIGIN/)

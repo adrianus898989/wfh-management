@@ -7,6 +7,7 @@ import {
   recoveryIdentityDisposition,
   recoveryProvisioningMaterial,
 } from '../../supabase/functions/_shared/recoveryProvisioningFingerprint.js'
+import { accountControlPatch, patchAccountRows } from './adminAccountRowUpdate.js'
 
 const read = relative => readFile(new URL(relative, import.meta.url), 'utf8')
 
@@ -63,7 +64,7 @@ test('temporary auth and database errors preserve the session', async () => {
   assert.match(source, /controller\?\.abort\(\)/)
 })
 
-test('online presence recovery performs count-only bounded reads', async () => {
+test('online presence recovery separates bounded counts from an authorised detail page', async () => {
   const source = await read('../../supabase/functions/admin-accounts/recovery.ts')
   assert.match(source, /if \(!can\('account\.online_presence\.view'\)\)/)
   assert.match(source, /userClient\.rpc\('admin_online_presence_allowed'\)/)
@@ -74,6 +75,12 @@ test('online presence recovery performs count-only bounded reads', async () => {
   assert.match(source, /select\('user_id', \{ count:'exact', head:true \}\)\.eq\('portal','staff'\)/)
   assert.match(source, /admin:\{ count:Number\(adminCountResult\.count \|\| 0\), rows:\[\] \}/)
   assert.match(source, /staff:\{ count:Number\(staffCountResult\.count \|\| 0\), rows:\[\] \}/)
+  assert.match(source, /const includeRows = body\?\.include_rows === true/)
+  assert.match(source, /userClient\.rpc\('admin_online_presence_page_v1'/)
+  assert.match(source, /p_page_size:pageSize/)
+  assert.match(source, /PRESENCE_DETAIL_TIMEOUT_MS = 4_000/)
+  assert.match(source, /count_only:true/)
+  assert.match(source, /count_only:false/)
 })
 
 test('recovery role page is bounded, Founder-write/others-read-only and never loads the employee scope directory', async () => {
@@ -98,10 +105,10 @@ test('recovery role page is bounded, Founder-write/others-read-only and never lo
   assert.match(page, /Founder 可勾选并保存现有角色权限，其他账号保持只读/)
 })
 
-test('recovery account list is fixed-page, field-whitelisted and creator-private', async () => {
+test('recovery account list is bounded, field-whitelisted and creator-private', async () => {
   const edge = await read('../../supabase/functions/admin-accounts/recovery.ts')
   const migration = await read('../../supabase/migrations/20260829101500_bounded_recovery_backend_accounts.sql')
-  assert.match(edge, /const ACCOUNT_PAGE_SIZE = 20/)
+  assert.match(edge, /const DEFAULT_ACCOUNT_PAGE_SIZE = 20/)
   assert.match(edge, /new Set\(\['username', 'employee', 'context'\]\)/)
   assert.match(edge, /Object\.keys\(rawSearch\)\.some\(key => !allowedSearchFields\.has\(key\)\)/)
   assert.match(edge, /userClient\.rpc\('admin_backend_accounts_page'/)
@@ -302,7 +309,7 @@ test('account UI detects recovery mode without restoring the full bootstrap', as
   assert.match(page, /action:'account_list'/)
   assert.match(page, /recovery_account_mode/)
   assert.match(page, /account_pagination/)
-  assert.match(page, /稳定恢复模式[\s\S]+账号列表固定每页 20 条/)
+  assert.match(page, /稳定恢复模式[\s\S]+账号列表支持完整分页/)
   assert.match(page, /if \(recoveryAccountMode\)[\s\S]+action:'create_backend'/)
   assert.match(page, /accountModal\.mode === 'create' && !recoveryAccountMode/)
   assert.match(page, /employee_lookup_only:true/)
@@ -330,10 +337,54 @@ test('recovery account controls are exact-permission, capability-gated and page-
   assert.match(page, /recoveryCan\('reset_password'\)/)
   assert.match(page, /recoveryCan\('reset_mfa'\)/)
   assert.match(page, /recoveryCan = action => Boolean\(recoveryAccountMode && recoveryAccountActions\.has\(action\)\)/)
-  assert.match(page, /refreshRecoveryAccountPage\(accessSearchQuery, accountPage\)/)
+  assert.match(page, /setData\(current => patchAccountRows\(current, a\.auth_user_id, controls/)
   assert.match(page, /requestedPage > lastPage/)
   assert.match(page, /!founder && canResetBackendPassword/)
   assert.match(page, /!founder && canResetBackendMfa/)
+})
+
+test('single-account controls patch only their row and never reload the whole account page', async () => {
+  const page = await read('../pages/AdminUsersPage.jsx')
+  const regularEdge = await read('../../supabase/functions/admin-accounts/index.ts')
+  const otpStart = page.indexOf('const toggleOtp = async')
+  const activeStart = page.indexOf('const toggleActive = async', otpStart)
+  const passwordStart = page.indexOf('const resetPassword = async', activeStart)
+  const otpSource = page.slice(otpStart, activeStart)
+  const activeSource = page.slice(activeStart, passwordStart)
+  for (const source of [otpSource, activeSource]) {
+    assert.match(source, /setMutatingAccountId\(a\.auth_user_id\)/)
+    assert.match(source, /patchAccountRows/)
+    assert.doesNotMatch(source, /await (?:load|refreshRecoveryAccountPage)\(/)
+  }
+  assert.match(regularEdge, /saved: \{ auth_user_id: target, otp_required: required \}/)
+  assert.match(regularEdge, /saved: \{ auth_user_id: target, active \}/)
+  assert.match(page, /access-account-row-mutating/)
+  assert.match(page, /OTP 设置失败：/)
+  assert.match(page, /账号状态修改失败：/)
+})
+
+test('row patching is immutable, authoritative and keeps bounded pagination coherent', () => {
+  const original = {
+    backend_accounts:[{ auth_user_id:'backend-1', active:true, otp_required:false, label:'kept' }],
+    employee_accounts:[{ auth_user_id:'staff-1', active:false }],
+    account_pagination:{ total:7, page:1 },
+  }
+  const authoritative = accountControlPatch(
+    { active:false, otp_required:true, ignored:'server-only-field' },
+    { active:true },
+  )
+  assert.deepEqual(authoritative, { active:false, otp_required:true })
+  const backend = patchAccountRows(original, 'backend-1', authoritative, -1)
+  assert.notEqual(backend, original)
+  assert.deepEqual(backend.backend_accounts[0], {
+    auth_user_id:'backend-1', active:false, otp_required:true, label:'kept',
+  })
+  assert.equal(backend.account_pagination.total, 6)
+  assert.equal(original.backend_accounts[0].active, true)
+  assert.equal(original.account_pagination.total, 7)
+  const staff = patchAccountRows(original, 'staff-1', { active:true })
+  assert.equal(staff.employee_accounts[0].active, true)
+  assert.equal(staff.backend_accounts[0], original.backend_accounts[0])
 })
 
 test('delegated recovery account search has complete server-side status filtering', async () => {
@@ -351,6 +402,27 @@ test('delegated recovery account search has complete server-side status filterin
   assert.match(migration, /v_status = 'inactive' and not access\.active/)
   assert.match(migration, /v_page_size constant integer := 20/)
   assert.match(migration, /set statement_timeout = '2500ms'/)
+})
+
+test('delegated recovery account list supports bounded page sizes and complete navigation', async () => {
+  const edge = await read('../../supabase/functions/admin-accounts/recovery.ts')
+  const page = await read('../pages/AdminUsersPage.jsx')
+  const migration = await read('../../supabase/migrations/20260829160000_recovery_backend_account_page_sizes.sql')
+  assert.match(edge, /ACCOUNT_PAGE_SIZE_OPTIONS = new Set\(\[20, 30, 50, 100, 200\]\)/)
+  assert.match(edge, /admin_recovery_backend_accounts_page_v2/)
+  assert.match(edge, /p_page_size:pageSize/)
+  assert.match(edge, /invalid_account_page_size/)
+  assert.match(edge, /supported_account_page_sizes:delegatedRecoveryAccounts/)
+  assert.match(page, /supportedAccountPageSizes = Array\.isArray/)
+  assert.match(page, /pageSizeOptions=\{supportedAccountPageSizes\}/)
+  assert.match(page, /onPage=\{nextPage => refreshRecoveryAccountPage/)
+  assert.match(page, /onPageSize=\{nextPageSize => refreshRecoveryAccountPage\(accessSearchQuery, 1, nextPageSize\)\}/)
+  assert.match(page, /fetchRecoveryAccounts\(blankAccessSearch\(\), 1, accountPageSize, \{[\s\S]+employee_lookup_only:true/)
+  assert.match(migration, /v_page_size not in \(20, 30, 50, 100, 200\)/)
+  assert.match(migration, /limit v_page_size/)
+  assert.match(migration, /set statement_timeout = '3000ms'/)
+  assert.match(migration, /revoke all on function public\.admin_recovery_backend_accounts_page_v2[\s\S]+from public, anon, authenticated, service_role/)
+  assert.match(migration, /grant execute on function public\.admin_recovery_backend_accounts_page_v2[\s\S]+to service_role/)
 })
 
 test('delegated recovery authorization is service-only and enforced before Auth mutations', async () => {

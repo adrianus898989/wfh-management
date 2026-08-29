@@ -8,6 +8,7 @@ import {
 import { loadEffectiveEmployeeScope } from '../_shared/employeeScope.ts'
 
 const allowedOrigin = 'https://adrianus898989.github.io'
+const PRESENCE_DETAIL_TIMEOUT_MS = 4_000
 
 function cors(origin: string | null) {
   return {
@@ -39,6 +40,29 @@ function passwordOk(p: string) {
 
 function cleanString(v: unknown) {
   return String(v ?? '').trim()
+}
+
+async function boundedPresence<T>(operation: PromiseLike<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const controller = typeof (operation as any)?.abortSignal === 'function'
+    ? new AbortController()
+    : null
+  const boundedOperation = controller
+    ? (operation as any).abortSignal(controller.signal)
+    : operation
+  try {
+    return await Promise.race([
+      Promise.resolve(boundedOperation),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller?.abort()
+          reject(new Error(`${label}_TIMEOUT`))
+        }, PRESENCE_DETAIL_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 function cleanStringList(v: unknown) {
@@ -171,7 +195,7 @@ Deno.serve(async (req) => {
 
     const can = (code: string) => {
       if (isFounder) return true
-      return callerEffectivePermissions.has(code)
+      return callerEffectivePermissions.has('*') || callerEffectivePermissions.has(code)
     }
 
     const audit = async (action: string, reason: string) => {
@@ -526,9 +550,15 @@ Deno.serve(async (req) => {
         if (error) throw error
         access = data
       }
-      if (!access?.backend_enabled || access?.active === false) return false
+      if (!access?.backend_enabled) return false
       const selection = await readScope(targetAuthUserId)
       if (!await scopeStructureWithinCaller(access, selection)) return false
+      // Disabling an account intentionally clears its materialized effective
+      // scope.  A permissioned parent must still be able to reactivate it, but
+      // only after the durable self/assigned-team structure above proves that
+      // the grant cannot escape the caller's own scope. Dynamic own-team and
+      // all-data targets already fail that structural check for limited callers.
+      if (access?.active === false) return true
       const scope = await getScopeContext()
       const targetEmployeeIds = await loadEffectiveEmployeeIds(targetAuthUserId)
       return targetEmployeeIds.every((employeeId) =>
@@ -666,16 +696,20 @@ Deno.serve(async (req) => {
     }
 
     async function getTargetAccount(targetAuthUserId: string) {
+      if (!targetAuthUserId) throw new Error('账号标识不正确')
+      if (targetAuthUserId === authenticatedUser.id) {
+        throw new Error('当前登录账号不能在这里修改自身状态、权限或凭据')
+      }
       const { data: targetAccess, error } = await admin.from('user_access')
-        .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,employee_portal_enabled,roles(id,code,name)')
+        .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,employee_portal_enabled,active,roles(id,code,name)')
         .eq('auth_user_id', targetAuthUserId)
         .maybeSingle()
       if (error) throw error
       if (!targetAccess) throw new Error('账号不存在')
 
       const targetRole = Array.isArray(targetAccess.roles) ? targetAccess.roles[0] : targetAccess.roles
-      if (!isFounder && targetRole?.code === 'founder') {
-        throw new Error('只有 Founder 可以管理 Founder 账号')
+      if (targetRole?.code === 'founder') {
+        throw new Error('Founder 账号受保护，不能通过普通账号操作修改')
       }
       if (!isFounder) {
         if (!targetAccess.employee_id) throw new Error('该账号未关联员工档案，只有 Founder 可以管理')
@@ -730,143 +764,114 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'online_presence') {
-      if (!can('backend_account.view') && !can('staff_account.view') && !can('employee.directory.view')) {
+      if (!can('account.online_presence.view')) {
         return json(req, { error:'无在线账号查看权限' }, 403)
       }
-      // The service-role reads below must not outlive the caller's current
-      // admin security context. Revalidate the signed-in JWT at the database
-      // boundary so an expired release epoch, IP attestation or MFA/session
-      // cannot continue reading presence until the five-minute lease expires.
-      const { data: presenceAllowed, error: presenceGuardError } = await userClient
-        .rpc('admin_online_presence_allowed')
-      if (presenceGuardError) {
-        console.error('online presence guard failed', presenceGuardError)
-        return json(req, { error:'在线状态验证暂时失败，请重试' }, 503)
+      const includeRows = body?.include_rows === true
+      const allowedFields = includeRows
+        ? new Set(['action', 'include_rows', 'portal', 'page', 'page_size'])
+        : new Set(['action', 'include_rows'])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, { error:'在线人员请求包含不受支持的字段' }, 400)
       }
-      if (presenceAllowed !== true) return json(req, { error:'无在线账号查看权限' }, 403)
 
-      const nowIso = new Date().toISOString()
-      const { data: leaseRows, error: leaseError } = await admin
-        .from('app_session_leases')
-        .select('user_id,portal,claimed_at,last_seen_at,lease_expires_at')
-        .gt('lease_expires_at', nowIso)
-        .in('portal', ['admin', 'staff'])
-        .order('last_seen_at', { ascending:false })
+      if (includeRows) {
+        const portal = cleanString(body?.portal).toLowerCase()
+        const page = Number(body?.page ?? 1)
+        const pageSize = Number(body?.page_size ?? 20)
+        if (!['admin', 'staff'].includes(portal) ||
+            !Number.isInteger(page) || page < 1 || page > 500 ||
+            !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) {
+          return json(req, { error:'在线人员分页参数不正确' }, 400)
+        }
 
-      if (leaseError) return json(req, { error:'无法读取在线状态' }, 500)
+        try {
+          // The authenticated RPC re-checks the current admin session, the
+          // explicit permission and the caller's data scope at the database
+          // boundary.  It returns at most one small page and has its own 2.5s
+          // statement timeout in addition to this 4s network deadline.
+          const { data:presencePage, error:presencePageError } = await boundedPresence(
+            userClient.rpc('admin_online_presence_page_v1', {
+              p_portal:portal,
+              p_page:page,
+              p_page_size:pageSize,
+            }),
+            'PRESENCE_DETAIL_PAGE',
+          )
+          if (presencePageError) {
+            const code = cleanString(presencePageError.code).toUpperCase()
+            const message = cleanString(presencePageError.message)
+            if (code === '42501' || /permission|session|access_denied/i.test(message)) {
+              return json(req, { error:'无在线账号查看权限' }, 403)
+            }
+            if (code === '22023' || /invalid_presence/i.test(message)) {
+              return json(req, { error:'在线人员分页参数不正确' }, 400)
+            }
+            console.error('bounded online presence page failed', presencePageError)
+            return json(req, { error:'在线人员名单暂时读取失败，请重试' }, 503)
+          }
+          const nowIso = new Date().toISOString()
+          return json(req, {
+            ok:true,
+            degraded:false,
+            count_only:false,
+            refreshed_at:nowIso,
+            online_window_seconds:300,
+            [portal]:presencePage || {
+              portal,
+              page,
+              page_size:pageSize,
+              total:0,
+              pages:1,
+              rows:[],
+            },
+          })
+        } catch (error) {
+          console.error('bounded online presence page failed', error)
+          return json(req, { error:'在线人员名单暂时读取失败，请重试' }, 503)
+        }
+      }
 
-      const userIds = [...new Set((leaseRows || []).map((row: any) => cleanString(row.user_id)).filter(Boolean))]
-      if (!userIds.length) {
+      try {
+        // Background badge refreshes stay count-only and head-only.  The guard
+        // is authenticated even though the two count queries use service role.
+        const { data:presenceAllowed, error:presenceGuardError } = await boundedPresence(
+          userClient.rpc('admin_online_presence_allowed'),
+          'PRESENCE_PERMISSION_GUARD',
+        )
+        if (presenceGuardError) {
+          console.error('online presence guard failed', presenceGuardError)
+          return json(req, { error:'在线状态验证暂时失败，请重试' }, 503)
+        }
+        if (presenceAllowed !== true) return json(req, { error:'无在线账号查看权限' }, 403)
+
+        const nowIso = new Date().toISOString()
+        const [adminCountResult, staffCountResult] = await Promise.all([
+          boundedPresence(
+            admin.from('app_session_leases').select('user_id', { count:'exact', head:true }).eq('portal','admin').gt('lease_expires_at',nowIso),
+            'ADMIN_PRESENCE_COUNT',
+          ),
+          boundedPresence(
+            admin.from('app_session_leases').select('user_id', { count:'exact', head:true }).eq('portal','staff').gt('lease_expires_at',nowIso),
+            'STAFF_PRESENCE_COUNT',
+          ),
+        ])
+        if (adminCountResult.error || staffCountResult.error) {
+          return json(req, { error:'在线人数暂时读取失败，请重试' }, 503)
+        }
         return json(req, {
           ok:true,
+          degraded:true,
+          count_only:true,
           refreshed_at:nowIso,
           online_window_seconds:300,
-          admin:{ count:0, rows:[] },
-          staff:{ count:0, rows:[] },
+          admin:{ count:Number(adminCountResult.count || 0), rows:[] },
+          staff:{ count:Number(staffCountResult.count || 0), rows:[] },
         })
+      } catch (error) {
+        console.error('bounded online presence count failed', error)
+        return json(req, { error:'在线人数暂时读取失败，请重试' }, 503)
       }
-
-      const { data: accessRows, error: accessError } = await admin
-        .from('user_access')
-        .select('auth_user_id,employee_id,login_username,login_email,backend_enabled,employee_portal_enabled,active')
-        .in('auth_user_id', userIds)
-
-      if (accessError) return json(req, { error:'无法读取在线账号' }, 500)
-
-      const accessMap = new Map((accessRows || []).map((row: any) => [cleanString(row.auth_user_id), row]))
-      const liveEmployeeIds = [...new Set((accessRows || []).map((row: any) => cleanString(row.employee_id)).filter(Boolean))]
-      // Presence is a once-per-minute global control. The old scope bootstrap
-      // here used to fetch every employee, every team, and the complete current
-      // roster for each online admin merely to filter a handful of live IDs.
-      // Founder/all needs no scope query.  For limited callers, intersect only
-      // the handful of live candidates with the already-materialized effective
-      // scope table.  Never enumerate an administrator's complete scope for a
-      // once-per-minute presence badge.
-      let presenceAllowedIds: Set<string> | null = null
-      if (!isFounder && activeCaller.data_scope !== 'all') {
-        const callerDataScope = cleanString(activeCaller.data_scope)
-        if (callerDataScope === 'self') {
-          const ownEmployeeId = cleanString(activeCaller.employee_id)
-          presenceAllowedIds = new Set(ownEmployeeId ? [ownEmployeeId] : [])
-        } else if (['own_team', 'assigned_teams'].includes(callerDataScope)) {
-          if (!liveEmployeeIds.length) {
-            presenceAllowedIds = new Set()
-          } else {
-            const { data: effectiveRows, error: effectiveError } = await admin
-              .from('user_scope_employees')
-              .select('employee_id')
-              .eq('auth_user_id', authenticatedUser.id)
-              .in('employee_id', liveEmployeeIds)
-            if (effectiveError) return json(req, { error:'无法读取在线账号范围' }, 500)
-            presenceAllowedIds = new Set((effectiveRows || [])
-              .map((row: any) => cleanString(row.employee_id))
-              .filter(Boolean))
-          }
-        } else {
-          presenceAllowedIds = new Set()
-        }
-      }
-      const visibleEmployeeIds = presenceAllowedIds === null
-        ? new Set(liveEmployeeIds)
-        : new Set(liveEmployeeIds.filter(id => presenceAllowedIds.has(id)))
-
-      const employeeMap = new Map<string, any>()
-      if (visibleEmployeeIds.size) {
-        const { data: employeeRows, error: employeeError } = await admin
-          .from('employees')
-          .select('id,employee_no,full_name,team_id,position_id,teams(id,name),positions(id,name)')
-          .in('id', [...visibleEmployeeIds])
-        if (employeeError) return json(req, { error:'无法读取在线员工资料' }, 500)
-        ;(employeeRows || []).forEach((row: any) => employeeMap.set(cleanString(row.id), row))
-      }
-
-      const canSeeEmployee = (employeeId: unknown) => Boolean(employeeId) && visibleEmployeeIds.has(cleanString(employeeId))
-      const formatEmployee = (employeeId: unknown) => {
-        const employee: any = employeeId ? employeeMap.get(cleanString(employeeId)) : null
-        const team = Array.isArray(employee?.teams) ? employee.teams[0] : employee?.teams
-        const position = Array.isArray(employee?.positions) ? employee.positions[0] : employee?.positions
-        return {
-          employee_no:cleanString(employee?.employee_no),
-          full_name:cleanString(employee?.full_name),
-          team:cleanString(team?.name),
-          position:cleanString(position?.name),
-        }
-      }
-
-      const visibleRows = (leaseRows || []).flatMap((lease: any) => {
-        const account: any = accessMap.get(cleanString(lease.user_id))
-        if (!account?.active) return []
-        if (lease.portal === 'admin' && !account.backend_enabled) return []
-        if (lease.portal === 'staff' && !account.employee_portal_enabled) return []
-        const accountInScope = account.employee_id
-          ? canSeeEmployee(account.employee_id)
-          : isFounder
-        if (!accountInScope && cleanString(lease.user_id) !== cleanString(userData.user.id)) return []
-
-        const employee = formatEmployee(account.employee_id)
-        const username = cleanString(account.login_username) || cleanString(account.login_email)
-        return [{
-          portal:lease.portal,
-          name:employee.full_name || username || (lease.portal === 'admin' ? '后台账号' : '员工账号'),
-          username,
-          employee_no:employee.employee_no,
-          team:employee.team,
-          position:employee.position,
-          last_seen_at:lease.last_seen_at,
-          claimed_at:lease.claimed_at,
-          current:cleanString(lease.user_id) === cleanString(userData.user.id),
-        }]
-      })
-
-      const adminRows = visibleRows.filter((row: any) => row.portal === 'admin')
-      const staffRows = visibleRows.filter((row: any) => row.portal === 'staff')
-      return json(req, {
-        ok:true,
-        refreshed_at:nowIso,
-        online_window_seconds:300,
-        admin:{ count:adminRows.length, rows:adminRows },
-        staff:{ count:staffRows.length, rows:staffRows },
-      })
     }
 
     if (action === 'dashboard') {
@@ -1581,17 +1586,21 @@ Deno.serve(async (req) => {
       if (!can('account.otp_toggle')) return json(req, { error: '无OTP设置权限' }, 403)
       const target = cleanString(body.auth_user_id)
       const required = Boolean(body.otp_required)
+      let current: any
       try {
-        await getTargetAccount(target)
+        current = await getTargetAccount(target)
       } catch (error) {
         return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
+      if (!current.backend_enabled) {
+        return json(req, { error: '后台登录 OTP 开关只能用于后台账号' }, 400)
       }
       const { error } = await admin.from('user_access')
         .update({ otp_required: required })
         .eq('auth_user_id', target)
       if (error) return json(req, { error: error.message }, 400)
       await audit('otp_toggle', `OTP=${required} ${target}`)
-      return json(req, { ok: true })
+      return json(req, { ok: true, saved: { auth_user_id: target, otp_required: required } })
     }
 
     if (action === 'toggle_active') {
@@ -1615,7 +1624,7 @@ Deno.serve(async (req) => {
       if (error) return json(req, { error: error.message }, 400)
 
       await audit('account_active_toggle', `active=${active} ${target}`)
-      return json(req, { ok: true })
+      return json(req, { ok: true, saved: { auth_user_id: target, active } })
     }
 
     if (action === 'reset_password') {

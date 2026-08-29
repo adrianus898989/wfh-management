@@ -132,7 +132,7 @@ export function EmployeeAttendancePanel({data,loading,error}){
   </section>
 }
 
-export function EmployeeAdjustmentPanel({data,loading,error}){
+export function EmployeeAdjustmentPanel({data,loading,error,canViewBonus=false,canViewDeduction=false}){
   const rows=data?.rows||data?.history||[]
   const summary=data?.summary||{}
   const currencySummary=attendanceCurrencySummary(summary)
@@ -141,12 +141,14 @@ export function EmployeeAdjustmentPanel({data,loading,error}){
   const [selected,setSelected]=useState(null)
   const [filters,setFilters]=useState(emptyHistoryFilters)
   const visibleRows=useMemo(()=>rows.filter(row=>historyMatches(row,filters,['reason','note','raw_amount',row=>adjustmentCategory(row),row=>attendanceAmount(row),row=>attendanceKindLabel(row.event_kind)])),[rows,filters])
+  const panelTitle=canViewBonus&&canViewDeduction?'奖金 / 扣款记录':canViewBonus?'奖金记录':'扣款记录'
+  const summaryItems=[...(canViewBonus?[['USD 奖金',`${currencyCount('USD','bonus_count')} · ${currencyValue('USD','bonus_total')}`,'positive'],['PHP 奖金',`${currencyCount('PHP','bonus_count')} · ${currencyValue('PHP','bonus_total')}`,'positive']]:[]),...(canViewDeduction?[['USD 扣款',`${currencyCount('USD','deduction_count')} · ${currencyValue('USD','deduction_total')}`,'negative'],['PHP 扣款',`${currencyCount('PHP','deduction_count')} · ${currencyValue('PHP','deduction_total')}`,'negative']]:[]),...(canViewBonus&&canViewDeduction?[['USD 净额',currencyValue('USD','net_amount')],['PHP 净额',currencyValue('PHP','net_amount')]]:[]),['币种待核对',summary.currency_review_count||0,'warning'],['金额未解析',summary.incomplete||0,'warning']]
   return <section className="detail-panel employee-attendance-panel employee-adjustment-panel">
-    <div className="detail-panel-head"><div><h3>奖金 / 扣款记录</h3></div><span className="employee-exam-count">{visibleRows.length} 条</span></div>
+    <div className="detail-panel-head"><div><h3>{panelTitle}</h3></div><span className="employee-exam-count">{visibleRows.length} 条</span></div>
     {loading?<div className="attendance-panel-state">正在读取奖金 / 扣款记录…</div>:error?<div className="attendance-panel-state error">{error}</div>:<>
       <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索类型、金额、奖金、扣款或原因"/>
       <div className="employee-adjustment-summary">
-        <SummaryItem label="USD 奖金" value={`${currencyCount('USD','bonus_count')} · ${currencyValue('USD','bonus_total')}`} tone="positive"/><SummaryItem label="USD 扣款" value={`${currencyCount('USD','deduction_count')} · ${currencyValue('USD','deduction_total')}`} tone="negative"/><SummaryItem label="USD 净额" value={currencyValue('USD','net_amount')}/><SummaryItem label="PHP 奖金" value={`${currencyCount('PHP','bonus_count')} · ${currencyValue('PHP','bonus_total')}`} tone="positive"/><SummaryItem label="PHP 扣款" value={`${currencyCount('PHP','deduction_count')} · ${currencyValue('PHP','deduction_total')}`} tone="negative"/><SummaryItem label="PHP 净额" value={currencyValue('PHP','net_amount')}/><SummaryItem label="币种待核对" value={summary.currency_review_count||0} tone="warning"/><SummaryItem label="金额未解析" value={summary.incomplete||0} tone="warning"/>
+        {summaryItems.map(([label,value,tone])=><SummaryItem key={label} label={label} value={value} tone={tone}/>)}
       </div>
       {visibleRows.length?<div className="employee-adjustment-list">{visibleRows.map((row,index)=><article key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <div className="employee-adjustment-amount"><span className={`attendance-kind ${kindTone(row.event_kind)}`}>{attendanceKindLabel(row.event_kind)}</span><b className={kindTone(row.event_kind)}>{attendanceAmount(row)}</b><small>{row.event_date||'—'}</small></div>

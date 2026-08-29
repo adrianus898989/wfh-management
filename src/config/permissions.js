@@ -116,6 +116,8 @@ export const PERMISSIONS = {
   ADJUSTMENT_CREATE: 'adjustment.create',
   ADJUSTMENT_APPROVE: 'adjustment.approve',
   ADJUSTMENT_PAGE_VIEW: 'adjustment.page.view',
+  ADJUSTMENT_BONUS_VIEW: 'adjustment.bonus.view',
+  ADJUSTMENT_DEDUCTION_VIEW: 'adjustment.deduction.view',
   ADJUSTMENT_PAGE_CREATE: 'adjustment.page.create',
   ADJUSTMENT_PAGE_EDIT: 'adjustment.page.edit',
   ADJUSTMENT_PAGE_APPROVE: 'adjustment.page.approve',
@@ -218,6 +220,7 @@ export const PERMISSIONS = {
   ALERT_LOW_WORKLOAD_STREAK_VIEW: 'alert.low_workload_streak.view',
   ALERT_MARK_READ: 'alert.mark_read',
   ALERT_FOLLOW_UP: 'alert.follow_up',
+  ALERT_SYNC_DIAGNOSTICS_VIEW: 'alert.sync_diagnostics.view',
 
   // 敏感资料
   SENSITIVE_EMPLOYEE_VIEW: 'sensitive.employee.view',

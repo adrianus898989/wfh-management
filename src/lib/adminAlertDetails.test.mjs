@@ -2,11 +2,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
+  adminAlertAdjustmentDetails,
   adminAlertAttendanceDetails,
   adminAlertEmployeeHistoryFilters,
   adminAlertEmployeeHireDate,
   adminAlertErrorFrequencyDetails,
   adminAlertFollowUpState,
+  adminAlertKeyAdjustmentEvidence,
+  adminAlertKeyEvidence,
   adminAlertKeyAttendanceEvidence,
   adminAlertReadState,
 } from './adminAlertDetails.js'
@@ -119,6 +122,60 @@ test('legacy payloads remain renderable until the enriched refresh runs', () => 
   assert.deepEqual(detail.events, [])
   assert.equal(detail.missingDetails, true)
   assert.equal(adminAlertAttendanceDetails({ alert_type:'exam_failed', payload:{} }), null)
+})
+
+test('late-timeout warning exposes the existing production reasons immediately', () => {
+  const row = {
+    alert_type:'late_timeout_frequency',
+    occurrence_count:3,
+    payload:{
+      days:7,
+      threshold:3,
+      count:3,
+      reasons:['late 1mn and 9s', 'overbreak 5mins 43 secs', 'late 1mn and 9s'],
+    },
+  }
+  const detail = adminAlertAdjustmentDetails(row, 'zh')
+
+  assert.equal(detail.title, '预警区间内迟到 / 超时扣款明细')
+  assert.equal(detail.summary, '3 笔；预警阈值 3 笔')
+  assert.deepEqual(detail.reasons, ['late 1mn and 9s', 'overbreak 5mins 43 secs'])
+  assert.equal(detail.legacyReasonsOnly, true)
+  assert.equal(detail.missingDetails, false)
+  assert.equal(adminAlertKeyAdjustmentEvidence(row, 'zh'), 'late 1mn and 9s；另有 1 个原因')
+  assert.equal(adminAlertKeyEvidence(row, 'zh'), 'late 1mn and 9s；另有 1 个原因')
+})
+
+test('enriched late-timeout evidence is bounded, dated and includes amount and reason', () => {
+  const row = {
+    alert_type:'late_timeout_frequency',
+    payload:{ threshold:3, count:14, reasons:['legacy fallback'], events:Array.from({ length:14 }, (_, index) => ({
+      date:`2026-08-${String(index + 1).padStart(2, '0')}`,
+      event_kind:'deduction',
+      currency:'usd',
+      amount:-(index + 1),
+      reason:`Late ${index + 1}`,
+      note:index === 13 ? 'latest note' : '',
+    })) },
+  }
+  const detail = adminAlertAdjustmentDetails(row, 'en')
+
+  assert.equal(detail.events.length, 12)
+  assert.equal(detail.events[0].date, '2026-08-14')
+  assert.equal(detail.events[0].currency, 'USD')
+  assert.equal(detail.events[0].amount, -14)
+  assert.deepEqual(detail.reasons, [])
+  assert.equal(detail.legacyReasonsOnly, false)
+  assert.match(adminAlertKeyAdjustmentEvidence(row, 'en'), /^2026-08-14 · USD -14 · Reason: Late 14 · Note: latest note; 11 more matching records$/)
+  assert.equal(adminAlertAdjustmentDetails({ alert_type:'monthly_leave', payload:{} }), null)
+})
+
+test('late-timeout detail panel is rendered in both alert records and employee history', () => {
+  assert.match(alertCenterComponent, /function AlertAdjustmentDetails/)
+  assert.equal((alertCenterComponent.match(/<AlertAdjustmentDetails row=\{row\} locale=\{locale\}\/\>/g) || []).length, 2)
+  assert.match(alertCenterComponent, /本次预警匹配到的原因/)
+  assert.match(alertCenterComponent, /扣款日期/)
+  assert.match(alertCenterStyles, /admin-alert-adjustment-reasons/)
 })
 
 test('error-frequency details expose all three thresholds and triggered rules', () => {

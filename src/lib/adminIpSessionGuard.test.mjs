@@ -4,7 +4,7 @@ import test from 'node:test'
 
 const source = relativePath => readFile(new URL(relativePath, import.meta.url), 'utf8')
 
-const [app, client, guard, allowlistPage, allowlistEdge, migration, raceFix] = await Promise.all([
+const [app, client, guard, allowlistPage, allowlistEdge, migration, raceFix, staffMigration] = await Promise.all([
   source('../App.jsx'),
   source('./supabase.js'),
   source('../../supabase/functions/admin-ip-guard/index.ts'),
@@ -12,12 +12,16 @@ const [app, client, guard, allowlistPage, allowlistEdge, migration, raceFix] = a
   source('../../supabase/functions/admin-ip-allowlist/index.ts'),
   source('../../supabase/migrations/20260827090427_admin_login_ip_allowlist.sql'),
   source('../../supabase/migrations/20260828064000_admin_ip_attestation_session_race.sql'),
+  source('../../supabase/migrations/20260829112326_staff_portal_ip_allowlist.sql'),
 ])
 
-test('admin claim and heartbeat use Edge while staff retains its direct heartbeat', () => {
-  assert.match(app, /mode === 'admin'\s*\? guardAdminAppSession\(method\)\s*:\s*method === 'heartbeat' \? heartbeatAppSession\(\)/)
+test('admin and staff claim and heartbeat both use the gateway IP Edge boundary', () => {
+  assert.match(app, /guardPortalAppSession\(mode, method\)/)
   assert.match(client, /supabase\.functions\.invoke\('admin-ip-guard'/)
+  assert.match(client, /body:\{action,portal:normalizedPortal\}/)
   assert.match(guard, /p_source: action/)
+  assert.match(guard, /portal === 'staff'[\s\S]*?'staff_ip_session_attest'/)
+  assert.match(guard, /p_portal: portal/)
   assert.match(guard, /action === 'claim'[\s\S]*?app_session_claim[\s\S]*?: await userClient\.rpc\('app_session_heartbeat'\)/)
 })
 
@@ -69,6 +73,16 @@ test('five-minute attestation blocks direct renewal after freshness expires', ()
   assert.match(migration, /v_now \+ interval '5 minutes'/)
   assert.match(migration, /app_session_heartbeat[\s\S]*?current_admin_ip_attestation_is_valid/)
   assert.match(migration, /v_portal = 'staff'[\s\S]*?staff_portal_account_exists/)
+})
+
+test('staff IP enforcement is default-off and protects the central session predicate', () => {
+  assert.match(staffMigration, /staff_enforced boolean not null default false/)
+  assert.match(staffMigration, /portal_scope text not null default 'admin'/)
+  assert.match(staffMigration, /portal_scope in \('admin', 'staff', 'both'\)/)
+  assert.match(staffMigration, /current_staff_ip_attestation_is_valid/)
+  assert.match(staffMigration, /lease\.portal <> 'staff'[\s\S]{0,180}?current_staff_ip_attestation_is_valid/)
+  assert.match(staffMigration, /app_session_claim[\s\S]*?ip_check_required/)
+  assert.match(staffMigration, /app_session_heartbeat[\s\S]*?ip_check_required/)
 })
 
 test('proxy metadata outage is retryable and cannot revoke a valid server session', () => {

@@ -34,6 +34,7 @@ const loginMessages: Record<string, string> = {
   ACTIVE_SESSION_EXISTS: '旧会话接管未完成，请重新登录',
   SESSION_REJECTED: '登录会话已失效，请重试',
   ADMIN_IP_NOT_ALLOWED: '当前IP不在后台登录白名单中',
+  STAFF_IP_NOT_ALLOWED: '当前IP不在员工前端登录白名单中',
   CLIENT_IP_UNAVAILABLE: '服务端无法读取当前IP，请联系管理员检查可信代理配置',
 }
 
@@ -260,25 +261,25 @@ Deno.serve(async (req) => {
     })
 
     const clientIp = trustedClientIp(req)
-    if (mode === 'admin') {
-      // This RPC consumes only the gateway-observed CF-Connecting-IP value.
-      // No browser body/header fallback can choose the address being checked.
-      const { data: ipGate, error: ipGateError } = await admin.rpc('admin_ip_prelogin_check', {
-        p_client_ip: clientIp || null,
-      })
-      if (ipGateError) {
-        console.error('ADMIN_LOGIN_IP_GATE_ERROR', safeErrorMeta(ipGateError))
-        return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
-      }
-      if (!ipGate?.ok) {
-        return loginError(
-          req,
-          ipGate?.reason === 'client_ip_unavailable'
-            ? 'CLIENT_IP_UNAVAILABLE'
-            : 'ADMIN_IP_NOT_ALLOWED',
-          403,
-        )
-      }
+    // The browser never supplies the checked IP. Both portals are checked
+    // against the hosted gateway's CF-Connecting-IP before account lookup or
+    // password verification; staff enforcement remains a default-off setting.
+    const { data: ipGate, error: ipGateError } = await admin.rpc('portal_ip_prelogin_check', {
+      p_portal: mode,
+      p_client_ip: clientIp || null,
+    })
+    if (ipGateError) {
+      console.error('PORTAL_LOGIN_IP_GATE_ERROR', { mode, ...safeErrorMeta(ipGateError) })
+      return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
+    }
+    if (!ipGate?.ok) {
+      return loginError(
+        req,
+        ipGate?.reason === 'client_ip_unavailable'
+          ? 'CLIENT_IP_UNAVAILABLE'
+          : mode === 'staff' ? 'STAFF_IP_NOT_ALLOWED' : 'ADMIN_IP_NOT_ALLOWED',
+        403,
+      )
     }
 
     const { access, unavailable } = await findAccess(admin, identifier, mode)
@@ -339,33 +340,34 @@ Deno.serve(async (req) => {
       return loginError(req, mode === 'staff' ? 'STAFF_ACCOUNT_NOT_FOUND' : 'ACCOUNT_UNAVAILABLE', 403)
     }
 
-    if (mode === 'admin') {
-      const sessionId = jwtSessionId(authData.session.access_token)
-      if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
-        await discardCandidateSession(authClient)
-        return loginError(req, 'SESSION_REJECTED', 401)
-      }
-      const { data: attestation, error: attestationError } = await admin.rpc('admin_ip_session_attest', {
-        p_user_id: authData.user.id,
-        p_session_id: sessionId,
-        p_client_ip: clientIp || null,
-        p_source: 'login',
-      })
-      if (attestationError) {
-        console.error('ADMIN_LOGIN_IP_ATTEST_ERROR', safeErrorMeta(attestationError))
-        await discardCandidateSession(authClient)
-        return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
-      }
-      if (!attestation?.ok) {
-        await discardCandidateSession(authClient)
-        return loginError(
-          req,
-          attestation?.reason === 'client_ip_unavailable'
-            ? 'CLIENT_IP_UNAVAILABLE'
-            : 'ADMIN_IP_NOT_ALLOWED',
-          403,
-        )
-      }
+    const sessionId = jwtSessionId(authData.session.access_token)
+    if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
+      await discardCandidateSession(authClient)
+      return loginError(req, 'SESSION_REJECTED', 401)
+    }
+    const attestationRpc = mode === 'staff'
+      ? 'staff_ip_session_attest'
+      : 'admin_ip_session_attest'
+    const { data: attestation, error: attestationError } = await admin.rpc(attestationRpc, {
+      p_user_id: authData.user.id,
+      p_session_id: sessionId,
+      p_client_ip: clientIp || null,
+      p_source: 'login',
+    })
+    if (attestationError) {
+      console.error('PORTAL_LOGIN_IP_ATTEST_ERROR', { mode, ...safeErrorMeta(attestationError) })
+      await discardCandidateSession(authClient)
+      return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
+    }
+    if (!attestation?.ok) {
+      await discardCandidateSession(authClient)
+      return loginError(
+        req,
+        attestation?.reason === 'client_ip_unavailable'
+          ? 'CLIENT_IP_UNAVAILABLE'
+          : mode === 'staff' ? 'STAFF_IP_NOT_ALLOWED' : 'ADMIN_IP_NOT_ALLOWED',
+        403,
+      )
     }
 
     const mfaRequired = mode === 'admin' && Boolean(access.otp_required)

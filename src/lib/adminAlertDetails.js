@@ -87,6 +87,36 @@ function normalizeEvents(payload, locale) {
   }).sort((a, b) => a.date.localeCompare(b.date) || a.eventKind.localeCompare(b.eventKind))
 }
 
+function normalizeAdjustmentEvents(payload, locale) {
+  if (!Array.isArray(payload.events)) return []
+  return payload.events.flatMap(value => {
+    if (!isRecord(value)) return []
+    const date = clean(value.date)
+    if (!date) return []
+    const amount = value.amount == null || clean(value.amount) === '' ? null : numeric(value.amount)
+    return [{
+      date,
+      eventKind:clean(value.event_kind).toLowerCase() || 'deduction',
+      currency:clean(value.currency).toUpperCase(),
+      amount,
+      reason:clean(value.reason),
+      note:clean(value.note),
+      description:eventDescription(value, locale),
+    }]
+  }).sort((a, b) => b.date.localeCompare(a.date) || a.description.localeCompare(b.description)).slice(0, 12)
+}
+
+function normalizeAdjustmentReasons(payload) {
+  if (!Array.isArray(payload.reasons)) return []
+  const seen = new Set()
+  return payload.reasons.flatMap(value => {
+    const reason = clean(isRecord(value) ? value.reason ?? value.note : value).slice(0, 160)
+    if (!reason || seen.has(reason)) return []
+    seen.add(reason)
+    return [reason]
+  }).slice(0, 12)
+}
+
 export function adminAlertAttendanceDetails(row, locale='zh') {
   if (!['consecutive_rest', 'weekly_absence', 'monthly_leave'].includes(row?.alert_type)) return null
   const payload = isRecord(row?.payload) ? row.payload : {}
@@ -113,6 +143,31 @@ export function adminAlertAttendanceDetails(row, locale='zh') {
       { kind:'absence', label:KIND_META.absence[locale], count:numeric(payload.absence), unit:locale === 'en' ? 'days' : '天' },
       { kind:'half_day', label:KIND_META.half_day[locale], count:numeric(payload.half_day), unit:locale === 'en' ? 'entries' : '次' },
     ] : [],
+  }
+}
+
+export function adminAlertAdjustmentDetails(row, locale='zh') {
+  if (!['deduction_frequency', 'late_timeout_frequency'].includes(row?.alert_type)) return null
+  const payload = isRecord(row?.payload) ? row.payload : {}
+  const lateTimeout = row.alert_type === 'late_timeout_frequency'
+  const count = numeric(payload.count ?? row?.occurrence_count)
+  const threshold = numeric(payload.threshold) || (lateTimeout ? 3 : 4)
+  const events = normalizeAdjustmentEvents(payload, locale)
+  const reasons = events.length > 0 ? [] : normalizeAdjustmentReasons(payload)
+  return {
+    kind:row.alert_type,
+    title:lateTimeout
+      ? (locale === 'en' ? 'Late / timeout deductions in the warning window' : '预警区间内迟到 / 超时扣款明细')
+      : (locale === 'en' ? 'Deductions in the warning window' : '预警区间内扣款明细'),
+    count,
+    threshold,
+    summary:locale === 'en'
+      ? `${count} records; warning threshold ${threshold}`
+      : `${count} 笔；预警阈值 ${threshold} 笔`,
+    events,
+    reasons,
+    missingDetails:events.length === 0 && reasons.length === 0,
+    legacyReasonsOnly:events.length === 0 && reasons.length > 0,
   }
 }
 
@@ -175,6 +230,36 @@ export function adminAlertKeyAttendanceEvidence(row, locale='zh') {
   return locale === 'en'
     ? `${primary}; ${remainder} more dated ${remainder === 1 ? 'record' : 'records'}`
     : `${primary}；另有 ${remainder} 个异常日期`
+}
+
+export function adminAlertKeyAdjustmentEvidence(row, locale='zh') {
+  const detail = adminAlertAdjustmentDetails(row, locale)
+  if (!detail) return ''
+  if (detail.events.length > 0) {
+    const first = detail.events[0]
+    const amount = first.amount == null
+      ? ''
+      : `${first.currency ? `${first.currency} ` : ''}${countText(first.amount)}`
+    const primary = [first.date, amount, first.description].filter(Boolean).join(' · ')
+    const remainder = detail.events.length - 1
+    if (remainder === 0) return primary
+    return locale === 'en'
+      ? `${primary}; ${remainder} more matching ${remainder === 1 ? 'record' : 'records'}`
+      : `${primary}；另有 ${remainder} 笔匹配记录`
+  }
+  if (detail.reasons.length > 0) {
+    const remainder = detail.reasons.length - 1
+    if (remainder === 0) return detail.reasons[0]
+    return locale === 'en'
+      ? `${detail.reasons[0]}; ${remainder} more reasons`
+      : `${detail.reasons[0]}；另有 ${remainder} 个原因`
+  }
+  return ''
+}
+
+export function adminAlertKeyEvidence(row, locale='zh') {
+  return adminAlertKeyAttendanceEvidence(row, locale)
+    || adminAlertKeyAdjustmentEvidence(row, locale)
 }
 
 export function adminAlertEmployeeHistoryFilters(employeeId) {

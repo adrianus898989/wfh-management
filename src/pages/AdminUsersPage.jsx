@@ -2,11 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import AdminModuleNav from '../components/AdminModuleNav'
+import { Pagination } from '../components/DataPageControls'
 import { adminLocalPageTabs } from '../config/navigation'
 import { buildRolePermissionSections, uniquePermissionIds } from '../config/rolePermissionCatalog'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { assignedScopeCandidates, pruneAssignedScopeSelection } from '../lib/adminAccountScopeSelection'
+import { accountControlPatch, patchAccountRows } from '../lib/adminAccountRowUpdate'
 
 const USER_TABS = ['backend', 'staff', 'roles']
 const blankAccessSearch = () => ({ account:'', employee:'', context:'', status:'all' })
@@ -104,6 +106,7 @@ export default function AdminUsersPage() {
   const [mutatingAccountId, setMutatingAccountId] = useState('')
   const [accountToast, setAccountToast] = useState(null)
   const [accountPage, setAccountPage] = useState(1)
+  const [accountPageSize, setAccountPageSize] = useState(20)
 
   const call = async (body) => {
     const { data, error } = await supabase.functions.invoke('admin-accounts', { body })
@@ -116,9 +119,10 @@ export default function AdminUsersPage() {
     return data
   }
 
-  const fetchRecoveryAccounts = (search, page = 1, extra = {}) => call({
+  const fetchRecoveryAccounts = (search, page = 1, pageSize = accountPageSize, extra = {}) => call({
     action:'account_list',
     page,
+    page_size:pageSize,
     search:{
       username:String(search?.account || ''),
       employee:String(search?.employee || ''),
@@ -147,10 +151,13 @@ export default function AdminUsersPage() {
       )
       if (bootstrap?.degraded && (mayReadRecoveryAccounts || mayReadRecoveryRoles)) {
         const [boundedAccounts, boundedRoles] = await Promise.all([
-          mayReadRecoveryAccounts ? fetchRecoveryAccounts(blankAccessSearch(), 1) : null,
+          mayReadRecoveryAccounts ? fetchRecoveryAccounts(blankAccessSearch(), 1, accountPageSize) : null,
           mayReadRecoveryRoles ? fetchRecoveryRoles() : null,
         ])
-        if (boundedAccounts) setAccountPage(Number(boundedAccounts?.account_pagination?.page || 1))
+        if (boundedAccounts) {
+          setAccountPage(Number(boundedAccounts?.account_pagination?.page || 1))
+          setAccountPageSize(Number(boundedAccounts?.account_pagination?.page_size || accountPageSize))
+        }
         setData({
           ...bootstrap,
           ...(boundedAccounts || {}),
@@ -183,7 +190,7 @@ export default function AdminUsersPage() {
     let cancelled = false
     const timer = window.setTimeout(async () => {
       try {
-        const result = await fetchRecoveryAccounts(blankAccessSearch(), 1, {
+        const result = await fetchRecoveryAccounts(blankAccessSearch(), 1, accountPageSize, {
           employee_lookup_only:true,
           employee_query:employeeQuery,
         })
@@ -312,7 +319,9 @@ export default function AdminUsersPage() {
   const visibleRoles = roles.filter(r => r.code !== 'employee' && matchesSearch(r.name, r.code))
   const accountPagination = data?.account_pagination || {}
   const accountTotal = Number(accountPagination.total || 0)
-  const accountPageSize = Number(accountPagination.page_size || 20)
+  const supportedAccountPageSizes = Array.isArray(data?.supported_account_page_sizes) && data.supported_account_page_sizes.length
+    ? data.supported_account_page_sizes.filter(size => [20,30,50,100,200].includes(Number(size))).map(Number)
+    : [20]
   const accountPageCount = Math.max(1, Math.ceil(accountTotal / accountPageSize))
   const visibleTab = visibleTabs.includes(tab) ? tab : ''
   const pageChrome = adminLocalPageTabs('/admin/users', visibleTabs, visibleTab)
@@ -513,17 +522,18 @@ export default function AdminUsersPage() {
     }
   }
 
-  const refreshRecoveryAccountPage = async (search, page) => {
+  const refreshRecoveryAccountPage = async (search, page, pageSize = accountPageSize) => {
     setLoading(true)
     setError('')
     try {
-      let boundedAccounts = await fetchRecoveryAccounts(search, page)
+      let boundedAccounts = await fetchRecoveryAccounts(search, page, pageSize)
       const requestedPage = Number(boundedAccounts?.account_pagination?.page || page || 1)
-      const pageSize = Number(boundedAccounts?.account_pagination?.page_size || 20)
+      const returnedPageSize = Number(boundedAccounts?.account_pagination?.page_size || pageSize || 20)
       const total = Number(boundedAccounts?.account_pagination?.total || 0)
-      const lastPage = Math.max(1, Math.ceil(total / pageSize))
-      if (requestedPage > lastPage) boundedAccounts = await fetchRecoveryAccounts(search, lastPage)
+      const lastPage = Math.max(1, Math.ceil(total / returnedPageSize))
+      if (requestedPage > lastPage) boundedAccounts = await fetchRecoveryAccounts(search, lastPage, returnedPageSize)
       setAccountPage(Number(boundedAccounts?.account_pagination?.page || lastPage))
+      setAccountPageSize(Number(boundedAccounts?.account_pagination?.page_size || returnedPageSize))
       setData(current => current ? ({
         ...current,
         ...boundedAccounts,
@@ -574,12 +584,17 @@ export default function AdminUsersPage() {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
+    setAccountToast(null)
     try {
-      await call({ action: 'toggle_otp', auth_user_id: a.auth_user_id, otp_required: !a.otp_required })
-      if (recoveryAccountMode) await refreshRecoveryAccountPage(accessSearchQuery, accountPage)
-      else await load()
+      const requestedOtp = !a.otp_required
+      const result = await call({ action: 'toggle_otp', auth_user_id: a.auth_user_id, otp_required: requestedOtp })
+      const controls = accountControlPatch(result?.saved, { otp_required:requestedOtp })
+      setData(current => patchAccountRows(current, a.auth_user_id, controls))
       setAccountToast({ type:'success', message:`${a.login_username || '账号'} 的登录 OTP 已${a.otp_required ? '关闭' : '开启'}。` })
-    } catch (e) { setError(e.message) }
+    } catch (e) {
+      setError(e.message)
+      setAccountToast({ type:'error', message:`OTP 设置失败：${e.message}` })
+    }
     finally { setMutatingAccountId('') }
   }
 
@@ -587,12 +602,23 @@ export default function AdminUsersPage() {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
+    setAccountToast(null)
     try {
-      await call({ action: 'toggle_active', auth_user_id: a.auth_user_id, active: !a.active })
-      if (recoveryAccountMode) await refreshRecoveryAccountPage(accessSearchQuery, accountPage)
-      else await load()
-      setAccountToast({ type:'success', message:`${a.login_username || '账号'} 已${a.active ? '停用' : '启用'}。` })
-    } catch (e) { setError(e.message) }
+      const requestedActive = !a.active
+      const result = await call({ action: 'toggle_active', auth_user_id: a.auth_user_id, active: requestedActive })
+      const controls = accountControlPatch(result?.saved, { active:requestedActive })
+      const statusFilter = String(accessSearchQuery?.status || 'all')
+      const leavesFilteredPage = Boolean(
+        recoveryAccountMode &&
+        ((statusFilter === 'active' && a.active && !controls.active) ||
+          (statusFilter === 'inactive' && !a.active && controls.active))
+      )
+      setData(current => patchAccountRows(current, a.auth_user_id, controls, leavesFilteredPage ? -1 : 0))
+      setAccountToast({ type:'success', message:`${a.login_username || a.login_email || '账号'} 已${a.active ? '停用' : '启用'}。` })
+    } catch (e) {
+      setError(e.message)
+      setAccountToast({ type:'error', message:`账号状态修改失败：${e.message}` })
+    }
     finally { setMutatingAccountId('') }
   }
 
@@ -602,10 +628,14 @@ export default function AdminUsersPage() {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
+    setAccountToast(null)
     try {
       await call({ action: 'reset_password', auth_user_id: a.auth_user_id, password })
-      window.alert('密码已重置')
-    } catch (e) { setError(e.message) }
+      setAccountToast({ type:'success', message:`${a.login_username || a.login_email || '账号'} 的密码已重置。` })
+    } catch (e) {
+      setError(e.message)
+      setAccountToast({ type:'error', message:`密码重置失败：${e.message}` })
+    }
     finally { setMutatingAccountId('') }
   }
 
@@ -614,10 +644,14 @@ export default function AdminUsersPage() {
     if (!a?.auth_user_id || mutatingAccountId) return
     setMutatingAccountId(a.auth_user_id)
     setError('')
+    setAccountToast(null)
     try {
       await call({ action: 'reset_mfa', auth_user_id: a.auth_user_id })
-      window.alert('OTP 已重置')
-    } catch (e) { setError(e.message) }
+      setAccountToast({ type:'success', message:`${a.login_username || a.login_email || '账号'} 的 OTP 已重置。` })
+    } catch (e) {
+      setError(e.message)
+      setAccountToast({ type:'error', message:`OTP 重置失败：${e.message}` })
+    }
     finally { setMutatingAccountId('') }
   }
 
@@ -837,7 +871,7 @@ export default function AdminUsersPage() {
         .access-tabs button.active{background:#fff;color:#255ec7;box-shadow:0 2px 8px rgba(35,55,85,.08)}
         .access-grid-actions{display:flex;gap:7px;flex-wrap:wrap}
         .access-grid-actions button{border:1px solid #d9e2ed;background:#fff;border-radius:7px;padding:6px 8px;font-size:11px;cursor:pointer}
-        .access-grid-actions button:disabled{opacity:.55;cursor:wait}.access-account-row-deleting{background:#fbfcfe}.access-account-row-deleting>td{opacity:.72}
+        .access-grid-actions button:disabled{opacity:.55;cursor:wait}.access-account-row-deleting,.access-account-row-mutating{background:#fbfcfe}.access-account-row-deleting>td,.access-account-row-mutating>td{opacity:.72}
         .access-grid-actions button.danger{color:#bd4242}
         .recovery-account-note{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-top:1px solid #e5ebf3;background:#f8fbff;color:#677b95;font-size:11px}.recovery-account-note strong{color:#345dba}.recovery-account-pager{display:flex;align-items:center;gap:8px}.recovery-account-pager button{height:32px;padding:0 12px;border:1px solid #d6e0ed;border-radius:8px;background:#fff;color:#34506f;cursor:pointer}.recovery-account-pager button:disabled{opacity:.45;cursor:not-allowed}
         .access-toast{position:fixed;z-index:1200;top:76px;right:24px;display:flex;align-items:center;gap:10px;max-width:min(420px,calc(100vw - 32px));padding:12px 15px;border:1px solid #bfe5cf;border-radius:11px;background:#f0fbf5;color:#166c45;box-shadow:0 12px 28px rgba(30,55,85,.16);font-size:12px;font-weight:800}.access-toast.error{border-color:#efc5c5;background:#fff5f5;color:#a83d3d}.access-toast button{border:0;background:transparent;color:inherit;font-size:17px;cursor:pointer}
@@ -909,8 +943,8 @@ export default function AdminUsersPage() {
       {loading ? <div className="data-card"><div className="empty-state">{adminT('读取中...')}</div></div> : (
         <>
           {visibleTab === 'backend' && (
-            <div className="data-card table-scroll">
-              <table className="data-table">
+            <div className="data-card recovery-account-card">
+              <div className="table-scroll"><table className="data-table">
                 <thead><tr><th>{adminT('用户名')}</th><th>{adminT('关联员工ID')}</th><th>{adminT('姓名')}</th><th>{adminT('角色')}</th><th>{adminT('范围')}</th><th>OTP</th><th>{adminT('状态')}</th><th>{adminT('创建人')}</th><th>{adminT('创建时间')}</th><th>{adminT('操作')}</th></tr></thead>
                 <tbody>
                   {visibleBackend.map(a => {
@@ -918,7 +952,7 @@ export default function AdminUsersPage() {
                     const founder = role?.code === 'founder'
                     const deleting = deletingAccountId === a.auth_user_id
                     const mutating = mutatingAccountId === a.auth_user_id
-                    return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : ''} aria-busy={(deleting || mutating) || undefined}>
+                    return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : mutating ? 'access-account-row-mutating' : ''} aria-busy={(deleting || mutating) || undefined}>
                       <td><strong>{a.login_username || '-'}</strong></td>
                       <td><strong>{a.employee?.employee_no || adminT('未关联')}</strong></td>
                       <td>{a.employee?.full_name || '-'}</td>
@@ -942,15 +976,22 @@ export default function AdminUsersPage() {
                     </tr>
                   })}
                 </tbody>
-              </table>
-              {recoveryAccountMode && <div className="recovery-account-note">
-                <span><strong>稳定恢复模式</strong>：账号列表固定每页 20 条；拥有对应权限的账号可操作其可管理角色与范围内的账号。编辑、删除与批量创建继续暂停。</span>
-                <div className="recovery-account-pager">
-                  <button type="button" disabled={accountPage <= 1 || loading} onClick={() => refreshRecoveryAccountPage(accessSearchQuery, accountPage - 1)}>上一页</button>
-                  <span>{accountTotal} 条 · {accountPage} / {accountPageCount} 页</span>
-                  <button type="button" disabled={accountPage >= accountPageCount || loading} onClick={() => refreshRecoveryAccountPage(accessSearchQuery, accountPage + 1)}>下一页</button>
+              </table></div>
+              {recoveryAccountMode && <>
+                <div className="recovery-account-note">
+                  <span><strong>稳定恢复模式</strong>：账号列表支持完整分页；拥有对应权限的账号可操作其可管理角色与范围内的账号。编辑、删除与批量创建继续暂停。</span>
                 </div>
-              </div>}
+                <Pagination
+                  page={accountPage}
+                  pages={accountPageCount}
+                  total={accountTotal}
+                  pageSize={accountPageSize}
+                  pageSizeOptions={supportedAccountPageSizes}
+                  loading={loading}
+                  onPage={nextPage => refreshRecoveryAccountPage(accessSearchQuery, nextPage, accountPageSize)}
+                  onPageSize={nextPageSize => refreshRecoveryAccountPage(accessSearchQuery, 1, nextPageSize)}
+                />
+              </>}
             </div>
           )}
 
@@ -961,7 +1002,8 @@ export default function AdminUsersPage() {
                 <thead><tr><th>{adminT('登录邮箱')}</th><th>{adminT('员工ID')}</th><th>{adminT('姓名')}</th><th>{adminT('团队')}</th><th>{adminT('岗位')}</th><th>{adminT('状态')}</th><th>{adminT('激活时间')}</th><th>{adminT('操作')}</th></tr></thead>
                 <tbody>{visibleStaff.map(a => {
                   const deleting = deletingAccountId === a.auth_user_id
-                  return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : ''} aria-busy={deleting || undefined}>
+                  const mutating = mutatingAccountId === a.auth_user_id
+                  return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : mutating ? 'access-account-row-mutating' : ''} aria-busy={(deleting || mutating) || undefined}>
                   <td><strong>{a.login_email || '-'}</strong></td>
                   <td><strong>{a.employee?.employee_no || '-'}</strong></td>
                   <td>{a.employee?.full_name || '-'}</td>
@@ -970,10 +1012,10 @@ export default function AdminUsersPage() {
                   <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span></td>
                   <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                   <td><div className="access-grid-actions">
-                    {canResetStaffPassword && <button disabled={deleting} onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
-                    {canResetStaffMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
-                    {canToggleStaff && <button disabled={deleting} onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
-                    {canDeleteStaff && <button disabled={deleting} className="danger" onClick={() => deleteAccount(a, 'staff')}>{adminT(deleting ? '删除中…' : '删除登录账号')}</button>}
+                    {canResetStaffPassword && <button disabled={deleting || mutating} onClick={() => resetPassword(a)}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
+                    {canResetStaffMfa && <button disabled={deleting || mutating} onClick={() => resetMfa(a)}>{adminT(mutating ? '处理中…' : '重置OTP')}</button>}
+                    {canToggleStaff && <button disabled={deleting || mutating} onClick={() => toggleActive(a)}>{adminT(mutating ? '处理中…' : a.active ? '停用' : '启用')}</button>}
+                    {canDeleteStaff && <button disabled={deleting || mutating} className="danger" onClick={() => deleteAccount(a, 'staff')}>{adminT(deleting ? '删除中…' : '删除登录账号')}</button>}
                   </div></td>
                 </tr>})}</tbody>
               </table>}

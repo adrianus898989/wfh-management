@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { trustedClientIp } from '../_shared/adminIp.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -25,18 +26,39 @@ Deno.serve(async req => {
 
   try {
     const body = await req.json()
-    const email = String(body.email || '').trim().toLowerCase()
-    const password = String(body.password || '')
-    const activationCode = String(body.activation_code || '').trim().toUpperCase()
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: '邮箱格式不正确' }, 400)
-    if (!validPassword(password)) return json({ error: '密码至少10位，并包含大写、小写、数字和特殊符号' }, 400)
-    if (!activationCode) return json({ error: '请填写激活码' }, 400)
 
     const secretKeys = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') || '{}')
     const secretKey = secretKeys.default || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     if (!supabaseUrl || !secretKey) return json({ error: '服务器配置缺失' }, 500)
     const admin = createClient(supabaseUrl, secretKey, { auth: { autoRefreshToken: false, persistSession: false } })
+
+    // Activation is also a staff-auth entry point. Check the hosted gateway IP
+    // before validating or consuming any activation code; browser form hiding
+    // alone is never treated as the security boundary.
+    const clientIp = trustedClientIp(req)
+    const { data: ipGate, error: ipGateError } = await admin.rpc('portal_ip_prelogin_check', {
+      p_portal: 'staff',
+      p_client_ip: clientIp || null,
+    })
+    if (ipGateError) return json({ error: '访问验证暂时不可用，请稍后重试', code: 'ACCESS_CHECK_UNAVAILABLE' }, 503)
+    if (!ipGate?.ok) {
+      return json({
+        error: ipGate?.reason === 'client_ip_unavailable'
+          ? '服务端无法读取当前IP，请稍后重试'
+          : '当前网络未获准访问员工前端',
+        code: ipGate?.reason === 'client_ip_unavailable'
+          ? 'CLIENT_IP_UNAVAILABLE'
+          : 'STAFF_IP_NOT_ALLOWED',
+      }, 403)
+    }
+
+    const email = String(body.email || '').trim().toLowerCase()
+    const password = String(body.password || '')
+    const activationCode = String(body.activation_code || '').trim().toUpperCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: '邮箱格式不正确' }, 400)
+    if (!validPassword(password)) return json({ error: '密码至少10位，并包含大写、小写、数字和特殊符号' }, 400)
+    if (!activationCode) return json({ error: '请填写激活码' }, 400)
 
     const { data: activation, error: activationError } = await admin.from('employee_activation_codes')
       .select('id,employee_id,expires_at,used_at,revoked_at,locked_until').eq('code_hash', await sha256(activationCode)).maybeSingle()

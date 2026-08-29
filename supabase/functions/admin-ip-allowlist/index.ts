@@ -86,6 +86,13 @@ function databaseErrorMessage(error: any) {
     client_ip_unavailable: '服务端无法从可信代理读取当前IP，已拒绝操作',
     invalid_enforced: '白名单开关状态不正确',
     invalid_action: '不支持的操作',
+    invalid_portal: '登录入口类型不正确',
+    invalid_portal_scope: '适用范围不正确',
+    cannot_enable_without_admin_entries: '请先添加至少一条“后台”或“两者”IP，再开启后台限制',
+    cannot_enable_without_staff_entries: '请先添加至少一条“员工前端”或“两者”IP，再开启员工前端限制',
+    last_enabled_admin_entry: '后台限制开启时，不能移除最后一条后台可用网络',
+    last_enabled_staff_entry: '员工前端限制开启时，不能移除最后一条员工可用网络',
+    configuration_busy: '另一项白名单配置正在保存，请稍后重试',
   }
   const key = Object.keys(messages).find(code => message.includes(code))
   return key ? messages[key] : '白名单保存失败'
@@ -120,24 +127,26 @@ async function effectivePermissions(admin: any, caller: any) {
 }
 
 async function snapshot(admin: any, clientIp: string) {
-  const [settingsResult, entriesResult, coverageResult] = await Promise.all([
+  const [settingsResult, entriesResult, adminCoverageResult, staffCoverageResult] = await Promise.all([
     admin.from('admin_ip_allowlist_settings')
-      .select('enforced,updated_at,updated_by')
+      .select('enforced,updated_at,updated_by,staff_enforced,staff_updated_at,staff_updated_by')
       .eq('id', 1)
       .single(),
     admin.from('admin_ip_allowlist_entries')
-      .select('id,ip_network,label,notes,enabled,created_by,created_at,updated_by,updated_at,last_hit_at,last_hit_ip,last_hit_user_id,hit_count')
+      .select('id,ip_network,label,notes,enabled,portal_scope,created_by,created_at,updated_by,updated_at,last_hit_at,last_hit_ip,last_hit_user_id,hit_count')
       .order('created_at', { ascending: false })
       .order('id', { ascending: false }),
-    admin.rpc('admin_ip_prelogin_check', { p_client_ip: clientIp || null }),
+    admin.rpc('portal_ip_prelogin_check', { p_portal: 'admin', p_client_ip: clientIp || null }),
+    admin.rpc('portal_ip_prelogin_check', { p_portal: 'staff', p_client_ip: clientIp || null }),
   ])
-  if (settingsResult.error || entriesResult.error || coverageResult.error) {
-    throw settingsResult.error || entriesResult.error || coverageResult.error
+  if (settingsResult.error || entriesResult.error || adminCoverageResult.error || staffCoverageResult.error) {
+    throw settingsResult.error || entriesResult.error || adminCoverageResult.error || staffCoverageResult.error
   }
 
   const entries = entriesResult.data || []
   const actorIds = [...new Set([
     settingsResult.data?.updated_by,
+    settingsResult.data?.staff_updated_by,
     ...entries.flatMap((entry: any) => [entry.created_by, entry.updated_by, entry.last_hit_user_id]),
   ].filter(Boolean))]
   const actorMap = new Map<string, string>()
@@ -151,18 +160,33 @@ async function snapshot(admin: any, clientIp: string) {
     }
   }
 
-  const enabledCount = entries.filter((entry: any) => entry.enabled).length
+  const adminEnabledCount = entries.filter((entry: any) => entry.enabled
+    && ['admin', 'both'].includes(entry.portal_scope)).length
+  const staffEnabledCount = entries.filter((entry: any) => entry.enabled
+    && ['staff', 'both'].includes(entry.portal_scope)).length
   const setting = settingsResult.data
   return {
     ok: true,
     current_ip: clientIp || null,
-    current_ip_covered: Boolean(coverageResult.data?.matched_entry_id),
+    current_ip_covered: Boolean(adminCoverageResult.data?.matched_entry_id),
+    current_ip_coverage: {
+      admin: Boolean(adminCoverageResult.data?.matched_entry_id),
+      staff: Boolean(staffCoverageResult.data?.matched_entry_id),
+    },
     settings: {
       ...setting,
-      effective: Boolean(setting.enforced && enabledCount > 0),
-      enabled_count: enabledCount,
+      // `enforced` is the server-side switch. `effective` is deliberately a
+      // UI health signal so an enforced-but-empty scope is shown as deny-all
+      // instead of looking like a normally configured allowlist.
+      effective: Boolean(setting.enforced && adminEnabledCount > 0),
+      enabled_count: adminEnabledCount,
       total_count: entries.length,
       updated_by_label: setting.updated_by ? actorMap.get(setting.updated_by) || '已删除账号' : '系统',
+      staff_effective: Boolean(setting.staff_enforced && staffEnabledCount > 0),
+      staff_enabled_count: staffEnabledCount,
+      staff_updated_by_label: setting.staff_updated_by
+        ? actorMap.get(setting.staff_updated_by) || '已删除账号'
+        : '系统',
     },
     entries: entries.map((entry: any) => ({
       ...entry,
@@ -274,13 +298,19 @@ export async function handleRequest(req: Request) {
     if (action === 'add_current_ip') {
       if (!clientIp) return json(req, { error: '服务端无法从可信代理读取当前IP' }, 400)
       const currentNetwork = hostCidr(clientIp)
+      const requestedScope = ['admin', 'staff', 'both'].includes(text(body.portal_scope).toLowerCase())
+        ? text(body.portal_scope).toLowerCase()
+        : 'admin'
       const { data: existing, error } = await admin.from('admin_ip_allowlist_entries')
-        .select('id,enabled')
+        .select('id,ip_network,label,notes,enabled,portal_scope')
         .eq('ip_network', currentNetwork)
         .maybeSingle()
       if (error) throw error
 
-      if (existing?.enabled) {
+      const nextScope = existing?.portal_scope === requestedScope || existing?.portal_scope === 'both'
+        ? existing?.portal_scope
+        : existing?.portal_scope ? 'both' : requestedScope
+      if (existing?.enabled && nextScope === existing.portal_scope) {
         return json(req, {
           ok: true,
           mutation: { action: 'add_current_ip', id: existing.id, unchanged: true },
@@ -288,8 +318,15 @@ export async function handleRequest(req: Request) {
         })
       }
       if (existing) {
-        mutationAction = 'set_enabled'
-        payload = { id: existing.id, enabled: true }
+        mutationAction = 'update'
+        payload = {
+          id: existing.id,
+          ip_network: existing.ip_network,
+          label: existing.label,
+          notes: existing.notes,
+          enabled: true,
+          portal_scope: nextScope,
+        }
       } else {
         mutationAction = 'create'
         payload = {
@@ -297,13 +334,18 @@ export async function handleRequest(req: Request) {
           label: text(body.label) || `当前IP ${clientIp}`,
           notes: text(body.notes) || '由后台“一键加入当前IP”添加',
           enabled: true,
+          portal_scope: requestedScope,
         }
       }
     } else if (action === 'set_enforced') {
       if (typeof body.enforced !== 'boolean') {
         return json(req, { error: '白名单开关状态不正确' }, 400)
       }
-      payload = { enforced: body.enforced }
+      const requestedPortal = text(body.portal).toLowerCase()
+      if (requestedPortal !== 'admin' && requestedPortal !== 'staff') {
+        return json(req, { error: '登录入口类型不正确' }, 400)
+      }
+      payload = { enforced: body.enforced, portal: requestedPortal }
     } else if (action === 'set_enabled') {
       if (typeof body.enabled !== 'boolean') {
         return json(req, { error: '白名单状态不正确' }, 400)
@@ -321,12 +363,13 @@ export async function handleRequest(req: Request) {
         label: text(body.label),
         notes: text(body.notes),
         enabled: body.enabled ?? true,
+        portal_scope: text(body.portal_scope).toLowerCase() || 'admin',
       }
     } else {
       return json(req, { error: '不支持的操作' }, 400)
     }
 
-    const { data: mutation, error: mutationError } = await admin.rpc('admin_ip_allowlist_mutate', {
+    const { data: mutation, error: mutationError } = await admin.rpc('portal_ip_allowlist_mutate', {
       p_actor_id: userId,
       p_session_id: sessionId,
       p_client_ip: clientIp || null,

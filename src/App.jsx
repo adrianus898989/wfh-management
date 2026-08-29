@@ -3,12 +3,10 @@ import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import {
   APP_SESSION_HEARTBEAT_MS,
   bootstrapAppSessionAccess,
-  claimAppSession,
   clearSessionActivity,
   configured,
   discardLocalAppSession,
-  guardAdminAppSession,
-  heartbeatAppSession,
+  guardPortalAppSession,
   isSessionIdleExpired,
   setAppSessionNotice,
   signOutAppSession,
@@ -18,6 +16,7 @@ import {
 import AdminLoginPage from './pages/AdminLoginPage'
 import StaffLoginPage from './pages/StaffLoginPage'
 import StaffRegisterPage from './pages/StaffRegisterPage'
+import StaffIpPreflightGate from './components/StaffIpPreflightGate'
 import MfaPage from './pages/MfaPage'
 import AdminEmployeesPage from './pages/AdminEmployeesPage'
 import AdminUsersPage from './pages/AdminUsersPage'
@@ -218,9 +217,7 @@ function Protected({ children, mode }) {
     const checkLease = (method = 'claim') => {
       if (leaseCheckPromise) return leaseCheckPromise
       leaseCheckPromise = Promise.resolve(
-        mode === 'admin'
-          ? guardAdminAppSession(method)
-          : method === 'heartbeat' ? heartbeatAppSession() : claimAppSession(mode),
+        guardPortalAppSession(mode, method),
       ).catch(error => ({ data:null, error }))
         .finally(() => { leaseCheckPromise = null })
       return leaseCheckPromise
@@ -240,7 +237,7 @@ function Protected({ children, mode }) {
             ? 'system_updated'
             : mode==='staff' && (reason==='staff_account_not_found'||reason==='staff_account_missing')
               ? 'account_not_found'
-            : mode==='admin' && reason==='ip_not_allowed'
+            : reason==='ip_not_allowed'
               ? 'ip_not_allowed'
             : reason==='active_elsewhere'||reason==='not_owner'
               ? 'active_elsewhere'
@@ -483,8 +480,8 @@ function AppRoutes() {
   return <Routes>
     <Route path="/" element={<Navigate to="/staff/login" replace />} />
     <Route path="/admin/login" element={<AdminLoginPage />} />
-    <Route path="/staff/login" element={<StaffLoginPage />} />
-    <Route path="/staff/register" element={<StaffRegisterPage />} />
+    <Route path="/staff/login" element={<StaffIpPreflightGate><StaffLoginPage /></StaffIpPreflightGate>} />
+    <Route path="/staff/register" element={<StaffIpPreflightGate><StaffRegisterPage /></StaffIpPreflightGate>} />
     <Route path="/admin/mfa" element={<Protected mode="admin"><MfaPage /></Protected>} />
     <Route path="/admin" element={<PortalShell mode="admin" />}>
       <Route index element={<AdminHome />} />

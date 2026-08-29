@@ -42,6 +42,8 @@ export default function StaffLoginPage() {
     SESSION_CHECK_UNAVAILABLE: t('auth.sessionCheckFailed','Unable to verify this browser session. Please try again.'),
     ACTIVE_SESSION_EXISTS: t('auth.sessionTakeoverFailed','Unable to replace the previous session. Please try signing in again.'),
     SESSION_REJECTED: t('auth.accountNotFound','Account does not exist'),
+    STAFF_IP_NOT_ALLOWED: t('auth.networkNotAllowed','This network is not allowed to access the staff portal. Please contact an administrator.'),
+    CLIENT_IP_UNAVAILABLE: t('auth.accessCheckUnavailable','Access verification is temporarily unavailable. Please try again later.'),
   }[response?.code] || t('auth.loginFailed','Sign in failed. Please try again.'))
 
   const submit = async (e) => {
@@ -147,6 +149,8 @@ export default function StaffLoginPage() {
                 ? t('auth.systemUpdated','The system has been updated. Please sign in again.')
               : sessionNotice === 'account_not_found'
                 ? t('auth.accountNotFound','Account does not exist')
+              : sessionNotice === 'ip_not_allowed'
+                ? t('auth.networkNotAllowed','This network is not allowed to access the staff portal. Please contact an administrator.')
               : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.')
           )}</div>}
 

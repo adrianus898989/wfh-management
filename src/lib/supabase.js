@@ -140,14 +140,15 @@ export const heartbeatAppSession=()=>runCoalescedAppHeartbeat({
   run:()=>timedAppSessionRpc(supabase,'app_session_heartbeat'),
 })
 
-// Admin claims and heartbeats cross the Edge trust boundary so the gateway IP
-// can refresh a five-minute session attestation before the database renews the
-// matching five-minute lease. A temporary Edge outage returns a retryable
-// error: it never actively revokes the local/Auth session, but it also cannot
-// renew the server lease forever. Staff never calls this function.
-const adminGuardFlights=new Map()
-const invokeAdminAppSessionGuard=action=>{
-  const existing=adminGuardFlights.get(action)
+// Both portals claim and renew through the Edge trust boundary. When a portal's
+// IP policy is disabled the attestation RPC is a zero-policy pass-through; when
+// enabled, only the gateway-observed IP can refresh the five-minute lease.
+// A temporary Edge outage is retryable and never causes browser-side logout.
+const portalGuardFlights=new Map()
+const invokePortalAppSessionGuard=(requestedPortal,action)=>{
+  const normalizedPortal=requestedPortal==='admin'?'admin':'staff'
+  const flightKey=`${normalizedPortal}:${action}`
+  const existing=portalGuardFlights.get(flightKey)
   if(existing)return existing
 
   const flight=(async()=>{
@@ -155,7 +156,7 @@ const invokeAdminAppSessionGuard=action=>{
   try{
     result=await withPromiseTimeout(
       supabase.functions.invoke('admin-ip-guard',{
-        body:{action},
+        body:{action,portal:normalizedPortal},
       }),
       APP_SESSION_RPC_TIMEOUT_MS,
       'APP_SESSION_TIMEOUT',
@@ -164,20 +165,23 @@ const invokeAdminAppSessionGuard=action=>{
 
   const payload=await readFunctionResponsePayload(result)
   if(payload&&typeof payload.ok==='boolean')return {data:payload,error:null}
-  return {data:null,error:result?.error||timeoutError('ADMIN_IP_GUARD_INVALID_RESPONSE')}
+  return {data:null,error:result?.error||timeoutError('PORTAL_IP_GUARD_INVALID_RESPONSE')}
   })().finally(()=>{
-    if(adminGuardFlights.get(action)===flight)adminGuardFlights.delete(action)
+    if(portalGuardFlights.get(flightKey)===flight)portalGuardFlights.delete(flightKey)
   })
-  adminGuardFlights.set(action,flight)
+  portalGuardFlights.set(flightKey,flight)
   return flight
 }
 
-export const guardAdminAppSession=(method='claim')=>{
+export const guardPortalAppSession=(requestedPortal=portal,method='claim')=>{
+  const normalizedPortal=requestedPortal==='admin'?'admin':'staff'
   const action=method==='claim'?'claim':'heartbeat'
   return action==='heartbeat'
-    ? runCoalescedAppHeartbeat({portal:'admin',run:()=>invokeAdminAppSessionGuard(action)})
-    : invokeAdminAppSessionGuard(action)
+    ? runCoalescedAppHeartbeat({portal:normalizedPortal,run:()=>invokePortalAppSessionGuard(normalizedPortal,action)})
+    : invokePortalAppSessionGuard(normalizedPortal,action)
 }
+
+export const guardAdminAppSession=(method='claim')=>guardPortalAppSession('admin',method)
 
 export const releaseAppSession=()=>timedAppSessionRpc(supabase,'app_session_release')
 

@@ -99,6 +99,13 @@ export async function handleRequest(req: Request) {
     return json(req, unavailablePreflight('method_not_allowed'), 405)
   }
 
+  let requestBody: Record<string, unknown> = {}
+  try { requestBody = await req.json() } catch {}
+  const portal = String(requestBody?.portal || 'admin').trim().toLowerCase()
+  if (portal !== 'admin' && portal !== 'staff') {
+    return json(req, unavailablePreflight('invalid_portal'), 400)
+  }
+
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || ''
   const secretKey = serviceRoleKey()
   if (!supabaseUrl || !secretKey) {
@@ -111,7 +118,8 @@ export async function handleRequest(req: Request) {
       auth: { persistSession: false, autoRefreshToken: false },
     })
     const clientIp = trustedClientIp(req)
-    const { data: gate, error } = await admin.rpc('admin_ip_prelogin_check', {
+    const { data: gate, error } = await admin.rpc('portal_ip_prelogin_check', {
+      p_portal: portal,
       p_client_ip: clientIp || null,
     })
 

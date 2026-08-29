@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Pagination } from './DataPageControls'
+import { AdminSyncDiagnosticsPanel } from './AdminSyncDiagnosticsPanel'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import {
@@ -12,12 +13,13 @@ import {
 } from '../lib/adminAlertCatalog'
 import { adminAlertEmployeeTarget, adminAlertTarget } from '../lib/adminAlertRoutes'
 import {
+  adminAlertAdjustmentDetails,
   adminAlertAttendanceDetails,
   adminAlertEmployeeHistoryFilters,
   adminAlertEmployeeHireDate,
   adminAlertErrorFrequencyDetails,
   adminAlertFollowUpState,
-  adminAlertKeyAttendanceEvidence,
+  adminAlertKeyEvidence,
   adminAlertMonthlyLeaveRule,
   adminAlertReadState,
 } from '../lib/adminAlertDetails'
@@ -35,6 +37,7 @@ import {
   writeAdminAlertBadgeCache,
 } from '../lib/adminAlertBadgePreload'
 import { supabase } from '../lib/supabase'
+import { PERMISSIONS } from '../config/permissions'
 import '../styles-admin-alerts.css'
 
 const ALERT_PERMISSIONS = ADMIN_ALERT_PERMISSIONS
@@ -153,6 +156,36 @@ function AlertAttendanceDetails({ row, locale }) {
           <span data-label={locale === 'en' ? 'Note' : '备注'}>{event.note || (locale === 'en' ? 'Not entered' : '未填写')}</span>
         </li>)}</ul>
       </div>}
+  </section>
+}
+
+function AlertAdjustmentDetails({ row, locale }) {
+  const detail = adminAlertAdjustmentDetails(row, locale)
+  if (!detail) return null
+  return <section className={`admin-alert-attendance-detail admin-alert-adjustment-detail ${detail.kind}`} data-admin-i18n-skip>
+    <div className="admin-alert-attendance-title">
+      <h4>{detail.title}</h4>
+      <strong>{detail.summary}</strong>
+    </div>
+    {detail.missingDetails
+      ? <p className="admin-alert-attendance-missing">{locale === 'en' ? 'The matching reasons are waiting for the next warning-data refresh.' : '匹配原因将在下一次预警数据刷新后补齐。'}</p>
+      : detail.events.length > 0
+        ? <div className="admin-alert-attendance-events">
+          <div className="admin-alert-attendance-events-head" aria-hidden="true">
+            <span>{locale === 'en' ? 'Date' : '扣款日期'}</span><span>{locale === 'en' ? 'Amount' : '扣款金额'}</span><span>{locale === 'en' ? 'Reason' : '原因'}</span><span>{locale === 'en' ? 'Note' : '备注'}</span>
+          </div>
+          <ul>{detail.events.map((event, index) => <li key={`${event.date}:${event.reason}:${index}`}>
+            <time data-label={locale === 'en' ? 'Date' : '扣款日期'}>{event.date}</time>
+            <strong data-label={locale === 'en' ? 'Amount' : '扣款金额'} className="deduction">{event.amount == null ? '—' : `${event.currency ? `${event.currency} ` : ''}${countText(event.amount)}`}</strong>
+            <span data-label={locale === 'en' ? 'Reason' : '原因'}>{event.reason || (locale === 'en' ? 'Not entered' : '未填写')}</span>
+            <span data-label={locale === 'en' ? 'Note' : '备注'}>{event.note || (locale === 'en' ? 'Not entered' : '未填写')}</span>
+          </li>)}</ul>
+        </div>
+        : <div className="admin-alert-adjustment-reasons">
+          <strong>{locale === 'en' ? 'Matched reasons from the current warning payload' : '本次预警匹配到的原因'}</strong>
+          <ol>{detail.reasons.map((reason, index) => <li key={`${reason}:${index}`}><b>{index + 1}</b><span>{reason}</span></li>)}</ol>
+          {detail.legacyReasonsOnly && <small>{locale === 'en' ? 'Dates and amounts will appear after the next enriched warning refresh.' : '下一次明细增强刷新后将同时显示日期与金额。'}</small>}
+        </div>}
   </section>
 }
 
@@ -496,7 +529,7 @@ export function AdminAlertBell({ access }) {
           : <div className="admin-alert-popover-list">{state.rows.map(row => {
             const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
             const copy = alertCopy(row, locale)
-            const evidence = adminAlertKeyAttendanceEvidence(row, locale)
+            const evidence = adminAlertKeyEvidence(row, locale)
             return <button type="button" key={row.id} className={row.unread ? 'unread' : ''} onClick={() => openAlert(row)}>
               <span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span>
               <span data-admin-i18n-skip><strong>{copy.title}</strong><small>{evidence || copy.message}</small><em>{formatTime(row.last_seen_at, locale)} · {locale === 'en' ? 'Open details' : '打开详情'}</em></span>
@@ -588,7 +621,7 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
           {state.rows.map(row => {
             const meta = TYPE_META[row.alert_type] || { icon:'警', tone:'blue' }
             const copy = alertCopy(row, locale)
-            const evidence = adminAlertKeyAttendanceEvidence(row, locale)
+            const evidence = adminAlertKeyEvidence(row, locale)
             const readState = adminAlertReadState(row, locale)
             const expanded = String(expandedId) === String(row.id)
             return <article className={`employee-alert-history-item ${readState.unread ? 'unread' : ''} ${expanded ? 'expanded' : ''}`} key={row.id}>
@@ -602,6 +635,7 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
               {expanded && <div className="employee-alert-history-expanded">
                 <p data-admin-i18n-skip>{copy.message}</p>
                 <AlertAttendanceDetails row={row} locale={locale}/>
+                <AlertAdjustmentDetails row={row} locale={locale}/>
                 <AlertErrorFrequencyDetails row={row} locale={locale}/>
                 <AlertFollowUpPanel row={row} locale={locale}/>
                 <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{locale === 'en' ? 'Last updated' : '最后更新'} <b data-admin-i18n-skip>{formatTime(row.last_seen_at, locale)}</b></span></div>
@@ -633,12 +667,14 @@ export function AdminAlertRecordsPage() {
   const canViewEmployees = access.hasPermission('employee.directory.view')
   const canMarkRead = access.hasPermission('alert.mark_read')
   const canFollowUp = access.hasPermission('alert.follow_up')
+  const canViewSyncDiagnostics = access.hasPermission(PERMISSIONS.ALERT_SYNC_DIAGNOSTICS_VIEW)
   const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false })
   const [filters, setFilters] = useState(draft)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
   const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, pages:1, active:0, unread:0, typeCounts:{} })
   const [ruleDialog, setRuleDialog] = useState(null)
+  const [showSyncDiagnostics, setShowSyncDiagnostics] = useState(false)
   const [expandedId, setExpandedId] = useState(() => new URLSearchParams(location.search).get('alert') || '')
   latestRef.current = { page, pageSize, filters }
 
@@ -741,8 +777,10 @@ export function AdminAlertRecordsPage() {
   return <section className="admin-alert-records-page">
     <header className="admin-alert-records-head">
       <div><small>{locale === 'en' ? 'WARNING RECORDS' : '预警记录 · 新列表'}</small><h2>{locale === 'en' ? 'Employee warning records' : '员工预警记录表'}</h2><p>{locale === 'en' ? 'Employee IDs stay selectable. Only the Open / Collapse control toggles details.' : '员工 ID 可直接选择复制；只有点击“展开 / 收起”才会切换详情。'}</p></div>
-      <div><button type="button" className="secondary-action" onClick={() => setRuleDialog({ kind:'all', entries:visibleAdminAlertTypes(access) })}>{locale === 'en' ? 'Rules' : '规则说明'}</button><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{canMarkRead && state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every active warning in the current account scope as read.' : '把当前账号权限范围内所有进行中预警标为已读。'} onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部标为已读'}</button>}</div>
+      <div>{canViewSyncDiagnostics&&<button type="button" className={showSyncDiagnostics?'primary-action':'secondary-action'} onClick={()=>setShowSyncDiagnostics(value=>!value)}>{showSyncDiagnostics?(locale==='en'?'Hide sync diagnostics':'收起同步差异'):(locale==='en'?'Sync diagnostics':'同步差异')}</button>}<button type="button" className="secondary-action" onClick={() => setRuleDialog({ kind:'all', entries:visibleAdminAlertTypes(access) })}>{locale === 'en' ? 'Rules' : '规则说明'}</button><button type="button" className="secondary-action" onClick={() => load(page, pageSize, filters)} disabled={state.loading}>{state.loading ? (locale === 'en' ? 'Refreshing…' : '刷新中…') : (locale === 'en' ? 'Refresh' : '↻ 刷新')}</button>{canMarkRead && state.unread > 0 && <button type="button" className="primary-action" title={locale === 'en' ? 'Marks every active warning in the current account scope as read.' : '把当前账号权限范围内所有进行中预警标为已读。'} onClick={markAll}>{locale === 'en' ? 'Mark all read' : '全部标为已读'}</button>}</div>
     </header>
+
+    <AdminSyncDiagnosticsPanel open={canViewSyncDiagnostics&&showSyncDiagnostics} locale={locale}/>
 
     <div className="admin-alert-summary-strip" aria-label={locale === 'en' ? 'Warning summary' : '预警汇总'}>
       <button type="button" onClick={() => showActive()}><span>{locale === 'en' ? 'Active' : '进行中'}</span><strong>{state.active}</strong></button>
@@ -807,6 +845,7 @@ export function AdminAlertRecordsPage() {
               {expanded && <div className="admin-alert-expanded-panel">
                 <div className="admin-alert-expanded-head"><div><span className={`admin-alert-icon ${meta.tone}`} aria-hidden="true">{meta.icon}</span><div><strong data-admin-i18n-skip>{copy.title}</strong><p data-admin-i18n-skip>{copy.message}</p></div></div><div className="admin-alert-record-actions">{row.alert_type === 'payout_change' && row.is_active && <button type="button" className="primary" onClick={() => navigate(adminAlertTarget(row.alert_type))}>{locale === 'en' ? 'Review' : '去审核'}</button>}{canViewEmployees && row.employee_id && <button type="button" onClick={() => navigate(adminAlertEmployeeTarget(row.employee_id))}>{locale === 'en' ? 'Employee file' : '员工档案'}</button>}</div></div>
                 <AlertAttendanceDetails row={row} locale={locale}/>
+                <AlertAdjustmentDetails row={row} locale={locale}/>
                 <AlertErrorFrequencyDetails row={row} locale={locale}/>
                 <AlertFollowUpPanel row={row} locale={locale} onUpdated={canFollowUp ? followUp => updateRowFollowUp(row.id, followUp) : undefined}/>
                 <div className="admin-alert-expanded-meta"><span>{locale === 'en' ? 'Warning window' : '预警区间'} <b data-admin-i18n-skip>{row.window_start || '—'}{row.window_end && row.window_end !== row.window_start ? ` → ${row.window_end}` : ''}</b></span><span>{locale === 'en' ? 'First detected' : '首次检测'} <b data-admin-i18n-skip>{formatTime(row.first_seen_at, locale)}</b></span><span>{row.is_active ? (locale === 'en' ? 'Last updated' : '最后更新') : (locale === 'en' ? 'Resolved' : '解除时间')} <b data-admin-i18n-skip>{formatTime(row.is_active ? row.last_seen_at : row.resolved_at, locale)}</b></span></div>

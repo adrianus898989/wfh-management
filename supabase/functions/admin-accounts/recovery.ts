@@ -10,8 +10,10 @@ import {
 
 const ALLOWED_ORIGIN = 'https://adrianus898989.github.io'
 const DEPENDENCY_TIMEOUT_MS = 8_000
+const PRESENCE_DETAIL_TIMEOUT_MS = 4_000
 const AUTH_MUTATION_TIMEOUT_MS = 12_000
-const ACCOUNT_PAGE_SIZE = 20
+const DEFAULT_ACCOUNT_PAGE_SIZE = 20
+const ACCOUNT_PAGE_SIZE_OPTIONS = new Set([20, 30, 50, 100, 200])
 const ACCOUNT_EMPLOYEE_LOOKUP_LIMIT = 10
 const RECOVERY_ROLE_LIMIT = 100
 const RECOVERY_PERMISSION_LIMIT = 500
@@ -62,7 +64,11 @@ function backendStatus(value: any) {
   return Number(value?.status || value?.statusCode || value?.context?.status || 0)
 }
 
-async function bounded<T>(operation: PromiseLike<T>, label: string): Promise<T> {
+async function bounded<T>(
+  operation: PromiseLike<T>,
+  label: string,
+  timeoutMs = DEPENDENCY_TIMEOUT_MS,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const controller = typeof (operation as any)?.abortSignal === 'function'
     ? new AbortController()
@@ -77,7 +83,7 @@ async function bounded<T>(operation: PromiseLike<T>, label: string): Promise<T> 
         timer = setTimeout(() => {
           controller?.abort()
           reject(new Error(`${label}_TIMEOUT`))
-        }, DEPENDENCY_TIMEOUT_MS)
+        }, timeoutMs)
       }),
     ])
   } finally {
@@ -373,6 +379,86 @@ Deno.serve(async (req: Request) => {
           preserve_session:true,
         }, 403)
       }
+      const includeRows = body?.include_rows === true
+      const allowedFields = includeRows
+        ? new Set(['action', 'include_rows', 'portal', 'page', 'page_size'])
+        : new Set(['action', 'include_rows'])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, {
+          ok:false,
+          error:'在线人员请求包含不受支持的字段',
+          code:'invalid_input_field',
+          retryable:false,
+          preserve_session:true,
+        }, 400)
+      }
+
+      if (includeRows) {
+        const portal = clean(body?.portal).toLowerCase()
+        const page = Number(body?.page ?? 1)
+        const pageSize = Number(body?.page_size ?? 20)
+        if (!['admin', 'staff'].includes(portal) ||
+            !Number.isInteger(page) || page < 1 || page > 500 ||
+            !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) {
+          return json(req, {
+            ok:false,
+            error:'在线人员分页参数不正确',
+            code:'invalid_presence_page',
+            retryable:false,
+            preserve_session:true,
+          }, 400)
+        }
+
+        const { data:presencePage, error:presencePageError } = await bounded(
+          userClient.rpc('admin_online_presence_page_v1', {
+            p_portal:portal,
+            p_page:page,
+            p_page_size:pageSize,
+          }),
+          'PRESENCE_DETAIL_PAGE',
+          PRESENCE_DETAIL_TIMEOUT_MS,
+        )
+        if (presencePageError) {
+          const errorCode = clean(presencePageError.code).toUpperCase()
+          const errorMessage = clean(presencePageError.message)
+          if (errorCode === '42501' || /permission|session|access_denied/i.test(errorMessage)) {
+            return json(req, {
+              ok:false,
+              error:'无在线账号查看权限',
+              code:'permission_denied',
+              retryable:false,
+              preserve_session:true,
+            }, 403)
+          }
+          if (errorCode === '22023' || /invalid_presence/i.test(errorMessage)) {
+            return json(req, {
+              ok:false,
+              error:'在线人员分页参数不正确',
+              code:'invalid_presence_page',
+              retryable:false,
+              preserve_session:true,
+            }, 400)
+          }
+          return retryable(req, '在线人员名单暂时读取失败，请重试')
+        }
+        const nowIso = new Date().toISOString()
+        return json(req, {
+          ok:true,
+          degraded:false,
+          count_only:false,
+          refreshed_at:nowIso,
+          online_window_seconds:300,
+          [portal]:presencePage || {
+            portal,
+            page,
+            page_size:pageSize,
+            total:0,
+            pages:1,
+            rows:[],
+          },
+        })
+      }
+
       const { data:presenceAllowed, error:presenceAllowedError } = await bounded(
         userClient.rpc('admin_online_presence_allowed'),
         'PRESENCE_PERMISSION_GUARD',
@@ -404,6 +490,7 @@ Deno.serve(async (req: Request) => {
       return json(req, {
         ok:true,
         degraded:true,
+        count_only:true,
         refreshed_at:nowIso,
         online_window_seconds:300,
         admin:{ count:Number(adminCountResult.count || 0), rows:[] },
@@ -564,6 +651,11 @@ Deno.serve(async (req: Request) => {
       }
       const requestedPage = Number(body?.page || 1)
       const page = Number.isInteger(requestedPage) ? Math.min(Math.max(requestedPage, 1), 100000) : 1
+      const requestedPageSize = Number(body?.page_size ?? DEFAULT_ACCOUNT_PAGE_SIZE)
+      if (!Number.isInteger(requestedPageSize) || !ACCOUNT_PAGE_SIZE_OPTIONS.has(requestedPageSize)) {
+        return json(req, { ok:false, error:'每页条数不受支持', code:'invalid_account_page_size' }, 400)
+      }
+      const pageSize = delegatedRecoveryAccounts ? requestedPageSize : DEFAULT_ACCOUNT_PAGE_SIZE
       const status = clean(body?.status || 'all').toLowerCase()
       if (!['all', 'active', 'inactive'].includes(status)) {
         return json(req, { ok:false, error:'账号状态筛选不正确', code:'invalid_account_status' }, 400)
@@ -577,16 +669,17 @@ Deno.serve(async (req: Request) => {
         return json(req, { ok:false, error:'员工搜索内容过长', code:'search_query_too_long' }, 400)
       }
 
-      let pageData:any = { page, page_size:ACCOUNT_PAGE_SIZE, total:0, rows:[] }
+      let pageData:any = { page, page_size:pageSize, total:0, rows:[] }
       if (!employeeLookupOnly) {
         const pageRequest = delegatedRecoveryAccounts
-          ? admin.rpc('admin_recovery_backend_accounts_page', {
+          ? admin.rpc('admin_recovery_backend_accounts_page_v2', {
               p_actor_user_id:userData.user.id,
               p_username_query:search.username,
               p_employee_query:search.employee,
               p_context_query:search.context,
               p_status:status,
               p_page:page,
+              p_page_size:pageSize,
             })
           : userClient.rpc('admin_backend_accounts_page', {
               p_username_query:search.username,
@@ -621,16 +714,19 @@ Deno.serve(async (req: Request) => {
         recovery_account_mode:true,
         supported_account_actions:supportedRecoveryAccountActions,
         supported_account_filters:delegatedRecoveryAccounts ? ['status'] : [],
+        supported_account_page_sizes:delegatedRecoveryAccounts
+          ? [...ACCOUNT_PAGE_SIZE_OPTIONS]
+          : [DEFAULT_ACCOUNT_PAGE_SIZE],
         caller:{
           auth_user_id:userData.user.id,
           role_code:callerRole?.code || null,
           is_founder:isFounder,
           permissions:isFounder ? ['*'] : [...permissions],
         },
-        backend_accounts:Array.isArray(pageData.rows) ? pageData.rows.slice(0, ACCOUNT_PAGE_SIZE) : [],
+        backend_accounts:Array.isArray(pageData.rows) ? pageData.rows.slice(0, pageSize) : [],
         account_pagination:{
           page:Number(pageData.page || page),
-          page_size:ACCOUNT_PAGE_SIZE,
+          page_size:Number(pageData.page_size || pageSize),
           total:Number(pageData.total || 0),
           status:clean(pageData.status || status || 'all'),
         },

@@ -2280,6 +2280,9 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
   const adminAccess=useAdminAccess()
   const canViewPrivateNotes=adminAccess.hasAnyPermission([PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_VIEW,PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_MANAGE])
   const canManagePrivateNotes=adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_MANAGE)
+  const canViewAdjustmentBonus=adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_BONUS_VIEW)
+  const canViewAdjustmentDeduction=adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_DEDUCTION_VIEW)
+  const canViewAdjustments=adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)&&(canViewAdjustmentBonus||canViewAdjustmentDeduction)
   const canViewPayrollRecords=adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_PAYROLL_RECORDS_VIEW)
   const canViewCompensation=detail.permissions?.compensation_view===true
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
@@ -2321,7 +2324,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     ['connectivity','停电 / 断网记录',adminAccess.hasPermission('connectivity.view')],
     ['payroll','工资记录',canViewPayrollRecords],
     ['attendance','员工出勤记录',adminAccess.hasPermission(PERMISSIONS.ATTENDANCE_RECORDS_VIEW)],
-    ['penalties','奖金 / 扣款',adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)],
+    ['penalties','奖金 / 扣款',canViewAdjustments],
     ['trainer_reviews','老师评价',adminAccess.hasPermission(PERMISSIONS.ONLINE_TRAINING_REPORT_VIEW)],
     ['private_notes','内部备注',canViewPrivateNotes],
   ].filter(([, ,allowed])=>allowed),[adminAccess.founder,adminAccess.permissionKey])
@@ -2393,15 +2396,20 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     return()=>{alive=false}
   },[e.id,activeSection])
   useEffect(()=>{
+    if(!canViewAdjustments){
+      setAdjustmentData(null);setAdjustmentError('');setAdjustmentLoading(false)
+      return
+    }
     if(!e.id||activeSection!=='penalties')return
     let alive=true
+    setAdjustmentData(null)
     setAdjustmentLoading(true);setAdjustmentError('')
     supabase.rpc('admin_employee_adjustment_history',{p_employee_id:e.id,p_page:1,p_page_size:100}).then(({data,error})=>{
       if(!alive)return
       if(error)setAdjustmentError(error.message);else setAdjustmentData(data||{rows:[],total:0,page:1,pages:1})
     }).finally(()=>alive&&setAdjustmentLoading(false))
     return()=>{alive=false}
-  },[e.id,activeSection])
+  },[e.id,activeSection,canViewAdjustments,canViewAdjustmentBonus,canViewAdjustmentDeduction])
   useEffect(()=>{
     if(!e.id||activeSection!=='errors')return
     let alive=true
@@ -2467,7 +2475,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
         {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivityData} loading={connectivityLoading} error={connectivityError}/>}
         {activeSection==='payroll'&&canViewPayrollRecords&&<EmployeePayrollHistoryPanel data={payrollData} loading={payrollLoading} error={payrollError}/>}
         {activeSection==='attendance'&&<EmployeeAttendancePanel data={attendanceData} loading={attendanceLoading} error={attendanceError}/>}
-        {activeSection==='penalties'&&<EmployeeAdjustmentPanel data={adjustmentData} loading={adjustmentLoading} error={adjustmentError}/>}
+        {activeSection==='penalties'&&canViewAdjustments&&<EmployeeAdjustmentPanel data={adjustmentData} loading={adjustmentLoading} error={adjustmentError} canViewBonus={canViewAdjustmentBonus} canViewDeduction={canViewAdjustmentDeduction}/>}
         {activeSection==='trainer_reviews'&&<EmployeeTrainerReviewPanel data={trainerReviewData} employeeId={e.id} loading={trainerReviewLoading} error={trainerReviewError}/>}
         {activeSection==='private_notes'&&canViewPrivateNotes&&<EmployeePrivateNotesPanel key={e.id} employeeId={e.id} canManage={canManagePrivateNotes}/>}
         {activeSection==='info'&&<>

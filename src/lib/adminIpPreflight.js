@@ -51,11 +51,12 @@ export function classifyAdminIpPreflight(payload) {
     : 'service_unavailable')
 }
 
-export async function requestAdminIpPreflight(client, {
+export async function requestPortalIpPreflight(client, portal = 'admin', {
   signal,
   timeoutMs = ADMIN_IP_PREFLIGHT_TIMEOUT_MS,
 } = {}) {
   if (!client?.functions?.invoke) return unavailableResult()
+  const normalizedPortal = portal === 'staff' ? 'staff' : 'admin'
 
   const controller = new AbortController()
   const abortFromCaller = () => controller.abort(signal?.reason)
@@ -65,7 +66,7 @@ export async function requestAdminIpPreflight(client, {
 
   try {
     const result = await client.functions.invoke('admin-ip-preflight', {
-      body: {},
+      body: { portal: normalizedPortal },
       signal: controller.signal,
     })
     const payload = await readFunctionResponsePayload(result)
@@ -78,3 +79,7 @@ export async function requestAdminIpPreflight(client, {
     signal?.removeEventListener('abort', abortFromCaller)
   }
 }
+
+
+export const requestAdminIpPreflight = (client, options = {}) =>
+  requestPortalIpPreflight(client, 'admin', options)

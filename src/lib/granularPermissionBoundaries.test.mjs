@@ -9,6 +9,7 @@ const payrollCorrections = await readFile(new URL('../../supabase/migrations/202
 const training = await readFile(new URL('../../supabase/migrations/20260827113200_online_training_page_permission_boundaries.sql', import.meta.url), 'utf8')
 const adjustmentAlignment = await readFile(new URL('../../supabase/migrations/20260827113300_adjustment_edit_permission_alignment.sql', import.meta.url), 'utf8')
 const adjustmentFilters = await readFile(new URL('../../supabase/migrations/20260829041328_preserve_admin_adjustment_currency_filter.sql', import.meta.url), 'utf8')
+const adjustmentVisibility = await readFile(new URL('../../supabase/migrations/20260829110546_split_adjustment_visibility_permissions.sql', import.meta.url), 'utf8')
 const accounts = await readFile(new URL('../../supabase/functions/admin-accounts/index.ts', import.meta.url), 'utf8')
 const employees = await readFile(new URL('../../supabase/functions/admin-employees/index.ts', import.meta.url), 'utf8')
 const employeeWrite = await readFile(new URL('../../supabase/functions/admin-employee-write/index.ts', import.meta.url), 'utf8')
@@ -16,6 +17,10 @@ const reports = await readFile(new URL('../../supabase/functions/admin-reports/i
 const payrollPage = await readFile(new URL('../pages/AdminPayrollPage.jsx', import.meta.url), 'utf8')
 const reportsPage = await readFile(new URL('../pages/AdminReportsPage.jsx', import.meta.url), 'utf8')
 const attendancePage = await readFile(new URL('../pages/AdminAttendancePage.jsx', import.meta.url), 'utf8')
+const employeePage = await readFile(new URL('../pages/AdminEmployeesPage.jsx', import.meta.url), 'utf8')
+const attendanceRecords = await readFile(new URL('../components/AttendanceRecords.jsx', import.meta.url), 'utf8')
+const permissionConfig = await readFile(new URL('../config/permissions.js', import.meta.url), 'utf8')
+const adminPagePermissions = await readFile(new URL('../config/adminPagePermissions.js', import.meta.url), 'utf8')
 const trainingPage = await readFile(new URL('../pages/AdminTrainingPage.jsx', import.meta.url), 'utf8')
 
 test('attendance and exam wrappers constrain filters, payloads and grading status', () => {
@@ -214,6 +219,46 @@ test('adjustment currency and search filters survive the granular wrapper', () =
   assert.match(attendancePage, /currency:''/)
   assert.match(attendancePage, /tab==='奖金 \/ 扣款'[\s\S]+<span>币种<\/span>[\s\S]+全部币种（USD \+ PHP）[\s\S]+value="USD"[\s\S]+value="PHP"/)
   assert.match(attendancePage, /admin_adjustment_page/)
+})
+
+test('bonus and deduction visibility is independently configurable on both admin surfaces', () => {
+  assert.match(permissionConfig, /ADJUSTMENT_BONUS_VIEW:\s*'adjustment\.bonus\.view'/)
+  assert.match(permissionConfig, /ADJUSTMENT_DEDUCTION_VIEW:\s*'adjustment\.deduction\.view'/)
+  assert.match(adminPagePermissions, /adjustments:[\s\S]+ADJUSTMENT_BONUS_VIEW[\s\S]+ADJUSTMENT_DEDUCTION_VIEW/)
+
+  assert.match(attendancePage, /canViewAdjustments=access\.hasPermission\(PERMISSIONS\.ADJUSTMENT_PAGE_VIEW\)&&\(canViewAdjustmentBonus\|\|canViewAdjustmentDeduction\)/)
+  assert.match(attendancePage, /if\(value==='奖金 \/ 扣款'\)return canViewAdjustments/)
+  assert.match(attendancePage, /allowedKinds=tab==='奖金 \/ 扣款'\?new Set\(\[canViewAdjustmentBonus&&'bonus',canViewAdjustmentDeduction&&'deduction'\]/)
+  assert.match(attendancePage, /canViewAdjustmentBonus\?\[\['USD 奖金'/)
+  assert.match(attendancePage, /canViewAdjustmentDeduction\?\[\['USD 扣款'/)
+
+  assert.match(employeePage, /canViewAdjustments=adminAccess\.hasPermission\(PERMISSIONS\.ADJUSTMENT_PAGE_VIEW\)&&\(canViewAdjustmentBonus\|\|canViewAdjustmentDeduction\)/)
+  assert.match(employeePage, /\['penalties','奖金 \/ 扣款',canViewAdjustments\]/)
+  assert.match(employeePage, /if\(!canViewAdjustments\)[\s\S]+admin_employee_adjustment_history/)
+  assert.match(employeePage, /EmployeeAdjustmentPanel[\s\S]+canViewBonus=\{canViewAdjustmentBonus\}[\s\S]+canViewDeduction=\{canViewAdjustmentDeduction\}/)
+  assert.match(attendanceRecords, /EmployeeAdjustmentPanel\(\{data,loading,error,canViewBonus=false,canViewDeduction=false\}\)/)
+  assert.match(attendanceRecords, /summaryItems=\[\.\.\.\(canViewBonus[\s\S]+\.\.\.\(canViewDeduction/)
+})
+
+test('bonus and deduction rows are filtered by both private server readers before aggregation', () => {
+  for (const code of ['adjustment.bonus.view','adjustment.deduction.view']) {
+    assert.ok(adjustmentVisibility.includes(`'${code}'`), `missing ${code}`)
+  }
+  assert.match(adjustmentVisibility, /from public\.role_permissions source[\s\S]+source\.permission_id=ids\.page_view_id[\s\S]+on conflict\(role_id,permission_id\) do nothing/)
+  assert.match(adjustmentVisibility, /from public\.user_permission_overrides source[\s\S]+source\.permission_id=ids\.page_view_id[\s\S]+do update set allowed=excluded\.allowed/)
+  assert.match(adjustmentVisibility, /create or replace function attendance_private\.adjustment_visibility_kind\([\s\S]+when p_event_kind='bonus' then 'bonus'[\s\S]+when p_event_kind='deduction' then 'deduction'[\s\S]+p_amount>0 then 'bonus'[\s\S]+p_amount<0 then 'deduction'[\s\S]+else 'unclassified'/)
+
+  const homePatch = adjustmentVisibility.slice(adjustmentVisibility.indexOf('do $adjustment_home_visibility$'), adjustmentVisibility.indexOf('do $employee_adjustment_visibility$'))
+  const employeePatch = adjustmentVisibility.slice(adjustmentVisibility.indexOf('do $employee_adjustment_visibility$'), adjustmentVisibility.indexOf('revoke all on function attendance_private.admin_attendance_home'))
+  assert.match(homePatch, /admin_attendance_home\(jsonb\)/)
+  assert.match(homePatch, /v_can_bonus[\s\S]+v_can_deduction[\s\S]+adjustment_visibility_kind\(x\.event_kind,x\.amount\)/)
+  assert.match(employeePatch, /admin_employee_adjustment_history\(uuid,integer,integer\)/)
+  assert.match(employeePatch, /v_can_bonus[\s\S]+v_can_deduction[\s\S]+adjustment_visibility_kind\(x\.event_kind,x\.amount\)/)
+  assert.match(adjustmentVisibility, /create or replace function public\.admin_adjustment_page[\s\S]+adjustment\.page\.view[\s\S]+adjustment\.bonus\.view[\s\S]+adjustment\.deduction\.view/)
+  assert.match(adjustmentVisibility, /create or replace function public\.admin_employee_adjustment_history[\s\S]+employee\.directory\.view[\s\S]+adjustment\.page\.view[\s\S]+adjustment\.bonus\.view[\s\S]+adjustment\.deduction\.view[\s\S]+can_manage_employee/)
+  assert.match(adjustmentVisibility, /revoke all on function attendance_private\.admin_attendance_home\(jsonb\)[\s\S]+from public,anon,authenticated,service_role/)
+  assert.match(adjustmentVisibility, /revoke all on function attendance_private\.admin_employee_adjustment_history\(uuid,integer,integer\)[\s\S]+from public,anon,authenticated,service_role/)
+  assert.doesNotMatch(adjustmentVisibility, /jsonb_array_elements\([^\n]+rows/)
 })
 
 test('account overview payloads omit sensitive employee contact fields', () => {

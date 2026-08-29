@@ -13,6 +13,7 @@ const blankEntry = () => ({
   label: '',
   notes: '',
   enabled: true,
+  portal_scope: 'admin',
 })
 
 const dateTime = value => {
@@ -97,7 +98,8 @@ export default function AdminIpAllowlistPage() {
 
   const settings = snapshot?.settings || {}
   const entries = snapshot?.entries || []
-  const currentIpCovered = Boolean(snapshot?.current_ip_covered)
+  const currentIpCovered = Boolean(snapshot?.current_ip_coverage?.admin ?? snapshot?.current_ip_covered)
+  const currentIpCoveredForStaff = Boolean(snapshot?.current_ip_coverage?.staff)
 
   const addCurrentIp = async () => {
     if (!snapshot?.current_ip) {
@@ -105,20 +107,28 @@ export default function AdminIpAllowlistPage() {
       return
     }
     await mutate(
-      { action: 'add_current_ip' },
-      `当前IP ${snapshot.current_ip} 已加入并启用`,
+      { action: 'add_current_ip', portal_scope: 'admin' },
+      `当前IP ${snapshot.current_ip} 已加入后台范围并启用`,
     )
   }
 
-  const toggleEnforcement = async () => {
-    const next = !settings.enforced
+  const toggleEnforcement = async portal => {
+    const isStaff = portal === 'staff'
+    const current = isStaff ? settings.staff_enforced : settings.enforced
+    const next = !current
     const message = next
-      ? '开启后，其他尚未验证IP的后台会话会退出。确认开启？'
-      : '关闭后，后台登录不再限制IP。确认关闭？'
+      ? isStaff
+        ? '开启员工前端限制后，所有现有员工前端会话会退出，并且只有“员工前端/两者”范围的IP可以重新登录。已核对员工全部固定IP/CIDR及备用线路后才可开启。确认开启？'
+        : '开启后台限制后，其他尚未验证IP的后台会话会退出。确认开启？'
+      : isStaff
+        ? '关闭后，员工前端不再限制登录IP。确认关闭？'
+        : '关闭后，后台登录不再限制IP。确认关闭？'
     if (!window.confirm(message)) return
     await mutate(
-      { action: 'set_enforced', enforced: next },
-      next ? '后台登录IP白名单已开启' : '后台登录IP白名单已关闭',
+      { action: 'set_enforced', portal, enforced: next },
+      next
+        ? `${isStaff ? '员工前端' : '后台'}登录IP白名单已开启`
+        : `${isStaff ? '员工前端' : '后台'}登录IP白名单已关闭`,
     )
   }
 
@@ -140,6 +150,7 @@ export default function AdminIpAllowlistPage() {
         label: form.label,
         notes: form.notes,
         enabled: form.enabled,
+        portal_scope: form.portal_scope,
       }, modal.mode === 'create' ? '白名单已新增' : '白名单已更新')
       if (outcome.ok) setModal(null)
       else setModal(current => current ? ({ ...current, error: outcome.error }) : current)
@@ -159,13 +170,14 @@ export default function AdminIpAllowlistPage() {
   }
 
   const recoveryCommand = "select session_private.founder_recover_admin_ip_allowlist('DISABLE ADMIN IP ALLOWLIST');"
+  const staffRecoveryCommand = "select session_private.founder_recover_staff_ip_allowlist('DISABLE STAFF IP ALLOWLIST');"
 
   return <div className="content-page ip-allowlist-page">
     <div className="page-toolbar">
       <div>
         <div className="module-kicker">ACCESS CONTROL · TRUSTED NETWORKS</div>
         <h1>后台登入IP白名单</h1>
-        <p>只限制后台账号登录与持续会话；员工前端不受影响。</p>
+        <p>同一份网络清单可分别用于后台、员工前端或两者；两个入口独立开启，员工前端默认关闭。</p>
       </div>
       <div className="ip-allowlist-head-actions">
         <button type="button" className="secondary-action" onClick={load} disabled={loading || saving}>刷新</button>
@@ -183,7 +195,7 @@ export default function AdminIpAllowlistPage() {
       <div className="ip-enforcement-status">
         <span className="ip-status-dot" aria-hidden="true" />
         <div>
-          <small>{settings.effective ? '正在强制执行' : settings.enforced ? '安全暂停' : '尚未开启'}</small>
+          <small>{settings.effective ? '正在强制执行' : settings.enforced ? '拒绝全部 / 配置异常' : '尚未开启'}</small>
           <strong>{settings.effective ? '仅白名单IP可登入后台' : settings.enforced ? '已打开开关，但没有可用条目' : '后台登录暂不限制IP'}</strong>
           <p>
             当前IP：<b>{snapshot?.current_ip || '可信代理未提供'}</b>
@@ -192,17 +204,44 @@ export default function AdminIpAllowlistPage() {
           </p>
         </div>
       </div>
-      <button type="button" className={`ip-enforcement-toggle ${settings.enforced ? 'on' : ''}`} onClick={toggleEnforcement} disabled={loading || saving}>
+      <button type="button" className={`ip-enforcement-toggle ${settings.enforced ? 'on' : ''}`} onClick={() => toggleEnforcement('admin')} disabled={loading || saving}>
         <span>{settings.enforced ? '关闭白名单' : '开启白名单'}</span><i aria-hidden="true" />
       </button>
       {!settings.enforced && <div className="ip-bootstrap-rule">
         开启前请先点击“一键加入当前IP”。服务端会确认当前IP已命中启用条目，否则拒绝开启。
       </div>}
       {settings.enforced && !settings.effective && <div className="ip-bootstrap-rule warning">
-        零条启用记录时自动进入 bootstrap 安全暂停，不会锁死全部后台账号；请立即补充条目或关闭开关。
+        后台限制已开启但没有后台范围条目；服务端会拒绝全部后台访问。请用 Founder 恢复命令关闭后再补充条目。
       </div>}
       {!currentIpCovered && snapshot?.current_ip && !settings.enforced && <div className="ip-bootstrap-rule warning">
         当前IP尚未产生白名单命中记录；建议先一键加入当前IP，再开启。
+      </div>}
+    </section>
+
+    <section className={`ip-enforcement-card ${settings.staff_effective ? 'on' : ''}`}>
+      <div className="ip-enforcement-status">
+        <span className="ip-status-dot" aria-hidden="true" />
+        <div>
+          <small>{settings.staff_effective ? '正在强制执行' : settings.staff_enforced ? '拒绝全部 / 配置异常' : '默认关闭 / 尚未开启'}</small>
+          <strong>{settings.staff_effective ? '仅员工范围白名单IP可访问员工前端' : settings.staff_enforced ? '员工限制已开启，但没有可用员工网络' : '员工前端登录暂不限制IP'}</strong>
+          <p>
+            当前后台操作IP：<b>{snapshot?.current_ip || '可信代理未提供'}</b>
+            {' · '}员工范围启用条目：{settings.staff_enabled_count || 0}
+            {' · '}最后设置：{settings.staff_updated_by_label || '系统'} / {dateTime(settings.staff_updated_at)}
+          </p>
+        </div>
+      </div>
+      <button type="button" className={`ip-enforcement-toggle ${settings.staff_enforced ? 'on' : ''}`} onClick={() => toggleEnforcement('staff')} disabled={loading || saving}>
+        <span>{settings.staff_enforced ? '关闭员工限制' : '开启员工限制'}</span><i aria-hidden="true" />
+      </button>
+      {!settings.staff_enforced && <div className="ip-bootstrap-rule">
+        默认关闭，不会因部署此功能而影响员工。请先录入员工实际出口 IPv4/IPv6/CIDR 与备用线路，完成允许/拒绝网络测试后再开启。
+      </div>}
+      {settings.staff_enforced && !settings.staff_effective && <div className="ip-bootstrap-rule warning">
+        员工限制已开启但没有员工范围条目；服务端会拒绝全部员工访问。请用 Founder 恢复命令关闭后再补充条目。
+      </div>}
+      {currentIpCoveredForStaff && <div className="ip-bootstrap-rule">
+        当前后台操作IP也被员工范围覆盖；这只表示网络命中，不会自动为任何员工账号授权。
       </div>}
     </section>
 
@@ -215,10 +254,11 @@ export default function AdminIpAllowlistPage() {
         ? <div className="empty-state">尚无白名单。先“一键加入当前IP”，确认无误后再开启强制执行。</div>
         : <div className="table-scroll"><table className="data-table ip-allowlist-table">
           <thead><tr>
-            <th>IP / CIDR</th><th>标签 / 备注</th><th>状态</th><th>创建</th><th>最后命中</th><th>操作</th>
+            <th>IP / CIDR</th><th>适用范围</th><th>标签 / 备注</th><th>状态</th><th>创建</th><th>最后命中</th><th>操作</th>
           </tr></thead>
           <tbody>{entries.map(entry => <tr key={entry.id}>
             <td><code>{entry.ip_network}</code></td>
+            <td><span className="status-chip">{{ admin: '后台', staff: '员工前端', both: '后台 + 员工' }[entry.portal_scope] || '后台'}</span></td>
             <td><strong>{entry.label}</strong><small>{entry.notes || '—'}</small></td>
             <td><span className={`status-chip ${entry.enabled ? '' : 'off'}`}>{entry.enabled ? '启用' : '停用'}</span></td>
             <td><strong>{entry.created_by_label}</strong><small>{dateTime(entry.created_at)}</small></td>
@@ -239,6 +279,9 @@ export default function AdminIpAllowlistPage() {
       <p>如果代理配置错误或所有允许网络都不可达，请在 Supabase SQL Editor 以项目所有者身份执行下面的一次性恢复命令。该函数不授予 authenticated / service_role 调用权限。</p>
       <code>{recoveryCommand}</code>
       <button type="button" className="secondary-action" onClick={() => navigator.clipboard?.writeText(recoveryCommand)}>复制恢复命令</button>
+      <p>如果只有员工前端范围配置错误，请关闭员工前端限制（不会关闭后台限制）：</p>
+      <code>{staffRecoveryCommand}</code>
+      <button type="button" className="secondary-action" onClick={() => navigator.clipboard?.writeText(staffRecoveryCommand)}>复制员工前端恢复命令</button>
     </details>}
 
     {modal && <div className="modal-mask" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !modal.saving) setModal(null) }}>
@@ -248,6 +291,11 @@ export default function AdminIpAllowlistPage() {
         <div className="form-grid">
           <label>IP / CIDR<input value={modal.form.ip_network} onChange={event => setModal(current => ({ ...current, form: { ...current.form, ip_network: event.target.value } }))} placeholder="203.0.113.8/32" required /></label>
           <label>标签<input value={modal.form.label} maxLength={80} onChange={event => setModal(current => ({ ...current, form: { ...current.form, label: event.target.value } }))} placeholder="办公室固定网络" required /></label>
+          <label>适用范围<select value={modal.form.portal_scope || 'admin'} onChange={event => setModal(current => ({ ...current, form: { ...current.form, portal_scope: event.target.value } }))}>
+            <option value="admin">仅后台</option>
+            <option value="staff">仅员工前端</option>
+            <option value="both">后台 + 员工前端</option>
+          </select></label>
           <label className="ip-entry-notes">备注<textarea value={modal.form.notes || ''} maxLength={500} onChange={event => setModal(current => ({ ...current, form: { ...current.form, notes: event.target.value } }))} placeholder="线路、负责人或变更原因" /></label>
         </div>
         <label className="ip-entry-enabled"><input type="checkbox" checked={modal.form.enabled !== false} onChange={event => setModal(current => ({ ...current, form: { ...current.form, enabled: event.target.checked } }))} /> 保存后立即启用</label>
