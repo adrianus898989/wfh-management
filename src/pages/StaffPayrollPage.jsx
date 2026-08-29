@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { StaffPaymentChangeWorkspace } from '../components/PaymentChangeWorkflow'
+import { useAppToast } from '../components/AppToastProvider'
+import { writeFailureToast } from '../lib/appMutationToast'
 import { useStaffLocale } from '../lib/staffI18n'
 import { supabase } from '../lib/supabase'
 
@@ -36,10 +38,14 @@ const printPayslip=()=>{
 
 export function StaffPayrollWorkspace({embedded=false}){
   const {locale,setLocale,adoptCountry,t:translate}=useStaffLocale()
+  const {notify}=useAppToast()
   const [state,setState]=useState({loading:true,error:'',data:null})
   const [selectedId,setSelectedId]=useState(null)
   const [detail,setDetail]=useState(null)
   const [detailLoading,setDetailLoading]=useState(false)
+  const [detailError,setDetailError]=useState('')
+  const [detailRefreshKey,setDetailRefreshKey]=useState(0)
+  const detailIntentRef=useRef('')
   useEffect(()=>()=>document.body.classList.remove('payslip-print-active'),[])
   const t=COPY[locale]||COPY.en
 
@@ -58,11 +64,26 @@ export function StaffPayrollWorkspace({embedded=false}){
     }
   })();return()=>{alive=false}},[adoptCountry])
 
-  useEffect(()=>{if(!selectedId){setDetail(null);return}let alive=true;setDetailLoading(true);(async()=>{
+  useEffect(()=>{if(!selectedId){setDetail(null);setDetailError('');return}let alive=true;const requestedOperation=detailIntentRef.current;detailIntentRef.current='';setDetailLoading(true);setDetailError('');(async()=>{
     const {data,error}=await supabase.rpc('staff_payroll_detail',{p_payslip_id:selectedId})
     if(!alive)return
-    setDetailLoading(false);if(!error)setDetail(data||null)
-  })();return()=>{alive=false}},[selectedId])
+    setDetailLoading(false)
+    if(error){
+      const reason=`${t.error}：${error.message||'工资明细读取失败'}`
+      setDetail(null);setDetailError(reason)
+      if(requestedOperation)notify(writeFailureToast({
+        module:t.title,operation:requestedOperation,error,reason,
+        dedupeKey:`staff-payroll:detail:${selectedId}:error`,
+        refresh:()=>{detailIntentRef.current='重新读取工资明细';setDetailRefreshKey(value=>value+1)},
+      }))
+    }else setDetail(data||null)
+  })();return()=>{alive=false}},[selectedId,detailRefreshKey])
+
+  const selectPayslip=id=>{detailIntentRef.current='查看工资明细';if(Number(selectedId)===Number(id))setDetailRefreshKey(value=>value+1);else setSelectedId(id)}
+  const printCurrent=()=>{
+    try{printPayslip()}
+    catch(error){notify(writeFailureToast({module:t.title,operation:t.print,error,fallback:t.error,dedupeKey:`staff-payroll:print:${selectedId}:error`}))}
+  }
 
   if(state.loading)return <div className={`${embedded?'':'content-page '}staff-payroll-page ${embedded?'staff-payroll-embedded':''}`}><div className="payroll-state">{t.loading}</div></div>
   if(state.error)return <div className={`${embedded?'':'content-page '}staff-payroll-page ${embedded?'staff-payroll-embedded':''}`}><div className="payroll-alert error">{t.error}：{state.error}</div></div>
@@ -71,8 +92,8 @@ export function StaffPayrollWorkspace({embedded=false}){
   return <div className={`${embedded?'':'content-page '}staff-payroll-page ${embedded?'staff-payroll-embedded':''}`}>
     <header className="staff-payroll-head"><div><small>{translate('decor.payroll','PAYSLIP')}</small><h1>{t.title}</h1><p>{t.subtitle}</p></div><label>{t.language}<select value={locale} onChange={event=>setLocale(event.target.value)}><option value="zh">中文</option><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="id">Bahasa Indonesia</option></select></label></header>
     {!history.length?<div className="payroll-state">{t.empty}</div>:<div className="staff-payroll-layout">
-      <aside className="staff-payroll-history"><h2>{t.history}</h2>{history.map(item=><button key={item.id} className={Number(selectedId)===Number(item.id)?'active':''} onClick={()=>setSelectedId(item.id)}><span>{monthLabel(item.period_start,locale)}</span><strong>{money(item.total_pay,item.currency,locale)}</strong><small>{item.title}</small></button>)}</aside>
-      <main className="payslip-paper">{detailLoading&&!detail?<div className="payroll-state">{t.loading}</div>:detail&&<Payslip detail={detail} locale={locale} t={t}/>}</main>
+      <aside className="staff-payroll-history"><h2>{t.history}</h2>{history.map(item=><button key={item.id} className={Number(selectedId)===Number(item.id)?'active':''} onClick={()=>selectPayslip(item.id)}><span>{monthLabel(item.period_start,locale)}</span><strong>{money(item.total_pay,item.currency,locale)}</strong><small>{item.title}</small></button>)}</aside>
+      <main className="payslip-paper">{detailLoading&&!detail?<div className="payroll-state">{t.loading}</div>:detailError?<div className="payroll-alert error">{detailError}</div>:detail&&<Payslip detail={detail} locale={locale} t={t} onPrint={printCurrent}/>}</main>
     </div>}
     {detail&&typeof document!=='undefined'&&createPortal(<div className="payslip-print-sheet" aria-hidden="true"><Payslip detail={detail} locale={locale} t={t} printOnly/></div>,document.body)}
   </div>
@@ -84,7 +105,7 @@ export default function StaffPayrollPage(){
   if (params.get('tab') === 'payment-change') return <div className="content-page staff-payroll-page staff-payment-change-page"><StaffPaymentChangeWorkspace locale={locale}/></div>
   return <StaffPayrollWorkspace/>
 }
-function Payslip({detail,locale,t,printOnly=false}){
+function Payslip({detail,locale,t,printOnly=false,onPrint=printPayslip}){
   const employee=detail.employee||{}
   const currency=detail.currency||'USD'
   const standard=useMemo(()=>[
@@ -94,7 +115,7 @@ function Payslip({detail,locale,t,printOnly=false}){
   ].filter(([code])=>Number(detail[code]||0)!==0).map(([code,type])=>({code,label:t[code],type,amount:Number(detail[code]||0)})),[detail,locale])
   const rows=Array.isArray(detail.line_items)&&detail.line_items.length?detail.line_items.map(item=>({...item,label:t[item.code]||item.label||item.code})):standard
   return <article className="payslip-content">
-    <div className="payslip-title"><div><span>{t.period}</span><h2>{monthLabel(detail.period_start,locale)}</h2><small>{detail.title}</small></div>{!printOnly&&<button onClick={printPayslip}>{t.print}</button>}</div>
+    <div className="payslip-title"><div><span>{t.period}</span><h2>{monthLabel(detail.period_start,locale)}</h2><small>{detail.title}</small></div>{!printOnly&&<button onClick={onPrint}>{t.print}</button>}</div>
     <section><h3>{t.employee}</h3><div className="payslip-info-grid">
       <Info label={t.employeeNo} value={employee.employee_no}/><Info label={t.name} value={employee.full_name}/>
       <Info label={t.platform} value={employee.platform}/><Info label={t.position} value={employee.position_name}/>

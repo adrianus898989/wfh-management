@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
+import { useAppToast } from '../components/AppToastProvider'
 import { useStaffLocale } from '../lib/staffI18n'
 import { useAdminI18n } from '../lib/adminI18n'
 import { adjustmentReason, adjustmentTitle } from '../lib/adjustmentPresentation'
 import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
+import { writeFailureToast } from '../lib/appMutationToast'
 
 const activeStatuses = ['active', 'probation', '在职', '试用']
 const DASHBOARD_REFRESH_MS = 5 * 60 * 1000
@@ -456,6 +458,7 @@ const staffExamBreakdown = (row, t) => {
 
 export const StaffHome = ({ mode = 'profile' }) => {
   const { locale, t, adoptCountry } = useStaffLocale()
+  const { notify } = useAppToast()
   const [searchParams, setSearchParams] = useSearchParams()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -466,6 +469,8 @@ export const StaffHome = ({ mode = 'profile' }) => {
   const [errorHistory, setErrorHistory] = useState({ rows: [], total: 0, page: 1, pages: 1 })
   const [errorPage, setErrorPage] = useState(1)
   const [errorsLoading, setErrorsLoading] = useState(false)
+  const [errorHistoryRefreshKey, setErrorHistoryRefreshKey] = useState(0)
+  const errorHistoryIntentRef = useRef('')
   const [revealed, setRevealed] = useState({})
   const [revealLoading, setRevealLoading] = useState('')
   const requestedRewardSection = searchParams.get('tab') || 'errors'
@@ -475,7 +480,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
   const [examDetailLoading, setExamDetailLoading] = useState(false)
   const [examDetailError, setExamDetailError] = useState('')
 
-  const load = async () => {
+  const load = async (announce=false) => {
     setLoading(true)
     setError('')
     setActivity(current => ({ ...current, loading: true, error: '' }))
@@ -497,6 +502,14 @@ export const StaffHome = ({ mode = 'profile' }) => {
     setSelfAttendance(current => attendanceError
       ? { ...current, loading: false, error: portalErrorMessage(attendanceError, t('portal.activityLoadFailed', 'Failed to load attendance records')) }
       : { loading: false, error: '', data: attendanceResult || null })
+    const refreshError=loadError||activityError||attendanceError
+    if (announce && refreshError) {
+      const reason=portalErrorMessage(refreshError, t('portal.profileLoadFailed', 'Failed to refresh profile'))
+      notify(writeFailureToast({
+        module:t('portal.myHome', 'My workspace'),operation:t('portal.refresh', 'Refresh'),error:refreshError,reason,
+        dedupeKey:'staff-portal:refresh:error',refresh:()=>load(true),
+      }))
+    }
     setLoading(false)
   }
 
@@ -508,16 +521,26 @@ export const StaffHome = ({ mode = 'profile' }) => {
   useEffect(() => {
     if (activeSection !== 'errors') return undefined
     let alive = true
+    const requestedOperation=errorHistoryIntentRef.current
+    errorHistoryIntentRef.current=''
     ;(async () => {
       setErrorsLoading(true)
       const { data: result, error: loadError } = await supabase.rpc('staff_portal_errors', { p_page: errorPage, p_page_size: 20 })
       if (!alive) return
-      if (loadError) setError(portalErrorMessage(loadError, t('portal.errorHistoryLoadFailed', 'Failed to load error records')))
+      if (loadError) {
+        const reason=portalErrorMessage(loadError, t('portal.errorHistoryLoadFailed', 'Failed to load error records'))
+        setError(reason)
+        if(requestedOperation)notify(writeFailureToast({
+          module:t('errors.title', 'Error records'),operation:requestedOperation,error:loadError,reason,
+          dedupeKey:'staff-portal:errors:page:error',
+          refresh:()=>{errorHistoryIntentRef.current=requestedOperation;setErrorHistoryRefreshKey(value=>value+1)},
+        }))
+      }
       else setErrorHistory(result || { rows: [], total: 0, page: 1, pages: 1 })
       setErrorsLoading(false)
     })()
     return () => { alive = false }
-  }, [errorPage, activeSection, t])
+  }, [errorPage, activeSection, t, errorHistoryRefreshKey])
   useEffect(() => {
     if (activeSection !== 'adjustments') return undefined
     let alive = true
@@ -552,7 +575,14 @@ export const StaffHome = ({ mode = 'profile' }) => {
     setRevealLoading(field)
     setError('')
     const { data: value, error: revealError } = await supabase.rpc('staff_portal_reveal_payment', { p_field: field })
-    if (revealError) setError(portalErrorMessage(revealError, t('portal.sensitiveLoadFailed', 'Failed to load protected information')))
+    if (revealError) {
+      const reason=portalErrorMessage(revealError, t('portal.sensitiveLoadFailed', 'Failed to load protected information'))
+      setError(reason)
+      notify(writeFailureToast({
+        module:t('payment.title', 'Payment & contact'),operation:t('common.view', 'View'),error:revealError,reason,
+        dedupeKey:`staff-portal:payment:${field}:error`,refresh:()=>toggleSensitive(field),
+      }))
+    }
     else setRevealed(current => ({ ...current, [field]: value || '—' }))
     setRevealLoading('')
   }
@@ -575,7 +605,14 @@ export const StaffHome = ({ mode = 'profile' }) => {
     setExamDetailLoading(true)
     setExamDetailError('')
     const { data: result, error: detailError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: row.id })
-    if (detailError) setExamDetailError(portalErrorMessage(detailError, t('portal.examDetailLoadFailed', 'Failed to load exam detail')))
+    if (detailError) {
+      const reason=portalErrorMessage(detailError, t('portal.examDetailLoadFailed', 'Failed to load exam detail'))
+      setExamDetailError(reason)
+      notify(writeFailureToast({
+        module:t('exams.title', 'Exam results'),operation:t('exams.viewPaper', 'View answers'),error:detailError,reason,
+        dedupeKey:`staff-portal:exam:${row.id}:error`,refresh:()=>openExam(row),
+      }))
+    }
     else setExamDetail(result)
     setExamDetailLoading(false)
   }
@@ -593,7 +630,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
     <header className="staff-portal-hero">
       <div className="staff-avatar">{(p.full_name || 'W').slice(0, 1).toUpperCase()}</div>
       <div><small>{t('portal.workspace', 'MY WORKSPACE')}</small><h1>{p.full_name || t('portal.myHome', 'My workspace')}</h1><p>{p.employee_no || '—'} · {p.team_name || t('portal.teamUnset', 'Team not set')} · {p.position_name || t('portal.positionUnset', 'Position not set')}</p><div className="staff-hero-tags"><span>{shiftDisplay}</span><span>{staffTenure(p.hire_date, t)}</span></div></div>
-      <button onClick={load}>↻ {t('portal.refresh', 'Refresh')}</button>
+      <button onClick={()=>load(true)}>↻ {t('portal.refresh', 'Refresh')}</button>
     </header>
     {error && <div className="exam-error">{error}<button onClick={() => setError('')}>×</button></div>}
     <section className="staff-dashboard-metrics">
@@ -614,7 +651,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
         <div><span>{t('payment.phone', 'Phone')}</span><strong>{pay.contact_phone || '—'}</strong></div><div><span>WhatsApp</span><strong>{pay.whatsapp_number || '—'}</strong></div><div><span>Facebook</span><strong>{pay.facebook || '—'}</strong></div><div><span>{t('payment.address', 'Contact address')}</span><strong>{pay.employee_address || '—'}</strong></div>
       </div></section>
     </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to="/staff/exams"><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link></section></div>}
-    {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => setErrorPage(value => Math.max(1, value - 1))}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => setErrorPage(value => value + 1)}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
+    {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => { errorHistoryIntentRef.current=t('common.previous', 'Previous');setErrorPage(value => Math.max(1, value - 1)) }}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => { errorHistoryIntentRef.current=t('common.next', 'Next');setErrorPage(value => value + 1) }}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
     {activeSection === 'adjustments' && <StaffAdjustmentPanel state={adjustmentHistory} t={t} locale={locale} />}
     {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
     {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={selfAttendance.loading} error={selfAttendance.error} profile={p} t={t} locale={locale} />}
@@ -668,12 +705,17 @@ const staffAttendanceMonthLabel = (month, locale) => {
 }
 
 function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
+  const { notify } = useAppToast()
   const [month, setMonth] = useState(data?.month || staffMonthValue())
   const [view, setView] = useState({ data: data || null, loading, error: error || '' })
   const [selectedDay, setSelectedDay] = useState(null)
+  const [refreshKey,setRefreshKey]=useState(0)
+  const readIntentRef=useRef('')
 
   useEffect(() => {
     let alive = true
+    const requestedOperation=readIntentRef.current
+    readIntentRef.current=''
     if (data?.month === month) {
       setView({ data, loading, error: error || '' })
       return () => { alive = false }
@@ -682,12 +724,17 @@ function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
       setView(current => ({ ...current, loading: true, error: '' }))
       const { data: result, error: loadError } = await supabase.rpc('staff_attendance_home', { p_month: month })
       if (!alive) return
-      setView(loadError
-        ? { data: null, loading: false, error: loadError.message || t('portal.activityLoadFailed', 'Failed to load attendance records') }
-        : { data: result || null, loading: false, error: '' })
+      if(loadError){
+        const reason=loadError.message || t('portal.activityLoadFailed', 'Failed to load attendance records')
+        setView({ data: null, loading: false, error:reason })
+        if(requestedOperation)notify(writeFailureToast({
+          module:t('attendance.selfTitle', 'My attendance'),operation:requestedOperation,error:loadError,reason,
+          dedupeKey:`staff-portal:attendance:${month}:error`,refresh:()=>{readIntentRef.current=requestedOperation;setRefreshKey(value=>value+1)},
+        }))
+      }else setView({ data: result || null, loading: false, error: '' })
     })()
     return () => { alive = false }
-  }, [month, data, loading, error, t])
+  }, [month, data, loading, error, t, refreshKey])
 
   const result = view.data || {}
   const employee = result.employee || {}
@@ -703,7 +750,7 @@ function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
   const primaryRecord = records => Array.isArray(records) ? records.find(record => staffAttendanceKind(record?.event_kind)) : null
 
   return <section className="staff-activity-panel staff-self-attendance">
-    <header className="staff-self-attendance-head"><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>{t('attendance.selfTitle', 'My attendance')}</h2></div><label><span>{t('attendance.viewMonth', 'View month')}</span><input type="month" value={month} onChange={event => { setSelectedDay(null); setMonth(event.target.value || staffMonthValue()) }} /></label></header>
+    <header className="staff-self-attendance-head"><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>{t('attendance.selfTitle', 'My attendance')}</h2></div><label><span>{t('attendance.viewMonth', 'View month')}</span><input type="month" value={month} onChange={event => { readIntentRef.current=t('attendance.viewMonth', 'View month');setSelectedDay(null); setMonth(event.target.value || staffMonthValue()) }} /></label></header>
     <div className="staff-self-attendance-legend">{staffAttendanceKinds.map(([kind, codeKey, codeFallback, labelKey, labelFallback]) => <span className={kind} key={kind}><i>{t(codeKey, codeFallback)}</i>{t(labelKey, labelFallback)}</span>)}</div>
     {view.error && <div className="staff-self-attendance-error">{view.error}</div>}
     <div className="staff-self-summary-groups">

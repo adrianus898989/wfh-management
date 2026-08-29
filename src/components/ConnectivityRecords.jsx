@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { businessRecentRange, businessTodayIso } from '../lib/adminQueryDefaults'
+import { useAppToast } from './AppToastProvider'
+import { writeFailureToast } from '../lib/appMutationToast'
 import { supabase } from '../lib/supabase'
 import { isCurrentLiveRequest, staleSnapshotNotice } from '../lib/requestConsistency'
 import { Pagination } from './DataPageControls'
@@ -121,6 +123,7 @@ function EvidenceLinks({items=[],legacyUrl='',t}){
 }
 
 export function ConnectivityRecordsPage(){
+  const {notify}=useAppToast()
   const [filters,setFilters]=useState(initialFilters)
   const [applied,setApplied]=useState(initialFilters)
   const [state,setState]=useState({loading:true,error:'',data:null,snapshotLabel:'',staleNotice:''})
@@ -142,7 +145,7 @@ export function ConnectivityRecordsPage(){
   const aliveRef=useRef(true)
   const loadRequestRef=useRef(0)
 
-  const load=async(nextPage=page,nextSize=pageSize,nextFilters=applied)=>{
+  const load=async(nextPage=page,nextSize=pageSize,nextFilters=applied,announceOperation='')=>{
     const requestToken=++loadRequestRef.current
     const requestLabel=connectivityRequestLabel(nextFilters,nextPage,nextSize)
     setState(current=>({...current,loading:true,error:'',staleNotice:current.data&&current.snapshotLabel!==requestLabel?staleSnapshotNotice(current.snapshotLabel):''}))
@@ -153,12 +156,25 @@ export function ConnectivityRecordsPage(){
         setState(current=>current.data
           ?{...current,loading:false,error:error.message,staleNotice:staleSnapshotNotice(current.snapshotLabel)}
           :{loading:false,error:error.message,data:null,snapshotLabel:'',staleNotice:''})
+        if(announceOperation)notify(writeFailureToast({
+          module:'停电 / 断网记录',operation:announceOperation,error,reason:error.message,
+          dedupeKey:`connectivity:read:${announceOperation}:error`,
+          refresh:()=>load(nextPage,nextSize,nextFilters,announceOperation),
+        }))
       }else setState({loading:false,error:'',data:data||{},snapshotLabel:requestLabel,staleNotice:''})
     }catch(error){
       if(!isCurrentLiveRequest(aliveRef.current,loadRequestRef.current,requestToken))return
       setState(current=>current.data
         ?{...current,loading:false,error:error?.message||'读取失败',staleNotice:staleSnapshotNotice(current.snapshotLabel)}
         :{loading:false,error:error?.message||'读取失败',data:null,snapshotLabel:'',staleNotice:''})
+      if(announceOperation){
+        const reason=error?.message||'读取失败'
+        notify(writeFailureToast({
+          module:'停电 / 断网记录',operation:announceOperation,error,reason,
+          dedupeKey:`connectivity:read:${announceOperation}:error`,
+          refresh:()=>load(nextPage,nextSize,nextFilters,announceOperation),
+        }))
+      }
     }
   }
   useEffect(()=>{
@@ -175,8 +191,8 @@ export function ConnectivityRecordsPage(){
     return()=>{active=false}
   },[])
 
-  const query=()=>{const next={...filters};setApplied(next);setPage(1);load(1,pageSize,next)}
-  const reset=()=>{const next=initialFilters();setFilters(next);setApplied(next);setPage(1);load(1,pageSize,next)}
+  const query=()=>{const next={...filters};setApplied(next);setPage(1);load(1,pageSize,next,'查询记录')}
+  const reset=()=>{const next=initialFilters();setFilters(next);setApplied(next);setPage(1);load(1,pageSize,next,'重置记录查询')}
   const flash=value=>{setMessage(value);window.setTimeout(()=>setMessage(''),5000)}
   const resetEditor=()=>{setEditor('');setRecord(initialRecord());setExistingFiles([]);setOriginalFiles([]);setFiles([]);setFormError('');setEmployeeLookup({status:'idle',employee:null,message:''})}
   const openCreate=()=>{resetEditor();setEditor('create')}
@@ -267,7 +283,13 @@ export function ConnectivityRecordsPage(){
       }
       const cleanupNotice=rollbackError?'；新上传证明文件未能自动回滚，请联系管理员清理存储文件':''
       const saveMessage=error.message==='employee_not_found'?'找不到这个员工ID，请核对后再保存。':`保存失败：${error.message}`
-      setFormError(`${saveMessage}${cleanupNotice}`)
+      const reason=`${saveMessage}${cleanupNotice}`
+      setFormError(reason)
+      notify(writeFailureToast({
+        module:'停电 / 断网记录',operation:editor==='edit'?'保存修改':'新增记录',error,reason,
+        dedupeKey:`connectivity:save:${record.id||record.employee_no||'new'}:error`,
+        refresh:()=>load(page,pageSize,applied,'刷新记录列表'),
+      }))
     }finally{setSaving(false)}
   }
   const confirmDelete=async()=>{
@@ -285,7 +307,7 @@ export function ConnectivityRecordsPage(){
       setDeleteTarget(null);flash(cleanupWarning||`已删除 ${deleteTarget.employee_no} 的 ${deleteTarget.incident_date} ${typeLabel(deleteTarget.incident_type)}记录。`)
       const nextPage=rows.length===1&&page>1?page-1:page
       setPage(nextPage);await load(nextPage,pageSize,applied)
-    }catch(error){setDeleteError(`删除失败：${error.message}`)}finally{setDeleting(false)}
+    }catch(error){const reason=`删除失败：${error.message}`;setDeleteError(reason);notify(writeFailureToast({module:'停电 / 断网记录',operation:'删除记录',error,reason,dedupeKey:`connectivity:delete:${deleteTarget.id}:error`,refresh:()=>load(page,pageSize,applied,'刷新记录列表')}))}finally{setDeleting(false)}
   }
   const data=state.data||{},summary=data.summary||{},rows=data.rows||[],daily=data.daily_stats||[]
   const canCreate=Boolean(data.permissions?.create||capabilities.create)
@@ -326,7 +348,7 @@ export function ConnectivityRecordsPage(){
     <section className="connectivity-daily-card"><header><div><h3>每日情况统计</h3></div><span>显示最近 {daily.length} 个有记录的日期</span></header>{daily.length?<div className="connectivity-daily-list">{daily.map(day=><article key={day.incident_date}><strong>{day.incident_date}</strong><span><b>{day.affected_employees}</b> 人</span><span>{day.total_records} 条记录</span><span className="power">停电 {day.power}</span><span className="internet">断网 {day.internet}</span><div>{(day.countries||[]).map(country=><em key={country.name}>{country.name} {country.employees}人</em>)}</div></article>)}</div>:<div className="connectivity-empty compact">暂无每日统计</div>}</section></>}
     <section className="connectivity-table-card">
       {state.loading&&!state.data?<div className="connectivity-empty">正在读取记录…</div>:!state.data?<div className="connectivity-empty error">本次读取失败，未显示记录。</div>:rows.length?<div className="connectivity-table-wrap"><table><thead><tr><th>日期</th><th>入职日期</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>岗位</th><th>类型</th><th>开始 / 恢复</th><th>持续</th><th>状态</th><th>情况说明</th><th>证明</th><th>录入人</th>{showActions&&<th>操作</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.incident_date}</strong></td><td>{row.hire_date||'—'}</td><td><b>{row.employee_no}</b></td><td>{row.full_name}</td><td>{row.employee_country||'—'}</td><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td><td><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></td><td>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'进行中'}</td><td>{row.ended_at?durationLabel(row.duration_minutes):'进行中'}</td><td><span className={`connectivity-status ${row.status}`}>{statusLabel(row.status)}</span></td><td className="connectivity-details">{row.details||'—'}</td><td className="connectivity-proof"><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?'—':null}</td><td>{row.recorded_by_name||'后台账号'}</td>{showActions&&<td><div className="connectivity-row-actions">{canEdit&&<button type="button" onClick={()=>openEdit(row)}>编辑</button>}{canDelete&&<button type="button" className="danger" onClick={()=>{setDeleteError('');setDeleteTarget(row)}}>删除</button>}</div></td>}</tr>)}</tbody></table></div>:<div className="connectivity-empty">暂无符合条件的记录</div>}
-      {state.data&&<Pagination page={Number(data.page||page)} pages={Number(data.pages||1)} total={Number(data.total||0)} pageSize={pageSize} loading={state.loading} onPage={next=>{setPage(next);load(next,pageSize,applied)}} onPageSize={next=>{setPageSize(next);setPage(1);load(1,next,applied)}}/>}
+      {state.data&&<Pagination page={Number(data.page||page)} pages={Number(data.pages||1)} total={Number(data.total||0)} pageSize={pageSize} loading={state.loading} onPage={next=>{setPage(next);load(next,pageSize,applied,'切换记录分页')}} onPageSize={next=>{setPageSize(next);setPage(1);load(1,next,applied,'调整记录每页条数')}}/>}
     </section>
   </div>
 }

@@ -1,5 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react'
 import AdminModuleNav from '../components/AdminModuleNav'
+import { useAppToast } from '../components/AppToastProvider'
+import { writeFailureToast } from '../lib/appMutationToast'
 import {supabase} from '../lib/supabase'
 import {
   ACTIVITY_LOG_ACTION_OPTIONS,
@@ -36,7 +38,9 @@ const errorMessage=error=>{
 }
 
 export default function AdminActivityLogPage(){
+  const {notify}=useAppToast()
   const requestRef=useRef(0)
+  const readIntentRef=useRef('')
   const [draft,setDraft]=useState({...DEFAULT_FILTERS})
   const [applied,setApplied]=useState({...DEFAULT_FILTERS})
   const [page,setPage]=useState(1)
@@ -46,6 +50,8 @@ export default function AdminActivityLogPage(){
 
   useEffect(()=>{
     const requestId=++requestRef.current
+    const requestedOperation=readIntentRef.current
+    readIntentRef.current=''
     setState(current=>({...current,loading:true,error:''}))
     ;(async()=>{
       const {data,error}=await supabase.rpc('admin_activity_log_search',buildActivityLogRpcParams(applied,page,pageSize))
@@ -60,7 +66,13 @@ export default function AdminActivityLogPage(){
       })
     })().catch(error=>{
       if(requestId!==requestRef.current)return
-      setState({loading:false,error:errorMessage(error),rows:[],total:0,pages:1})
+      const reason=errorMessage(error)
+      setState({loading:false,error:reason,rows:[],total:0,pages:1})
+      if(requestedOperation)notify(writeFailureToast({
+        module:'后台操作日志',operation:requestedOperation,error,reason,
+        dedupeKey:`activity-log:${requestedOperation}:error`,
+        refresh:()=>{readIntentRef.current=requestedOperation;setRefreshKey(value=>value+1)},
+      }))
     })
     return()=>{requestRef.current+=1}
   },[applied,page,pageSize,refreshKey])
@@ -68,16 +80,20 @@ export default function AdminActivityLogPage(){
   const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
   const search=event=>{
     event.preventDefault()
+    readIntentRef.current='查询操作日志'
     setPage(1)
     setApplied({...draft})
   }
   const reset=()=>{
+    readIntentRef.current='重置操作日志查询'
     const defaults={...DEFAULT_FILTERS}
     setDraft(defaults)
     setApplied(defaults)
     setPage(1)
   }
-  const refresh=()=>setRefreshKey(value=>value+1)
+  const refresh=()=>{readIntentRef.current='刷新操作日志';setRefreshKey(value=>value+1)}
+  const changePage=next=>{readIntentRef.current='切换操作日志分页';setPage(next)}
+  const changePageSize=next=>{readIntentRef.current='调整操作日志每页条数';setPageSize(next);setPage(1)}
   const from=state.total?(page-1)*pageSize+1:0
   const to=Math.min(state.total,page*pageSize)
 
@@ -127,8 +143,8 @@ export default function AdminActivityLogPage(){
         </div>
         <footer className="admin-activity-log-pagination">
           <span>显示 {from}–{to}，共 {state.total} 条</span>
-          <label>每页<select value={pageSize} onChange={event=>{setPageSize(Number(event.target.value));setPage(1)}}><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label>
-          <div><button type="button" className="secondary" disabled={page<=1} onClick={()=>setPage(value=>Math.max(1,value-1))}>上一页</button><span>第 {page} / {state.pages} 页</span><button type="button" className="secondary" disabled={page>=state.pages} onClick={()=>setPage(value=>Math.min(state.pages,value+1))}>下一页</button></div>
+          <label>每页<select value={pageSize} onChange={event=>changePageSize(Number(event.target.value))}><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label>
+          <div><button type="button" className="secondary" disabled={page<=1} onClick={()=>changePage(Math.max(1,page-1))}>上一页</button><span>第 {page} / {state.pages} 页</span><button type="button" className="secondary" disabled={page>=state.pages} onClick={()=>changePage(Math.min(state.pages,page+1))}>下一页</button></div>
         </footer>
       </>}
     </section>

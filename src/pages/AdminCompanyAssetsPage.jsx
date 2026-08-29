@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Pagination } from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
+import { useAppToast } from '../components/AppToastProvider'
 import { supabase } from '../lib/supabase'
 import { useAdminI18n } from '../lib/adminI18n'
 import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 import {
   COMPANY_ASSET_TABS,
   COMPANY_HARDWARE_TABS,
@@ -64,6 +66,7 @@ function SoftwareTable({ rows }) {
 
 export default function AdminCompanyAssetsPage() {
   const { t } = useAdminI18n()
+  const { notify } = useAppToast()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -74,7 +77,7 @@ export default function AdminCompanyAssetsPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
 
-  const load = async () => {
+  const load = async ({ announce=false }={}) => {
     setLoading(true)
     setError('')
     try {
@@ -83,8 +86,17 @@ export default function AdminCompanyAssetsPage() {
       })
       if (requestError || data?.error) throw new Error(await edgeFunctionErrorMessage({ data, error:requestError, fallback:'公司资产资料读取失败' }))
       setRows(normalizeCompanyAssetEmployees(data?.employees || []))
+      if (announce) notify(writeSuccessToast({
+        module:'公司提供资产',operation:'刷新资料',reason:'公司资产资料已刷新。',
+        dedupeKey:'company-assets:refresh:success',
+      }))
     } catch (requestError) {
-      setError(requestError?.message || '公司资产资料读取失败')
+      const reason=requestError?.message || '公司资产资料读取失败'
+      setError(reason)
+      if (announce) notify(writeFailureToast({
+        module:'公司提供资产',operation:'刷新资料',error:requestError,reason,
+        dedupeKey:'company-assets:refresh:error',refresh:()=>load({ announce:true }),
+      }))
     } finally {
       setLoading(false)
     }
@@ -125,7 +137,7 @@ export default function AdminCompanyAssetsPage() {
         <div className="module-kicker">ACCOUNT & ASSET MANAGEMENT</div>
         <h1>{t('后台账号使用情况')}</h1>
       </div>
-      <button className="secondary-action" onClick={load} disabled={loading}>{loading ? t('刷新中…') : <><span aria-hidden="true">↻</span> {t('刷新资料')}</>}</button>
+      <button className="secondary-action" onClick={()=>load({ announce:true })} disabled={loading}>{loading ? t('刷新中…') : <><span aria-hidden="true">↻</span> {t('刷新资料')}</>}</button>
     </div>
 
     <AdminModuleNav />
@@ -161,7 +173,7 @@ export default function AdminCompanyAssetsPage() {
         <button className="secondary-action" type="button" onClick={resetFilters} disabled={!keyword && !country}>{t('重置')}</button>
       </div>
 
-      {error && <div className="page-error company-assets-error">{error}<button type="button" onClick={load}>{t('重新读取')}</button></div>}
+      {error && <div className="page-error company-assets-error">{error}<button type="button" onClick={()=>load({ announce:true })}>{t('重新读取')}</button></div>}
       {loading && !rows.length
         ? <AssetTableLoading columns={assetTab === COMPANY_ASSET_TABS.HARDWARE ? 10 : 9}/>
         : !pageResult.rows.length

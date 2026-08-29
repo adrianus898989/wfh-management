@@ -3,12 +3,14 @@ import {useSearchParams} from 'react-router-dom'
 import {supabase} from '../lib/supabase'
 import {Pagination} from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
+import {useAppToast} from '../components/AppToastProvider'
 import {adminLocalPageTabs,adminTabParams,adminTabSlug,canonicalAdminTab} from '../config/navigation'
 import {useAdminI18n} from '../lib/adminI18n'
 import {useAdminAccess} from '../lib/adminAccess'
 import {PERMISSIONS} from '../config/permissions'
 import {rosterPersonKey,uniqueRosterCount} from '../lib/rosterIdentity'
 import {edgeFunctionErrorMessage,readableErrorMessage} from '../lib/edgeFunctionError'
+import {writeFailureToast} from '../lib/appMutationToast'
 
 const text=v=>String(v??'').trim()
 const OPS=['总汇','人员','排班表','盘口人数','统计','错误统计']
@@ -142,6 +144,7 @@ function filterRoster(rows,f){
 }
 
 export default function AdminReportsPage(){
+  const {notify}=useAppToast()
   const [sp,setSp]=useSearchParams()
   const requestedRouteTab=sp.get('tab')
   const requestedTab=canonicalAdminTab('/admin/reports',requestedRouteTab)
@@ -160,7 +163,7 @@ export default function AdminReportsPage(){
     if(error||data?.error)throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'统计数据读取失败'}))
     return data
   }
-  const load=async(silent=false)=>{
+  const load=async(silent=false,announceOperation='')=>{
     const requestId=++overviewRequestRef.current
     overviewPendingRef.current=true
     if(!silent)setLoading(true)
@@ -170,7 +173,14 @@ export default function AdminReportsPage(){
       if(requestId!==overviewRequestRef.current)return
       setOverview(result);overviewLoadedAtRef.current=Date.now();setError('')
     }
-    catch(e){if(requestId===overviewRequestRef.current)setError(e.message||'统计数据读取失败')}
+    catch(e){if(requestId===overviewRequestRef.current){
+      const reason=e.message||'统计数据读取失败'
+      setError(reason)
+      if(announceOperation)notify(writeFailureToast({
+        module:'统计报表',operation:announceOperation,error:e,reason,
+        dedupeKey:`reports:overview:${tab}:${announceOperation}:error`,refresh:()=>load(false,announceOperation),
+      }))
+    }}
     finally{if(requestId===overviewRequestRef.current){overviewPendingRef.current=false;setLoading(false)}}
   }
   useEffect(()=>{
@@ -203,7 +213,7 @@ export default function AdminReportsPage(){
   return <div className="content-page reports-page rp-page">
     <div className="rp-head">
       <div><div className="module-kicker">{sectionKicker}</div><h1>{sectionTitle}</h1>{pageChrome.active.itemLabel&&<p>{pageChrome.active.itemLabel}</p>}</div>
-      <div className="rp-live"><i/><div><small>{overview?.updated_at?`最近读取 ${new Date(overview.updated_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · 切回页面按需刷新`:'正在读取…'}</small></div><button onClick={()=>load()}>刷新</button></div>
+      <div className="rp-live"><i/><div><small>{overview?.updated_at?`最近读取 ${new Date(overview.updated_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · 切回页面按需刷新`:'正在读取…'}</small></div><button onClick={()=>load(false,'刷新统计数据')}>刷新</button></div>
     </div>
     {error&&<div className="rp-error">{error}<button onClick={()=>setError('')}>×</button></div>}
     <AdminModuleNav />
@@ -213,8 +223,8 @@ export default function AdminReportsPage(){
       {tab==='人员'&&<People rows={roster}/>} 
       {tab==='排班表'&&<Schedule rows={roster}/>} 
       {tab==='盘口人数'&&<Platforms rows={roster}/>} 
-      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} allRoster={overview?.roster||[]} onError={setError} filterValue={draftFilters} onFilterChange={setDraftFilters} onFilterQuery={applyFilters} onFilterReset={resetFilters} filterOptions={overview?.options||{}} filterMeta={`筛选后 ${uniqueCount(roster)} 人`}/>}
-      {tab==='错误统计'&&<Errors onError={setError}/>}
+      {tab==='统计'&&<OrdersManualQuery invoke={invoke} roster={roster} allRoster={overview?.roster||[]} onError={setError} notify={notify} filterValue={draftFilters} onFilterChange={setDraftFilters} onFilterQuery={applyFilters} onFilterReset={resetFilters} filterOptions={overview?.options||{}} filterMeta={`筛选后 ${uniqueCount(roster)} 人`}/>}
+      {tab==='错误统计'&&<Errors onError={setError} notify={notify}/>}
     </>}
   </div>
 }
@@ -268,7 +278,7 @@ function Platforms({rows}){
 
 function Orders({invoke,roster,onError}){const [range,setRange]=useState({from:'',to:''}),[position,setPosition]=useState(''),[data,setData]=useState(null),[loading,setLoading]=useState(true),[sort,setSort]=useState({key:'total',asc:false}),[page,setPage]=useState(1),[size,setSize]=useState(30),[mistakes,setMistakes]=useState(null);const load=async(next=range)=>{setLoading(true);try{const d=await invoke({action:'orders',date_from:next.from,date_to:next.to});setData(d);onError('')}catch(e){onError(e.message||'统计读取失败')}finally{setLoading(false)}};useEffect(()=>{load()},[]);const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster]);const rows=useMemo(()=>{let x=(data?.rows||[]).filter(r=>allowed.has(r.employee_id)&&(!position||r.position===position));x=[...x].sort((a,b)=>{const av=Number(a[sort.key]||0),bv=Number(b[sort.key]||0);return sort.asc?av-bv:bv-av});return x},[data,allowed,position,sort]);useEffect(()=>setPage(1),[position,sort,size,roster]);const pages=Math.max(1,Math.ceil(rows.length/size)),slice=rows.slice((page-1)*size,page*size),dates=data?.dates||[];const changeSort=key=>setSort(s=>({key,asc:s.key===key?!s.asc:false}));const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);load(next)};const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:range.from,date_to:range.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){onError(e.message||'错误记录读取失败')}};return <section className="rp-card"><div className="rp-card-title"><div><h2>员工订单处理统计</h2><p>与原版同源：效率表「网站数据」（由 工作表4 + 填表 生成）+ 居家排班表「账号」做后台账号 → ID 映射。</p></div><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'正在读取…'}</span></div><div className="rp-order-toolbar"><label>日期起<input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label>日期止<input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label><Select value={position} onChange={setPosition} options={data?.options?.positions||[]} all="全部岗位"/><button className="primary" onClick={()=>load()}>查询</button><button onClick={()=>quick('7d')}>最近7天</button><button onClick={()=>quick('month')}>本月</button><button onClick={()=>quick('all')}>全部</button></div>{loading&&!data?<div className="rp-loading-inline">正在读取…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>入职日期</th><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td>{r.hire_date||'—'}</td><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section>}
 
-function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilterChange,onFilterQuery,onFilterReset,filterOptions,filterMeta}){
+function OrdersManualQuery({invoke,roster,allRoster,onError,notify,filterValue,onFilterChange,onFilterQuery,onFilterReset,filterOptions,filterMeta}){
   const [range,setRange]=useState(currentMonthRange)
   const [appliedRange,setAppliedRange]=useState(currentMonthRange)
   const [data,setData]=useState(null)
@@ -279,7 +289,7 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilter
   const [mistakes,setMistakes]=useState(null)
   const requestRef=useRef(0)
   const loadedAtRef=useRef(0)
-  const load=async(nextRange=appliedRange,{allHistory=false,scope=null}={})=>{
+  const load=async(nextRange=appliedRange,{allHistory=false,scope=null,announceOperation=''}={})=>{
     const requestId=++requestRef.current
     setLoading(true)
     try{
@@ -288,7 +298,15 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilter
       const d=await invoke({action:'orders',date_from:nextRange.from,date_to:nextRange.to,employee_ids:employeeIds,all_history:allHistory})
       if(requestId!==requestRef.current)return
       setData(d);loadedAtRef.current=Date.now();setAppliedRange(nextRange);setPage(1);onError('')
-    }catch(e){if(requestId===requestRef.current)onError(e.message||'统计读取失败')}
+    }catch(e){if(requestId===requestRef.current){
+      const reason=e.message||'统计读取失败'
+      onError(reason)
+      if(announceOperation)notify(writeFailureToast({
+        module:'统计报表',operation:announceOperation,error:e,reason,
+        dedupeKey:`reports:orders:${announceOperation}:error`,
+        refresh:()=>load(nextRange,{allHistory,scope,announceOperation}),
+      }))
+    }}
     finally{if(requestId===requestRef.current)setLoading(false)}
   }
   useEffect(()=>{load(currentMonthRange())},[])
@@ -316,11 +334,11 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilter
     if(kind==='7d')next={from:isoAdd(end,-6),to:end}
     if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end}
     const scope=filterRoster(allRoster,filterValue)
-    setRange(next);onFilterQuery();load(next,{allHistory:kind==='all',scope})
+    setRange(next);onFilterQuery();load(next,{allHistory:kind==='all',scope,announceOperation:'查询订单统计'})
   }
-  const query=()=>{const scope=filterRoster(allRoster,filterValue);onFilterQuery();load({...range},{scope})}
-  const reset=()=>{const next=currentMonthRange();setRange(next);onFilterReset();load(next,{scope:allRoster})}
-  const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:appliedRange.from,date_to:appliedRange.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){onError(e.message||'错误记录读取失败')}}
+  const query=()=>{const scope=filterRoster(allRoster,filterValue);onFilterQuery();load({...range},{scope,announceOperation:'查询订单统计'})}
+  const reset=()=>{const next=currentMonthRange();setRange(next);onFilterReset();load(next,{scope:allRoster,announceOperation:'重置订单统计'})}
+  const openMistakes=async id=>{try{const d=await invoke({action:'errors',date_from:appliedRange.from,date_to:appliedRange.to,employee_id:id,date_basis:'review'});setMistakes({id,rows:d.rows||[]})}catch(e){const reason=e.message||'错误记录读取失败';onError(reason);notify(writeFailureToast({module:'统计报表',operation:'查看员工错误记录',error:e,reason,dedupeKey:`reports:orders:errors:${id}:error`,refresh:()=>openMistakes(id)}))}}
   const dateFields=<><label className="rp-filter-field rp-filter-date"><span>日期起</span><input type="date" value={range.from} onChange={e=>setRange({...range,from:e.target.value})}/></label><label className="rp-filter-field rp-filter-date"><span>日期止</span><input type="date" value={range.to} onChange={e=>setRange({...range,to:e.target.value})}/></label></>
   const quickActions=<div className="rp-quick-actions"><button type="button" onClick={()=>quick('7d')}>近7天</button><button type="button" onClick={()=>quick('month')}>本月</button><button type="button" onClick={()=>quick('all')}>全部</button></div>
   return <><GlobalFilters tab="统计" value={filterValue} onChange={onFilterChange} onQuery={query} onReset={reset} options={filterOptions} meta={filterMeta} extraFields={dateFields} extraActions={quickActions} loading={loading}/><section className="rp-card"><div className="rp-card-title"><h2>员工订单处理统计</h2><span>{data?`${data.from||'—'} ~ ${data.to||'—'}`:'正在读取…'}</span></div>{loading&&!data?<div className="rp-loading-inline">正在读取…</div>:<><div className="rp-table-scroll rp-order-scroll"><table className="rp-table rp-order-table"><thead><tr><th>入职日期</th><th>ID</th><th>姓名</th><th>团队</th><th>班次</th><th>国家</th><th>岗位</th><th>盘口</th><th><button onClick={()=>changeSort('total')}>总 ⇅</button></th><th><button onClick={()=>changeSort('avg')}>平均每天处理 ⇅</button></th><th><button onClick={()=>changeSort('mistake_count')}>错误次数 ⇅</button></th>{dates.map(d=><th key={d}>{d}<br/>成功/驳回</th>)}</tr></thead><tbody>{slice.map(r=><tr key={r.employee_id}><td>{r.hire_date||'—'}</td><td><strong>{r.employee_id}</strong></td><td>{r.name}</td><td>{r.team||'—'}</td><td>{r.shift||'—'}</td><td>{r.country||'—'}</td><td>{r.position||'—'}</td><td className="rp-pan-cell">{r.platform||'—'}</td><td><strong>{r.total}</strong></td><td>{r.avg}</td><td><button className="rp-link" onClick={()=>openMistakes(r.employee_id)}>{r.mistake_count}</button></td>{dates.map(d=>{const day=r.daily?.[d]||{success:0,reject:0},before=r.hire_date&&d<r.hire_date;return <td key={d}>{before?'0 / 0':`${day.success||0} / ${day.reject||0}`}</td>})}</tr>)}</tbody></table></div><Pagination page={page} pages={pages} total={rows.length} pageSize={size} loading={loading} onPage={setPage} onPageSize={n=>{setSize(n);setPage(1)}}/></>}{mistakes&&<MistakeListModal id={mistakes.id} rows={mistakes.rows} onClose={()=>setMistakes(null)}/>}</section></>
@@ -328,7 +346,7 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,filterValue,onFilter
 
 const blankErrorFilters=()=>({employee_id:'',employee_name:'',employee_status:'',risk_level:'',error_type:'',qc_person:'',shift:'',team:'',group:'',position:'',country:'',manager:'',platform:''})
 
-function Errors({onError}){
+function Errors({onError,notify}){
   const {locale}=useAdminI18n()
   const access=useAdminAccess()
   const canViewEmployeeDirectory=access.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)
@@ -336,7 +354,7 @@ function Errors({onError}){
   const loadedAtRef=useRef(0)
   const requestRef=useRef(0)
   const requestPendingRef=useRef(false)
-  const load=async({nextRange=appliedRange,nextFilters=appliedFilters,nextSort=sort,nextPage=page,nextSize=size,silent=false}={})=>{
+  const load=async({nextRange=appliedRange,nextFilters=appliedFilters,nextSort=sort,nextPage=page,nextSize=size,silent=false,announceOperation=''}={})=>{
     const requestId=++requestRef.current
     requestPendingRef.current=true
     if(!silent)setLoading(true)
@@ -344,7 +362,15 @@ function Errors({onError}){
       const result=await invokeErrorReport({date_from:nextRange.from,date_to:nextRange.to,...nextFilters,page:nextPage,page_size:nextSize,sort_key:nextSort.key,sort_dir:nextSort.asc?'asc':'desc'})
       if(requestId!==requestRef.current)return
       setData(result);loadedAtRef.current=Date.now();setPage(Number(result?.page||nextPage));onError('')
-    }catch(e){if(requestId===requestRef.current)onError(reportErrorMessage(e,'错误统计读取失败'))}
+    }catch(e){if(requestId===requestRef.current){
+      const reason=reportErrorMessage(e,'错误统计读取失败')
+      onError(reason)
+      if(announceOperation)notify(writeFailureToast({
+        module:'错误统计',operation:announceOperation,error:e,reason,
+        dedupeKey:`reports:errors:${announceOperation}:error`,
+        refresh:()=>load({nextRange,nextFilters,nextSort,nextPage,nextSize,announceOperation}),
+      }))
+    }}
     finally{if(requestId===requestRef.current){requestPendingRef.current=false;setLoading(false)}}
   }
   useEffect(()=>{load({nextRange:currentDayRange(),nextFilters:blankErrorFilters(),nextPage:1});return()=>{requestRef.current+=1;requestPendingRef.current=false}},[])
@@ -358,13 +384,13 @@ function Errors({onError}){
     return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
   },[appliedRange,appliedFilters,sort,page,size])
   const updateFilter=(key,value)=>setFilters(current=>({...current,[key]:value}))
-  const query=()=>{const nextRange={...range},nextFilters={...filters};setAppliedRange(nextRange);setAppliedFilters(nextFilters);setPage(1);load({nextRange,nextFilters,nextPage:1})}
-  const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);setAppliedRange(next);setAppliedFilters({...filters});setPage(1);load({nextRange:next,nextFilters:{...filters},nextPage:1})}
-  const reset=()=>{const nextFilters=blankErrorFilters(),nextRange=currentDayRange(),nextSort={key:'qc_date',asc:false};setFilters(nextFilters);setAppliedFilters(nextFilters);setRange(nextRange);setAppliedRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1})}
-  const showEmployeeErrors=employeeId=>{const nextFilters={...blankErrorFilters(),employee_id:text(employeeId)},nextRange={from:'',to:''},nextSort={key:'qc_date',asc:false};setDetail(null);setEmployeeNo('');setFilters(nextFilters);setAppliedFilters(nextFilters);setRange(nextRange);setAppliedRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1})}
-  const setSortKey=key=>{const next={key,asc:sort.key===key?!sort.asc:true};setSort(next);setPage(1);load({nextSort:next,nextPage:1})}
-  const changePage=next=>{setPage(next);load({nextPage:next})}
-  const changeSize=next=>{setSize(next);setPage(1);load({nextSize:next,nextPage:1})}
+  const query=()=>{const nextRange={...range},nextFilters={...filters};setAppliedRange(nextRange);setAppliedFilters(nextFilters);setPage(1);load({nextRange,nextFilters,nextPage:1,announceOperation:'查询错误统计'})}
+  const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);setAppliedRange(next);setAppliedFilters({...filters});setPage(1);load({nextRange:next,nextFilters:{...filters},nextPage:1,announceOperation:'查询错误统计'})}
+  const reset=()=>{const nextFilters=blankErrorFilters(),nextRange=currentDayRange(),nextSort={key:'qc_date',asc:false};setFilters(nextFilters);setAppliedFilters(nextFilters);setRange(nextRange);setAppliedRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1,announceOperation:'重置错误统计'})}
+  const showEmployeeErrors=employeeId=>{const nextFilters={...blankErrorFilters(),employee_id:text(employeeId)},nextRange={from:'',to:''},nextSort={key:'qc_date',asc:false};setDetail(null);setEmployeeNo('');setFilters(nextFilters);setAppliedFilters(nextFilters);setRange(nextRange);setAppliedRange(nextRange);setSort(nextSort);setPage(1);load({nextFilters,nextRange,nextSort,nextPage:1,announceOperation:'查看员工全部错误'})}
+  const setSortKey=key=>{const next={key,asc:sort.key===key?!sort.asc:true};setSort(next);setPage(1);load({nextSort:next,nextPage:1,announceOperation:'排序错误统计'})}
+  const changePage=next=>{setPage(next);load({nextPage:next,announceOperation:'切换错误统计分页'})}
+  const changeSize=next=>{setSize(next);setPage(1);load({nextSize:next,nextPage:1,announceOperation:'调整错误统计每页条数'})}
   const sortMark=key=>sort.key===key?(sort.asc?' ↑':' ↓'):' ↕'
   const SortTh=({field,children})=><th><button className="rp-sort-head" onClick={()=>setSortKey(field)}>{children}{sortMark(field)}</button></th>
   const options=data?.options||{}
@@ -384,8 +410,10 @@ function Errors({onError}){
 
 function ReportEmployeeDrawer({employeeNo,onClose}){
   const {locale}=useAdminI18n()
+  const {notify}=useAppToast()
   const [state,setState]=useState({loading:true,error:'',detail:null,profileSummary:null})
-  useEffect(()=>{let alive=true;(async()=>{try{
+  const [refreshKey,setRefreshKey]=useState(0)
+  useEffect(()=>{let alive=true;setState(current=>({...current,loading:true,error:''}));(async()=>{try{
     const found=await supabase.functions.invoke('admin-employees',{body:{action:'list',page:1,page_size:20,filters:{employee_no:employeeNo,status:''}}})
     if(found.error||found.data?.error)throw new Error(await edgeFunctionErrorMessage({data:found.data,error:found.error,fallback:'员工读取失败'}))
     const row=(found.data?.rows||[]).find(item=>upperText(item.employee_no)===upperText(employeeNo))||(found.data?.rows||[])[0]
@@ -394,7 +422,7 @@ function ReportEmployeeDrawer({employeeNo,onClose}){
     if(profile.error||profile.data?.error)throw new Error(await edgeFunctionErrorMessage({data:profile.data,error:profile.error,fallback:'员工档案读取失败'}))
     if(profileSummaryResult.error)throw new Error(profileSummaryResult.error.message||'员工统计读取失败')
     if(alive)setState({loading:false,error:'',detail:profile.data,profileSummary:profileSummaryResult.data||null})
-  }catch(error){if(alive)setState({loading:false,error:error.message||'员工档案读取失败',detail:null,profileSummary:null})}})();return()=>{alive=false}},[employeeNo])
+  }catch(error){if(alive){const reason=error.message||'员工档案读取失败';setState({loading:false,error:reason,detail:null,profileSummary:null});notify(writeFailureToast({module:'统计报表',operation:'查看员工档案',error,reason,dedupeKey:`reports:employee:${employeeNo}:error`,refresh:()=>setRefreshKey(value=>value+1)}))}}})();return()=>{alive=false}},[employeeNo,refreshKey])
   const detail=state.detail||{},employee=detail.employee||{},contact=detail.contact||{},payment=detail.payment||{},compensation=detail.compensation||{},summary=state.profileSummary||{},missing=detail.missing_fields||[],grade=errorGradeLabel(errorGradeKey(summary.total_errors),locale)
   return <div className="modal-mask detail-mask wfh-report-employee-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={event=>event.stopPropagation()}>
     <div className="employee-hero"><div className="employee-avatar">{text(employee.full_name).slice(0,1).toUpperCase()||'E'}</div><div className="employee-hero-copy"><div className="employee-id-line">{employeeNo}</div><h2>{employee.full_name||'读取员工档案...'}</h2>{employee.id&&<div className="employee-tags"><span>{employeeTypeName(employee.employment_type)}</span><span>{employee.teams?.name||'未匹配团队'}</span><span>{employee.positions?.name||'未设置主档岗位'}</span>{employee.hire_date&&<span className="employee-tenure-chip">{tenureDurationLabel(employee.hire_date,employee.resign_date,employee.status)}</span>}</div>}</div><div className="drawer-head-actions"><button className="drawer-close" onClick={onClose}>×</button></div></div>
