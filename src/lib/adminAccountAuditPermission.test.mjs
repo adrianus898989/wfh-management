@@ -69,11 +69,13 @@ test('supervisor role creation uses a server-only allowlist without relaxing cus
   assert.match(boundedMigration, /backend_role_assignment_rules assignment[\s\S]+base_permission\.role_id = access\.role_id/)
 })
 
-test('recovery restores the role page as bounded read-only data without reopening mutations', () => {
+test('recovery restores bounded Founder permission saves without reopening role lifecycle mutations', () => {
   assert.match(recoveryEndpoint, /action === 'role_list'/)
   assert.match(recoveryEndpoint, /if \(!can\('role\.view'\)\)/)
   assert.match(recoveryEndpoint, /recovery_role_mode:true/)
+  assert.match(recoveryEndpoint, /role_permissions_writable:isFounder/)
+  assert.match(recoveryEndpoint, /action === 'save_role_permissions'/)
   assert.match(page, /fetchRecoveryRoles\(\)/)
-  assert.match(page, /recoveryRoleMode \|\| !callerFounder \|\| roleIsLocked/)
+  assert.match(page, /roleReadOnly = !canSaveRolePermissions \|\| roleIsLocked/)
   assert.match(page, /!recoveryRoleMode&&!role\.system_locked/)
 })

@@ -15,6 +15,7 @@ const ACCOUNT_EMPLOYEE_LOOKUP_LIMIT = 10
 const RECOVERY_ROLE_LIMIT = 100
 const RECOVERY_PERMISSION_LIMIT = 500
 const RECOVERY_ROLE_PERMISSION_LIMIT = 5_000
+const RECOVERY_ROLE_PERMISSION_WRITE_LIMIT = 500
 const RECOVERY_AUTH_DOMAIN = 'admin.wfh.invalid'
 const RECOVERY_PROVISIONING_MARKER = 'wfh_backend_recovery_v1'
 const RECOVERY_PROVISIONING_FINGERPRINT_KEY = 'wfh_provisioning_fingerprint'
@@ -91,7 +92,7 @@ Deno.serve(async (req: Request) => {
     // Older production bundles used `bootstrap` for the shell permission read.
     // During recovery it is a read-only alias of `access`; it must never fall
     // through to the former full-directory bootstrap implementation.
-    if (!['access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'account_list', 'create_backend'].includes(action)) {
+    if (!['access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions', 'account_list', 'create_backend'].includes(action)) {
       return json(req, {
         ok: false,
         error: 'temporarily_paused_for_database_recovery',
@@ -381,6 +382,7 @@ Deno.serve(async (req: Request) => {
         ok:true,
         degraded:true,
         recovery_role_mode:true,
+        role_permissions_writable:isFounder,
         caller:{
           auth_user_id:userData.user.id,
           role_code:callerRole?.code || null,
@@ -391,6 +393,71 @@ Deno.serve(async (req: Request) => {
         permissions:permissionResult.data || [],
         role_permissions:rolePermissionResult.data || [],
       })
+    }
+
+    if (action === 'save_role_permissions') {
+      if (!isFounder) {
+        return json(req, {
+          ok:false,
+          error:'只有 Founder 可以修改全局角色权限',
+          code:'permission_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+
+      const allowedInputFields = new Set(['action', 'role_id', 'permission_ids'])
+      if (Object.keys(body).some(key => !allowedInputFields.has(key))) {
+        return json(req, { ok:false, error:'包含不受支持的角色权限字段', code:'invalid_input_field' }, 400)
+      }
+      const roleId = clean(body?.role_id)
+      const rawPermissionIds = body?.permission_ids
+      if (!uuidLike(roleId) || !Array.isArray(rawPermissionIds)) {
+        return json(req, { ok:false, error:'角色或权限项目格式不正确', code:'invalid_role_permissions' }, 400)
+      }
+      if (rawPermissionIds.length > RECOVERY_ROLE_PERMISSION_WRITE_LIMIT) {
+        return json(req, { ok:false, error:'单个角色的权限项目超过稳定恢复上限', code:'role_permission_limit_exceeded' }, 400)
+      }
+      const permissionIds = rawPermissionIds.map(clean)
+      if (
+        permissionIds.some(permissionId => !uuidLike(permissionId)) ||
+        new Set(permissionIds).size !== permissionIds.length
+      ) {
+        return json(req, { ok:false, error:'权限项目包含无效或重复标识', code:'invalid_permission_id' }, 400)
+      }
+
+      // One service-only RPC rechecks the canonical Founder role, locks only
+      // the target role row, applies the bounded diff and inserts its audit row
+      // in the same short transaction.  No employee/team directory is read.
+      const { data:saved, error:saveError } = await bounded(
+        admin.rpc('admin_recovery_save_role_permissions', {
+          p_actor_user_id:userData.user.id,
+          p_role_id:roleId,
+          p_permission_ids:permissionIds,
+        }),
+        'RECOVERY_ROLE_PERMISSION_SAVE',
+      )
+      if (saveError) {
+        const message = clean(saveError.message)
+        const code = clean(saveError.code).toUpperCase()
+        if (code === '42501' || /founder_required|permission_denied/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'只有 Founder 可以修改全局角色权限',
+            code:'permission_denied',
+            retryable:false,
+            preserve_session:true,
+          }, 403)
+        }
+        if (code === 'P0002' || /target_role_missing/i.test(message)) {
+          return json(req, { ok:false, error:'角色不存在', code:'role_not_found' }, 404)
+        }
+        if (code === '22023' || /invalid|unknown|duplicate|limit|fixed/i.test(message)) {
+          return json(req, { ok:false, error:'角色或权限项目不正确', code:'invalid_role_permissions' }, 400)
+        }
+        return retryable(req, '角色权限暂时保存失败，请稍后重试')
+      }
+      return json(req, { ok:true, saved })
     }
 
     if (action === 'account_list') {

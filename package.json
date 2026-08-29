@@ -8,6 +8,7 @@
     "test:payroll-private-notes": "node --test src/lib/payoutManualWorkflow.test.mjs src/lib/payrollPrivateNotesSecurity.test.mjs src/config/rolePermissionCatalog.test.js",
     "test:edge-employee-scope": "node --test src/lib/edgeEmployeeScope.test.mjs",
     "test:admin-ip-preflight": "node --test src/lib/adminIpPreflight.test.mjs",
+    "test:role-permission-recovery": "node --test src/lib/adminRolePermissionRecovery.test.mjs",
     "dev": "vite",
     "build": "vite build && node scripts/write-release-manifest.mjs",
     "preview": "vite preview",

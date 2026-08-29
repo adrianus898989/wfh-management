@@ -10,9 +10,9 @@ import {
 
 const read = relative => readFile(new URL(relative, import.meta.url), 'utf8')
 
-test('recovery account edge keeps bootstrap read-only and opens only bounded account list/create operations', async () => {
+test('recovery account edge keeps bootstrap read-only and opens only explicitly bounded recovery operations', async () => {
   const source = await read('../../supabase/functions/admin-accounts/recovery.ts')
-  assert.match(source, /\['access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'account_list', 'create_backend'\]\.includes\(action\)/)
+  assert.match(source, /\['access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions', 'account_list', 'create_backend'\]\.includes\(action\)/)
   assert.match(source, /bootstrap[\s\S]+read-only alias of `access`/)
   assert.match(source, /temporarily_paused_for_database_recovery/)
   assert.match(source, /preserve_session:\s*true/)
@@ -75,24 +75,26 @@ test('online presence recovery performs count-only bounded reads', async () => {
   assert.match(source, /staff:\{ count:Number\(staffCountResult\.count \|\| 0\), rows:\[\] \}/)
 })
 
-test('recovery role page is read-only, bounded and never loads the employee scope directory', async () => {
+test('recovery role page is bounded, Founder-write/others-read-only and never loads the employee scope directory', async () => {
   const source = await read('../../supabase/functions/admin-accounts/recovery.ts')
   const page = await read('../pages/AdminUsersPage.jsx')
   const roleStart = source.indexOf("if (action === 'role_list')")
-  const accountStart = source.indexOf("if (action === 'account_list')", roleStart)
-  const roleSource = source.slice(roleStart, accountStart)
+  const roleSaveStart = source.indexOf("if (action === 'save_role_permissions')", roleStart)
+  const roleSource = source.slice(roleStart, roleSaveStart)
   assert.match(roleSource, /if \(!can\('role\.view'\)\)/)
   assert.match(source, /RECOVERY_ROLE_LIMIT = 100/)
   assert.match(source, /RECOVERY_PERMISSION_LIMIT = 500/)
   assert.match(source, /RECOVERY_ROLE_PERMISSION_LIMIT = 5_000/)
   assert.match(roleSource, /from\('roles'\)[\s\S]+from\('permissions'\)[\s\S]+from\('role_permissions'\)/)
   assert.match(roleSource, /recovery_role_mode:true/)
+  assert.match(roleSource, /role_permissions_writable:isFounder/)
   assert.doesNotMatch(roleSource, /employees|teams|positions|current_employee_scope_directory|create_role|save_role_permissions/)
   assert.match(page, /fetchRecoveryRoles = \(\) => call\(\{ action:'role_list' \}\)/)
   assert.match(page, /const recoveryRoleMode = Boolean\(data\?\.recovery_role_mode\)/)
-  assert.match(page, /roleReadOnly = recoveryRoleMode \|\| !callerFounder \|\| roleIsLocked/)
+  assert.match(page, /recoveryRolePermissionsWritable = Boolean\(/)
+  assert.match(page, /roleReadOnly = !canSaveRolePermissions \|\| roleIsLocked/)
   assert.match(page, /callerFounder && !recoveryRoleMode/)
-  assert.match(page, /角色与权限只读展示/)
+  assert.match(page, /Founder 可勾选并保存现有角色权限，其他账号保持只读/)
 })
 
 test('recovery account list is fixed-page, field-whitelisted and creator-private', async () => {

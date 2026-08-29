@@ -214,6 +214,12 @@ export default function AdminUsersPage() {
   const callerCan = code => Boolean(callerFounder || sharedAccess.hasPermission(code) || callerPermissions.has('*') || callerPermissions.has(code))
   const recoveryAccountMode = Boolean(data?.recovery_account_mode)
   const recoveryRoleMode = Boolean(data?.recovery_role_mode)
+  const recoveryRolePermissionsWritable = Boolean(
+    recoveryRoleMode && callerFounder && data?.role_permissions_writable
+  )
+  const canSaveRolePermissions = Boolean(
+    callerFounder && (!recoveryRoleMode || recoveryRolePermissionsWritable)
+  )
   const backendPermissionCodes = ['backend_account.view']
   const staffPermissionCodes = ['staff_account.view']
   const tabAllowed = key => key === 'backend'
@@ -648,25 +654,36 @@ export default function AdminUsersPage() {
   }
 
   const saveRole = async () => {
-    if (recoveryRoleMode || !roleModal || !callerFounder) return
-    if (!roleModal.name.trim()) {
+    if (!roleModal || !canSaveRolePermissions) return
+    if (recoveryRoleMode && (roleModal.role.system_locked || roleModal.role.active === false)) return
+    if (!recoveryRoleMode && !roleModal.name.trim()) {
       setRoleModal(x => ({ ...x, error: '角色名称不能为空。' }))
       return
     }
     setRoleModal(x => ({ ...x, error: '', saving: true }))
     try {
-      if (!roleModal.role.system_locked && roleModal.name.trim() !== roleModal.role.name) {
+      if (!recoveryRoleMode && !roleModal.role.system_locked && roleModal.name.trim() !== roleModal.role.name) {
         await call({ action: 'rename_role', role_id: roleModal.role.id, name: roleModal.name.trim() })
       }
       if (roleModal.role.code !== 'founder') {
-        await call({
+        const savedResult = await call({
           action: 'save_role_permissions',
           role_id: roleModal.role.id,
           permission_ids: roleModal.permission_ids,
         })
+        if (recoveryRoleMode && Array.isArray(savedResult?.saved?.permission_ids)) {
+          const roleId = roleModal.role.id
+          setData(current => current ? ({
+            ...current,
+            role_permissions: [
+              ...(current.role_permissions || []).filter(grant => grant.role_id !== roleId),
+              ...savedResult.saved.permission_ids.map(permission_id => ({ role_id:roleId, permission_id })),
+            ],
+          }) : current)
+        }
       }
       setRoleModal(null)
-      await load()
+      if (!recoveryRoleMode) await load()
     } catch (e) {
       setRoleModal(x => x ? ({ ...x, error: e.message, saving: false }) : x)
     }
@@ -682,7 +699,10 @@ export default function AdminUsersPage() {
   }
 
   const roleIsLocked = roleModal?.role.code === 'founder'
-  const roleReadOnly = recoveryRoleMode || !callerFounder || roleIsLocked
+  const recoveryTargetLocked = Boolean(
+    recoveryRoleMode && (roleModal?.role.system_locked || roleModal?.role.active === false)
+  )
+  const roleReadOnly = !canSaveRolePermissions || roleIsLocked || recoveryTargetLocked
   const selectedPermissionIds = new Set(roleModal?.permission_ids || [])
   const accountEmployeeQuery = String(accountModal?.form?.employee_search || '').trim().toLowerCase()
   const accountEmployeeMatches = accountEmployeeQuery
@@ -760,7 +780,7 @@ export default function AdminUsersPage() {
   }
 
   const updatePermissionSelection = (permissionIds, checked) => {
-    if (recoveryRoleMode || !callerFounder) return
+    if (!canSaveRolePermissions) return
     setRoleModal(current => {
       if (!current || current.role.code === 'founder') return current
       const next = new Set(current.permission_ids)
@@ -922,7 +942,7 @@ export default function AdminUsersPage() {
 
           {visibleTab === 'roles' && (
             <div className="roles-workspace">
-              {recoveryRoleMode && <div className="recovery-account-note"><span><strong>稳定恢复模式</strong>：角色与权限只读展示；新增、改名、授权保存和删除继续暂停，避免恢复期间误改权限。</span></div>}
+              {recoveryRoleMode && <div className="recovery-account-note"><span><strong>稳定恢复模式</strong>：Founder 可勾选并保存现有角色权限，其他账号保持只读；角色新增、改名和删除继续暂停。</span></div>}
               <div className="roles-overview">
                 <div className="roles-overview-copy">
                   <span>ACCESS CONTROL</span>
@@ -983,7 +1003,7 @@ export default function AdminUsersPage() {
                       </div>
                     </div>
                     <div className="role-card-actions">
-                      <button className="primary" onClick={() => openRole(role)}>{adminT(role.code === 'founder' ? '查看固定权限' : recoveryRoleMode || !callerFounder ? '查看权限' : '配置权限')}</button>
+                      <button className="primary" onClick={() => openRole(role)}>{adminT(role.code === 'founder' ? '查看固定权限' : canSaveRolePermissions && (!recoveryRoleMode || (!role.system_locked && role.active !== false)) ? '配置权限' : '查看权限')}</button>
                       {callerFounder&&!recoveryRoleMode&&!role.system_locked && <button className="danger" onClick={() => deleteRole(role)}>{adminT('删除角色')}</button>}
                     </div>
                   </div>
@@ -1226,7 +1246,7 @@ export default function AdminUsersPage() {
 
               <div className="role-identity-panel">
                 <label className="role-name-field"><span>{adminT('角色名称')}</span>
-                  <input disabled={roleReadOnly||roleModal.role.system_locked} value={roleModal.name}
+                  <input disabled={roleReadOnly||recoveryRoleMode||roleModal.role.system_locked} value={roleModal.name}
                     onChange={e => setRoleModal(x => ({...x, name:e.target.value, error:''}))}/>
                 </label>
                 <div className="role-selection-summary">
