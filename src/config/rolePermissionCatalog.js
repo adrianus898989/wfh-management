@@ -15,6 +15,7 @@ const LEGACY_IMPLEMENTATION_CODES = new Set([
   'adjustment.view','adjustment.create','adjustment.approve','adjustment.page.approve',
   'daily_work.submit','daily_work.manage',
   'payroll.view','payroll.edit','payroll.approve','payroll.publish','payroll.export','payroll.rule.edit','payroll.payout_change.view','payroll.payout_change.review',
+  'employee.directory.payroll_history.view',
   'user.view','account.view','account.mfa_reset',
   // Global role mutation is Founder-only and must never appear as a
   // delegable checkbox in the supplemental bucket.

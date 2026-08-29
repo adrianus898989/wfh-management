@@ -351,7 +351,9 @@ function employeeWriteCapabilities(source,mode){
   return {
     basic,
     sensitiveEmployeeView:creating||permissions.sensitive_employee_view===true,
-    compensationView:creating||permissions.compensation_view===true,
+    compensationView:creating
+      ? actions.can_create_compensation===true
+      : permissions.compensation_view===true,
     paymentView:creating||permissions.sensitive_payment_view===true,
     sensitiveEmployee:creating
       ? actions.can_create_sensitive_employee===true
@@ -2118,7 +2120,7 @@ function EmployeeFormModal({state,setState,meta,onClose,onSave,onCheckIdentity})
       <Field label="WhatsApp / 手机"><input value={f.contact.whatsapp_phone} disabled={!capabilities.sensitiveEmployee} placeholder={capabilities.sensitiveEmployee?'':'无编辑权限'} onChange={x=>setContact('whatsapp_phone',x.target.value)}/></Field>
     </FormSection>
 
-    {e.employment_type&&<FormSection title="工资设置" subtitle={!capabilities.compensation?'当前账号无工资编辑权限；保存普通资料不会修改工资设置。':!capabilities.compensationView?'当前工资值已隐藏；只填写需要替换的项目，留空会保留原值。':''}>
+    {e.employment_type&&capabilities.compensationView&&<FormSection title="工资设置" subtitle={!capabilities.compensation?'当前账号无工资编辑权限；保存普通资料不会修改工资设置。':''}>
       {phpHome?<>
         <Field label="PHP 工资方式">
           <select disabled={!capabilities.compensation} value={f.compensation.salary_basis||phpSalaryBasis(f.compensation)} onChange={x=>setPhpSalaryBasis(x.target.value)}>
@@ -2275,6 +2277,8 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
   const adminAccess=useAdminAccess()
   const canViewPrivateNotes=adminAccess.hasAnyPermission([PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_VIEW,PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_MANAGE])
   const canManagePrivateNotes=adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_MANAGE)
+  const canViewPayrollRecords=adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_PAYROLL_RECORDS_VIEW)
+  const canViewCompensation=detail.permissions?.compensation_view===true
   const e=detail.employee||{}, c=detail.contact||{}, p=detail.payment||{}, comp=detail.compensation||{}
   const [profileSummary,setProfileSummary]=useState(null)
   const [profileSummaryLoading,setProfileSummaryLoading]=useState(false)
@@ -2312,7 +2316,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     ['errors','员工出错记录',adminAccess.hasPermission(PERMISSIONS.REPORT_ERRORS_VIEW)],
     ['exams','员工考试记录',adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)],
     ['connectivity','停电 / 断网记录',adminAccess.hasPermission('connectivity.view')],
-    ['payroll','工资记录',adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_PAYROLL_HISTORY_VIEW)],
+    ['payroll','工资记录',canViewPayrollRecords],
     ['attendance','员工出勤记录',adminAccess.hasPermission(PERMISSIONS.ATTENDANCE_RECORDS_VIEW)],
     ['penalties','奖金 / 扣款',adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)],
     ['trainer_reviews','老师评价',adminAccess.hasPermission(PERMISSIONS.ONLINE_TRAINING_REPORT_VIEW)],
@@ -2362,6 +2366,10 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     return()=>{alive=false}
   },[e.id,activeSection])
   useEffect(()=>{
+    if(!canViewPayrollRecords){
+      setPayrollData(null);setPayrollError('');setPayrollLoading(false)
+      return
+    }
     if(!e.id||activeSection!=='payroll')return
     let alive=true
     setPayrollLoading(true);setPayrollError('')
@@ -2370,7 +2378,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
       if(error)setPayrollError(error.message);else setPayrollData(data||null)
     }).finally(()=>alive&&setPayrollLoading(false))
     return()=>{alive=false}
-  },[e.id,activeSection])
+  },[e.id,activeSection,canViewPayrollRecords])
   useEffect(()=>{
     if(!e.id||activeSection!=='attendance')return
     let alive=true
@@ -2454,7 +2462,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
         {activeSection==='exams'&&<EmployeeExamPanel data={examData} loading={examLoading} error={examError}/>}
         {activeSection==='errors'&&<EmployeeErrorPanel data={employeeErrors} loading={employeeErrorsLoading} error={employeeErrorsError}/>}
         {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivityData} loading={connectivityLoading} error={connectivityError}/>}
-        {activeSection==='payroll'&&<EmployeePayrollHistoryPanel data={payrollData} loading={payrollLoading} error={payrollError}/>}
+        {activeSection==='payroll'&&canViewPayrollRecords&&<EmployeePayrollHistoryPanel data={payrollData} loading={payrollLoading} error={payrollError}/>}
         {activeSection==='attendance'&&<EmployeeAttendancePanel data={attendanceData} loading={attendanceLoading} error={attendanceError}/>}
         {activeSection==='penalties'&&<EmployeeAdjustmentPanel data={adjustmentData} loading={adjustmentLoading} error={adjustmentError}/>}
         {activeSection==='trainer_reviews'&&<EmployeeTrainerReviewPanel data={trainerReviewData} employeeId={e.id} loading={trainerReviewLoading} error={trainerReviewError}/>}
@@ -2463,7 +2471,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}/>
         <InfoPanel title="组织与排班" rows={[['团队',e.teams?.name],['主档岗位',e.positions?.name],['排班岗位',e.schedule_position],['班次',e.shift_name],['负责人',e.person_in_charge||e.leader_name],['现场培训',e.on_site_trainer],['线上组长',e.online_leader||e.leader_name],['线上培训',e.online_trainer||e.trainer_name],['盘口',e.platform_scope],['工作内容',e.work_content]]}/>
         <InfoPanel title="联系方式" rows={[['工作TG',e.work_tg],['后台账号',e.backend_accounts],['Telegram',c.telegram_username],['Workfolio邮箱',c.work_email],['Zoom邮箱',c.zoom_email],['Facebook',c.facebook],['WhatsApp',c.whatsapp_phone]]}/>
-        <InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
+        {canViewCompensation&&<InfoPanel title="工资设置" rows={isPhpHome(e.employment_type)
           ? (comp.base_salary!==null && comp.base_salary!==undefined && comp.base_salary!==''
               ? [['工资方式','月薪制'],['月薪',money(comp.base_salary,'PHP')],['备注',comp.note]]
               : comp.daily_rate!==null && comp.daily_rate!==undefined && comp.daily_rate!==''
@@ -2472,7 +2480,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
           : isOnsiteToHome(e.employment_type)
             ? [['底薪',money(comp.base_salary,'USD')],['默认绩效',money(comp.performance_default,'USD')],['餐补',money(comp.meal_allowance,'USD')],['备注',comp.note]]
             : [['底薪',money(comp.base_salary,'USD')],['默认绩效',money(comp.performance_default,'USD')],['备注',comp.note]]
-        }/>
+        }/>}
         <section className="detail-panel payment-panel-v11">
           <div className="detail-panel-head"><div><h3>{paymentTitle}</h3><p>{full?'你有敏感资料查看权限，显示完整值。':'完整号码不下发到浏览器，仅显示首尾，中间 **** 隐藏。'}</p></div><span className={full?'access-full':'access-masked'}>{full?'完整可见':'部分隐藏'}</span></div>
           {paymentMode==='usdt'?<div className="payment-primary"><span>USDT 地址</span><strong>{text(p.usdt_address)||'—'}</strong><small>收款方式：{p.transfer_using||'USDT'}</small></div>:paymentMode==='bank_wallet'?<div className="info-rows"><InfoRow label="收款方式" value={p.transfer_using}/><InfoRow label="银行卡 / 钱包账号" value={p.bank_wallet_account} mono/><InfoRow label="收款姓名" value={p.account_name}/></div>:null}

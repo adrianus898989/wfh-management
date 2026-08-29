@@ -8,6 +8,7 @@ const payroll = await readFile(new URL('../../supabase/migrations/20260827113100
 const payrollCorrections = await readFile(new URL('../../supabase/migrations/20260827140000_payroll_batch_correction_workflow.sql', import.meta.url), 'utf8')
 const training = await readFile(new URL('../../supabase/migrations/20260827113200_online_training_page_permission_boundaries.sql', import.meta.url), 'utf8')
 const adjustmentAlignment = await readFile(new URL('../../supabase/migrations/20260827113300_adjustment_edit_permission_alignment.sql', import.meta.url), 'utf8')
+const adjustmentFilters = await readFile(new URL('../../supabase/migrations/20260829041328_preserve_admin_adjustment_currency_filter.sql', import.meta.url), 'utf8')
 const accounts = await readFile(new URL('../../supabase/functions/admin-accounts/index.ts', import.meta.url), 'utf8')
 const employees = await readFile(new URL('../../supabase/functions/admin-employees/index.ts', import.meta.url), 'utf8')
 const employeeWrite = await readFile(new URL('../../supabase/functions/admin-employee-write/index.ts', import.meta.url), 'utf8')
@@ -167,7 +168,7 @@ test('payroll readers expose actor snapshots and explain archived or missing pub
   assert.match(payrollCorrections,/admin_payroll_enrich_page[\s\S]+admin_payroll_granular_page/)
   assert.match(payrollCorrections,/当前无有效发布批次，最近批次已删除\/作废/)
   assert.match(payrollCorrections,/已归档表示同月份新批次发布后自动替代旧批次/)
-  assert.match(payrollPage,/上传 \{batch\.created_by_name\|\|'—'\}[\s\S]+编辑 \{batch\.updated_by_name\|\|'—'\}/)
+  assert.match(payrollPage,/导入 \{batch\.created_by_name\|\|'—'\} · \{dateTime\(batch\.created_at\)\}[\s\S]+最近操作 \{batch\.updated_by_name\|\|'—'\} · \{dateTime\(batch\.updated_at\)\}/)
   assert.match(payrollPage,/selected\?\.published_by_name/)
   assert.match(payrollPage,/admin_payroll_update_batch/)
   assert.match(payrollPage,/admin_payroll_void_batch/)
@@ -202,6 +203,17 @@ test('adjustment edits use their own selectable permission instead of approval',
   assert.match(adjustmentAlignment, /admin_adjustment_upsert\(p_payload jsonb\)[\s\S]+p_payload->>'id'[\s\S]+adjustment\.page\.edit/)
   assert.match(attendancePage, /canEditAdjustment=access\.hasPermission\(PERMISSIONS\.ADJUSTMENT_PAGE_EDIT\)/)
   assert.doesNotMatch(attendancePage, /canEditAdjustment=access\.hasPermission\(PERMISSIONS\.ADJUSTMENT_PAGE_APPROVE\)/)
+})
+
+test('adjustment currency and search filters survive the granular wrapper', () => {
+  assert.match(adjustmentFilters, /create or replace function public\.admin_attendance_page_filters/)
+  for (const key of ['search','employee_status','currency','match_status']) {
+    assert.ok(adjustmentFilters.includes(`'${key}',p_filters->'${key}'`), `missing whitelisted ${key} filter`)
+  }
+  assert.match(adjustmentFilters, /jsonb_strip_nulls[\s\S]+\|\| coalesce\(p_forced,'\{\}'::jsonb\)[\s\S]+include_mirrors',false/)
+  assert.match(attendancePage, /currency:''/)
+  assert.match(attendancePage, /tab==='奖金 \/ 扣款'[\s\S]+<span>币种<\/span>[\s\S]+全部币种（USD \+ PHP）[\s\S]+value="USD"[\s\S]+value="PHP"/)
+  assert.match(attendancePage, /admin_adjustment_page/)
 })
 
 test('account overview payloads omit sensitive employee contact fields', () => {

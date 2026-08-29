@@ -135,8 +135,24 @@ test('trainer landing page uses one bounded server aggregation request per page'
   )
   assert.match(loadListSource,/requestedMode==='reports'\?'online_training_search_trainers':'online_training_search_people'/)
   assert.match(loadListSource,/p_page:nextPage/)
-  assert.match(loadListSource,/p_page_size:requestedMode==='reports'\?TRAINER_PAGE_SIZE:PEOPLE_PAGE_SIZE/)
+  assert.match(loadListSource,/p_page_size:pageSize/)
   assert.doesNotMatch(loadListSource,/Promise\.all|online_training_search_reports|online_training_resolve_trainer_identities|hydrateAttachments|createSignedUrls/)
+})
+
+test('training result pages expose bounded page-size choices and one global report summary',()=>{
+  assert.match(onlineTrainingPage,/const \[pageSize,setPageSize\]=useState\(20\)/)
+  assert.match(onlineTrainingPage,/pageSizeOptions=\{\[20,30,50,100\]\}/)
+  const pageControls=readFileSync(new URL('../components/DataPageControls.jsx',import.meta.url),'utf8')
+  assert.match(pageControls,/pageSizeOptions=PAGE_SIZE_OPTIONS/)
+  assert.match(pageControls,/pageSizeOptions\.map\(n=>/)
+  assert.equal((onlineTrainingPage.match(/ot-report-global-summary/g)||[]).length,1)
+  const migration=readFileSync(new URL(
+    '../../supabase/migrations/20260828172000_online_training_page_size_options.sql',
+    import.meta.url,
+  ),'utf8')
+  assert.match(migration,/least\(greatest\(coalesce\(p_page_size, 20\), 1\), 100\)/)
+  assert.match(migration,/online_training_page_size_guard_changed/)
+  assert.match(migration,/set local lock_timeout = '500ms'/)
 })
 
 test('trainer summary RPC preserves session, view, employee-scope and execute boundaries',()=>{

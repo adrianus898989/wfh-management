@@ -65,7 +65,8 @@ test('scope pruning removes positions and employee supplements outside selected 
   assert.deepEqual(result, { teamIds: ['panda'], positionIds: ['payout'], employeeIds: ['a'] })
 })
 
-test('account search leaves room for adjacent actions instead of consuming the toolbar', () => {
-  assert.match(usersPage, /\.access-searchbar\{display:grid;grid-template-columns:minmax\(240px,420px\) auto auto auto;/)
+test('account search keeps three explicit fields alongside adjacent actions', () => {
+  assert.match(usersPage, /\.access-searchbar\{display:grid;grid-template-columns:repeat\(3,minmax\(160px,1fr\)\) auto auto auto;/)
   assert.match(usersPage, /\.access-searchbar\{[^}]+justify-content:start/)
+  assert.match(usersPage, /输入后台用户名[\s\S]+输入员工ID或姓名[\s\S]+输入角色、管理范围或创建人/)
 })

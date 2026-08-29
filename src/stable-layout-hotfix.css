@@ -137,3 +137,32 @@
   white-space:normal!important;
   overflow-wrap:anywhere!important;
 }
+
+/*
+ * Modal readability policy
+ *
+ * Keep the dimmed overlay, stacking order and every dialog interaction intact,
+ * but never blur the page behind an application modal/drawer/lightbox.  The
+ * attribute selectors cover current and future module-specific wrappers while
+ * the explicit legacy classes cover overlays whose names predate that pattern.
+ * `!important` is intentional: several feature styles are loaded lazily after
+ * this shared hotfix, and this visual-only policy must remain consistent.
+ */
+:where(
+  .modal-mask,
+  .detail-mask,
+  .activation-code-mask,
+  .analytics-detail-mask,
+  .admin-alert-rule-mask,
+  .wfh-chart-summary-mask,
+  .rp-workload-modal-mask,
+  .ot-backdrop,
+  [class*="modal-backdrop"],
+  [class*="modal-mask"],
+  [class*="drawer-backdrop"],
+  [class*="drawer-mask"],
+  [class*="lightbox"]
+){
+  -webkit-backdrop-filter:none!important;
+  backdrop-filter:none!important;
+}

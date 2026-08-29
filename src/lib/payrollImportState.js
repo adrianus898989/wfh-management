@@ -1,6 +1,42 @@
 const clean = value => String(value ?? '').trim()
+const searchKey = value => clean(value).normalize('NFKC').toLowerCase().replace(/[\s_\-\/()（）.：:#]+/g, '')
+
+const PAYROLL_BATCH_STATUS_LABELS = {
+  draft: '待发布',
+  published: '已发布',
+  archived: '已归档',
+  voided: '已作废',
+}
 
 export const payrollBatchIdentity = batch => clean(batch?.id)
+
+export const payrollBatchLifecycleState = batch => {
+  if (batch?.voided_at) return 'voided'
+  return clean(batch?.status).toLowerCase() || 'unknown'
+}
+
+export const filterPayrollBatches = (batches, { search = '', status = 'all' } = {}) => {
+  const expectedStatus = clean(status).toLowerCase() || 'all'
+  const needle = searchKey(search)
+  return (batches || []).filter(batch => {
+    const lifecycleState = payrollBatchLifecycleState(batch)
+    if (expectedStatus !== 'all' && lifecycleState !== expectedStatus) return false
+    if (!needle) return true
+    const searchable = searchKey([
+      payrollBatchIdentity(batch),
+      batch?.source_file_name,
+      batch?.title,
+      batch?.period_start,
+      batch?.currency,
+      batch?.created_by_name,
+      batch?.updated_by_name,
+      batch?.published_by_name,
+      lifecycleState,
+      PAYROLL_BATCH_STATUS_LABELS[lifecycleState],
+    ].join(' '))
+    return searchable.includes(needle)
+  })
+}
 
 export const payrollMatchState = row => {
   const match = clean(row?.match_state || row?.identity_match_state).toLowerCase()

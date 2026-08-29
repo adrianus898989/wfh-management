@@ -7,6 +7,7 @@ export function DataPageControls({
   onKeyword,
   placeholder='搜索',
   pageSize=20,
+  pageSizeOptions=PAGE_SIZE_OPTIONS,
   onPageSize,
   right,
 }) {
@@ -21,7 +22,7 @@ export function DataPageControls({
           <label className="page-size-control">
             <span>每页</span>
             <select value={pageSize} onChange={e=>onPageSize(Number(e.target.value))}>
-              {PAGE_SIZE_OPTIONS.map(n=><option key={n} value={n}>{n} 条</option>)}
+              {pageSizeOptions.map(n=><option key={n} value={n}>{n} 条</option>)}
             </select>
           </label>
         )}
@@ -39,7 +40,7 @@ function pageWindow(page,pages){
   return Array.from({length:end-start+1},(_,i)=>start+i)
 }
 
-export function Pagination({ page, pages, total, pageSize, loading, onPage, onPageSize }) {
+export function Pagination({ page, pages, total, pageSize, pageSizeOptions=PAGE_SIZE_OPTIONS, loading, onPage, onPageSize }) {
   const [jump,setJump]=useState('')
   const pageList=useMemo(()=>pageWindow(page,pages),[page,pages])
   const from = total ? (page-1)*pageSize+1 : 0
@@ -60,7 +61,7 @@ export function Pagination({ page, pages, total, pageSize, loading, onPage, onPa
       <div className="pagination-main">
         {onPageSize&&<label className="pagination-size-control">
           <select value={pageSize} onChange={e=>onPageSize(Number(e.target.value))}>
-            {PAGE_SIZE_OPTIONS.map(n=><option key={n} value={n}>{n} 条 / 页</option>)}
+            {pageSizeOptions.map(n=><option key={n} value={n}>{n} 条 / 页</option>)}
           </select>
         </label>}
         <button disabled={page<=1||loading} onClick={()=>go(1)}>首页</button>

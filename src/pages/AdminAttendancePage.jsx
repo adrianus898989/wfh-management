@@ -32,7 +32,7 @@ const scheduleTeamName=(row,profile={})=>{
 }
 const scheduleTeamKey=value=>organizationName(value).toLocaleLowerCase().replace(/\s+/g,'')
 const todayIso=businessTodayIso
-const emptyFilters=()=>({search:'',employee_no:'',employee_name:'',date_from:'',date_to:'',source_month:'',source_group:'',work_mode:'',event_kind:'',employee_status:'',team:'',position:'',country:'',platform:'',manager:'',match_status:''})
+const emptyFilters=()=>({search:'',employee_no:'',employee_name:'',date_from:'',date_to:'',source_month:'',source_group:'',work_mode:'',event_kind:'',employee_status:'',currency:'',team:'',position:'',country:'',platform:'',manager:'',match_status:''})
 const tabFilters=tab=>{
   const next={
     ...emptyFilters(),
@@ -265,6 +265,7 @@ function AttendanceFilters({tab,draft,setDraft,options,advanced,setAdvanced,load
       <label><span>日期止</span><input type="date" value={draft.date_to} disabled={tab==='今日考勤'} onChange={event=>update('date_to',event.target.value)}/></label>
       <label><span>员工类型</span><select value={draft.source_group} onChange={event=>update('source_group',event.target.value)}><option value="">全部员工类型</option><option value="home">纯居家</option><option value="onsite_to_home">现场转居家</option>{optionEntries(options.source_groups,attendanceSourceGroupLabel).filter(item=>!['home','onsite_to_home'].includes(item.value)).map(item=><option value={item.value} key={item.key}>{item.label}</option>)}</select></label>
       <label><span>记录类别</span><select value={draft.event_kind} onChange={event=>update('event_kind',event.target.value)}><option value="">全部类别</option>{kindOptions.map(item=><option key={item.key} value={item.value}>{item.label}</option>)}</select></label>
+      {tab==='奖金 / 扣款'&&<label><span>币种</span><select value={draft.currency} onChange={event=>update('currency',event.target.value)}><option value="">全部币种（USD + PHP）</option><option value="USD">USD · 美元</option><option value="PHP">PHP · 菲律宾比索</option></select></label>}
       <label><span>员工状态</span><select value={draft.employee_status} onChange={event=>update('employee_status',event.target.value)}><option value="">全部员工状态</option><option value="active">在职</option><option value="probation">试用</option><option value="resigned">离职</option><option value="inactive">停用</option><option value="unmatched">未匹配</option></select></label>
       {select('团队','team',options.teams,'全部团队')}
       {select('岗位','position',options.positions,'全部岗位')}

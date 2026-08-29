@@ -18,8 +18,6 @@ import {edgeFunctionErrorMessage} from '../lib/edgeFunctionError'
 import '../styles-online-training.css'
 
 const BUCKET='online-training'
-const PEOPLE_PAGE_SIZE=20
-const TRAINER_PAGE_SIZE=12
 const RPC_PAGE_SIZE=50
 const MAX_ATTACHMENTS=6
 const MAX_IMAGE_BYTES=4*1024*1024
@@ -199,6 +197,7 @@ export default function OnlineTrainingPage(){
   const [draftFilters,setDraftFilters]=useState(defaultFilters)
   const [searchVersion,setSearchVersion]=useState(0)
   const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(20)
   const [result,setResult]=useState({rows:[],total:0,pages:1})
   const [loading,setLoading]=useState(true)
   const [searching,setSearching]=useState(false)
@@ -269,7 +268,7 @@ export default function OnlineTrainingPage(){
     try{
       const data=await readCall(
         requestedMode==='reports'?'online_training_search_trainers':'online_training_search_people',{
-          p_filters:filters,p_page:nextPage,p_page_size:requestedMode==='reports'?TRAINER_PAGE_SIZE:PEOPLE_PAGE_SIZE,
+          p_filters:filters,p_page:nextPage,p_page_size:pageSize,
         },
       )
       const rows=data?.rows||[]
@@ -290,7 +289,7 @@ export default function OnlineTrainingPage(){
     if(!bootstrap)return
     const timer=setTimeout(()=>loadList({silent:true}),0)
     return()=>clearTimeout(timer)
-  },[bootstrap,mode,page,searchVersion])
+  },[bootstrap,mode,page,pageSize,searchVersion])
   useEffect(()=>{
     if(!(editor||viewing||deleteTarget||profile||history||trainerHistory||lightbox))return
     const prior=document.body.style.overflow;document.body.style.overflow='hidden'
@@ -699,7 +698,7 @@ export default function OnlineTrainingPage(){
       :<PeopleList rows={result.rows} onHistory={openHistory}/>
     }
 
-    {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={mode==='reports'?TRAINER_PAGE_SIZE:PEOPLE_PAGE_SIZE} onPage={setPage}/>}
+    {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={pageSize} pageSizeOptions={[20,30,50,100]} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>}
 
     {editor&&<OverlayPortal><EditorModal editor={editor} updateDraft={updateDraft} updateMember={updateMember} updateMetric={updateMetric}
       assignment={bootstrap.auto_assignment||{}} trainerOptions={bootstrap.manager_options||[]} onSelectTrainer={selectAdminTrainer}
@@ -836,11 +835,11 @@ function ViewModal({row,returnToHistory=false,onClose,onProfile,onOpenImage,onEd
       <div className="ot-view-head"><div className="date"><span>{dateText(row.report_date)}</span><strong>{row.platform||'未填写平台'} · {row.shift_name||'未填写班次'}</strong></div><div><span>提交人</span><strong>{row.author_name||'后台用户'}</strong><small>{row.author_employee_no||'后台账号'} · {timeText(row.created_at)}</small></div></div>
       <div className="ot-view-meta"><span>负责人：{row.leader_name||'—'}</span><span>培训：{row.trainer_name||'—'}</span><span>课程：{row.course_type||'—'}</span><span>人员：{row.members?.length||0}人</span></div>
       <div className="ot-counts large"><b>排班记录</b><span>正常 {counts.normal||0}</span><span>公休 {counts.rest||0}</span><span>未入 {counts.not_started||0}</span><span>请假 {counts.leave||0}</span><span className={counts.absent?'danger':''}>缺席 {counts.absent||0}</span><span>回家 {counts.transferred||0}</span></div>
+      {(row.report_summary||row.issues_summary||row.next_plan)&&<section className="ot-summary-box compact ot-report-global-summary">{row.report_summary&&<div><b>整体培训总结</b><p>{row.report_summary}</p></div>}{row.issues_summary&&<div><b>共同问题</b><p>{row.issues_summary}</p></div>}{row.next_plan&&<div><b>下一步安排</b><p>{row.next_plan}</p></div>}</section>}
       <div className="ot-report-detail-workspace">
         <aside className="ot-member-index"><header><strong>人员列表</strong><span>{row.members?.length||0} 人</span></header><div>{(row.members||[]).map((member,index)=>{const status=ATTENDANCE[member.attendance_status]||ATTENDANCE.normal;const key=text(member.id)||text(member.employee_id)||text(member.employee_no);const active=selectedMember===member;return <button type="button" className={active?'active':''} key={key||index} onClick={()=>setSelectedMemberId(key)}><span>{index+1}</span><div><strong>{member.employee_no||'—'} · {member.employee_name||'未填写姓名'}</strong><small>{member.position_name||'未填写岗位'} · {member.team_name||'未填写团队'}</small></div><em className={status.tone}>{status.label}</em></button>})}</div></aside>
         <section className="ot-selected-member-detail">
           {selectedMember?<MemberView member={selectedMember} index={(row.members||[]).indexOf(selectedMember)} onProfile={onProfile}/>:<div className="ot-empty small"><h3>这份日报没有人员明细</h3></div>}
-          {(row.report_summary||row.issues_summary||row.next_plan)&&<section className="ot-summary-box compact">{row.report_summary&&<div><b>整体培训总结</b><p>{row.report_summary}</p></div>}{row.issues_summary&&<div><b>共同问题</b><p>{row.issues_summary}</p></div>}{row.next_plan&&<div><b>下一步安排</b><p>{row.next_plan}</p></div>}</section>}
           <AttachmentGrid items={row.attachments} onOpen={onOpenImage} compact/>
         </section>
       </div>

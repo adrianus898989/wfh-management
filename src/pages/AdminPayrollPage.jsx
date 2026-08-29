@@ -8,7 +8,7 @@ import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { PAYROLL_CURRENCY_OPTIONS, payrollCurrencyLabel } from '../lib/payrollCurrency'
-import { payrollBatchIdentity, payrollMatchState, summarizePayrollRows } from '../lib/payrollImportState'
+import { filterPayrollBatches, payrollBatchIdentity, payrollMatchState, summarizePayrollRows } from '../lib/payrollImportState'
 import { supabase } from '../lib/supabase'
 
 const PAYOUT_CHANGE_VIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW
@@ -491,13 +491,16 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
   const [matchFilter,setMatchFilter]=useState('all')
   const [positionFilter,setPositionFilter]=useState('')
   const [platformFilter,setPlatformFilter]=useState('')
+  const [historySearch,setHistorySearch]=useState('')
+  const [historyStatus,setHistoryStatus]=useState('all')
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(20)
-  const history=useMemo(()=>[...(batches||[])].sort((left,right)=>{
+  const allHistory=useMemo(()=>[...(batches||[])].sort((left,right)=>{
     const byCreated=new Date(right.created_at||0).getTime()-new Date(left.created_at||0).getTime()
     if(byCreated)return byCreated
     return Number(right.id||0)-Number(left.id||0)
   }),[batches])
+  const history=useMemo(()=>filterPayrollBatches(allHistory,{search:historySearch,status:historyStatus}),[allHistory,historySearch,historyStatus])
   const rows=panel?.rows||[]
   const selected=panel?.selected||panel?.batch||null
   const positionOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.position_name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
@@ -598,23 +601,28 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
     <section className="payroll-import-history-card">
       <div className="payroll-import-history-head">
         <div><h2>导入批次</h2><p>已归档表示同月份新批次发布后自动替代旧批次；历史数据仍会保留。</p></div>
-        <span>共 {history.length} 个批次</span>
+        <span>{history.length===allHistory.length?`共 ${allHistory.length} 个批次`:`筛选 ${history.length} / ${allHistory.length} 个批次`}</span>
+      </div>
+      <div className="payroll-import-history-filters">
+        <label><span>批次搜索</span><input value={historySearch} onChange={event=>setHistorySearch(event.target.value)} placeholder="文档名 / 批次名 / 批次号 / 操作人 / 币种"/></label>
+        <label><span>批次状态</span><select value={historyStatus} onChange={event=>setHistoryStatus(event.target.value)}><option value="all">全部状态</option><option value="draft">待发布</option><option value="published">已发布</option><option value="archived">已归档</option><option value="voided">已作废</option></select></label>
+        <button type="button" disabled={!historySearch&&historyStatus==='all'} onClick={()=>{setHistorySearch('');setHistoryStatus('all')}}>重置</button>
       </div>
       <div className="payroll-import-history-list">
-        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>工资月份</span><span>操作人</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span/></div>
+        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span/></div>
         {history.length?history.map(batch=>{
           const hasTotal=batch.total_amount!==undefined&&batch.total_amount!==null
           return <button type="button" key={payrollBatchIdentity(batch)} className="payroll-import-history-row" onClick={()=>openBatch(batch)}>
             <span className="payroll-import-file"><b>{batch.source_file_name||batch.title||'未命名工资文档'}</b><small>批次 #{payrollBatchIdentity(batch)} · {batch.source_file_name&&batch.title&&batch.source_file_name!==batch.title?batch.title:(batch.source_type==='upload'?'文件上传':'系统导入')}</small></span>
             <span className="payroll-import-period">{String(batch.period_start||'').slice(0,7)||'—'}</span>
-            <span className="payroll-import-actors"><b>上传 {batch.created_by_name||'—'}</b><small>编辑 {batch.updated_by_name||'—'}</small>{batch.published_at&&<small>发布 {batch.published_by_name||'—'}</small>}</span>
+            <span className="payroll-import-actors"><b>导入 {batch.created_by_name||'—'} · {dateTime(batch.created_at)}</b><small>最近操作 {batch.updated_by_name||'—'} · {dateTime(batch.updated_at)}</small>{batch.published_at&&<small>发布 {batch.published_by_name||'—'} · {dateTime(batch.published_at)}</small>}</span>
             <span className="payroll-import-time">{dateTime(batch.created_at)}</span>
             <span className="payroll-import-count"><b>{Number(batch.row_count||0).toLocaleString()}</b><small>人</small></span>
             <span className="payroll-import-total"><b>{hasTotal?money(batch.total_amount,batch.currency):'—'}</b><small>{batch.currency||'USD'}</small></span>
             <span><i className={`payroll-batch-status ${payrollBatchStatusClass(batch)}`}>{payrollBatchDisplayStatus(batch)}</i></span>
             <span className="payroll-import-open">查看记录 <b aria-hidden="true">→</b></span>
           </button>
-        }):<div className="payroll-import-history-empty">暂无工资导入记录</div>}
+        }):<div className="payroll-import-history-empty">{allHistory.length?'当前搜索与状态下没有导入批次':'暂无工资导入记录'}</div>}
       </div>
     </section>
     {panel&&<div className="payroll-batch-modal-backdrop" role="presentation" onMouseDown={closePanel}>
@@ -627,7 +635,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
           <div className="payroll-batch-facts">
             <div><span>文档批次 / 导入时间</span><strong>#{payrollBatchIdentity(selected)} · {dateTime(selected?.created_at)}</strong></div>
             <div><span>上传人</span><strong>{selected?.created_by_name||'—'} · {dateTime(selected?.created_at)}</strong></div>
-            <div><span>最近编辑人</span><strong>{selected?.updated_by_name||'—'} · {dateTime(selected?.updated_at)}</strong></div>
+            <div><span>最近操作人</span><strong>{selected?.updated_by_name||'—'} · {dateTime(selected?.updated_at)}</strong></div>
             <div><span>发布人</span><strong>{selected?.published_at?`${selected?.published_by_name||'—'} · ${dateTime(selected?.published_at)}`:'尚未发布'}</strong></div>
             <div><span>工资单</span><strong>{Number(selected?.row_count||rows.length).toLocaleString()} 人</strong></div>
             <div><span>合计实发</span><strong>{panel.loading?'读取中…':money(totalAmount,selected?.currency)}</strong></div>

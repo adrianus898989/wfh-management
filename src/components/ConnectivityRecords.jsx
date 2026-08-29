@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { isCurrentLiveRequest, staleSnapshotNotice } from '../lib/requestConsistency'
 import { Pagination } from './DataPageControls'
 import { employeeMetricCountLabel, employeeRiskGradeFromTotal } from '../lib/employeeDrawerState'
+import { calculatedConnectivityDuration, normaliseConnectivityStatus } from '../lib/connectivityIncidentState'
 
 const text=value=>String(value??'').trim()
 const EVIDENCE_BUCKET='connectivity-evidence'
@@ -12,19 +13,13 @@ const MAX_EVIDENCE_SIZE=50*1024*1024
 const ALLOWED_EVIDENCE_TYPES=new Set(['image/jpeg','image/png','image/webp','image/gif','image/heic','image/heif','video/mp4','video/quicktime','video/webm'])
 const today=businessTodayIso
 const typeLabel=value=>({power_outage:'停电',internet_outage:'断网'}[value]||value||'—')
-const statusLabel=value=>({reported:'已记录',verified:'已核实',resolved:'已恢复',rejected:'不成立'}[value]||value||'—')
+const statusLabel=value=>({reported:'进行中',verified:'已核实',resolved:'已恢复',rejected:'不成立'}[value]||value||'—')
 const durationLabel=value=>{
   const minutes=Number(value)
-  if(!Number.isFinite(minutes)||minutes<=0)return '—'
+  if(!Number.isFinite(minutes)||minutes<0)return '—'
+  if(minutes===0)return '0分钟'
   const hours=Math.floor(minutes/60),rest=minutes%60
   return `${hours?`${hours}小时`:''}${rest?`${rest}分钟`:''}`
-}
-const calculatedDuration=(start,end)=>{
-  if(!start||!end)return 0
-  const [sh,sm]=start.split(':').map(Number),[eh,em]=end.split(':').map(Number)
-  if(![sh,sm,eh,em].every(Number.isFinite))return 0
-  const from=sh*60+sm,to=eh*60+em
-  return to>=from?to-from:24*60-from+to
 }
 const initialFilters=()=>({employee_no:'',employee_name:'',team:'',position:'',incident_type:'',status:'',country:'',...businessRecentRange(30)})
 const initialRecord=()=>({id:null,employee_no:'',incident_date:today(),incident_type:'power_outage',started_at:'',ended_at:'',details:'',status:'reported'})
@@ -187,7 +182,7 @@ export function ConnectivityRecordsPage(){
   const openCreate=()=>{resetEditor();setEditor('create')}
   const openEdit=row=>{
     const attachments=evidenceItems(row)
-    setRecord({id:row.id,employee_no:row.employee_no||'',incident_date:row.incident_date||today(),incident_type:row.incident_type||'internet_outage',started_at:text(row.started_at).slice(0,5),ended_at:text(row.ended_at).slice(0,5),details:row.details||'',status:row.status||'reported'})
+    setRecord({id:row.id,employee_no:row.employee_no||'',incident_date:row.incident_date||today(),incident_type:row.incident_type||'power_outage',started_at:text(row.started_at).slice(0,5),ended_at:text(row.ended_at).slice(0,5),details:row.details||'',status:row.status||'reported'})
     setExistingFiles(attachments);setOriginalFiles(attachments);setFiles([]);setFormError('')
     setEmployeeLookup({status:'found',employee:{full_name:row.full_name,country:row.employee_country,team_name:row.team_name,position_name:row.position_name,status:row.employee_status},message:''})
     setEditor('edit')
@@ -225,24 +220,34 @@ export function ConnectivityRecordsPage(){
     event.preventDefault();setFormError('');setMessage('')
     if(!text(record.employee_no)){setFormError('请填写员工ID。');return}
     if(employeeLookup.status!=='found'){setFormError(employeeLookup.status==='loading'?'正在检测员工，请稍候。':'员工ID尚未通过检测，请先核对。');return}
-    if(!record.incident_date||!record.started_at||!record.ended_at){setFormError('请完整填写发生日期、开始时间和恢复时间。');return}
+    if(!record.incident_date||!record.started_at){setFormError('请完整填写发生日期和开始时间。');return}
     setSaving(true)
     const uploaded=[]
     try{
-      const {data:userData,error:userError}=await supabase.auth.getUser()
-      if(userError||!userData?.user)throw new Error('登录状态已失效，请重新登录。')
+      let uploadUserId=''
+      if(files.length){
+        const {data:userData,error:userError}=await supabase.auth.getUser()
+        if(userError||!userData?.user){
+          const status=Number(userError?.status||0)
+          throw new Error(status===401||status===403
+            ? '登录状态已失效，请重新登录。'
+            : '上传身份验证暂时失败，请重试；当前登录状态已保留。')
+        }
+        uploadUserId=userData.user.id
+      }
       const employeeKey=text(record.employee_no).toUpperCase().replace(/[^A-Z0-9]/g,'')||'employee'
       for(let index=0;index<files.length;index+=1){
         const file=files[index],mime=evidenceMime(file)
         const unique=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${index}`
-        const path=`${userData.user.id}/${employeeKey}/${record.incident_date}/${unique}-${safeFileName(file.name)}`
+        const path=`${uploadUserId}/${employeeKey}/${record.incident_date}/${unique}-${safeFileName(file.name)}`
         const {data,error}=await supabase.storage.from(EVIDENCE_BUCKET).upload(path,file,{contentType:mime,upsert:false})
         if(error)throw error
         uploaded.push({path:data.path,name:file.name,mime,size:file.size})
       }
       const attachments=[...existingFiles,...uploaded]
+      const status=normaliseConnectivityStatus(record.status,record.ended_at)
       const rpc=editor==='edit'?'admin_connectivity_update':'admin_connectivity_create'
-      const {data,error}=await supabase.rpc(rpc,{p_record:{...record,attachments}})
+      const {data,error}=await supabase.rpc(rpc,{p_record:{...record,status,attachments}})
       if(error)throw error
       let cleanupWarning=''
       if(editor==='edit'){
@@ -252,8 +257,8 @@ export function ConnectivityRecordsPage(){
           const removeError=await removeEvidencePaths(removed)
           if(removeError)cleanupWarning='记录已更新，但旧证明文件未能自动清理；文件已从记录隐藏，请联系管理员清理存储文件。'
         }
-        flash(cleanupWarning||`已更新 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}记录。`)
-      }else flash(`已记录 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}情况。`)
+        flash(cleanupWarning||`已更新 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}记录${record.ended_at?'，恢复时间已确认。':'，当前仍在进行中。'}`)
+      }else flash(`已记录 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}情况${record.ended_at?'，恢复时间已确认。':'，当前仍在进行中，可稍后编辑补填恢复时间。'}`)
       resetEditor();setPage(1);await load(1,pageSize,applied)
     }catch(error){
       let rollbackError=null
@@ -287,18 +292,18 @@ export function ConnectivityRecordsPage(){
   const canEdit=capabilities.edit
   const canDelete=capabilities.delete
   const showActions=canEdit||canDelete
-  const previewDuration=useMemo(()=>calculatedDuration(record.started_at,record.ended_at),[record.started_at,record.ended_at])
+  const previewDuration=useMemo(()=>calculatedConnectivityDuration(record.started_at,record.ended_at),[record.started_at,record.ended_at])
   return <div className="connectivity-page">
     <div className="connectivity-head"><div><h2>停电 / 断网记录</h2></div>{canCreate&&<button className="primary-action" onClick={openCreate}>＋ 新增记录</button>}</div>
     {message&&<div className="connectivity-toast" role="status"><span>✓</span>{message}</div>}
-    {editor&&<div className="connectivity-modal-backdrop" role="presentation" onMouseDown={closeEditor}><form className="connectivity-modal" onSubmit={save} onMouseDown={event=>event.stopPropagation()}><header><div><small>{editor==='edit'?'EDIT CONNECTIVITY RECORD':'NEW CONNECTIVITY RECORD'}</small><h3>{editor==='edit'?'编辑停电 / 断网记录':'新增停电 / 断网记录'}</h3></div><button type="button" onClick={closeEditor} disabled={saving}>×</button></header>{formError&&<div className="connectivity-form-error">{formError}</div>}<div className="connectivity-form-grid">
+    {editor&&<div className="connectivity-modal-backdrop" role="presentation" onMouseDown={closeEditor}><form className="connectivity-modal" role="dialog" aria-modal="true" aria-labelledby="connectivity-editor-title" onSubmit={save} onMouseDown={event=>event.stopPropagation()}><header><div><small>{editor==='edit'?'EDIT CONNECTIVITY RECORD':'NEW CONNECTIVITY RECORD'}</small><h3 id="connectivity-editor-title">{editor==='edit'?'编辑停电 / 断网记录':'新增停电 / 断网记录'}</h3></div><button type="button" aria-label="关闭" onClick={closeEditor} disabled={saving}>×</button></header>{formError&&<div className="connectivity-form-error" role="alert">{formError}</div>}<div className="connectivity-form-grid">
       <label className="connectivity-employee-field">员工ID<input autoFocus value={record.employee_no} onChange={event=>setRecord({...record,employee_no:event.target.value})} placeholder="例如 CS000134" required/><span className={`connectivity-employee-check ${employeeLookup.status}`}>{employeeLookup.status==='found'?<><b>{employeeLookup.employee.full_name}</b><em>{employeeLookup.employee.country||'未填写国家'} · {employeeLookup.employee.team_name||'未分配团队'} / {employeeLookup.employee.position_name||'未分配岗位'} · {employeeLookup.employee.status==='resigned'?'已离职':'在职'}</em></>:employeeLookup.message}</span></label>
       <label>发生日期<input type="date" value={record.incident_date} onChange={event=>setRecord({...record,incident_date:event.target.value})} required/></label>
       <label>问题类型<select value={record.incident_type} onChange={event=>setRecord({...record,incident_type:event.target.value})}><option value="power_outage">停电</option><option value="internet_outage">断网</option></select></label>
-      <label>自动时长<input value={previewDuration?durationLabel(previewDuration):'填写开始与恢复时间后自动计算'} disabled/></label>
+      <label>自动时长<input value={record.ended_at?(previewDuration?durationLabel(previewDuration):'0分钟'):'进行中（补填恢复时间后自动计算）'} disabled/></label>
       <label>开始时间<input type="time" value={record.started_at} onChange={event=>setRecord({...record,started_at:event.target.value})} required/></label>
-      <label>恢复时间<input type="time" value={record.ended_at} onChange={event=>setRecord({...record,ended_at:event.target.value})} required/></label>
-      {editor==='edit'&&<label>记录状态<select value={record.status} onChange={event=>setRecord({...record,status:event.target.value})}><option value="reported">已记录</option><option value="verified">已核实</option><option value="resolved">已恢复</option><option value="rejected">不成立</option></select></label>}
+      <label className="connectivity-recovery-field">恢复时间（可后补）<input type="time" value={record.ended_at} onChange={event=>{const ended_at=event.target.value;setRecord({...record,ended_at,status:normaliseConnectivityStatus(record.status,ended_at)})}}/><span>{record.ended_at?'已填写恢复时间，保存后自动计算持续时长；支持跨午夜，单条记录最长 24 小时。':'尚未恢复时请留空；先保存为进行中，恢复后再点“编辑”补填。超过 24 小时请按天分开记录。'}</span></label>
+      {editor==='edit'&&<label>记录状态<select value={record.status} onChange={event=>setRecord({...record,status:event.target.value})}><option value="reported" disabled={Boolean(record.ended_at)}>进行中</option><option value="verified" disabled={Boolean(record.ended_at)}>已核实</option><option value="resolved" disabled={!record.ended_at}>已恢复</option><option value="rejected">不成立</option></select><span>{record.ended_at?'已填写恢复时间，状态将保存为“已恢复”。':'未填恢复时间时，可保存为“进行中”或“已核实”。'}</span></label>}
       <label className="wide">情况说明（可选）<textarea value={record.details} onChange={event=>setRecord({...record,details:event.target.value})} placeholder="填写停电或断网原因、恢复情况等"/></label>
       <label className="wide connectivity-upload">图片 / 视频证明（可选，最多 3 个）<input type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,video/mp4,video/quicktime,video/webm" onChange={chooseFiles} disabled={existingFiles.length+files.length>=MAX_EVIDENCE_FILES}/><span>支持图片、MP4、MOV、WebM；每个文件不超过 50MB。</span>{(existingFiles.length>0||files.length>0)&&<div className="connectivity-upload-files">{existingFiles.map(item=><button type="button" key={item.path} onClick={()=>setExistingFiles(current=>current.filter(file=>file.path!==item.path))}><small>已上传</small>{item.name||'证明文件'}<b>×</b></button>)}{files.map((file,index)=><button type="button" key={`${file.name}-${file.size}-${index}`} onClick={()=>setFiles(current=>current.filter((_,i)=>i!==index))}><small>待上传</small>{file.name}<b>×</b></button>)}</div>}</label>
     </div><footer><button type="button" className="secondary-action" onClick={closeEditor} disabled={saving}>取消</button><button type="submit" className="primary-action" disabled={saving}>{saving?'正在上传并保存…':editor==='edit'?'保存修改':'保存记录'}</button></footer></form></div>}
@@ -310,7 +315,7 @@ export function ConnectivityRecordsPage(){
       <label>岗位<select value={filters.position} onChange={event=>setFilters({...filters,position:event.target.value})}><option value="">全部岗位</option>{(data.position_options||[]).map(value=><option key={value}>{value}</option>)}</select></label>
       <label>问题类型<select value={filters.incident_type} onChange={event=>setFilters({...filters,incident_type:event.target.value})}><option value="">全部类型</option><option value="power_outage">停电</option><option value="internet_outage">断网</option></select></label>
       <label>员工国家<select value={filters.country} onChange={event=>setFilters({...filters,country:event.target.value})}><option value="">全部国家</option>{(data.country_options||[]).map(country=><option key={country}>{country}</option>)}</select></label>
-      <label>状态<select value={filters.status} onChange={event=>setFilters({...filters,status:event.target.value})}><option value="">全部状态</option><option value="reported">已记录</option><option value="verified">已核实</option><option value="resolved">已恢复</option><option value="rejected">不成立</option></select></label>
+      <label>状态<select value={filters.status} onChange={event=>setFilters({...filters,status:event.target.value})}><option value="">全部状态</option><option value="reported">进行中</option><option value="verified">已核实</option><option value="resolved">已恢复</option><option value="rejected">不成立</option></select></label>
       <label>日期起<input type="date" value={filters.date_from} onChange={event=>setFilters({...filters,date_from:event.target.value})}/></label>
       <label>日期止<input type="date" value={filters.date_to} onChange={event=>setFilters({...filters,date_to:event.target.value})}/></label>
       <div className="connectivity-filter-actions"><button className="primary-action" onClick={query} disabled={state.loading}>{state.loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={reset}>重置</button></div>
@@ -320,7 +325,7 @@ export function ConnectivityRecordsPage(){
     {state.data&&<><div className="connectivity-summary"><div><span>记录总数</span><strong>{summary.total||0}</strong></div><div><span>涉及员工</span><strong>{summary.affected_employees||0}</strong></div><div><span>停电</span><strong>{summary.power||0}</strong></div><div><span>断网</span><strong>{summary.internet||0}</strong></div></div>
     <section className="connectivity-daily-card"><header><div><h3>每日情况统计</h3></div><span>显示最近 {daily.length} 个有记录的日期</span></header>{daily.length?<div className="connectivity-daily-list">{daily.map(day=><article key={day.incident_date}><strong>{day.incident_date}</strong><span><b>{day.affected_employees}</b> 人</span><span>{day.total_records} 条记录</span><span className="power">停电 {day.power}</span><span className="internet">断网 {day.internet}</span><div>{(day.countries||[]).map(country=><em key={country.name}>{country.name} {country.employees}人</em>)}</div></article>)}</div>:<div className="connectivity-empty compact">暂无每日统计</div>}</section></>}
     <section className="connectivity-table-card">
-      {state.loading&&!state.data?<div className="connectivity-empty">正在读取记录…</div>:!state.data?<div className="connectivity-empty error">本次读取失败，未显示记录。</div>:rows.length?<div className="connectivity-table-wrap"><table><thead><tr><th>日期</th><th>入职日期</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>岗位</th><th>类型</th><th>开始 / 恢复</th><th>持续</th><th>状态</th><th>情况说明</th><th>证明</th><th>录入人</th>{showActions&&<th>操作</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.incident_date}</strong></td><td>{row.hire_date||'—'}</td><td><b>{row.employee_no}</b></td><td>{row.full_name}</td><td>{row.employee_country||'—'}</td><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td><td><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></td><td>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'}</td><td>{durationLabel(row.duration_minutes)}</td><td><span className={`connectivity-status ${row.status}`}>{statusLabel(row.status)}</span></td><td className="connectivity-details">{row.details||'—'}</td><td className="connectivity-proof"><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?'—':null}</td><td>{row.recorded_by_name||'后台账号'}</td>{showActions&&<td><div className="connectivity-row-actions">{canEdit&&<button type="button" onClick={()=>openEdit(row)}>编辑</button>}{canDelete&&<button type="button" className="danger" onClick={()=>{setDeleteError('');setDeleteTarget(row)}}>删除</button>}</div></td>}</tr>)}</tbody></table></div>:<div className="connectivity-empty">暂无符合条件的记录</div>}
+      {state.loading&&!state.data?<div className="connectivity-empty">正在读取记录…</div>:!state.data?<div className="connectivity-empty error">本次读取失败，未显示记录。</div>:rows.length?<div className="connectivity-table-wrap"><table><thead><tr><th>日期</th><th>入职日期</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>岗位</th><th>类型</th><th>开始 / 恢复</th><th>持续</th><th>状态</th><th>情况说明</th><th>证明</th><th>录入人</th>{showActions&&<th>操作</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.incident_date}</strong></td><td>{row.hire_date||'—'}</td><td><b>{row.employee_no}</b></td><td>{row.full_name}</td><td>{row.employee_country||'—'}</td><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td><td><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></td><td>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'进行中'}</td><td>{row.ended_at?durationLabel(row.duration_minutes):'进行中'}</td><td><span className={`connectivity-status ${row.status}`}>{statusLabel(row.status)}</span></td><td className="connectivity-details">{row.details||'—'}</td><td className="connectivity-proof"><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?'—':null}</td><td>{row.recorded_by_name||'后台账号'}</td>{showActions&&<td><div className="connectivity-row-actions">{canEdit&&<button type="button" onClick={()=>openEdit(row)}>编辑</button>}{canDelete&&<button type="button" className="danger" onClick={()=>{setDeleteError('');setDeleteTarget(row)}}>删除</button>}</div></td>}</tr>)}</tbody></table></div>:<div className="connectivity-empty">暂无符合条件的记录</div>}
       {state.data&&<Pagination page={Number(data.page||page)} pages={Number(data.pages||1)} total={Number(data.total||0)} pageSize={pageSize} loading={state.loading} onPage={next=>{setPage(next);load(next,pageSize,applied)}} onPageSize={next=>{setPageSize(next);setPage(1);load(1,next,applied)}}/>}
     </section>
   </div>
@@ -334,7 +339,7 @@ export function EmployeeConnectivityPanel({data,loading,error,title,t}){
   const rows=data?.rows||[]
   const [filters,setFilters]=useState({from:'',to:'',keyword:''})
   const translatedType=value=>value==='power_outage'?tr('connectivity.power','停电'):value==='internet_outage'?tr('connectivity.internet','断网'):value||'—'
-  const translatedStatus=value=>({reported:tr('connectivity.recorded','已记录'),verified:tr('connectivity.verified','已核实'),resolved:tr('connectivity.resolved','已恢复'),rejected:tr('connectivity.rejected','不成立')}[value]||value||'—')
+  const translatedStatus=value=>({reported:tr('connectivity.ongoing','进行中'),verified:tr('connectivity.verified','已核实'),resolved:tr('connectivity.resolved','已恢复'),rejected:tr('connectivity.rejected','不成立')}[value]||value||'—')
   const translatedDuration=value=>{
     const minutes=Number(value)
     if(!Number.isFinite(minutes)||minutes<=0)return '—'
@@ -358,7 +363,7 @@ export function EmployeeConnectivityPanel({data,loading,error,title,t}){
     <label><span>{tr('filters.dateTo','日期止')}</span><input type="date" value={filters.to} onChange={event=>update('to',event.target.value)}/></label>
     <label className="employee-history-search"><span>{tr('filters.search','搜索')}</span><input value={filters.keyword} onChange={event=>update('keyword',event.target.value)} placeholder={tr('connectivity.searchPlaceholder','搜索类型、状态或情况说明')}/></label>
     {(filters.from||filters.to||filters.keyword)&&<button type="button" onClick={reset}>{tr('filters.reset','重置')}</button>}
-  </div>{visibleRows.length?<div className="employee-connectivity-list">{visibleRows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{translatedType(row.incident_type)}</span></div><div><small>{tr('connectivity.timeDuration','时间 / 持续')}</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'—'} · {translatedDuration(row.duration_minutes)}</p></div><div><small>{tr('connectivity.status','状态')}</small><p>{translatedStatus(row.status)}</p></div><div className="employee-connectivity-details"><small>{tr('connectivity.details','情况说明')}</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>{tr('connectivity.evidence','证明')}</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url} t={t}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">{tr('connectivity.none','暂无停电或断网记录')}</div>}</>}</section>
+  </div>{visibleRows.length?<div className="employee-connectivity-list">{visibleRows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{translatedType(row.incident_type)}</span></div><div><small>{tr('connectivity.timeDuration','时间 / 持续')}</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||tr('connectivity.ongoing','进行中')} · {row.ended_at?translatedDuration(row.duration_minutes):tr('connectivity.ongoing','进行中')}</p></div><div><small>{tr('connectivity.status','状态')}</small><p>{translatedStatus(row.status)}</p></div><div className="employee-connectivity-details"><small>{tr('connectivity.details','情况说明')}</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>{tr('connectivity.evidence','证明')}</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url} t={t}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">{tr('connectivity.none','暂无停电或断网记录')}</div>}</>}</section>
 }
 
 export function EmployeePayrollHistoryPanel({data,loading,error}){

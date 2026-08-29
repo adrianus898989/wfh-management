@@ -140,12 +140,13 @@ function AlertErrorFrequencyDetails({ row, locale }) {
   </section>
 }
 
-async function loadAlertPage(filters, page, pageSize) {
-  const { data, error } = await supabase.rpc('admin_alert_center', {
+async function loadAlertPage(filters, page, pageSize, signal = null) {
+  const query = supabase.rpc('admin_alert_center', {
     p_filters: filters,
     p_page: page,
     p_page_size: pageSize,
   })
+  const { data, error } = signal ? await query.abortSignal(signal) : await query
   if (error) throw error
   return data || { rows:[], total:0, pages:1, unread_total:0, active_total:0, type_counts:{} }
 }
@@ -228,6 +229,8 @@ export function AdminAlertBell({ access }) {
   const navigate = useNavigate()
   const rootRef = useRef(null)
   const requestRef = useRef(0)
+  const flightRef = useRef(null)
+  const openRef = useRef(false)
   const [open, setOpen] = useState(false)
   const [state, setState] = useState({ loading:false, error:'', rows:[], unread:0, active:0 })
   const enabled = Boolean(access && !access.loading && !access.error && (
@@ -235,18 +238,30 @@ export function AdminAlertBell({ access }) {
   ))
   const canMarkRead = Boolean(access?.founder || access?.permissions?.includes('*') || access?.permissions?.includes('alert.mark_read'))
 
-  const load = async ({ quiet=false } = {}) => {
-    if (!enabled) return
+  const load = ({ quiet=false } = {}) => {
+    if (!enabled) return Promise.resolve(false)
+    if (flightRef.current) return flightRef.current.promise
     const requestId = ++requestRef.current
+    const controller = new AbortController()
     if (!quiet) setState(current => ({ ...current, loading:true, error:'' }))
-    try {
-      const data = await loadAlertPage({ status:'active' }, 1, 8)
-      if (requestId !== requestRef.current) return
-      setState({ loading:false, error:'', rows:Array.isArray(data.rows) ? data.rows : [], unread:numeric(data.unread_total), active:numeric(data.active_total) })
-    } catch (error) {
-      if (requestId !== requestRef.current) return
-      setState(current => ({ ...current, loading:false, error:alertErrorMessage(error, locale, locale === 'en' ? 'Unable to load notifications.' : '通知读取失败') }))
-    }
+    const entry = { controller, promise:null }
+    const promise = (async () => {
+      try {
+        const data = await loadAlertPage({ status:'active' }, 1, 8, controller.signal)
+        if (requestId !== requestRef.current) return false
+        setState({ loading:false, error:'', rows:Array.isArray(data.rows) ? data.rows : [], unread:numeric(data.unread_total), active:numeric(data.active_total) })
+        return true
+      } catch (error) {
+        if (controller.signal.aborted || requestId !== requestRef.current) return false
+        setState(current => ({ ...current, loading:false, error:alertErrorMessage(error, locale, locale === 'en' ? 'Unable to load notifications.' : '通知读取失败') }))
+        return false
+      } finally {
+        if (flightRef.current === entry) flightRef.current = null
+      }
+    })()
+    entry.promise = promise
+    flightRef.current = entry
+    return promise
   }
 
   useEffect(() => {
@@ -254,13 +269,24 @@ export function AdminAlertBell({ access }) {
     // The alert reader is intentionally on-demand. Mount/focus/minute polling
     // across several admin tabs can multiply one slow database call into a
     // request storm that starves login and ordinary page traffic.
-    const refresh = () => { if (open) load({ quiet:true }) }
+    const refresh = () => { if (openRef.current && !document.hidden) load({ quiet:true }) }
     window.addEventListener('wfh-admin-alerts-changed', refresh)
     return () => {
       requestRef.current += 1
+      flightRef.current?.controller.abort()
+      flightRef.current = null
       window.removeEventListener('wfh-admin-alerts-changed', refresh)
     }
-  }, [enabled, locale, open])
+  }, [enabled, locale])
+
+  useEffect(() => {
+    openRef.current = open
+    if (!open && flightRef.current) {
+      requestRef.current += 1
+      flightRef.current.controller.abort()
+      flightRef.current = null
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return undefined

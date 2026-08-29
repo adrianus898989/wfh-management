@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { classifySessionFailure } from './sessionFailure.js'
 import { readFunctionResponsePayload } from './functionErrors.js'
+import { runCoalescedAppHeartbeat } from './appSessionHeartbeatPressure.js'
 const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
@@ -88,6 +89,12 @@ export const supabase=configured?createClient(url,key,{
   // Admin and staff are often opened in two tabs on the same browser. Keeping
   // separate storage namespaces prevents either login replacing the other JWT.
   auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,storageKey:AUTH_STORAGE_KEY},
+  // The pinned supabase-js client retries transient PostgREST failures by default.
+  // During database saturation that can turn one failed idempotent Data API
+  // read into several more statements, so this application owns retries
+  // explicitly at the page/session boundary instead. Edge/Auth calls and
+  // non-idempotent PostgREST methods are unaffected by this option.
+  db:{retry:false},
   global:{fetch:authenticatedFetch},
 }):null
 
@@ -128,19 +135,27 @@ export const bootstrapAppSessionAccess=()=>timedAppSessionRpc(
   'app_session_bootstrap_access',
 )
 
-export const heartbeatAppSession=()=>timedAppSessionRpc(supabase,'app_session_heartbeat')
+export const heartbeatAppSession=()=>runCoalescedAppHeartbeat({
+  portal:'staff',
+  run:()=>timedAppSessionRpc(supabase,'app_session_heartbeat'),
+})
 
 // Admin claims and heartbeats cross the Edge trust boundary so the gateway IP
 // can refresh a five-minute session attestation before the database renews the
 // matching five-minute lease. A temporary Edge outage returns a retryable
 // error: it never actively revokes the local/Auth session, but it also cannot
 // renew the server lease forever. Staff never calls this function.
-export const guardAdminAppSession=async(method='claim')=>{
+const adminGuardFlights=new Map()
+const invokeAdminAppSessionGuard=action=>{
+  const existing=adminGuardFlights.get(action)
+  if(existing)return existing
+
+  const flight=(async()=>{
   let result
   try{
     result=await withPromiseTimeout(
       supabase.functions.invoke('admin-ip-guard',{
-        body:{action:method==='claim'?'claim':'heartbeat'},
+        body:{action},
       }),
       APP_SESSION_RPC_TIMEOUT_MS,
       'APP_SESSION_TIMEOUT',
@@ -150,6 +165,18 @@ export const guardAdminAppSession=async(method='claim')=>{
   const payload=await readFunctionResponsePayload(result)
   if(payload&&typeof payload.ok==='boolean')return {data:payload,error:null}
   return {data:null,error:result?.error||timeoutError('ADMIN_IP_GUARD_INVALID_RESPONSE')}
+  })().finally(()=>{
+    if(adminGuardFlights.get(action)===flight)adminGuardFlights.delete(action)
+  })
+  adminGuardFlights.set(action,flight)
+  return flight
+}
+
+export const guardAdminAppSession=(method='claim')=>{
+  const action=method==='claim'?'claim':'heartbeat'
+  return action==='heartbeat'
+    ? runCoalescedAppHeartbeat({portal:'admin',run:()=>invokeAdminAppSessionGuard(action)})
+    : invokeAdminAppSessionGuard(action)
 }
 
 export const releaseAppSession=()=>timedAppSessionRpc(supabase,'app_session_release')

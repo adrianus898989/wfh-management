@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-import { payrollBatchIdentity, payrollMatchState, summarizePayrollRows } from './payrollImportState.js'
+import {
+  filterPayrollBatches,
+  payrollBatchIdentity,
+  payrollBatchLifecycleState,
+  payrollMatchState,
+  summarizePayrollRows,
+} from './payrollImportState.js'
 
 const pageUrl = new URL('../pages/AdminPayrollPage.jsx', import.meta.url)
 const page = await readFile(pageUrl, 'utf8')
@@ -15,6 +21,29 @@ test('same-month payroll documents keep independent batch identities', () => {
   assert.notEqual(payrollBatchIdentity(first), payrollBatchIdentity(second))
   assert.match(page, /p_batch_id:batch\.id/)
   assert.match(page, /key=\{payrollBatchIdentity\(batch\)\}/)
+})
+
+test('payroll import history can search actors and filter the effective lifecycle status', () => {
+  const batches = [
+    { id: 4, status: 'draft', source_file_name: 'August PH.xlsx', created_by_name: 'founder' },
+    { id: 3, status: 'published', title: 'Vietnam July', updated_by_name: 'xiaonang001' },
+    { id: 2, status: 'archived', title: 'Old draft', voided_at: '2026-08-28T12:00:00Z', published_by_name: 'founder' },
+  ]
+  assert.equal(payrollBatchLifecycleState(batches[2]), 'voided')
+  assert.deepEqual(filterPayrollBatches(batches, { status: 'published' }).map(batch => batch.id), [3])
+  assert.deepEqual(filterPayrollBatches(batches, { status: 'voided' }).map(batch => batch.id), [2])
+  assert.deepEqual(filterPayrollBatches(batches, { search: 'xiaonang001' }).map(batch => batch.id), [3])
+  assert.deepEqual(filterPayrollBatches(batches, { search: '#4' }).map(batch => batch.id), [4])
+  assert.deepEqual(filterPayrollBatches(batches, { search: '已作废' }).map(batch => batch.id), [2])
+  assert.match(page, /批次状态[\s\S]+value="draft">待发布[\s\S]+value="voided">已作废/)
+  assert.match(page, /批次搜索[\s\S]+文档名 \/ 批次名 \/ 批次号 \/ 操作人 \/ 币种/)
+})
+
+test('payroll import history renders recorded actor timestamps without fabricating an editor', () => {
+  assert.match(page, /导入 \{batch\.created_by_name\|\|'—'\} · \{dateTime\(batch\.created_at\)\}/)
+  assert.match(page, /最近操作 \{batch\.updated_by_name\|\|'—'\} · \{dateTime\(batch\.updated_at\)\}/)
+  assert.match(page, /发布 \{batch\.published_by_name\|\|'—'\} · \{dateTime\(batch\.published_at\)\}/)
+  assert.doesNotMatch(page, /updated_by_name\|\|batch\.created_by_name/)
 })
 
 test('an explicitly selected batch is not replaced by the first batch with the same status', () => {

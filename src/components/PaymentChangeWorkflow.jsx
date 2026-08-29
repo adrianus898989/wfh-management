@@ -17,7 +17,7 @@ const COPY = {
     cancel: '取消', submit: '提交申请', submitting: '提交中…', history: '申请进度', none: '暂无修改申请。',
     statusPending: '待审核', statusApproved: '已通过', statusRejected: '已驳回', statusCancelled: '已取消', rejectReason: '驳回原因',
     submittedAt: '提交时间', reviewedAt: '处理时间', changedTo: '申请修改为', success: '申请已提交，请等待后台审核。', retry: '重试',
-    fulfillment: '资料处理', fulfillmentAwaiting: '等待审核', fulfillmentManual: '审核通过，等待助理人工修改', fulfillmentMatched: '资料已更新并匹配', fulfillmentMismatch: '资料已变化，但与申请不一致', fulfillmentNone: '无需处理',
+    fulfillment: '资料处理', fulfillmentAwaiting: '等待审核', fulfillmentManual: '审核已通过，待助理人工修改', fulfillmentMatched: '人工修改通过', fulfillmentMismatch: '资料已变化，但与申请不一致', fulfillmentNone: '无需处理',
   },
   en: {
     title: 'Change payment details', introBank: 'Pure remote employees in the Philippines can only change bank or e-wallet details.', introUsdt: 'Your employee type can only change the USDT address.',
