@@ -52,6 +52,15 @@ const dateTime = value => {
 const payrollBatchStatus=value=>({draft:'待发布',published:'已发布',archived:'已归档'}[clean(value).toLowerCase()]||clean(value)||'未知')
 const payrollBatchDisplayStatus=batch=>batch?.voided_at?'已作废':payrollBatchStatus(batch?.status)
 const payrollBatchStatusClass=batch=>batch?.voided_at?'voided':clean(batch?.status).toLowerCase()
+const payrollBatchActionLabel=(batch,canEdit=false)=>{
+  if(!canEdit)return '查看记录'
+  if(batch?.voided_at)return '管理 / 恢复批次'
+  return ({
+    draft:'管理 / 删除草稿',
+    archived:'管理 / 作废记录',
+    published:'管理 / 创建纠正草稿',
+  })[clean(batch?.status).toLowerCase()]||'管理记录'
+}
 const ALIASES = {
   sequence:['序号','no','number','stt'],
   platform:['盘口','平台','platform','series','market'],
@@ -609,7 +618,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
         <button type="button" disabled={!historySearch&&historyStatus==='all'} onClick={()=>{setHistorySearch('');setHistoryStatus('all')}}>重置</button>
       </div>
       <div className="payroll-import-history-list">
-        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span/></div>
+        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span>操作</span></div>
         {history.length?history.map(batch=>{
           const hasTotal=batch.total_amount!==undefined&&batch.total_amount!==null
           return <button type="button" key={payrollBatchIdentity(batch)} className="payroll-import-history-row" onClick={()=>openBatch(batch)}>
@@ -620,7 +629,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
             <span className="payroll-import-count"><b>{Number(batch.row_count||0).toLocaleString()}</b><small>人</small></span>
             <span className="payroll-import-total"><b>{hasTotal?money(batch.total_amount,batch.currency):'—'}</b><small>{batch.currency||'USD'}</small></span>
             <span><i className={`payroll-batch-status ${payrollBatchStatusClass(batch)}`}>{payrollBatchDisplayStatus(batch)}</i></span>
-            <span className="payroll-import-open">查看记录 <b aria-hidden="true">→</b></span>
+            <span className="payroll-import-open">{payrollBatchActionLabel(batch,canEdit)} <b aria-hidden="true">→</b></span>
           </button>
         }):<div className="payroll-import-history-empty">{allHistory.length?'当前搜索与状态下没有导入批次':'暂无工资导入记录'}</div>}
       </div>

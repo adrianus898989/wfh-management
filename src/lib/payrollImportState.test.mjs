@@ -46,6 +46,19 @@ test('payroll import history renders recorded actor timestamps without fabricati
   assert.doesNotMatch(page, /updated_by_name\|\|batch\.created_by_name/)
 })
 
+test('payroll import history exposes lifecycle-specific management entry labels without inline mutation', () => {
+  assert.match(page, /if\(!canEdit\)return '查看记录'/)
+  assert.match(page, /if\(batch\?\.voided_at\)return '管理 \/ 恢复批次'/)
+  assert.match(page, /draft:'管理 \/ 删除草稿'/)
+  assert.match(page, /archived:'管理 \/ 作废记录'/)
+  assert.match(page, /published:'管理 \/ 创建纠正草稿'/)
+  assert.match(page, /<span>状态<\/span><span>操作<\/span>/)
+  assert.match(page, /\{payrollBatchActionLabel\(batch,canEdit\)\}/)
+  const historyRow = page.match(/return <button type="button" key=\{payrollBatchIdentity\(batch\)\}[\s\S]+?<\/button>/)?.[0] || ''
+  assert.match(historyRow, /onClick=\{\(\)=>openBatch\(batch\)\}/)
+  assert.doesNotMatch(historyRow, /removeDraft|voidArchived|restoreBatch|cloneCorrection/)
+})
+
 test('an explicitly selected batch is not replaced by the first batch with the same status', () => {
   assert.match(page, /if\(wantedStatus&&data\?\.selected_batch\?\.status!==wantedStatus\)\{[\s\S]+?\.find\(batch=>batch\.status===wantedStatus\)/)
   assert.doesNotMatch(page, /if\(wantedStatus\)\{\s*const target=\(data\?\.batches\|\|\[\]\)\.find/)
