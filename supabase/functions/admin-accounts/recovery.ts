@@ -10,6 +10,7 @@ import {
 
 const ALLOWED_ORIGIN = 'https://adrianus898989.github.io'
 const DEPENDENCY_TIMEOUT_MS = 8_000
+const AUTH_MUTATION_TIMEOUT_MS = 12_000
 const ACCOUNT_PAGE_SIZE = 20
 const ACCOUNT_EMPLOYEE_LOOKUP_LIMIT = 10
 const RECOVERY_ROLE_LIMIT = 100
@@ -19,6 +20,18 @@ const RECOVERY_ROLE_PERMISSION_WRITE_LIMIT = 500
 const RECOVERY_AUTH_DOMAIN = 'admin.wfh.invalid'
 const RECOVERY_PROVISIONING_MARKER = 'wfh_backend_recovery_v1'
 const RECOVERY_PROVISIONING_FINGERPRINT_KEY = 'wfh_provisioning_fingerprint'
+const RECOVERY_ACCOUNT_ACTIONS = [
+  'toggle_active',
+  'toggle_otp',
+  'reset_password',
+  'reset_mfa',
+]
+const RECOVERY_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
+  toggle_active:'account.disable',
+  toggle_otp:'account.otp_toggle',
+  reset_password:'account.reset_password',
+  reset_mfa:'backend_account.mfa_reset',
+}
 
 function cors(origin: string | null) {
   return {
@@ -72,6 +85,20 @@ async function bounded<T>(operation: PromiseLike<T>, label: string): Promise<T> 
   }
 }
 
+async function boundedAuthMutation<T>(operation: PromiseLike<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve(operation),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}_OUTCOME_UNKNOWN`)), AUTH_MUTATION_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 function retryable(req: Request, message: string, code = 'service_temporarily_unavailable') {
   return json(req, {
     ok: false,
@@ -92,7 +119,10 @@ Deno.serve(async (req: Request) => {
     // Older production bundles used `bootstrap` for the shell permission read.
     // During recovery it is a read-only alias of `access`; it must never fall
     // through to the former full-directory bootstrap implementation.
-    if (!['access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions', 'account_list', 'create_backend'].includes(action)) {
+    if (![
+      'access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions',
+      'account_list', 'create_backend', ...RECOVERY_ACCOUNT_ACTIONS,
+    ].includes(action)) {
       return json(req, {
         ok: false,
         error: 'temporarily_paused_for_database_recovery',
@@ -235,6 +265,52 @@ Deno.serve(async (req: Request) => {
     }
     const isFounder = callerRole?.code === 'founder'
     const can = (code: string) => isFounder || permissions.has('*') || permissions.has(code)
+    const delegatedRecoveryAccounts = isFounder || caller.data_scope === 'all'
+    const supportedRecoveryAccountActions = delegatedRecoveryAccounts
+      ? RECOVERY_ACCOUNT_ACTIONS.filter(accountAction => can(RECOVERY_ACCOUNT_ACTION_PERMISSION[accountAction]))
+      : []
+
+    const recheckRecoveryMutationGate = async () => {
+      await enforceAdminRequestIp(req, admin, userData.user.id, authorization)
+      const { data:stillCurrent, error:currentError } = await bounded(
+        userClient.rpc('admin_access_session_allowed'),
+        'RECOVERY_MUTATION_CURRENT_SESSION',
+      )
+      if (currentError) throw currentError
+      if (stillCurrent !== true) {
+        const error:any = new Error('session_not_current')
+        error.code = 'session_not_current'
+        throw error
+      }
+    }
+
+    const loadRecoveryBackendTarget = async (targetAuthUserId: string) => {
+      const { data:target, error:targetError } = await bounded(
+        admin.from('user_access')
+          .select('auth_user_id,backend_enabled,active,otp_required,roles(code,active)')
+          .eq('auth_user_id', targetAuthUserId)
+          .eq('backend_enabled', true)
+          .maybeSingle(),
+        'RECOVERY_BACKEND_TARGET',
+      )
+      if (targetError) throw targetError
+      const targetRole = Array.isArray(target?.roles) ? target.roles[0] : target?.roles
+      if (!target || targetRole?.active !== true) return null
+      return { ...target, role_code:targetRole?.code || null }
+    }
+
+    const recoveryBackendActionAllowed = async (targetAuthUserId: string, requiredPermission: string) => {
+      const { data:allowed, error } = await bounded(
+        admin.rpc('admin_recovery_backend_action_allowed', {
+          p_actor_user_id:userData.user.id,
+          p_target_user_id:targetAuthUserId,
+          p_required_permission:requiredPermission,
+        }),
+        'RECOVERY_BACKEND_ACTION_PREFLIGHT',
+      )
+      if (error) throw error
+      return allowed === true
+    }
 
     let assignableRolesPromise: Promise<any[]> | null = null
     const loadAssignableRoles = () => {
@@ -488,6 +564,13 @@ Deno.serve(async (req: Request) => {
       }
       const requestedPage = Number(body?.page || 1)
       const page = Number.isInteger(requestedPage) ? Math.min(Math.max(requestedPage, 1), 100000) : 1
+      const status = clean(body?.status || 'all').toLowerCase()
+      if (!['all', 'active', 'inactive'].includes(status)) {
+        return json(req, { ok:false, error:'账号状态筛选不正确', code:'invalid_account_status' }, 400)
+      }
+      if (!delegatedRecoveryAccounts && status !== 'all') {
+        return json(req, { ok:false, error:'当前账号的数据范围暂不支持按账号状态筛选', code:'permission_denied' }, 403)
+      }
       const employeeQuery = clean(body?.employee_query)
       const employeeLookupOnly = body?.employee_lookup_only === true
       if (employeeQuery.length > 64) {
@@ -496,15 +579,22 @@ Deno.serve(async (req: Request) => {
 
       let pageData:any = { page, page_size:ACCOUNT_PAGE_SIZE, total:0, rows:[] }
       if (!employeeLookupOnly) {
-        const { data, error } = await bounded(
-          userClient.rpc('admin_backend_accounts_page', {
-            p_username_query:search.username,
-            p_employee_query:search.employee,
-            p_context_query:search.context,
-            p_page:page,
-          }),
-          'BACKEND_ACCOUNT_PAGE',
-        )
+        const pageRequest = delegatedRecoveryAccounts
+          ? admin.rpc('admin_recovery_backend_accounts_page', {
+              p_actor_user_id:userData.user.id,
+              p_username_query:search.username,
+              p_employee_query:search.employee,
+              p_context_query:search.context,
+              p_status:status,
+              p_page:page,
+            })
+          : userClient.rpc('admin_backend_accounts_page', {
+              p_username_query:search.username,
+              p_employee_query:search.employee,
+              p_context_query:search.context,
+              p_page:page,
+            })
+        const { data, error } = await bounded(pageRequest, 'BACKEND_ACCOUNT_PAGE')
         if (error || !data) return retryable(req, '后台账号列表暂时读取失败，请重试')
         pageData = data
       }
@@ -529,6 +619,8 @@ Deno.serve(async (req: Request) => {
         ok:true,
         degraded:true,
         recovery_account_mode:true,
+        supported_account_actions:supportedRecoveryAccountActions,
+        supported_account_filters:delegatedRecoveryAccounts ? ['status'] : [],
         caller:{
           auth_user_id:userData.user.id,
           role_code:callerRole?.code || null,
@@ -540,12 +632,230 @@ Deno.serve(async (req: Request) => {
           page:Number(pageData.page || page),
           page_size:ACCOUNT_PAGE_SIZE,
           total:Number(pageData.total || 0),
+          status:clean(pageData.status || status || 'all'),
         },
         employees,
         roles,
         assignable_role_ids:roles.map((role:any) => role.id),
         supported_data_scopes:supportedDataScopes,
       })
+    }
+
+    if (RECOVERY_ACCOUNT_ACTIONS.includes(action)) {
+      const requiredPermission = RECOVERY_ACCOUNT_ACTION_PERMISSION[action]
+      if (!requiredPermission || !can(requiredPermission)) {
+        return json(req, {
+          ok:false,
+          error:'当前账号没有此项账号操作权限',
+          code:'permission_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+      if (!delegatedRecoveryAccounts) {
+        return json(req, {
+          ok:false,
+          error:'当前账号的数据范围暂不支持此项账号恢复操作',
+          code:'scope_not_supported',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+
+      const allowedFields = action === 'toggle_active'
+        ? new Set(['action', 'auth_user_id', 'active'])
+        : action === 'toggle_otp'
+          ? new Set(['action', 'auth_user_id', 'otp_required'])
+          : action === 'reset_password'
+            ? new Set(['action', 'auth_user_id', 'password'])
+            : new Set(['action', 'auth_user_id'])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, { ok:false, error:'账号恢复请求包含不受支持的字段', code:'invalid_input_field' }, 400)
+      }
+
+      const targetAuthUserId = clean(body?.auth_user_id)
+      if (!uuidLike(targetAuthUserId)) {
+        return json(req, { ok:false, error:'账号标识不正确', code:'invalid_account_id' }, 400)
+      }
+      if (targetAuthUserId === userData.user.id) {
+        return json(req, { ok:false, error:'当前登录账号不能在这里修改自身状态或凭据', code:'current_account_protected' }, 400)
+      }
+
+      try {
+        await recheckRecoveryMutationGate()
+      } catch (gateError) {
+        if (/session_not_current/i.test(clean((gateError as any)?.message || (gateError as any)?.code))) {
+          return json(req, {
+            ok:false,
+            error:'当前浏览器会话已失效或账号已在其他设备登录',
+            code:'session_not_current',
+            retryable:false,
+            preserve_session:false,
+          }, 401)
+        }
+        return retryable(req, '账号恢复前置验证暂时繁忙，请稍后重试')
+      }
+
+      let actionAllowed = false
+      try {
+        actionAllowed = await recoveryBackendActionAllowed(targetAuthUserId, requiredPermission)
+      } catch {
+        return retryable(req, '账号操作授权暂时无法确认，请稍后重试')
+      }
+      if (actionAllowed !== true) {
+        return json(req, {
+          ok:false,
+          error:'该账号不在你可操作的角色或数据范围内',
+          code:'permission_or_scope_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+
+      if (action === 'toggle_active' || action === 'toggle_otp') {
+        const inputValue = action === 'toggle_active' ? body?.active : body?.otp_required
+        if (typeof inputValue !== 'boolean') {
+          return json(req, { ok:false, error:'账号恢复状态必须是布尔值', code:'invalid_account_control' }, 400)
+        }
+        const { data:saved, error:saveError } = await bounded(
+          admin.rpc('admin_recovery_set_backend_account_control', {
+            p_actor_user_id:userData.user.id,
+            p_target_user_id:targetAuthUserId,
+            p_control:action === 'toggle_active' ? 'active' : 'otp_required',
+            p_value:inputValue,
+          }),
+          'RECOVERY_BACKEND_CONTROL',
+        )
+        if (saveError) {
+          const message = clean(saveError.message)
+          const code = clean(saveError.code).toUpperCase()
+          if (code === 'P0002' || /not_found/i.test(message)) {
+            return json(req, { ok:false, error:'后台账号不存在', code:'account_not_found' }, 404)
+          }
+          if (code === '42501' || /permission_or_scope_denied|founder.*protected|founder_required/i.test(message)) {
+            return json(req, { ok:false, error:'该账号不在你可操作的角色或数据范围内', code:'permission_or_scope_denied' }, 403)
+          }
+          if (code === '22023' || /invalid|unsupported|cannot_disable/i.test(message)) {
+            return json(req, { ok:false, error:'账号恢复参数不正确', code:'invalid_account_control' }, 400)
+          }
+          return retryable(req, '账号状态暂时保存失败，请稍后重试')
+        }
+        return json(req, { ok:true, saved })
+      }
+
+      const target = await loadRecoveryBackendTarget(targetAuthUserId)
+      if (!target) return json(req, { ok:false, error:'后台账号不存在', code:'account_not_found' }, 404)
+      if (target.role_code === 'founder') {
+        return json(req, { ok:false, error:'Founder 账号受保护，不能在普通账号恢复中修改', code:'founder_protected' }, 403)
+      }
+
+      if (action === 'reset_password') {
+        const password = String(body?.password || '')
+        if (!passwordOk(password)) {
+          return json(req, { ok:false, error:'新密码至少10位，并包含大小写字母、数字和特殊符号', code:'weak_password' }, 400)
+        }
+        try {
+          if (!await recoveryBackendActionAllowed(targetAuthUserId, requiredPermission)) {
+            return json(req, { ok:false, error:'该账号已不在你可操作的角色或数据范围内', code:'permission_or_scope_denied' }, 403)
+          }
+        } catch {
+          return retryable(req, '密码修改前无法再次确认授权，请稍后重试')
+        }
+        let passwordResult:any
+        try {
+          passwordResult = await boundedAuthMutation(
+            admin.auth.admin.updateUserById(targetAuthUserId, { password }),
+            'RECOVERY_PASSWORD_RESET',
+          )
+        } catch (mutationError) {
+          if (/OUTCOME_UNKNOWN/i.test(clean((mutationError as any)?.message))) {
+            return json(req, {
+              ok:false,
+              error:'密码重置结果暂未确认；请使用同一个新密码重试一次，不要换密码',
+              code:'password_reset_outcome_unknown',
+              outcome_unknown:true,
+              retryable:true,
+              preserve_session:true,
+            }, 503, '15')
+          }
+          return retryable(req, '密码服务暂时繁忙，请稍后重试')
+        }
+        if (passwordResult?.error) {
+          const status = backendStatus(passwordResult.error)
+          return json(req, {
+            ok:false,
+            error:status === 404 ? '后台账号登录身份不存在' : clean(passwordResult.error.message || '密码重置失败'),
+            code:status === 404 ? 'auth_identity_not_found' : 'password_reset_failed',
+            retryable:false,
+            preserve_session:true,
+          }, status === 404 ? 404 : 400)
+        }
+      } else {
+        const { data:factors, error:listError } = await bounded(
+          admin.auth.admin.mfa.listFactors({ userId:targetAuthUserId }),
+          'RECOVERY_MFA_LIST',
+        )
+        if (listError) return retryable(req, 'OTP/MFA 状态暂时读取失败，请稍后重试')
+        const items = [
+          ...(((factors as any)?.factors || []) as any[]),
+          ...(((factors as any)?.totp || []) as any[]),
+          ...(((factors as any)?.phone || []) as any[]),
+        ]
+        const factorIds = [...new Set(items.map(item => clean(item?.id)).filter(Boolean))]
+        if (factorIds.length > 10) {
+          return json(req, { ok:false, error:'该账号的 OTP/MFA 因子异常过多，请联系 Founder 专项处理', code:'mfa_factor_limit_exceeded' }, 409)
+        }
+        try {
+          if (!await recoveryBackendActionAllowed(targetAuthUserId, requiredPermission)) {
+            return json(req, { ok:false, error:'该账号已不在你可操作的角色或数据范围内', code:'permission_or_scope_denied' }, 403)
+          }
+        } catch {
+          return retryable(req, 'OTP/MFA 修改前无法再次确认授权，请稍后重试')
+        }
+        for (const factorId of factorIds) {
+          try {
+            const { error:deleteError } = await boundedAuthMutation(
+              admin.auth.admin.mfa.deleteFactor({ userId:targetAuthUserId, id:factorId }),
+              'RECOVERY_MFA_DELETE',
+            )
+            if (deleteError && backendStatus(deleteError) !== 404) {
+              return json(req, { ok:false, error:'OTP/MFA 重置未完成，请重试', code:'mfa_reset_incomplete', retryable:true, preserve_session:true }, 503, '15')
+            }
+          } catch (mutationError) {
+            return json(req, {
+              ok:false,
+              error:'OTP/MFA 重置结果暂未确认；该操作可以安全重试',
+              code:'mfa_reset_outcome_unknown',
+              outcome_unknown:true,
+              retryable:true,
+              preserve_session:true,
+            }, 503, '15')
+          }
+        }
+      }
+
+      const finalAction = action === 'reset_password' ? 'password_reset' : 'mfa_reset'
+      const { data:finalized, error:finalizeError } = await bounded(
+        admin.rpc('admin_recovery_finalize_backend_auth_control', {
+          p_actor_user_id:userData.user.id,
+          p_target_user_id:targetAuthUserId,
+          p_action:finalAction,
+        }),
+        'RECOVERY_AUTH_CONTROL_FINALIZE',
+      )
+      if (finalizeError) {
+        return json(req, {
+          ok:false,
+          error:action === 'reset_password'
+            ? '密码已经重置，但审计/强制改密标记暂未确认；请勿更换新密码，联系 Founder 核对'
+            : 'OTP/MFA 已重置，但审计记录暂未确认，请联系 Founder 核对',
+          code:'auth_control_finalize_pending',
+          outcome_unknown:false,
+          retryable:false,
+          preserve_session:true,
+        }, 500)
+      }
+      return json(req, { ok:true, finalized })
     }
 
     if (action === 'create_backend') {

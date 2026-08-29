@@ -9,7 +9,7 @@ import { useAdminI18n } from '../lib/adminI18n'
 import { assignedScopeCandidates, pruneAssignedScopeSelection } from '../lib/adminAccountScopeSelection'
 
 const USER_TABS = ['backend', 'staff', 'roles']
-const blankAccessSearch = () => ({ account:'', employee:'', context:'' })
+const blankAccessSearch = () => ({ account:'', employee:'', context:'', status:'all' })
 
 const accountDateTime = value => {
   const date = new Date(value || '')
@@ -101,6 +101,7 @@ export default function AdminUsersPage() {
   const [accessSearchDraft, setAccessSearchDraft] = useState(blankAccessSearch)
   const [accessSearchQuery, setAccessSearchQuery] = useState(blankAccessSearch)
   const [deletingAccountId, setDeletingAccountId] = useState('')
+  const [mutatingAccountId, setMutatingAccountId] = useState('')
   const [accountToast, setAccountToast] = useState(null)
   const [accountPage, setAccountPage] = useState(1)
 
@@ -123,6 +124,7 @@ export default function AdminUsersPage() {
       employee:String(search?.employee || ''),
       context:String(search?.context || ''),
     },
+    status:String(search?.status || 'all'),
     ...extra,
   })
   const fetchRecoveryRoles = () => call({ action:'role_list' })
@@ -213,6 +215,9 @@ export default function AdminUsersPage() {
   const callerPermissions = new Set(data?.caller?.permissions || [])
   const callerCan = code => Boolean(callerFounder || sharedAccess.hasPermission(code) || callerPermissions.has('*') || callerPermissions.has(code))
   const recoveryAccountMode = Boolean(data?.recovery_account_mode)
+  const recoveryAccountActions = new Set(data?.supported_account_actions || [])
+  const recoveryAccountFilters = new Set(data?.supported_account_filters || [])
+  const recoveryCan = action => Boolean(recoveryAccountMode && recoveryAccountActions.has(action))
   const recoveryRoleMode = Boolean(data?.recovery_role_mode)
   const recoveryRolePermissionsWritable = Boolean(
     recoveryRoleMode && callerFounder && data?.role_permissions_writable !== false
@@ -236,11 +241,11 @@ export default function AdminUsersPage() {
     ))
   const canCreateBackend = callerCan('account.create')
   const canEditBackend = !recoveryAccountMode && callerCan('account.edit')
-  const canToggleBackend = !recoveryAccountMode && callerCan('account.disable')
+  const canToggleBackend = (!recoveryAccountMode && callerCan('account.disable')) || recoveryCan('toggle_active')
   const canDeleteBackend = !recoveryAccountMode && callerCan('account.delete')
-  const canResetBackendPassword = !recoveryAccountMode && callerCan('account.reset_password')
-  const canToggleOtp = !recoveryAccountMode && callerCan('account.otp_toggle')
-  const canResetBackendMfa = !recoveryAccountMode && callerCan('backend_account.mfa_reset')
+  const canResetBackendPassword = (!recoveryAccountMode && callerCan('account.reset_password')) || recoveryCan('reset_password')
+  const canToggleOtp = (!recoveryAccountMode && callerCan('account.otp_toggle')) || recoveryCan('toggle_otp')
+  const canResetBackendMfa = (!recoveryAccountMode && callerCan('backend_account.mfa_reset')) || recoveryCan('reset_mfa')
   const canResetStaffMfa = callerCan('staff_account.mfa_reset')
   const canManageScope = callerCan('scope.manage')
   const canCreateStaff = callerCan('user.account.create')
@@ -295,7 +300,9 @@ export default function AdminUsersPage() {
     const role = getRole(a)
     return matchesAccessField('account', a.login_username) &&
       matchesAccessField('employee', a.employee?.employee_no, a.employee?.full_name) &&
-      matchesAccessField('context', role?.name, role?.code, scopeLabel(a.data_scope), a.account_created_by_label)
+      matchesAccessField('context', role?.name, role?.code, scopeLabel(a.data_scope), a.account_created_by_label) &&
+      (!normalizedAccessSearch.status || normalizedAccessSearch.status === 'all' ||
+        (normalizedAccessSearch.status === 'active' ? a.active : !a.active))
   })
   const visibleStaff = staff.filter(a =>
     matchesAccessField('account', a.login_email) &&
@@ -510,8 +517,13 @@ export default function AdminUsersPage() {
     setLoading(true)
     setError('')
     try {
-      const boundedAccounts = await fetchRecoveryAccounts(search, page)
-      setAccountPage(Number(boundedAccounts?.account_pagination?.page || page || 1))
+      let boundedAccounts = await fetchRecoveryAccounts(search, page)
+      const requestedPage = Number(boundedAccounts?.account_pagination?.page || page || 1)
+      const pageSize = Number(boundedAccounts?.account_pagination?.page_size || 20)
+      const total = Number(boundedAccounts?.account_pagination?.total || 0)
+      const lastPage = Math.max(1, Math.ceil(total / pageSize))
+      if (requestedPage > lastPage) boundedAccounts = await fetchRecoveryAccounts(search, lastPage)
+      setAccountPage(Number(boundedAccounts?.account_pagination?.page || lastPage))
       setData(current => current ? ({
         ...current,
         ...boundedAccounts,
@@ -559,34 +571,54 @@ export default function AdminUsersPage() {
   }
 
   const toggleOtp = async (a) => {
+    if (!a?.auth_user_id || mutatingAccountId) return
+    setMutatingAccountId(a.auth_user_id)
+    setError('')
     try {
       await call({ action: 'toggle_otp', auth_user_id: a.auth_user_id, otp_required: !a.otp_required })
-      await load()
+      if (recoveryAccountMode) await refreshRecoveryAccountPage(accessSearchQuery, accountPage)
+      else await load()
+      setAccountToast({ type:'success', message:`${a.login_username || '账号'} 的登录 OTP 已${a.otp_required ? '关闭' : '开启'}。` })
     } catch (e) { setError(e.message) }
+    finally { setMutatingAccountId('') }
   }
 
   const toggleActive = async (a) => {
+    if (!a?.auth_user_id || mutatingAccountId) return
+    setMutatingAccountId(a.auth_user_id)
+    setError('')
     try {
       await call({ action: 'toggle_active', auth_user_id: a.auth_user_id, active: !a.active })
-      await load()
+      if (recoveryAccountMode) await refreshRecoveryAccountPage(accessSearchQuery, accountPage)
+      else await load()
+      setAccountToast({ type:'success', message:`${a.login_username || '账号'} 已${a.active ? '停用' : '启用'}。` })
     } catch (e) { setError(e.message) }
+    finally { setMutatingAccountId('') }
   }
 
   const resetPassword = async (a) => {
     const password = window.prompt('输入新的临时密码')
     if (!password) return
+    if (!a?.auth_user_id || mutatingAccountId) return
+    setMutatingAccountId(a.auth_user_id)
+    setError('')
     try {
       await call({ action: 'reset_password', auth_user_id: a.auth_user_id, password })
       window.alert('密码已重置')
     } catch (e) { setError(e.message) }
+    finally { setMutatingAccountId('') }
   }
 
   const resetMfa = async (a) => {
     if (!window.confirm('确认重置该账号的 Google OTP？')) return
+    if (!a?.auth_user_id || mutatingAccountId) return
+    setMutatingAccountId(a.auth_user_id)
+    setError('')
     try {
       await call({ action: 'reset_mfa', auth_user_id: a.auth_user_id })
       window.alert('OTP 已重置')
     } catch (e) { setError(e.message) }
+    finally { setMutatingAccountId('') }
   }
 
   const deleteAccount = async (a, accountKind) => {
@@ -819,7 +851,7 @@ export default function AdminUsersPage() {
         .role-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.role-card-title{display:flex;align-items:center;gap:10px;min-width:0}.role-avatar{display:grid;place-items:center;width:38px;height:38px;flex:0 0 auto;border-radius:10px;background:#edf3ff;color:#3465d5;font-size:14px;font-weight:900}.role-card h3{overflow:hidden;margin:0;color:#253b58;font-size:15px;white-space:nowrap;text-overflow:ellipsis}.role-card-title small{display:block;margin-top:4px;color:#8996a8;font-size:10px}.role-lock{display:inline-flex;align-items:center;padding:4px 7px;border-radius:999px;background:#edf8f2;color:#20805a;font-size:9px;font-weight:850}
         .role-permission-summary{margin-top:16px}.role-permission-summary>div:first-child{display:flex;align-items:center;justify-content:space-between;color:#697b92;font-size:10px}.role-permission-summary strong{color:#315fc8;font-size:11px}.role-progress{height:6px;margin:7px 0 10px;overflow:hidden;border-radius:999px;background:#edf1f6}.role-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#3971df,#765ce1)}.role-module-tags{display:flex;min-height:24px;gap:5px;flex-wrap:wrap}.role-module-tags span{padding:4px 7px;border-radius:6px;background:#f2f5f9;color:#60728a;font-size:9px}.role-module-tags span.more{background:#edf2ff;color:#3f67c5}.role-module-tags small{padding-top:4px;color:#9aa6b5;font-size:9px}
         .role-card-actions{display:flex;gap:7px;margin-top:auto;padding-top:14px}.role-card-actions button{height:34px;border:1px solid #d5dfeb;background:#fff;border-radius:8px;padding:0 11px;color:#486078;font-size:11px;font-weight:800;cursor:pointer}.role-card-actions button.primary{border-color:#d3dfff;background:#f1f5ff;color:#2d61d3}.role-card-actions button.danger{margin-left:auto;color:#b85050}
-        .access-searchbar{display:grid;grid-template-columns:repeat(3,minmax(160px,1fr)) auto auto auto;align-items:end;justify-content:start;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar label{display:flex;min-width:0;flex-direction:column;gap:5px;color:#6f8096;font-size:10px;font-weight:850}.access-searchbar input{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
+        .access-searchbar{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr)) auto auto auto;align-items:end;justify-content:start;gap:9px;margin-bottom:14px;padding:12px;background:#fff;border:1px solid #dfe7f0;border-radius:12px}.access-searchbar label{display:flex;min-width:0;flex-direction:column;gap:5px;color:#6f8096;font-size:10px;font-weight:850}.access-searchbar input,.access-searchbar select{height:40px;width:100%;border:1px solid #d6e0eb;border-radius:9px;padding:0 12px;background:#fff}.access-searchbar .secondary-action,.access-searchbar .primary-action{height:40px;white-space:nowrap}
         .account-modal{width:min(1180px,96vw);max-height:min(820px,90vh);display:flex;flex-direction:column;overflow:hidden}.account-modal .modal-head{flex:0 0 auto}.account-modal .account-modal-body{overflow:auto;padding:2px 3px 8px}.account-modal .modal-actions{flex:0 0 auto;position:sticky;bottom:0;background:#fff;border-top:1px solid #edf1f5;padding-top:12px;margin-top:6px;z-index:2}
         .account-session-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;padding:10px 12px;border:1px solid #d9e4f5;border-radius:10px;background:#f4f8ff;color:#58708f;font-size:11px;line-height:1.55}.account-session-note strong{flex:0 0 auto;color:#3564c8}.account-session-note span{min-width:0}
         .scope-current-team-note{grid-column:1/-1;display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border:1px solid #d7e6df;border-radius:9px;background:#f3faf6;color:#557365;font-size:10px;line-height:1.55}.scope-current-team-note strong{flex:0 0 auto;color:#28734f}.scope-current-team-note.warning{border-color:#ecd8ae;background:#fff9ed;color:#826a3c}.scope-current-team-note.warning strong{color:#9a681f}.scope-current-team-note+.scope-columns{margin-top:10px}
@@ -860,6 +892,13 @@ export default function AdminUsersPage() {
           onChange={e => setAccessSearchDraft(current => ({ ...current, context:e.target.value }))}
           onKeyDown={e => e.key === 'Enter' && applyAccessSearch()}
           placeholder={adminT(visibleTab === 'backend' ? '输入角色、管理范围或创建人' : '输入团队或岗位')} /></label>
+        {visibleTab === 'backend' && (!recoveryAccountMode || recoveryAccountFilters.has('status')) && <label><span>{adminT('账号状态')}</span>
+          <select value={accessSearchDraft.status || 'all'} onChange={e => setAccessSearchDraft(current => ({ ...current, status:e.target.value }))}>
+            <option value="all">{adminT('全部状态')}</option>
+            <option value="active">{adminT('启用')}</option>
+            <option value="inactive">{adminT('停用')}</option>
+          </select>
+        </label>}
         <button className="primary-action" onClick={applyAccessSearch}>{adminT('查询')}</button>
         <button className="secondary-action" onClick={resetAccessSearch}>{adminT('重置')}</button>
         {((visibleTab === 'backend' && canCreateBackend) || (visibleTab === 'staff' && canCreateStaff)) && <button className="primary-action" onClick={visibleTab === 'backend' ? openCreate : openCreateStaff}>
@@ -878,33 +917,34 @@ export default function AdminUsersPage() {
                     const role = getRole(a)
                     const founder = role?.code === 'founder'
                     const deleting = deletingAccountId === a.auth_user_id
-                    return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : ''} aria-busy={deleting || undefined}>
+                    const mutating = mutatingAccountId === a.auth_user_id
+                    return <tr key={a.auth_user_id} className={deleting ? 'access-account-row-deleting' : ''} aria-busy={(deleting || mutating) || undefined}>
                       <td><strong>{a.login_username || '-'}</strong></td>
                       <td><strong>{a.employee?.employee_no || adminT('未关联')}</strong></td>
                       <td>{a.employee?.full_name || '-'}</td>
                       <td>{role?.name || '-'}</td>
                       <td>{adminT(scopeLabel(a.data_scope))}</td>
                       <td>
-                        {canToggleOtp
-                          ? <button className={`switch-button ${a.otp_required ? 'on' : ''}`} onClick={() => toggleOtp(a)}><i/><span>{a.otp_required ? '开' : '关'}</span></button>
+                        {!founder && canToggleOtp
+                          ? <button disabled={mutating} className={`switch-button ${a.otp_required ? 'on' : ''}`} onClick={() => toggleOtp(a)}><i/><span>{a.otp_required ? '开' : '关'}</span></button>
                           : <span className={`status-chip ${a.otp_required ? '' : 'off'}`}>{adminT(a.otp_required ? '开启' : '关闭')}</span>}
                       </td>
                       <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span></td>
                       <td><strong>{a.account_created_by_label || adminT('系统 / 历史导入')}</strong></td>
                       <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                       <td><div className="access-grid-actions">
-                        {!founder && canEditBackend && <button disabled={deleting} onClick={() => openEdit(a)}>{adminT('编辑')}</button>}
-                        {canResetBackendPassword && <button disabled={deleting} onClick={() => resetPassword(a)}>{adminT('重置密码')}</button>}
-                        {canResetBackendMfa && <button disabled={deleting} onClick={() => resetMfa(a)}>{adminT('重置OTP')}</button>}
-                        {!founder && canToggleBackend && <button disabled={deleting} onClick={() => toggleActive(a)}>{adminT(a.active ? '停用' : '启用')}</button>}
-                        {!founder && canDeleteBackend && <button disabled={deleting} className="danger" onClick={() => deleteAccount(a, 'backend')}>{adminT(deleting ? '删除中…' : '删除账号')}</button>}
+                        {!founder && canEditBackend && <button disabled={deleting || mutating} onClick={() => openEdit(a)}>{adminT('编辑')}</button>}
+                        {!founder && canResetBackendPassword && <button disabled={deleting || mutating} onClick={() => resetPassword(a)}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
+                        {!founder && canResetBackendMfa && <button disabled={deleting || mutating} onClick={() => resetMfa(a)}>{adminT(mutating ? '处理中…' : '重置OTP')}</button>}
+                        {!founder && canToggleBackend && <button disabled={deleting || mutating} onClick={() => toggleActive(a)}>{adminT(mutating ? '处理中…' : a.active ? '停用' : '启用')}</button>}
+                        {!founder && canDeleteBackend && <button disabled={deleting || mutating} className="danger" onClick={() => deleteAccount(a, 'backend')}>{adminT(deleting ? '删除中…' : '删除账号')}</button>}
                       </div></td>
                     </tr>
                   })}
                 </tbody>
               </table>
               {recoveryAccountMode && <div className="recovery-account-note">
-                <span><strong>稳定恢复模式</strong>：账号列表固定每页 20 条；编辑、重置、停用与批量创建继续暂停。</span>
+                <span><strong>稳定恢复模式</strong>：账号列表固定每页 20 条；拥有对应权限的账号可操作其可管理角色与范围内的账号。编辑、删除与批量创建继续暂停。</span>
                 <div className="recovery-account-pager">
                   <button type="button" disabled={accountPage <= 1 || loading} onClick={() => refreshRecoveryAccountPage(accessSearchQuery, accountPage - 1)}>上一页</button>
                   <span>{accountTotal} 条 · {accountPage} / {accountPageCount} 页</span>
