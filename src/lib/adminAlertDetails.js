@@ -1,6 +1,7 @@
 const clean = value => String(value ?? '').trim()
 
 const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0
+const countText = value => numeric(value).toLocaleString(undefined, { maximumFractionDigits:1 })
 
 const KIND_META = {
   public_holiday: { zh:'公休', en:'Rest day' },
@@ -11,6 +12,47 @@ const KIND_META = {
 }
 
 const isRecord = value => Boolean(value && typeof value === 'object' && !Array.isArray(value))
+
+export function adminAlertMonthlyLeaveRule(row, locale='zh') {
+  if (row?.alert_type !== 'monthly_leave') return null
+  const payload = isRecord(row?.payload) ? row.payload : {}
+  const configuredAllowedDays = Number(payload.allowed_days ?? payload.threshold)
+  const allowedDays = Number.isFinite(configuredAllowedDays) && configuredAllowedDays > 0
+    ? configuredAllowedDays
+    : 5
+  const configuredTriggerAt = Number(payload.trigger_at)
+  const triggerAt = Number.isFinite(configuredTriggerAt) && configuredTriggerAt > allowedDays
+    ? configuredTriggerAt
+    : allowedDays + 1
+  const workMode = clean(payload.work_mode) || 'legacy_fallback'
+  const sourceGroup = clean(payload.source_group) || 'unknown'
+  const classificationQuality = clean(payload.classification_quality) || 'legacy'
+  const modeLabels = locale === 'en'
+    ? { onsite_to_home:'Onsite-to-home', home:'Pure-home', legacy_fallback:'Legacy fallback' }
+    : { onsite_to_home:'现场转居家', home:'纯居家', legacy_fallback:'旧规则回退' }
+  const modeLabel = modeLabels[workMode] || modeLabels.legacy_fallback
+  const limitLabel = locale === 'en'
+    ? `${modeLabel}: warn above ${countText(allowedDays)} counted leave days per month; half days count as 0.5 and home leave is excluded.`
+    : `${modeLabel}：本月计入休假超过 ${countText(allowedDays)} 天即预警；半天按 0.5 天，回家不计。`
+  const qualityLabel = classificationQuality === 'fallback'
+    ? (locale === 'en'
+      ? 'Source classification was not verified, so the legacy limit is retained.'
+      : '来源分类未通过核验，已保守沿用旧上限。')
+    : ''
+
+  return {
+    allowedDays,
+    triggerAt,
+    workMode,
+    sourceGroup,
+    classificationQuality,
+    classificationSource:clean(payload.classification_source),
+    classificationIssue:clean(payload.classification_issue),
+    modeLabel,
+    limitLabel,
+    qualityLabel,
+  }
+}
 
 function eventDescription(event, locale) {
   const reason = clean(event.reason)
@@ -51,6 +93,7 @@ export function adminAlertAttendanceDetails(row, locale='zh') {
   const events = normalizeEvents(payload, locale)
   const monthly = row.alert_type === 'monthly_leave'
   const consecutiveRest = row.alert_type === 'consecutive_rest'
+  const monthlyRule = monthly ? adminAlertMonthlyLeaveRule(row, locale) : null
   return {
     kind:row.alert_type,
     title:monthly
@@ -61,6 +104,9 @@ export function adminAlertAttendanceDetails(row, locale='zh') {
     events,
     missingDetails:events.length === 0,
     homeLeaveExcluded:monthly && payload.home_leave_excluded !== false,
+    monthlyRule,
+    limitLabel:monthlyRule?.limitLabel || '',
+    qualityLabel:monthlyRule?.qualityLabel || '',
     breakdown:monthly ? [
       { kind:'public_holiday', label:KIND_META.public_holiday[locale], count:numeric(payload.public_holiday), unit:locale === 'en' ? 'days' : '天' },
       { kind:'leave', label:KIND_META.leave[locale], count:numeric(payload.leave), unit:locale === 'en' ? 'days' : '天' },

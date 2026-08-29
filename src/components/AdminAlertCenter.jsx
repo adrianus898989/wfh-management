@@ -18,6 +18,7 @@ import {
   adminAlertErrorFrequencyDetails,
   adminAlertFollowUpState,
   adminAlertKeyAttendanceEvidence,
+  adminAlertMonthlyLeaveRule,
   adminAlertReadState,
 } from '../lib/adminAlertDetails'
 import { supabase } from '../lib/supabase'
@@ -38,7 +39,7 @@ const ALERT_RULE_COPY = {
   late_timeout_frequency: { zh:'7 天内迟到或超时相关扣款达到 3 次。', en:'At least 3 late or timeout deductions within 7 days.' },
   consecutive_rest: { zh:'连续公休达到 2 天。', en:'At least 2 consecutive public rest days.' },
   weekly_absence: { zh:'7 天内缺席达到 2 天。', en:'At least 2 absence days within 7 days.' },
-  monthly_leave: { zh:'本月休假超过 5 天；半天按 0.5 天，回家不计。', en:'More than 5 leave days this month; half days count as 0.5 and home leave is excluded.' },
+  monthly_leave: { zh:'现场转居家超过 2 天、纯居家超过 4 天预警；未核验分类保守沿用旧上限 5 天。半天按 0.5 天，回家不计。', en:'Warn above 2 days for onsite-to-home and above 4 for pure-home; unverified classifications retain the legacy 5-day limit. Half days count as 0.5 and home leave is excluded.' },
   error_spike: { zh:'3 天内错误记录达到 6 笔。', en:'At least 6 error records within 3 days.' },
   deduction_frequency: { zh:'7 天内扣款达到 4 次。', en:'At least 4 deductions within 7 days.' },
   exam_failed: { zh:'最近一次已评分考试未达到及格线。', en:'The latest graded exam did not reach the pass score.' },
@@ -87,6 +88,12 @@ const alertErrorMessage = (error, locale, fallback) => {
 function alertCopy(row, locale) {
   const name = clean(row?.employee_name) || clean(row?.employee_no) || (locale === 'en' ? 'Employee' : '员工')
   const count = countText(row?.occurrence_count)
+  if (row?.alert_type === 'monthly_leave') {
+    const rule = adminAlertMonthlyLeaveRule(row, locale)
+    return locale === 'en'
+      ? { title:'Monthly leave warning', message:`${name} has ${count} counted leave days this month, above the ${countText(rule.allowedDays)}-day limit (home leave excluded).` }
+      : { title:clean(row?.title) || '当月休假天数预警', message:`${name} 本月累计休假 ${count} 天，已超过 ${countText(rule.allowedDays)} 天上限（回家不计）。` }
+  }
   if (locale !== 'en') return { title:clean(row?.title) || eventName(row, locale), message:clean(row?.message) || '—' }
   switch (row?.alert_type) {
     case 'payout_change': return row?.payload?.fulfillment_status === 'mismatch'
@@ -97,7 +104,6 @@ function alertCopy(row, locale) {
     case 'late_timeout_frequency': return { title:'Late / timeout frequency warning', message:`${name} has ${count} late or timeout-related deductions in the last 7 days.` }
     case 'consecutive_rest': return { title:'Consecutive rest-day warning', message:`${name} is marked for ${count} consecutive public rest days.` }
     case 'weekly_absence': return { title:'Weekly absence warning', message:`${name} was absent ${count} days in the last 7 days.` }
-    case 'monthly_leave': return { title:'Monthly leave warning', message:`${name} has ${count} leave days this month (home leave excluded).` }
     case 'exam_failed': return { title:'Latest exam failed', message:`${name}'s latest graded exam did not pass${row?.payload?.percentage == null ? '.' : ` (${countText(row.payload.percentage)}%).`}` }
     case 'resigned_account_active': return { title:'Resigned account not recovered', message:`${name} is resigned but still has ${count} enabled login mapping(s).` }
     default: return { title:clean(row?.title) || eventName(row, locale), message:clean(row?.message) || '—' }
@@ -110,7 +116,10 @@ function AlertAttendanceDetails({ row, locale }) {
   return <section className={`admin-alert-attendance-detail ${detail.kind}`} data-admin-i18n-skip>
     <div className="admin-alert-attendance-title">
       <h4>{detail.title}</h4>
-      {detail.homeLeaveExcluded && <strong>{locale === 'en' ? 'Home leave is excluded from the total' : '回家不计入休假总数'}</strong>}
+      {detail.limitLabel
+        ? <strong>{detail.limitLabel}</strong>
+        : detail.homeLeaveExcluded && <strong>{locale === 'en' ? 'Home leave is excluded from the total' : '回家不计入休假总数'}</strong>}
+      {detail.qualityLabel && <strong>{detail.qualityLabel}</strong>}
     </div>
     {detail.breakdown.length > 0 && <div className="admin-alert-attendance-breakdown">
       {detail.breakdown.map(item => <span key={item.kind}><b>{item.label}</b> {countText(item.count)} {item.unit}{item.kind === 'half_day' && (locale === 'en' ? ` (${countText(item.count * 0.5)} days counted)` : `（计 ${countText(item.count * 0.5)} 天）`)}</span>)}
