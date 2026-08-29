@@ -6,6 +6,7 @@ import {
   filterPayrollBatches,
   payrollBatchIdentity,
   payrollBatchLifecycleState,
+  payrollBatchSourcePresentation,
   payrollMatchState,
   summarizePayrollRows,
 } from './payrollImportState.js'
@@ -36,7 +37,26 @@ test('payroll import history can search actors and filter the effective lifecycl
   assert.deepEqual(filterPayrollBatches(batches, { search: '#4' }).map(batch => batch.id), [4])
   assert.deepEqual(filterPayrollBatches(batches, { search: '已作废' }).map(batch => batch.id), [2])
   assert.match(page, /批次状态[\s\S]+value="draft">待发布[\s\S]+value="voided">已作废/)
-  assert.match(page, /批次搜索[\s\S]+文档名 \/ 批次名 \/ 批次号 \/ 操作人 \/ 币种/)
+  assert.match(page, /批次搜索[\s\S]+文档名 \/ 来源 \/ 批次类别 \/ 批次号 \/ 操作人 \/ 币种/)
+})
+
+test('payroll import history presents only persisted source and category fields', () => {
+  assert.deepEqual(payrollBatchSourcePresentation({
+    source_type: 'upload',
+    source_file_name: '现场转居家5月工资.xlsx',
+    title: '2026-05 现场转居家',
+  }), {
+    sourceType: 'upload',
+    sourceLabel: '文件上传',
+    category: '2026-05 现场转居家',
+    sourceFileName: '现场转居家5月工资.xlsx',
+    sourceProjectRef: '',
+    sourceBatchKey: '',
+  })
+  assert.equal(payrollBatchSourcePresentation({source_type:'friend_supabase',title:'外部批次'}).sourceLabel,'外部 Supabase 导入')
+  assert.equal(payrollBatchSourcePresentation({source_type:'partner_feed',title:'已记录类别'}).sourceLabel,'partner_feed')
+  assert.match(page, /<span>来源 \/ 批次类别<\/span>/)
+  assert.match(page, /source\.sourceLabel[\s\S]+source\.category/)
 })
 
 test('payroll import history renders recorded actor timestamps without fabricating an editor', () => {
@@ -46,17 +66,25 @@ test('payroll import history renders recorded actor timestamps without fabricati
   assert.doesNotMatch(page, /updated_by_name\|\|batch\.created_by_name/)
 })
 
-test('payroll import history exposes lifecycle-specific management entry labels without inline mutation', () => {
+test('payroll import history exposes lifecycle-specific safe actions directly on each row', () => {
   assert.match(page, /if\(!canEdit\)return '查看记录'/)
-  assert.match(page, /if\(batch\?\.voided_at\)return '管理 \/ 恢复批次'/)
-  assert.match(page, /draft:'管理 \/ 删除草稿'/)
-  assert.match(page, /archived:'管理 \/ 作废记录'/)
-  assert.match(page, /published:'管理 \/ 创建纠正草稿'/)
+  assert.match(page, /if\(batch\?\.voided_at\)return '恢复批次'/)
+  assert.match(page, /draft:'删除草稿'/)
+  assert.match(page, /archived:'作废记录'/)
+  assert.match(page, /published:'创建纠正草稿'/)
   assert.match(page, /<span>状态<\/span><span>操作<\/span>/)
-  assert.match(page, /\{payrollBatchActionLabel\(batch,canEdit\)\}/)
-  const historyRow = page.match(/return <button type="button" key=\{payrollBatchIdentity\(batch\)\}[\s\S]+?<\/button>/)?.[0] || ''
+  assert.match(page, /:payrollBatchActionLabel\(batch,canEdit\)/)
+  const historyRow = page.match(/return <div key=\{payrollBatchIdentity\(batch\)\}[\s\S]+?<\/div>/)?.[0] || ''
   assert.match(historyRow, /onClick=\{\(\)=>openBatch\(batch\)\}/)
-  assert.doesNotMatch(historyRow, /removeDraft|voidArchived|restoreBatch|cloneCorrection/)
+  assert.match(historyRow, /removeDraftFromRow\(batch\)/)
+  assert.match(historyRow, /voidArchivedFromRow\(batch\)/)
+  assert.match(historyRow, /restoreBatchFromRow\(batch\)/)
+  assert.match(historyRow, /cloneCorrectionFromRow\(batch\)/)
+  assert.match(page, /window\.confirm\(`确认删除草稿/)
+  assert.match(page, /window\.prompt\(`请填写作废/)
+  assert.match(page, /admin_payroll_delete/)
+  assert.match(page, /admin_payroll_void_batch/)
+  assert.doesNotMatch(historyRow, /public\.payroll_batches|delete from/)
 })
 
 test('an explicitly selected batch is not replaced by the first batch with the same status', () => {

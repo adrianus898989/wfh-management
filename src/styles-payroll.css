@@ -166,8 +166,10 @@
 .payroll-page-head p{margin:4px 0 0;color:#71819a;font-size:12px}
 
 /* Auditable payroll import correction workflow. */
-.payroll-import-history-columns,.payroll-import-history-row{grid-template-columns:minmax(235px,1.8fr) 82px minmax(220px,1.25fr) 125px 62px minmax(130px,.85fr) 82px 92px;min-width:1180px}
+.payroll-import-history-columns,.payroll-import-history-row{grid-template-columns:minmax(210px,1.55fr) minmax(150px,1fr) 82px minmax(210px,1.2fr) 116px 58px minmax(125px,.85fr) 76px minmax(190px,auto);min-width:1410px}
 .payroll-import-actors{display:grid;gap:2px}.payroll-import-actors b,.payroll-import-actors small{overflow:hidden;color:#536a84;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.payroll-import-actors b{color:#294a75;font-weight:850}
+.payroll-import-source{display:grid;gap:3px}.payroll-import-source b,.payroll-import-source small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.payroll-import-source b{color:#315b9a;font-size:9px}.payroll-import-source small{color:#6e7f95;font-size:8px}
+.payroll-import-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px}.payroll-import-row-actions button{min-height:28px;padding:0 8px;border:1px solid #2f68d5;border-radius:7px;background:#2f68d5;color:#fff;font-size:8px;font-weight:850;white-space:nowrap;cursor:pointer}.payroll-import-row-actions button.secondary{border-color:#cbd8e9;background:#fff;color:#2b5ebd}.payroll-import-row-actions button.danger{border-color:#e7a8b0;background:#fff4f5;color:#b63d4e}.payroll-import-row-actions button:disabled{cursor:not-allowed;opacity:.55}
 .payroll-batch-status.voided{background:#ffe9ec;color:#b43c50}
 .payroll-batch-facts{grid-template-columns:repeat(4,minmax(0,1fr))}
 .payroll-lifecycle-note{margin-bottom:8px;padding:8px 10px;border:1px solid #efd8aa;border-radius:9px;background:#fff9ec;color:#785d27;font-size:10px;line-height:1.5}.payroll-lifecycle-note.is-voided{border-color:#efc1c7;background:#fff3f4;color:#9d3948}

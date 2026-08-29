@@ -10,7 +10,7 @@ import { useAdminAccess } from '../lib/adminAccess'
 import { useAdminI18n } from '../lib/adminI18n'
 import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 import { PAYROLL_CURRENCY_OPTIONS, payrollCurrencyLabel } from '../lib/payrollCurrency'
-import { filterPayrollBatches, payrollBatchIdentity, payrollMatchState, summarizePayrollRows } from '../lib/payrollImportState'
+import { filterPayrollBatches, payrollBatchIdentity, payrollBatchSourcePresentation, payrollMatchState, summarizePayrollRows } from '../lib/payrollImportState'
 import { supabase } from '../lib/supabase'
 
 const PAYOUT_CHANGE_VIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW
@@ -56,12 +56,12 @@ const payrollBatchDisplayStatus=batch=>batch?.voided_at?'已作废':payrollBatch
 const payrollBatchStatusClass=batch=>batch?.voided_at?'voided':clean(batch?.status).toLowerCase()
 const payrollBatchActionLabel=(batch,canEdit=false)=>{
   if(!canEdit)return '查看记录'
-  if(batch?.voided_at)return '管理 / 恢复批次'
+  if(batch?.voided_at)return '恢复批次'
   return ({
-    draft:'管理 / 删除草稿',
-    archived:'管理 / 作废记录',
-    published:'管理 / 创建纠正草稿',
-  })[clean(batch?.status).toLowerCase()]||'管理记录'
+    draft:'删除草稿',
+    archived:'作废记录',
+    published:'创建纠正草稿',
+  })[clean(batch?.status).toLowerCase()]||''
 }
 const ALIASES = {
   sequence:['序号','no','number','stt'],
@@ -533,6 +533,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
   const [platformFilter,setPlatformFilter]=useState('')
   const [historySearch,setHistorySearch]=useState('')
   const [historyStatus,setHistoryStatus]=useState('all')
+  const [rowActionBusy,setRowActionBusy]=useState('')
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(20)
   const allHistory=useMemo(()=>[...(batches||[])].sort((left,right)=>{
@@ -646,6 +647,56 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
     if(!window.confirm(`将“${selected.title}”完整复制为新的待发布纠正草稿？\n原批次保持只读，不会被修改。`))return
     runBatchAction('clone','admin_payroll_clone_correction',{p_batch_id:selected.id},data=>`已创建纠正草稿“${data.title||`批次 #${data.batch_id}`}”。`,{close:true})
   }
+  const runRowBatchAction=async(batch,name,rpc,args,success)=>{
+    if(rowActionBusy)return
+    const actionKey=`${name}:${payrollBatchIdentity(batch)}`
+    setRowActionBusy(actionKey)
+    try{
+      const {data,error}=await supabase.rpc(rpc,args)
+      if(error)throw error
+      const nextMessage=typeof success==='function'?success(data||{}):success
+      const operation={
+        admin_payroll_delete:'移除工资草稿',
+        admin_payroll_void_batch:'作废工资批次',
+        admin_payroll_restore_batch:'恢复工资批次',
+        admin_payroll_clone_correction:'创建纠正草稿',
+      }[rpc]||'管理工资批次'
+      notify(writeSuccessToast({module:'工资统计',operation,reason:nextMessage,dedupeKey:`payroll:batch:${payrollBatchIdentity(batch)}:${rpc}:success`}))
+      if(onChanged)await onChanged(nextMessage)
+    }catch(error){
+      const reason=error?.message||'批次操作失败'
+      const operation={
+        admin_payroll_delete:'移除工资草稿',
+        admin_payroll_void_batch:'作废工资批次',
+        admin_payroll_restore_batch:'恢复工资批次',
+        admin_payroll_clone_correction:'创建纠正草稿',
+      }[rpc]||'管理工资批次'
+      notify(writeFailureToast({
+        module:'工资统计',operation,error,reason,
+        dedupeKey:`payroll:batch:${payrollBatchIdentity(batch)}:${rpc}:error`,
+      }))
+    }finally{setRowActionBusy('')}
+  }
+  const removeDraftFromRow=batch=>{
+    if(!window.confirm(`确认删除草稿“${batch.title}”？\n这是可恢复的安全移除：工资记录和审计日志不会被物理删除。`))return
+    runRowBatchAction(batch,'delete','admin_payroll_delete',{p_batch_id:batch.id},'草稿已安全移除；记录和审计日志仍保留，可恢复。')
+  }
+  const voidArchivedFromRow=batch=>{
+    const prompted=window.prompt(`请填写作废“${batch.title}”的原因（必填）：`,'')
+    if(prompted===null)return
+    const reason=clean(prompted)
+    if(!reason){window.alert('作废原因不能为空。');return}
+    if(!window.confirm(`确认作废已归档批次“${batch.title}”？\n原因：${reason}\n这不会物理删除工资或审计记录。`))return
+    runRowBatchAction(batch,'void','admin_payroll_void_batch',{p_batch_id:batch.id,p_reason:reason},'归档批次已作废；数据未删除，可恢复。')
+  }
+  const restoreBatchFromRow=batch=>{
+    if(!window.confirm(`确认恢复批次“${batch.title}”？`))return
+    runRowBatchAction(batch,'restore','admin_payroll_restore_batch',{p_batch_id:batch.id},data=>`批次已恢复为“${payrollBatchStatus(data.status)}”。`)
+  }
+  const cloneCorrectionFromRow=batch=>{
+    if(!window.confirm(`将“${batch.title}”完整复制为新的待发布纠正草稿？\n原已发布批次保持只读，不会被删除或修改。`))return
+    runRowBatchAction(batch,'clone','admin_payroll_clone_correction',{p_batch_id:batch.id},data=>`已创建纠正草稿“${data.title||`批次 #${data.batch_id}`}”。`)
+  }
   useEffect(()=>{setPage(1)},[search,matchFilter,positionFilter,platformFilter,selected?.id])
   useEffect(()=>{setPage(current=>Math.min(current,pages))},[pages])
   useEffect(()=>{
@@ -667,24 +718,41 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
         <span>{history.length===allHistory.length?`共 ${allHistory.length} 个批次`:`筛选 ${history.length} / ${allHistory.length} 个批次`}</span>
       </div>
       <div className="payroll-import-history-filters">
-        <label><span>批次搜索</span><input value={historySearch} onChange={event=>setHistorySearch(event.target.value)} placeholder="文档名 / 批次名 / 批次号 / 操作人 / 币种"/></label>
+        <label><span>批次搜索</span><input value={historySearch} onChange={event=>setHistorySearch(event.target.value)} placeholder="文档名 / 来源 / 批次类别 / 批次号 / 操作人 / 币种"/></label>
         <label><span>批次状态</span><select value={historyStatus} onChange={event=>setHistoryStatus(event.target.value)}><option value="all">全部状态</option><option value="draft">待发布</option><option value="published">已发布</option><option value="archived">已归档</option><option value="voided">已作废</option></select></label>
         <button type="button" disabled={!historySearch&&historyStatus==='all'} onClick={()=>{setHistorySearch('');setHistoryStatus('all')}}>重置</button>
       </div>
       <div className="payroll-import-history-list">
-        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span>操作</span></div>
+        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>来源 / 批次类别</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span>操作</span></div>
         {history.length?history.map(batch=>{
           const hasTotal=batch.total_amount!==undefined&&batch.total_amount!==null
-          return <button type="button" key={payrollBatchIdentity(batch)} className="payroll-import-history-row" onClick={()=>openBatch(batch)}>
-            <span className="payroll-import-file"><b>{batch.source_file_name||batch.title||'未命名工资文档'}</b><small>批次 #{payrollBatchIdentity(batch)} · {batch.source_file_name&&batch.title&&batch.source_file_name!==batch.title?batch.title:(batch.source_type==='upload'?'文件上传':'系统导入')}</small></span>
+          const source=payrollBatchSourcePresentation(batch)
+          const busyPrefix=rowActionBusy.split(':')[0]
+          const isBusy=rowActionBusy.endsWith(`:${payrollBatchIdentity(batch)}`)
+          const lifecycleStatus=clean(batch.status).toLowerCase()
+          return <div key={payrollBatchIdentity(batch)} className="payroll-import-history-row" role="button" tabIndex={0} onClick={()=>openBatch(batch)} onKeyDown={event=>{
+            if(event.target!==event.currentTarget||!['Enter',' '].includes(event.key))return
+            event.preventDefault()
+            openBatch(batch)
+          }}>
+            <span className="payroll-import-file"><b>{source.sourceFileName||batch.title||'未命名工资文档'}</b><small>批次 #{payrollBatchIdentity(batch)}</small></span>
+            <span className="payroll-import-source"><b>{source.sourceLabel}</b><small title={source.category}>{source.category}</small></span>
             <span className="payroll-import-period">{String(batch.period_start||'').slice(0,7)||'—'}</span>
             <span className="payroll-import-actors"><b>导入 {batch.created_by_name||'—'} · {dateTime(batch.created_at)}</b><small>最近操作 {batch.updated_by_name||'—'} · {dateTime(batch.updated_at)}</small>{batch.published_at&&<small>发布 {batch.published_by_name||'—'} · {dateTime(batch.published_at)}</small>}</span>
             <span className="payroll-import-time">{dateTime(batch.created_at)}</span>
             <span className="payroll-import-count"><b>{Number(batch.row_count||0).toLocaleString()}</b><small>人</small></span>
             <span className="payroll-import-total"><b>{hasTotal?money(batch.total_amount,batch.currency):'—'}</b><small>{batch.currency||'USD'}</small></span>
             <span><i className={`payroll-batch-status ${payrollBatchStatusClass(batch)}`}>{payrollBatchDisplayStatus(batch)}</i></span>
-            <span className="payroll-import-open">{payrollBatchActionLabel(batch,canEdit)} <b aria-hidden="true">→</b></span>
-          </button>
+            <span className="payroll-import-row-actions" onClick={event=>event.stopPropagation()}>
+              <button type="button" className="secondary" disabled={isBusy} onClick={()=>openBatch(batch)}>查看</button>
+              {canEdit&&payrollBatchActionLabel(batch,canEdit)&&<button type="button" className={['draft','archived'].includes(lifecycleStatus)&&!batch.voided_at?'danger':''} disabled={Boolean(rowActionBusy)} onClick={()=>{
+                if(batch.voided_at)restoreBatchFromRow(batch)
+                else if(lifecycleStatus==='draft')removeDraftFromRow(batch)
+                else if(lifecycleStatus==='archived')voidArchivedFromRow(batch)
+                else if(lifecycleStatus==='published')cloneCorrectionFromRow(batch)
+              }}>{isBusy?({delete:'删除中…',void:'作废中…',restore:'恢复中…',clone:'创建中…'}[busyPrefix]||'处理中…'):payrollBatchActionLabel(batch,canEdit)}</button>}
+            </span>
+          </div>
         }):<div className="payroll-import-history-empty">{allHistory.length?'当前搜索与状态下没有导入批次':'暂无工资导入记录'}</div>}
       </div>
     </section>

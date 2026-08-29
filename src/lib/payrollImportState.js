@@ -8,6 +8,12 @@ const PAYROLL_BATCH_STATUS_LABELS = {
   voided: '已作废',
 }
 
+const PAYROLL_BATCH_SOURCE_LABELS = {
+  upload: '文件上传',
+  friend_supabase: '外部 Supabase 导入',
+  manual: '手动录入',
+}
+
 export const payrollBatchIdentity = batch => clean(batch?.id)
 
 export const payrollBatchLifecycleState = batch => {
@@ -15,17 +21,35 @@ export const payrollBatchLifecycleState = batch => {
   return clean(batch?.status).toLowerCase() || 'unknown'
 }
 
+export const payrollBatchSourcePresentation = batch => {
+  const sourceType = clean(batch?.source_type).toLowerCase()
+  const sourceLabel = PAYROLL_BATCH_SOURCE_LABELS[sourceType] || clean(batch?.source_type) || '来源未记录'
+  return {
+    sourceType,
+    sourceLabel,
+    category: clean(batch?.title) || '批次类别未记录',
+    sourceFileName: clean(batch?.source_file_name),
+    sourceProjectRef: clean(batch?.source_project_ref),
+    sourceBatchKey: clean(batch?.source_batch_key),
+  }
+}
+
 export const filterPayrollBatches = (batches, { search = '', status = 'all' } = {}) => {
   const expectedStatus = clean(status).toLowerCase() || 'all'
   const needle = searchKey(search)
   return (batches || []).filter(batch => {
     const lifecycleState = payrollBatchLifecycleState(batch)
+    const source = payrollBatchSourcePresentation(batch)
     if (expectedStatus !== 'all' && lifecycleState !== expectedStatus) return false
     if (!needle) return true
     const searchable = searchKey([
       payrollBatchIdentity(batch),
-      batch?.source_file_name,
-      batch?.title,
+      source.sourceType,
+      source.sourceLabel,
+      source.sourceFileName,
+      source.category,
+      source.sourceProjectRef,
+      source.sourceBatchKey,
       batch?.period_start,
       batch?.currency,
       batch?.created_by_name,
