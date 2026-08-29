@@ -215,7 +215,7 @@ export default function AdminUsersPage() {
   const recoveryAccountMode = Boolean(data?.recovery_account_mode)
   const recoveryRoleMode = Boolean(data?.recovery_role_mode)
   const recoveryRolePermissionsWritable = Boolean(
-    recoveryRoleMode && callerFounder && data?.role_permissions_writable
+    recoveryRoleMode && callerFounder && data?.role_permissions_writable !== false
   )
   const canSaveRolePermissions = Boolean(
     callerFounder && (!recoveryRoleMode || recoveryRolePermissionsWritable)

@@ -49,7 +49,7 @@ test('atomic recovery writer rechecks Founder, locks one role and audits the bou
 test('recovery UI enables only permission selection and save for Founder', async () => {
   const page = await read('../pages/AdminUsersPage.jsx')
 
-  assert.match(page, /recoveryRolePermissionsWritable = Boolean\([\s\S]+recoveryRoleMode && callerFounder && data\?\.role_permissions_writable/)
+  assert.match(page, /recoveryRolePermissionsWritable = Boolean\([\s\S]+recoveryRoleMode && callerFounder && data\?\.role_permissions_writable !== false/)
   assert.match(page, /canSaveRolePermissions = Boolean\([\s\S]+callerFounder && \(!recoveryRoleMode \|\| recoveryRolePermissionsWritable\)/)
   assert.match(page, /if \(!roleModal \|\| !canSaveRolePermissions\) return/)
   assert.match(page, /recoveryRoleMode && \(roleModal\.role\.system_locked \|\| roleModal\.role\.active === false\)/)
