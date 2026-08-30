@@ -94,6 +94,16 @@ function HistoryFilters({filters,setFilters,placeholder='搜索备注或内容'}
 
 const emptyHistoryFilters=()=>({from:'',to:'',keyword:''})
 
+const adjustmentVisibilityKind=row=>{
+  const kind=text(row?.event_kind).toLowerCase()
+  if(kind==='bonus')return 'bonus'
+  if(kind==='deduction')return 'deduction'
+  const amount=Number(row?.amount)
+  if(kind&&Number.isFinite(amount)&&amount>0)return 'bonus'
+  if(kind&&Number.isFinite(amount)&&amount<0)return 'deduction'
+  return 'unclassified'
+}
+
 function RecordDetailsModal({row,onClose,adjustment=false}){
   if(!row)return null
   return <div className="modal-mask attendance-record-modal-mask" onMouseDown={onClose}>
@@ -140,7 +150,11 @@ export function EmployeeAdjustmentPanel({data,loading,error,canViewBonus=false,c
   const currencyCount=(currency,key)=>currencySummary[currency]?`${currencySummary[currency]?.[key]||0} 笔`:'—'
   const [selected,setSelected]=useState(null)
   const [filters,setFilters]=useState(emptyHistoryFilters)
-  const visibleRows=useMemo(()=>rows.filter(row=>historyMatches(row,filters,['reason','note','raw_amount',row=>adjustmentCategory(row),row=>attendanceAmount(row),row=>attendanceKindLabel(row.event_kind)])),[rows,filters])
+  const visibleRows=useMemo(()=>rows.filter(row=>{
+    const kind=adjustmentVisibilityKind(row)
+    const categoryAllowed=kind==='bonus'?canViewBonus:kind==='deduction'?canViewDeduction:canViewBonus&&canViewDeduction
+    return categoryAllowed&&historyMatches(row,filters,['reason','note','raw_amount',row=>adjustmentCategory(row),row=>attendanceAmount(row),row=>attendanceKindLabel(row.event_kind)])
+  }),[rows,filters,canViewBonus,canViewDeduction])
   const panelTitle=canViewBonus&&canViewDeduction?'奖金 / 扣款记录':canViewBonus?'奖金记录':'扣款记录'
   const summaryItems=[...(canViewBonus?[['USD 奖金',`${currencyCount('USD','bonus_count')} · ${currencyValue('USD','bonus_total')}`,'positive'],['PHP 奖金',`${currencyCount('PHP','bonus_count')} · ${currencyValue('PHP','bonus_total')}`,'positive']]:[]),...(canViewDeduction?[['USD 扣款',`${currencyCount('USD','deduction_count')} · ${currencyValue('USD','deduction_total')}`,'negative'],['PHP 扣款',`${currencyCount('PHP','deduction_count')} · ${currencyValue('PHP','deduction_total')}`,'negative']]:[]),...(canViewBonus&&canViewDeduction?[['USD 净额',currencyValue('USD','net_amount')],['PHP 净额',currencyValue('PHP','net_amount')]]:[]),['币种待核对',summary.currency_review_count||0,'warning'],['金额未解析',summary.incomplete||0,'warning']]
   return <section className="detail-panel employee-attendance-panel employee-adjustment-panel">

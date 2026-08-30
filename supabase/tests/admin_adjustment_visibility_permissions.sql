@@ -10,6 +10,7 @@ declare
   v_employee text;
   v_page text;
   v_employee_page text;
+  v_has_permission text;
 begin
   if not exists (
     select 1 from public.permissions
@@ -95,6 +96,9 @@ begin
   select pg_catalog.pg_get_functiondef(
     'public.admin_employee_adjustment_history(uuid,integer,integer)'::regprocedure
   ) into v_employee_page;
+  select pg_catalog.pg_get_functiondef(
+    'public.has_permission(text)'::regprocedure
+  ) into v_has_permission;
 
   if position('''adjustment.bonus.view''' in v_home)=0
      or position('''adjustment.deduction.view''' in v_home)=0
@@ -126,6 +130,11 @@ begin
      or position('''adjustment.deduction.view''' in v_employee_page)=0
      or position('public.can_manage_employee(p_employee_id)' in v_employee_page)=0 then
     raise exception 'public adjustment wrapper permission or scope guard is missing';
+  end if;
+
+  if position('public.is_founder()' in v_has_permission)=0
+     or position('return true' in lower(v_has_permission))=0 then
+    raise exception 'Founder must retain implicit access to both adjustment categories';
   end if;
 
   if not exists (

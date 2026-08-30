@@ -508,7 +508,9 @@ export default function AdminEmployeesPage(){
   const canViewSensitiveEmployees=adminAccess.hasPermission(PERMISSIONS.SENSITIVE_EMPLOYEE_VIEW)
   const canGenerateActivationCode=adminAccess.hasPermission(PERMISSIONS.USER_ACTIVATION_GENERATE)
   const canManagePrivateNotes=adminAccess.hasPermission(PERMISSIONS.EMPLOYEE_PRIVATE_NOTE_MANAGE)
-  const canViewAdjustmentLogs=canViewAudit&&adminAccess.hasPermission('adjustment.page.view')
+  const canViewAdjustmentLogs=canViewAudit
+    &&adminAccess.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_VIEW)
+    &&adminAccess.hasAnyPermission([PERMISSIONS.ADJUSTMENT_BONUS_VIEW,PERMISSIONS.ADJUSTMENT_DEDUCTION_VIEW])
   const canViewAttendanceLogs=canViewAudit&&adminAccess.hasAnyPermission(['attendance.monthly.view','attendance.today.view','attendance.records.view','attendance.leave.view'])
   const tabs=adminAccess.loading?[]:EMPLOYEE_TABS.filter(item=>{
     const permissions=EMPLOYEE_TAB_PERMISSIONS[item]

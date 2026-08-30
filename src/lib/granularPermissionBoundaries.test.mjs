@@ -11,6 +11,7 @@ const adjustmentAlignment = await readFile(new URL('../../supabase/migrations/20
 const adjustmentFilters = await readFile(new URL('../../supabase/migrations/20260829041328_preserve_admin_adjustment_currency_filter.sql', import.meta.url), 'utf8')
 const adjustmentVisibility = await readFile(new URL('../../supabase/migrations/20260829110546_split_adjustment_visibility_permissions.sql', import.meta.url), 'utf8')
 const adjustmentCategoryClosure = await readFile(new URL('../../supabase/migrations/20260830062228_close_adjustment_category_permissions.sql', import.meta.url), 'utf8')
+const adjustmentCategoryCatalog = await readFile(new URL('../../supabase/migrations/20260830112000_clarify_adjustment_category_permission_scope.sql', import.meta.url), 'utf8')
 const accounts = await readFile(new URL('../../supabase/functions/admin-accounts/index.ts', import.meta.url), 'utf8')
 const employees = await readFile(new URL('../../supabase/functions/admin-employees/index.ts', import.meta.url), 'utf8')
 const employeeWrite = await readFile(new URL('../../supabase/functions/admin-employee-write/index.ts', import.meta.url), 'utf8')
@@ -237,8 +238,15 @@ test('bonus and deduction visibility is independently configurable on both admin
   assert.match(employeePage, /\['penalties','奖金 \/ 扣款',canViewAdjustments\]/)
   assert.match(employeePage, /if\(!canViewAdjustments\)[\s\S]+admin_employee_adjustment_history/)
   assert.match(employeePage, /EmployeeAdjustmentPanel[\s\S]+canViewBonus=\{canViewAdjustmentBonus\}[\s\S]+canViewDeduction=\{canViewAdjustmentDeduction\}/)
+  assert.match(employeePage, /canViewAdjustmentLogs=canViewAudit[\s\S]+ADJUSTMENT_PAGE_VIEW[\s\S]+hasAnyPermission\(\[PERMISSIONS\.ADJUSTMENT_BONUS_VIEW,PERMISSIONS\.ADJUSTMENT_DEDUCTION_VIEW\]\)/)
   assert.match(attendanceRecords, /EmployeeAdjustmentPanel\(\{data,loading,error,canViewBonus=false,canViewDeduction=false\}\)/)
   assert.match(attendanceRecords, /summaryItems=\[\.\.\.\(canViewBonus[\s\S]+\.\.\.\(canViewDeduction/)
+  assert.match(attendanceRecords, /adjustmentVisibilityKind[\s\S]+categoryAllowed=kind==='bonus'\?canViewBonus:kind==='deduction'\?canViewDeduction:canViewBonus&&canViewDeduction/)
+
+  assert.match(adjustmentCategoryCatalog, /查看奖金记录（奖惩表 \/ 员工档案）/)
+  assert.match(adjustmentCategoryCatalog, /查看扣款记录（奖惩表 \/ 员工档案）/)
+  assert.match(adjustmentCategoryCatalog, /sensitive=true/)
+  assert.doesNotMatch(adjustmentCategoryCatalog, /insert into public\.role_permissions|insert into public\.user_permission_overrides/)
 })
 
 test('bonus and deduction rows are filtered by both private server readers before aggregation', () => {
