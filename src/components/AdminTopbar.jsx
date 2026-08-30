@@ -299,7 +299,7 @@ export default function AdminTopbar({ access }) {
       window.removeEventListener('focus', resume)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [canPresenceCounts, canPresenceRows, locale])
+  }, [canPresenceCounts, canPresenceRows, locale, access?.authUserId])
 
   useEffect(() => {
     if (!open) return undefined
