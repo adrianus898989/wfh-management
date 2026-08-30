@@ -9,6 +9,7 @@ import {
   sheetSyncRpcWithDeadline,
 } from "../_shared/sheetSyncRuntime.ts";
 import { assertOrderSnapshotSafe } from "./orderSnapshotGuard.mjs";
+import { normalizeEmployeeErrors } from "./errorNormalization.ts";
 
 // Reuse the existing project cron secret. The raw value stays in Supabase
 // Vault; only its SHA-256 digest is committed here.
@@ -301,35 +302,7 @@ function noteValue(note: unknown, key: string) {
 }
 
 function normalizeErrors(rawErrors: Record<string, unknown>[], sourceName: string) {
-  return rawErrors.map((row, index) => {
-    const employeeId = normalizeEmployeeId(pick(row, ['员工ID', '員工ID', 'ID']))
-    const memberOrder = pick(row, ['会员/id /订单号', '會員/id /訂單號'])
-    const errorNote = pick(row, ['错误备注', '錯誤備註'])
-    const errorType = pick(row, ['错误类型', '錯誤類型'])
-    const qcPerson = pick(row, ['质检人', '質檢人'])
-    const qcDate = normalizeDate(pick(row, ['质检时间', '質檢時間']))
-    const recordKey = `${employeeId}|${qcDate}|${hash32([memberOrder, errorType, qcPerson, errorNote].join('|'))}`
-
-    return {
-      source_name: sourceName,
-      record_key: recordKey,
-      source_row: index + 2,
-      employee_id: employeeId,
-      member_order: memberOrder,
-      amount: pick(row, ['金额', '金額']),
-      error_note: errorNote,
-      correct_action: pick(row, ['正确操作方式', '正確操作方式']),
-      error_type: errorType,
-      score: pick(row, ['扣分']),
-      qc_person: qcPerson,
-      qc_date: qcDate,
-      leader_review: pick(row, ['小组长复审', '小組長複審']),
-      qc_result: pick(row, ['质检人对错', '质检人对/错', '質檢人對錯']),
-      review_date: normalizeDate(pick(row, ['复检时间', '複檢時間'])),
-    }
-  }).filter((row) => row.employee_id && (
-    row.qc_date || row.review_date || row.error_type || row.error_note
-  ))
+  return normalizeEmployeeErrors(rawErrors, sourceName)
 }
 
 function buildRiskSummaries(

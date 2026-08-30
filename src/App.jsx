@@ -13,32 +13,14 @@ import {
   supabase,
   touchSessionActivity,
 } from './lib/supabase'
-import AdminLoginPage from './pages/AdminLoginPage'
-import StaffLoginPage from './pages/StaffLoginPage'
-import StaffRegisterPage from './pages/StaffRegisterPage'
 import StaffIpPreflightGate from './components/StaffIpPreflightGate'
-import MfaPage from './pages/MfaPage'
-import AdminEmployeesPage from './pages/AdminEmployeesPage'
-import AdminUsersPage from './pages/AdminUsersPage'
-import AdminIpAllowlistPage from './pages/AdminIpAllowlistPage'
-import AdminAttendancePage from './pages/AdminAttendancePage'
-import AdminReportsPage from './pages/AdminReportsPage'
-import AdminDailyWorkPage from './pages/AdminDailyWorkPage'
-import AdminTrainingPage from './pages/AdminTrainingPage'
-import StaffExamPage from './pages/StaffExamPage'
-import AdminPayrollPage from './pages/AdminPayrollPage'
-import StaffPayrollPage from './pages/StaffPayrollPage'
-import AdminPlanningPage from './pages/AdminPlanningPage'
-import AdminManualPage from './pages/AdminManualPage'
-import AdminActivityLogPage from './pages/AdminActivityLogPage'
-import { AdminHome, StaffHome, ComingSoon } from './pages/PortalPage'
 import AppLayout from './components/AppLayout'
 import { AppToastProvider } from './components/AppToastProvider'
 import { StaffI18nProvider, useStaffLocale } from './lib/staffI18n'
 import { AdminI18nProvider } from './lib/adminI18n'
 import {
   APP_RELEASE_ID,
-  APP_RELEASE_POLL_MS,
+  appReleasePollDelay,
   clearRegisteredAppRelease,
   currentAppReleaseIsRegistered,
   fetchPublishedAppReleaseId,
@@ -48,6 +30,39 @@ import {
   markAppSessionVerified,
   runCoalescedAppSessionWake,
 } from './lib/appSessionHeartbeatPressure'
+
+// Keep each route behind its own Suspense boundary.  The wrapper is the route
+// component, so a lazy child never unmounts the long-lived Protected/AppLayout
+// shell (and therefore never repeats access, IP-lease, presence or alert work).
+const lazyRoute = (loader, exportName = 'default') => {
+  const LazyPage = React.lazy(() => loader().then(module => ({ default:module[exportName] })))
+  return function LazyRoutePage(props) {
+    return <React.Suspense fallback={<div className="center-screen">Loading...</div>}>
+      <LazyPage {...props} />
+    </React.Suspense>
+  }
+}
+
+const AdminLoginPage = lazyRoute(() => import('./pages/AdminLoginPage'))
+const StaffLoginPage = lazyRoute(() => import('./pages/StaffLoginPage'))
+const StaffRegisterPage = lazyRoute(() => import('./pages/StaffRegisterPage'))
+const MfaPage = lazyRoute(() => import('./pages/MfaPage'))
+const AdminEmployeesPage = lazyRoute(() => import('./pages/AdminEmployeesPage'))
+const AdminUsersPage = lazyRoute(() => import('./pages/AdminUsersPage'))
+const AdminIpAllowlistPage = lazyRoute(() => import('./pages/AdminIpAllowlistPage'))
+const AdminAttendancePage = lazyRoute(() => import('./pages/AdminAttendancePage'))
+const AdminReportsPage = lazyRoute(() => import('./pages/AdminReportsPage'))
+const AdminDailyWorkPage = lazyRoute(() => import('./pages/AdminDailyWorkPage'))
+const AdminTrainingPage = lazyRoute(() => import('./pages/AdminTrainingPage'))
+const StaffExamPage = lazyRoute(() => import('./pages/StaffExamPage'))
+const AdminPayrollPage = lazyRoute(() => import('./pages/AdminPayrollPage'))
+const StaffPayrollPage = lazyRoute(() => import('./pages/StaffPayrollPage'))
+const AdminPlanningPage = lazyRoute(() => import('./pages/AdminPlanningPage'))
+const AdminManualPage = lazyRoute(() => import('./pages/AdminManualPage'))
+const AdminActivityLogPage = lazyRoute(() => import('./pages/AdminActivityLogPage'))
+const AdminHome = lazyRoute(() => import('./pages/PortalPage'), 'AdminHome')
+const StaffHome = lazyRoute(() => import('./pages/PortalPage'), 'StaffHome')
+const ComingSoon = lazyRoute(() => import('./pages/PortalPage'), 'ComingSoon')
 
 const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 6
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
@@ -116,7 +131,16 @@ function ReleaseSessionBoundary({ children }) {
     }
 
     void verifyStoredRelease().then(() => checkPublishedRelease())
-    const manifestTimer = window.setInterval(checkPublishedRelease, APP_RELEASE_POLL_MS)
+    let manifestTimer = 0
+    const scheduleManifestCheck = () => {
+      window.clearTimeout(manifestTimer)
+      if (!alive || terminating.current) return
+      manifestTimer = window.setTimeout(async () => {
+        await checkPublishedRelease()
+        scheduleManifestCheck()
+      }, appReleasePollDelay())
+    }
+    scheduleManifestCheck()
     const onVisible = () => { if (!document.hidden) checkPublishedRelease() }
     const onFocus = () => checkPublishedRelease()
     const onOnline = () => checkPublishedRelease()
@@ -130,7 +154,7 @@ function ReleaseSessionBoundary({ children }) {
 
     return () => {
       alive = false
-      window.clearInterval(manifestTimer)
+      window.clearTimeout(manifestTimer)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('online', onOnline)

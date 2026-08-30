@@ -439,6 +439,19 @@ const staffMonthValue = () => {
 }
 const localeCode = locale => ({ zh: 'zh-CN', en: 'en-US', vi: 'vi-VN', id: 'id-ID' }[locale] || 'en-US')
 const staffDateTime = (value, locale) => value ? new Date(value).toLocaleString(localeCode(locale), { hour12: false }) : '—'
+const compactStaffActivityHome = async () => {
+  const compact = await supabase.rpc('staff_activity_home', { p_include_attendance:false })
+  if (!compact.error) return compact
+  const code = String(compact.error?.code || '')
+  const message = String(compact.error?.message || '')
+  // Keep Pages compatible while the new overload reaches PostgREST's schema
+  // cache.  Only a missing-signature error may use the old heavier endpoint;
+  // permission/session failures must remain failures and must never be retried.
+  if (['PGRST202', '42883'].includes(code) || /function[^\n]+staff_activity_home[^\n]+not found|schema cache/i.test(message)) {
+    return supabase.rpc('staff_activity_home')
+  }
+  return compact
+}
 const staffExamBreakdown = (row, t) => {
   if (row?.source_system === 'legacy' && !row?.answer_detail_available) {
     return row?.percentage == null ? t('exam.detailWaiting', 'Per-question detail pending sync') : t('exam.totalOnly', 'Final score saved · per-question detail not synced')
@@ -491,7 +504,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
       { data: attendanceResult, error: attendanceError },
     ] = await Promise.all([
       supabase.rpc('staff_portal_home'),
-      supabase.rpc('staff_activity_home'),
+      compactStaffActivityHome(),
       supabase.rpc('staff_attendance_home', { p_month: staffMonthValue() }),
     ])
     if (loadError) setError(portalErrorMessage(loadError, t('portal.profileLoadFailed', 'Failed to load profile')))

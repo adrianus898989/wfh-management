@@ -38,7 +38,19 @@ ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><A
 // They are DOM driven; native report/employee pages own workload and grade data.
 // A missing environment configuration should still render the normal setup
 // screen instead of crashing while a legacy enhancer patches Supabase.
-if (configured) {
+const runtimeBasePath = String(import.meta.env.BASE_URL || '/').replace(/\/+$/, '')
+const runtimeBrowserPath = window.location.pathname
+const runtimeAppPath = runtimeBasePath && (
+  runtimeBrowserPath === runtimeBasePath || runtimeBrowserPath.startsWith(`${runtimeBasePath}/`)
+)
+  ? runtimeBrowserPath.slice(runtimeBasePath.length) || '/'
+  : runtimeBrowserPath
+const isAdminRuntime = runtimeAppPath === '/admin' || runtimeAppPath.startsWith('/admin/')
+
+// These compatibility layers inspect and patch admin-only tables.  Loading them
+// for staff used five extra chunks and five document-wide MutationObservers on
+// every employee session, even though no matching admin DOM can exist there.
+if (configured && isAdminRuntime) {
   void (async () => {
     const starts = [
       () => import('./uiV2714Enhancer').then(module => module.startUiV2714Enhancer()),

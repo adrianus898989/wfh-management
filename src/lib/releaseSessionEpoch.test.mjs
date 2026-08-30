@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import {
   APP_RELEASE_ID,
+  APP_RELEASE_POLL_JITTER_MS,
   APP_RELEASE_POLL_MS,
+  appReleasePollDelay,
   clearRegisteredAppRelease,
   currentAppReleaseIsRegistered,
   fetchPublishedAppReleaseId,
@@ -108,9 +110,14 @@ test('new pages reject an authenticated browser without the current local releas
   assert.match(staffLogin, /registerCurrentAppRelease\('staff'\)/)
 })
 
-test('open pages poll an uncached release manifest at least once per minute', async () => {
-  assert.ok(APP_RELEASE_POLL_MS > 0 && APP_RELEASE_POLL_MS <= 60_000)
-  assert.match(app, /setInterval\(checkPublishedRelease, APP_RELEASE_POLL_MS\)/)
+test('open pages poll an uncached release manifest on a jittered two-minute cadence', async () => {
+  assert.equal(APP_RELEASE_POLL_MS, 120_000)
+  assert.equal(APP_RELEASE_POLL_JITTER_MS, 30_000)
+  assert.equal(appReleasePollDelay(() => 0), 120_000)
+  assert.equal(appReleasePollDelay(() => 0.5), 135_000)
+  assert.equal(appReleasePollDelay(() => 1), 150_000)
+  assert.match(app, /window\.setTimeout\(async \(\) => \{[\s\S]{0,180}appReleasePollDelay\(\)/)
+  assert.match(app, /visibilitychange[\s\S]{0,180}focus[\s\S]{0,180}online/)
   let request
   const published = await fetchPublishedAppReleaseId({
     baseUrl: 'https://example.test/wfh-management/',

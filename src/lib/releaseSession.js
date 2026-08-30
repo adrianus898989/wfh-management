@@ -3,7 +3,14 @@ const injectedReleaseId = typeof import.meta.env?.VITE_APP_RELEASE_ID === 'strin
   : ''
 
 export const APP_RELEASE_ID = injectedReleaseId || 'development'
-export const APP_RELEASE_POLL_MS = 45 * 1000
+export const APP_RELEASE_POLL_MS = 120 * 1000
+export const APP_RELEASE_POLL_JITTER_MS = 30 * 1000
+
+export const appReleasePollDelay = (random = Math.random) => {
+  const sampled = typeof random === 'function' ? Number(random()) : 0
+  const fraction = Number.isFinite(sampled) ? Math.max(0, Math.min(1, sampled)) : 0
+  return APP_RELEASE_POLL_MS + Math.floor(fraction * APP_RELEASE_POLL_JITTER_MS)
+}
 
 const normalizedPortal = portal => portal === 'admin' ? 'admin' : 'staff'
 const storageKey = portal => `wfh_${normalizedPortal(portal)}_app_release_id`
