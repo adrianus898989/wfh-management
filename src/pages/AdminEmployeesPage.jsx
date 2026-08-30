@@ -21,6 +21,7 @@ import { managementRiskDatePreset } from '../lib/managementRiskPresentation'
 import ManagementRiskPanel from '../components/ManagementRiskPanel'
 import { withAbortTimeout } from '../lib/abortableRequest'
 import { employeeProfileMetricSeed, mergeEmployeeDetailRefresh, withEmployeeDetailTimeout } from '../lib/employeeDrawerState'
+import { filterEmployeeErrorHistory, filterEmployeeExamHistory } from '../lib/employeeRecordFilters'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -83,6 +84,8 @@ const EMPLOYEE_TOAST_MODULE='员工管理'
 const employeeToastDedupeKey=(operation,type,scope='')=>['employees',text(operation),text(scope),type].join(':')
 const employeeRefreshSucceeded=outcomes=>(outcomes||[]).every(outcome=>outcome!==false)
 const MANAGEMENT_RISK_REQUEST_TIMEOUT_MS=12*1000
+const MANAGEMENT_RISK_CACHE_TTL_MS=60*1000
+const MANAGEMENT_RISK_CACHE_MAX_ENTRIES=8
 const blankPeopleFilters=()=>({employee_no:'',full_name:'',work_tg:'',team:'',position:'',country:'',shift_name:'',date_from:'',date_to:''})
 const blankManagementRiskFilters=()=>({
   ...managementRiskDatePreset('30d'),team:'',group:'',manager:'',manager_role:'',employee_search:'',
@@ -577,6 +580,7 @@ export default function AdminEmployeesPage(){
   const [appliedManagementRiskFilters,setAppliedManagementRiskFilters]=useState(blankManagementRiskFilters)
   const [managementRiskDimension,setManagementRiskDimension]=useState('teams')
   const managementRiskRequestRef=useRef({inFlight:null,activeFilterKey:'',pendingFilters:null})
+  const managementRiskCacheRef=useRef(new Map())
   const [archiveStats,setArchiveStats]=useState({loading:false,error:'',as_of:'',active:0,total:0,latest_updated_at:'',refreshed_at:'',tenure:[],positions:[],platforms:[],countries:[]})
   const [analysisFilters,setAnalysisFilters]=useState(blankPeopleFilters)
   const [appliedAnalysisFilters,setAppliedAnalysisFilters]=useState(blankPeopleFilters)
@@ -746,16 +750,17 @@ export default function AdminEmployeesPage(){
     }
   }
 
-  const loadManagementRisk=(nextFilters=appliedManagementRiskFilters,{announceFailure=false,operation='查询管理风险'}={})=>{
+  const loadManagementRisk=(nextFilters=appliedManagementRiskFilters,{announceFailure=false,operation='查询管理风险',force=false}={})=>{
     if(!pageMountedRef.current)return Promise.resolve(false)
     if(!canViewManagementRisk) return Promise.resolve(true)
     const requestState=managementRiskRequestRef.current
     const requestedFilters={...blankManagementRiskFilters(),...(nextFilters||{})}
     const requestedFilterKey=JSON.stringify(requestedFilters)
+    const requestedCacheKey=JSON.stringify([employeeAccessKey,requestedFilters,50])
 
     const announceRequestFailure=task=>task.then(success=>{
       if(!success)publishEmployeeFailure(operation,requestState.failureMessage||'管理风险分析读取失败，筛选条件已保留，请重试。',{
-        retry:()=>loadManagementRisk(requestedFilters,{announceFailure:true,operation}),
+        retry:()=>loadManagementRisk(requestedFilters,{announceFailure:true,operation,force:true}),
       })
       return success
     })
@@ -770,11 +775,22 @@ export default function AdminEmployeesPage(){
       return announceRequestFailure(requestState.inFlight)
     }
 
+    if(!force){
+      const cached=managementRiskCacheRef.current.get(requestedCacheKey)
+      if(cached&&Date.now()-cached.cachedAt<MANAGEMENT_RISK_CACHE_TTL_MS){
+        setAppliedManagementRiskFilters(requestedFilters)
+        setManagementRisk({...cached.data,loading:false,error:''})
+        return Promise.resolve(true)
+      }
+      if(cached)managementRiskCacheRef.current.delete(requestedCacheKey)
+    }
+
     requestState.failureMessage=''
     const drainRequests=async()=>{
       let activeFilters=requestedFilters
       let finalSuccess=true
       while(activeFilters){
+        const activeCacheKey=JSON.stringify([employeeAccessKey,activeFilters,50])
         requestState.activeFilterKey=JSON.stringify(activeFilters)
         requestState.pendingFilters=null
         // "Applied" means the RPC really started; queued filters must not be
@@ -801,6 +817,10 @@ export default function AdminEmployeesPage(){
           if(!pageMountedRef.current)return false
           if(error||data?.error) throw new Error(readableErrorMessage(error||data?.error)||'管理风险分析读取失败')
           responseData=data
+          const cache=managementRiskCacheRef.current
+          cache.delete(activeCacheKey)
+          cache.set(activeCacheKey,{cachedAt:Date.now(),data})
+          while(cache.size>MANAGEMENT_RISK_CACHE_MAX_ENTRIES)cache.delete(cache.keys().next().value)
         }catch(e){
           responseError=e?.code==='MANAGEMENT_RISK_TIMEOUT'||e?.message==='MANAGEMENT_RISK_TIMEOUT'
             ? '管理风险分析读取超过12秒，已停止本次请求；筛选条件已保留，请手动重试。'
@@ -829,7 +849,7 @@ export default function AdminEmployeesPage(){
 
   const announceUserManagementRisk=(task,nextFilters,operation='查询管理风险')=>task.then(success=>{
     if(!success)publishEmployeeFailure(operation,managementRiskRequestRef.current.failureMessage||'管理风险分析读取失败，筛选条件已保留，请重试。',{
-      retry:()=>loadManagementRisk(nextFilters,{announceFailure:true,operation}),
+      retry:()=>loadManagementRisk(nextFilters,{announceFailure:true,operation,force:true}),
     })
     return success
   })
@@ -1087,7 +1107,7 @@ export default function AdminEmployeesPage(){
       else if(canViewAnalytics||canViewResignations||canViewAudit) jobs.push(loadPageFilterOptions(tab==='离职记录'))
       if(canViewEmployees||canViewAnalytics) jobs.push(loadArchiveStats(true))
       if(canViewAnalytics&&tab==='人员分析'){
-        if(analysisView==='管理风险'&&canViewManagementRisk) jobs.push(loadManagementRisk(appliedManagementRiskFilters))
+        if(analysisView==='管理风险'&&canViewManagementRisk) jobs.push(loadManagementRisk(appliedManagementRiskFilters,{force:!silent}))
         else{
           jobs.push(loadPeopleAnalytics(appliedAnalysisFilters))
           // The default resignation data is identical to the default people
@@ -1151,6 +1171,7 @@ export default function AdminEmployeesPage(){
       state.inFlight=null
       state.epoch+=1
       employeeDirectoryRequestRef.current.pending=null
+      managementRiskCacheRef.current.clear()
       detailRequestRef.current+=1
       requestedEmployeeRef.current=''
       setRows([]);setTotal(0);setMeta(emptyEmployeeMeta());setMetaError('')
@@ -1880,17 +1901,17 @@ export default function AdminEmployeesPage(){
       publishEmployeeFailure('查询管理风险',message)
       return
     }
-    void announceUserManagementRisk(loadManagementRisk(next),next)
+    void announceUserManagementRisk(loadManagementRisk(next,{force:true}),next)
   }
   const resetManagementRiskFilters=()=>{
     const next=blankManagementRiskFilters()
     setManagementRiskFilters(next)
-    void announceUserManagementRisk(loadManagementRisk(next),next)
+    void announceUserManagementRisk(loadManagementRisk(next,{force:true}),next)
   }
   const setManagementRiskRange=preset=>{
     const next={...managementRiskFilters,...managementRiskDatePreset(preset)}
     setManagementRiskFilters(next)
-    void announceUserManagementRisk(loadManagementRisk(next),next)
+    void announceUserManagementRisk(loadManagementRisk(next,{force:true}),next)
   }
   const changeAnalysisView=view=>{
     const next={...blankPeopleFilters(),date_from:analysisFilters.date_from,date_to:analysisFilters.date_to}
@@ -2058,7 +2079,7 @@ export default function AdminEmployeesPage(){
         {analysisViews.map(x=><button type="button" key={x} className={analysisView===x?'active':''} onClick={()=>changeAnalysisView(x)}>{x}</button>)}
       </div>
 
-      {(analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error)&&<div className="employee-inline-sync-note is-error" role="alert"><span>{analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error}</span><button type="button" onClick={()=>analysisView==='管理风险'?loadManagementRisk(appliedManagementRiskFilters,{announceFailure:true,operation:'重新读取管理风险'}):analysisView==='离职分析'?loadResignationAnalytics(appliedResignationAnalyticsFilters,{announceFailure:true,operation:'重新读取离职分析'}):loadPeopleAnalytics(appliedAnalysisFilters,{announceFailure:true,operation:'重新读取人员分析'})}>重新读取</button></div>}
+      {(analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error)&&<div className="employee-inline-sync-note is-error" role="alert"><span>{analysisView==='管理风险'?managementRisk.error:analysisView==='离职分析'?resignationAnalytics.error:peopleAnalytics.error}</span><button type="button" onClick={()=>analysisView==='管理风险'?loadManagementRisk(appliedManagementRiskFilters,{announceFailure:true,operation:'重新读取管理风险',force:true}):analysisView==='离职分析'?loadResignationAnalytics(appliedResignationAnalyticsFilters,{announceFailure:true,operation:'重新读取离职分析'}):loadPeopleAnalytics(appliedAnalysisFilters,{announceFailure:true,operation:'重新读取人员分析'})}>重新读取</button></div>}
 
       {!['离职分析','管理风险'].includes(analysisView)&&<div className="analytics-filter-panel v24-analytics-filter-panel">
         <div className={`people-filter-grid view-${analysisView}`}>
@@ -2259,6 +2280,7 @@ export default function AdminEmployeesPage(){
     {analysisDetail&&<AnalysisDetailModal state={analysisDetail} loading={analysisDetailLoading} onClose={()=>setAnalysisDetail(null)} onOpenEmployee={canViewEmployees?row=>openHistoryDetail(row):null}/>}
 
     {selected&&<EmployeeDrawer
+      key={selected.employee.id}
       detail={selected}
       loading={detailLoading}
       error={detailError}
@@ -2802,15 +2824,12 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
   const [payrollData,setPayrollData]=useState(null)
   const [payrollLoading,setPayrollLoading]=useState(false)
   const [payrollError,setPayrollError]=useState('')
-  const [attendanceData,setAttendanceData]=useState(null)
-  const [attendanceLoading,setAttendanceLoading]=useState(false)
-  const [attendanceError,setAttendanceError]=useState('')
-  const [adjustmentData,setAdjustmentData]=useState(null)
-  const [adjustmentLoading,setAdjustmentLoading]=useState(false)
-  const [adjustmentError,setAdjustmentError]=useState('')
-  const [trainerReviewData,setTrainerReviewData]=useState({rows:[],total:0,page:1,pages:1})
+  const [trainerReviewData,setTrainerReviewData]=useState({rows:[],total:0,page:1,page_size:20,pages:1})
   const [trainerReviewLoading,setTrainerReviewLoading]=useState(false)
   const [trainerReviewError,setTrainerReviewError]=useState('')
+  const [trainerReviewFilters,setTrainerReviewFilters]=useState({query:'',dateFrom:'',dateTo:''})
+  const [trainerReviewPage,setTrainerReviewPage]=useState(1)
+  const [trainerReviewPageSize,setTrainerReviewPageSize]=useState(20)
   const missing=detail.missing_fields||[]
   const full=Boolean(detail.permissions?.sensitive_payment_view)
   const paymentMode=p.mode||defaultPaymentMode(e.employment_type)
@@ -2828,7 +2847,13 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     ['penalties','奖金 / 扣款',canViewAdjustments],
     ['trainer_reviews','老师评价',adminAccess.hasPermission(PERMISSIONS.ONLINE_TRAINING_REPORT_VIEW)],
   ].filter(([, ,allowed])=>allowed),[adminAccess.founder,adminAccess.permissionKey])
-  useEffect(()=>setActiveSection('info'),[e.id])
+  useEffect(()=>{
+    setActiveSection('info')
+    setTrainerReviewFilters({query:'',dateFrom:'',dateTo:''})
+    setTrainerReviewPage(1)
+    setTrainerReviewData({rows:[],total:0,page:1,page_size:20,pages:1})
+    setTrainerReviewError('')
+  },[e.id])
   useEffect(()=>{
     if(!drawerTabs.some(([key])=>key===activeSection))setActiveSection('info')
   },[activeSection,drawerTabs])
@@ -2886,31 +2911,6 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     return()=>{alive=false}
   },[e.id,activeSection,canViewPayrollRecords])
   useEffect(()=>{
-    if(!e.id||activeSection!=='attendance')return
-    let alive=true
-    setAttendanceLoading(true);setAttendanceError('')
-    supabase.rpc('admin_employee_attendance_history',{p_employee_id:e.id,p_page:1,p_page_size:100}).then(({data,error})=>{
-      if(!alive)return
-      if(error)setAttendanceError(error.message);else setAttendanceData(data||{rows:[],total:0,page:1,pages:1})
-    }).finally(()=>alive&&setAttendanceLoading(false))
-    return()=>{alive=false}
-  },[e.id,activeSection])
-  useEffect(()=>{
-    if(!canViewAdjustments){
-      setAdjustmentData(null);setAdjustmentError('');setAdjustmentLoading(false)
-      return
-    }
-    if(!e.id||activeSection!=='penalties')return
-    let alive=true
-    setAdjustmentData(null)
-    setAdjustmentLoading(true);setAdjustmentError('')
-    supabase.rpc('admin_employee_adjustment_history',{p_employee_id:e.id,p_page:1,p_page_size:100}).then(({data,error})=>{
-      if(!alive)return
-      if(error)setAdjustmentError(error.message);else setAdjustmentData(data||{rows:[],total:0,page:1,pages:1})
-    }).finally(()=>alive&&setAdjustmentLoading(false))
-    return()=>{alive=false}
-  },[e.id,activeSection,canViewAdjustments,canViewAdjustmentBonus,canViewAdjustmentDeduction])
-  useEffect(()=>{
     if(!e.id||activeSection!=='errors')return
     let alive=true
     setEmployeeErrorsLoading(true);setEmployeeErrorsError('')
@@ -2926,19 +2926,25 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     setTrainerReviewLoading(true);setTrainerReviewError('')
     const load=async()=>{
       try{
-        const args={p_query:'',p_date_from:null,p_date_to:null,p_employee_id:e.id,p_page:1,p_page_size:50}
-        const first=await supabase.rpc('online_training_list',args)
-        if(first.error)throw first.error
-        const rows=[...(first.data?.rows||[])]
-        const pages=Math.max(1,Number(first.data?.pages||1))
-        if(pages>1){
-          const results=await Promise.all(Array.from({length:pages-1},(_,index)=>supabase.rpc('online_training_list',{...args,p_page:index+2})))
-          for(const result of results){
-            if(result.error)throw result.error
-            rows.push(...(result.data?.rows||[]))
-          }
+        const args={
+          p_query:trainerReviewFilters.query,
+          p_date_from:trainerReviewFilters.dateFrom||null,
+          p_date_to:trainerReviewFilters.dateTo||null,
+          p_employee_id:e.id,
+          p_page:trainerReviewPage,
+          p_page_size:trainerReviewPageSize,
         }
-        if(alive)setTrainerReviewData({rows,total:Number(first.data?.total||rows.length),page:1,pages})
+        const result=await supabase.rpc('online_training_list',args)
+        if(result.error)throw result.error
+        const payload=result.data||{}
+        const rows=payload.rows||[]
+        if(alive)setTrainerReviewData({
+          rows,
+          total:Number(payload.total??rows.length),
+          page:Number(payload.page||trainerReviewPage),
+          page_size:Number(payload.page_size||trainerReviewPageSize),
+          pages:Math.max(1,Number(payload.pages||1)),
+        })
       }catch(error){
         if(alive)setTrainerReviewError(employeeRequestError(error,'老师评价读取失败，请重试。'))
       }finally{
@@ -2947,7 +2953,7 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
     }
     load()
     return()=>{alive=false}
-  },[e.id,activeSection])
+  },[e.id,activeSection,trainerReviewFilters.query,trainerReviewFilters.dateFrom,trainerReviewFilters.dateTo,trainerReviewPage,trainerReviewPageSize])
 
   return <div className="modal-mask detail-mask" onMouseDown={onClose}><div className="employee-detail-drawer employee-detail-v12" onMouseDown={ev=>ev.stopPropagation()}>
     <div className="employee-hero">
@@ -2974,9 +2980,9 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
         {activeSection==='errors'&&<EmployeeErrorPanel data={employeeErrors} loading={employeeErrorsLoading} error={employeeErrorsError}/>}
         {activeSection==='connectivity'&&<EmployeeConnectivityPanel data={connectivityData} loading={connectivityLoading} error={connectivityError}/>}
         {activeSection==='payroll'&&canViewPayrollRecords&&<EmployeePayrollHistoryPanel data={payrollData} loading={payrollLoading} error={payrollError}/>}
-        {activeSection==='attendance'&&<EmployeeAttendancePanel data={attendanceData} loading={attendanceLoading} error={attendanceError}/>}
-        {activeSection==='penalties'&&canViewAdjustments&&<EmployeeAdjustmentPanel data={adjustmentData} loading={adjustmentLoading} error={adjustmentError} canViewBonus={canViewAdjustmentBonus} canViewDeduction={canViewAdjustmentDeduction}/>}
-        {activeSection==='trainer_reviews'&&<EmployeeTrainerReviewPanel data={trainerReviewData} employeeId={e.id} loading={trainerReviewLoading} error={trainerReviewError}/>}
+        {activeSection==='attendance'&&<EmployeeAttendancePanel employeeId={e.id}/>}
+        {activeSection==='penalties'&&canViewAdjustments&&<EmployeeAdjustmentPanel employeeId={e.id} canViewBonus={canViewAdjustmentBonus} canViewDeduction={canViewAdjustmentDeduction}/>}
+        {activeSection==='trainer_reviews'&&<EmployeeTrainerReviewPanel data={trainerReviewData} employeeId={e.id} loading={trainerReviewLoading} error={trainerReviewError} filters={trainerReviewFilters} page={trainerReviewPage} pageSize={trainerReviewPageSize} onFilters={next=>{setTrainerReviewFilters(next);setTrainerReviewPage(1)}} onPage={setTrainerReviewPage} onPageSize={next=>{setTrainerReviewPageSize(next);setTrainerReviewPage(1)}}/>}
         {activeSection==='info'&&<>
         <InfoPanel title="基本资料" rows={[['员工ID',e.employee_no],['姓名',e.full_name],['员工国家',e.country||e.nationality],['员工类型',typeName(e.employment_type)],['状态',statusName(e.status)],['入职日期',text(e.hire_date).slice(0,10)],['入职时长',tenureDurationLabel(e.hire_date,e.resign_date,e.status)],['录入时间',formatDateTime(e.created_at)],['离职日期',text(e.resign_date).slice(0,10)],...(e.status==='resigned'?[['离职原因',text(detail.resignation_reason)||'—']]:[])]}>
           {canViewPrivateNotes&&<EmployeePrivateNoteSummary employeeId={e.id} canManage={canManagePrivateNotes}/>}
@@ -3005,10 +3011,31 @@ export function EmployeeDrawer({detail,loading,error,onRetry,onClose,onEdit,onRe
 
 const TRAINING_ATTENDANCE_LABELS={normal:'正常上班',rest:'公休',not_started:'未入',leave:'请假',absent:'缺席',transferred:'回家'}
 
-function EmployeeTrainerReviewPanel({data,employeeId,loading,error}){
+function EmployeeTrainerReviewPanel({data,employeeId,loading,error,filters,page,pageSize,onFilters,onPage,onPageSize}){
   const rows=employeeTrainerReviewRows(data?.rows||[],employeeId)
+  const [draft,setDraft]=useState(filters)
+  useEffect(()=>setDraft(filters),[employeeId,filters.query,filters.dateFrom,filters.dateTo])
+  const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
+  const submit=event=>{
+    event.preventDefault()
+    onFilters({...draft,query:text(draft.query)})
+  }
+  const reset=()=>{
+    const next={query:'',dateFrom:'',dateTo:''}
+    setDraft(next)
+    onFilters(next)
+  }
+  const total=Number(data?.total??rows.length)
+  const resolvedPage=Number(data?.page||page)
+  const resolvedPageSize=Number(data?.page_size||pageSize)
   return <section className="detail-panel employee-trainer-review-panel">
-    <div className="detail-panel-head"><div><h3>老师评价</h3><p>按线上培训日报日期查看老师对该员工的工作与培训评价。</p></div><span className="employee-exam-count">{rows.length} 条</span></div>
+    <div className="detail-panel-head"><div><h3>老师评价</h3><p>按线上培训日报日期查看老师对该员工的工作与培训评价。</p></div><span className="employee-exam-count">{total} 条</span></div>
+    <form className="employee-history-filters employee-trainer-review-filters" onSubmit={submit}>
+      <label><span>日期起</span><input type="date" value={draft.dateFrom} max={draft.dateTo||undefined} onChange={event=>update('dateFrom',event.target.value)}/></label>
+      <label><span>日期止</span><input type="date" value={draft.dateTo} min={draft.dateFrom||undefined} onChange={event=>update('dateTo',event.target.value)}/></label>
+      <label className="employee-history-search"><span>搜索</span><input value={draft.query} onChange={event=>update('query',event.target.value)} placeholder="搜索老师、日报标题、工作、表现或问题"/></label>
+      <div className="employee-trainer-review-filter-actions"><button type="submit" disabled={loading}>查询</button><button type="button" disabled={loading||(!filters.query&&!filters.dateFrom&&!filters.dateTo&&!draft.query&&!draft.dateFrom&&!draft.dateTo)} onClick={reset}>重置</button></div>
+    </form>
     {loading?<div className="employee-exam-empty">正在读取老师评价...</div>:error?<div className="employee-exam-empty error">{error}</div>:rows.length?<div className="employee-trainer-review-list">{rows.map(row=>{
       const details=[
         ['当天工作 / 培训评语',row.workDetails],
@@ -3024,20 +3051,66 @@ function EmployeeTrainerReviewPanel({data,employeeId,loading,error}){
         <footer><span>{row.reportTitle||'线上培训日报'}</span><span>更新：{formatDateTime(row.submittedAt)}</span></footer>
       </article>
     })}</div>:<div className="employee-exam-empty">暂无老师评价</div>}
+    {!loading&&!error&&total>0&&<Pagination
+      page={resolvedPage}
+      pages={Math.max(1,Number(data?.pages||1))}
+      total={total}
+      pageSize={resolvedPageSize}
+      pageSizeOptions={[20,30,50,100]}
+      loading={loading}
+      onPage={onPage}
+      onPageSize={onPageSize}
+    />}
   </section>
 }
 
+const EMPLOYEE_HISTORY_PAGE_SIZES=[20,30,50,100]
+
+function EmployeeProfileHistoryFilters({draft,setDraft,onApply,onReset,loading=false,placeholder}){
+  const update=(key,value)=>setDraft(current=>({...current,[key]:value}))
+  return <form className="employee-history-filters employee-profile-history-filters" onSubmit={event=>{event.preventDefault();onApply()}}>
+    <label><span>日期起</span><input type="date" value={draft.dateFrom} max={draft.dateTo||undefined} onChange={event=>update('dateFrom',event.target.value)}/></label>
+    <label><span>日期止</span><input type="date" value={draft.dateTo} min={draft.dateFrom||undefined} onChange={event=>update('dateTo',event.target.value)}/></label>
+    <label className="employee-history-search"><span>搜索</span><input value={draft.query} onChange={event=>update('query',event.target.value)} placeholder={placeholder}/></label>
+    <div className="employee-trainer-review-filter-actions"><button type="submit" disabled={loading}>查询</button><button type="button" disabled={loading||(!draft.query&&!draft.dateFrom&&!draft.dateTo)} onClick={onReset}>重置</button></div>
+  </form>
+}
+
 function EmployeeErrorPanel({data,loading,error}){
-  const rows=data?.rows||[]
-  return <section className="detail-panel employee-error-panel"><div className="detail-panel-head"><div><h3>员工出错记录</h3></div><span className="employee-exam-count">{data?.total||0} 条</span></div>{loading?<div className="employee-exam-empty">正在读取出错记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:rows.length?<div className="employee-error-list">{rows.map((row,index)=><article key={row.record_key||`${row.qc_date}-${index}`}><div className="employee-error-meta"><b>{text(row.qc_date).slice(0,10)||'—'}</b><span>{row.error_type||'未分类错误'}</span>{row.score&&<em>{row.score} 分</em>}</div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><footer><span>质检人：{row.qc_person||'—'}</span><span>复检：{row.leader_review||'—'} · {row.qc_result||'—'}</span></footer></article>)}</div>:<div className="employee-exam-empty">暂无出错记录</div>}</section>
+  const sourceRows=Array.isArray(data?.rows)?data.rows:[]
+  const sourceTotal=Number(data?.total??sourceRows.length)
+  const blankFilters=()=>({query:'',dateFrom:'',dateTo:''})
+  const [draft,setDraft]=useState(blankFilters)
+  const [filters,setFilters]=useState(blankFilters)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(20)
+  const filteredRows=useMemo(()=>filterEmployeeErrorHistory(sourceRows,filters),[sourceRows,filters])
+  const pages=Math.max(1,Math.ceil(filteredRows.length/pageSize))
+  const resolvedPage=Math.min(page,pages)
+  const rows=filteredRows.slice((resolvedPage-1)*pageSize,resolvedPage*pageSize)
+  const limited=sourceTotal>sourceRows.length
+  const apply=()=>{setFilters({...draft,query:text(draft.query)});setPage(1)}
+  const reset=()=>{const next=blankFilters();setDraft(next);setFilters(next);setPage(1)}
+  return <section className="detail-panel employee-error-panel">
+    <div className="detail-panel-head"><div><h3>员工出错记录</h3></div><span className="employee-exam-count">{filteredRows.length}{sourceTotal!==filteredRows.length?` / ${sourceTotal}`:''} 条</span></div>
+    <EmployeeProfileHistoryFilters draft={draft} setDraft={setDraft} onApply={apply} onReset={reset} loading={loading} placeholder="搜索日期、错误类型、情况、处理方式、质检人或结果"/>
+    {limited&&<div className="employee-history-limit-note">当前安全读取最近 {sourceRows.length} / 共 {sourceTotal} 条；日期和搜索仅筛选这批已加载记录，不会并发读取其余页面。</div>}
+    {loading?<div className="employee-exam-empty">正在读取出错记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:rows.length?<div className="employee-error-list">{rows.map((row,index)=><article key={row.record_key||`${row.qc_date}-${index}`}><div className="employee-error-meta"><b>{text(row.qc_date).slice(0,10)||'—'}</b><span>{row.error_type||'未分类错误'}</span>{row.score!==null&&row.score!==undefined&&row.score!==''&&<em>{row.score} 分</em>}</div><div><small>错误情况</small><p>{row.error_note||'—'}</p></div><div><small>正确处理方式</small><p>{row.correct_action||'—'}</p></div><footer><span>质检人：{row.qc_person||'—'}</span><span>复检：{row.leader_review||'—'} · {row.qc_result||'—'}</span></footer></article>)}</div>:<div className="employee-exam-empty">{sourceRows.length?'暂无符合筛选条件的出错记录':'暂无出错记录'}</div>}
+    {!loading&&!error&&filteredRows.length>0&&<Pagination page={resolvedPage} pages={pages} total={filteredRows.length} pageSize={pageSize} pageSizeOptions={EMPLOYEE_HISTORY_PAGE_SIZES} loading={loading} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>}
+  </section>
 }
 
 function EmployeeExamPanel({data,loading,error}){
   const {notify}=useAppToast()
-  const summary=data?.summary||{}, rows=data?.history||[]
+  const summary=data?.summary||{}, sourceRows=Array.isArray(data?.history)?data.history:[]
   const [examDetail,setExamDetail]=useState(null)
   const [detailLoading,setDetailLoading]=useState(false)
   const [detailError,setDetailError]=useState('')
+  const blankFilters=()=>({query:'',dateFrom:'',dateTo:''})
+  const [draft,setDraft]=useState(blankFilters)
+  const [filters,setFilters]=useState(blankFilters)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(20)
   const mountedRef=useRef(true)
   useEffect(()=>{
     mountedRef.current=true
@@ -3045,6 +3118,14 @@ function EmployeeExamPanel({data,loading,error}){
   },[])
   const examStatus=x=>({in_progress:'答题中',submitted:'待批改',grading:'批改中',graded:'已完成',expired:'已过期'}[x]||x||'—')
   const result=x=>x.status==='graded'?(x.passed?'通过':'未通过'):examStatus(x.status)
+  const filteredRows=useMemo(()=>filterEmployeeExamHistory(sourceRows,filters),[sourceRows,filters])
+  const pages=Math.max(1,Math.ceil(filteredRows.length/pageSize))
+  const resolvedPage=Math.min(page,pages)
+  const rows=filteredRows.slice((resolvedPage-1)*pageSize,resolvedPage*pageSize)
+  const sourceTotal=Number(summary.attempts??sourceRows.length)
+  const limited=sourceTotal>sourceRows.length
+  const apply=()=>{setFilters({...draft,query:text(draft.query)});setPage(1)}
+  const reset=()=>{const next=blankFilters();setDraft(next);setFilters(next);setPage(1)}
   const answerResult=x=>{
     if(x.source_system==='legacy'&&!x.answer_detail_available)return x.percentage==null?'逐题明细未同步':'总成绩已保留 · 逐题明细未同步'
     const parts=[`对 ${x.correct_count||0}`]
@@ -3075,10 +3156,13 @@ function EmployeeExamPanel({data,loading,error}){
     }else setExamDetail(detail)
     setDetailLoading(false)
   }
-  return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{summary.attempts||0} 次</span></div>
+  return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{filteredRows.length}{sourceTotal!==filteredRows.length?` / ${sourceTotal}`:''} 次</span></div>
+    <EmployeeProfileHistoryFilters draft={draft} setDraft={setDraft} onApply={apply} onReset={reset} loading={loading} placeholder="搜索日期、考试、来源、系列、评分人、状态或结果"/>
+    {limited&&<div className="employee-history-limit-note">当前安全读取最近 {sourceRows.length} / 共 {sourceTotal} 次；日期和搜索仅筛选这批已加载记录，不会并发读取其余记录。</div>}
     {loading?<div className="employee-exam-empty">正在读取考试记录...</div>:error?<div className="employee-exam-empty error">{error}</div>:<>
       <div className="employee-exam-summary"><span><small>考试次数</small><b>{summary.attempts||0}</b></span><span><small>本系统 / 旧考试</small><b>{summary.current_attempts||0} / {summary.legacy_attempts||0}</b></span><span><small>已评分 / 待完成</small><b>{summary.graded||0} / {summary.pending||0}</b></span><span><small>通过次数</small><b>{summary.passed||0}</b></span><span><small>平均分</small><b>{summary.average==null?'—':`${summary.average}%`}</b></span></div>
-      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{answerResult(x)}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">暂无考试记录</div>}
+      {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{answerResult(x)}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">{sourceRows.length?'暂无符合筛选条件的考试记录':'暂无考试记录'}</div>}
+      {filteredRows.length>0&&<Pagination page={resolvedPage} pages={pages} total={filteredRows.length} pageSize={pageSize} pageSizeOptions={EMPLOYEE_HISTORY_PAGE_SIZES} loading={loading} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>}
     </>}
     {examDetail&&<EmployeeExamDetailModal detail={examDetail} loading={detailLoading} error={detailError} onClose={()=>setExamDetail(null)}/>}
   </section>

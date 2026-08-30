@@ -238,6 +238,21 @@ test('alert bell preloads only a bounded summary and keeps rows click-loaded', (
   assert.doesNotMatch(bell, /signOut|clearSession|removeItem\([^)]*auth/i)
 })
 
+test('employee warning history keeps exact scope with server search and paging', () => {
+  const panel = alertCenterComponent.slice(
+    alertCenterComponent.indexOf('export function EmployeeAlertHistoryPanel'),
+    alertCenterComponent.indexOf('export function AdminAlertRecordsPage'),
+  )
+
+  assert.match(panel, /adminAlertEmployeeHistoryFilters\(employeeId\)/)
+  assert.match(panel, /loadAlertPage\(\{[\s\S]+\.\.\.employeeFilters,[\s\S]+date_from:clean\(nextFilters\.date_from\),[\s\S]+date_to:clean\(nextFilters\.date_to\),[\s\S]+search:clean\(nextFilters\.search\),[\s\S]+\}, nextPage, nextSize\)/)
+  assert.match(panel, /state\.rows\.map\(row =>/)
+  assert.doesNotMatch(panel, /alertHistoryDate|visibleRows|dateFrom|dateTo/)
+  assert.match(panel, /pageSizeOptions=\{\[20,30,50,100\]\}/)
+  assert.match(panel, /state\.pageSize/)
+  assert.doesNotMatch(panel, /Promise\.all/)
+})
+
 test('alert badge cache and lease coalesce permission-success preloads across tabs', () => {
   const values = new Map()
   const storage = {

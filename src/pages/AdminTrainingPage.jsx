@@ -458,7 +458,7 @@ export default function AdminTrainingPage(){
       <GradeModal session={grading.session} permissionPage={tab==='人工批改'?'grading':'records'} forceReadOnly={!canGrade} onClose={()=>setGrading(null)} onChanged={()=>refreshSessionsAfterMutation('评分后刷新考试记录')} onRefreshConfirm={()=>refreshSessionsAfterMutation('刷新确认评分状态')}/>
     )}
     {deleteSession&&<DeleteSessionModal session={deleteSession} onClose={()=>setDeleteSession(null)} onRefreshConfirm={()=>{setDeleteSession(null);return refreshSessionsAfterMutation('刷新确认删除结果')}} onDeleted={async()=>{setDeleteSession(null);await refreshSessionsAfterMutation('删除后刷新考试记录')}}/>}
-    {employeeDetail&&<EmployeeDrawer detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>setEmployeeDetail(null)}/>}
+    {employeeDetail&&<EmployeeDrawer key={employeeDetail?.employee?.id||employeeDetail?.employee?.employee_no||employeeDetail?.id||'exam-employee'} detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>setEmployeeDetail(null)}/>}
   </div>
 }
 

@@ -8,6 +8,7 @@ const [
   permissions,
   pagePermissions,
   migration,
+  coexistenceMigration,
   staffMigration,
   employeePayrollMigration,
 ] = await Promise.all([
@@ -15,6 +16,7 @@ const [
   read('../config/permissions.js'),
   read('../config/adminPagePermissions.js'),
   read('../../supabase/migrations/20260830093000_payroll_import_record_safe_delete.sql'),
+  read('../../supabase/migrations/20260830153000_payroll_published_stream_isolation.sql'),
   read('../../supabase/migrations/20260826160000_payroll_historical_identity_and_publish_scope.sql'),
   read('../../supabase/migrations/20260828173000_employee_payroll_records_explicit_permission.sql'),
 ])
@@ -41,6 +43,11 @@ const restoreRpc = functionBody(
   migration,
   'create or replace function public.admin_payroll_restore_batch(',
   'revoke all on function public.admin_payroll_pending_page',
+)
+const coexistenceRestoreRpc = functionBody(
+  coexistenceMigration,
+  'create or replace function public.admin_payroll_restore_batch(',
+  'revoke all on function payroll_private.payroll_population_key',
 )
 
 test('payroll import deletion is a separate sensitive permission with no implicit role grant', () => {
@@ -71,13 +78,14 @@ test('business deletion supports every lifecycle state without deleting payroll 
   assert.doesNotMatch(softDelete, /delete\s+from\s+public\.payroll_(?:batches|payslips|audit_log)/i)
 })
 
-test('published deletion immediately leaves every staff-visible payroll reader and restore cannot duplicate a published month', () => {
+test('published deletion leaves staff readers and restore preserves same-month document coexistence', () => {
   assert.match(softDelete, /set status = 'archived'/)
   assert.match(staffMigration, /join public\.payroll_batches batch on batch\.id = payslip\.batch_id and batch\.status = 'published'/)
   assert.match(employeePayrollMigration, /batch\.status='published'[\s\S]+batch\.voided_at is null/)
-  assert.match(restoreRpc, /v_batch\.voided_prior_status in \('draft','published','archived'\)/)
-  assert.match(restoreRpc, /v_restore_status = 'published'[\s\S]+conflict_batch\.status = 'published'[\s\S]+conflict_batch\.voided_at is null[\s\S]+published_restore_conflict/)
-  assert.match(restoreRpc, /'restore_deleted_import_record'[\s\S]+'deleted_by_name',v_batch\.voided_by_name[\s\S]+'deleted_at',v_batch\.voided_at/)
+  assert.match(coexistenceRestoreRpc, /v_batch\.voided_prior_status in \('draft','published','archived'\)/)
+  assert.doesNotMatch(coexistenceRestoreRpc, /published_restore_conflict|conflict_batch/)
+  assert.match(coexistenceRestoreRpc, /'published_coexistence',true/)
+  assert.match(coexistenceRestoreRpc, /'restore_deleted_import_record'[\s\S]+'deleted_by_name',v_batch\.voided_by_name[\s\S]+'deleted_at',v_batch\.voided_at/)
 })
 
 test('normal history is active-only while deleted records have an explicit recoverable filter', () => {

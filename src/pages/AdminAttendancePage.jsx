@@ -278,7 +278,7 @@ export default function AdminAttendancePage(){
 
     {recordDetail&&<AttendanceRecordModal row={recordDetail} adjustment={tabScope(tab)==='adjustment'} onClose={()=>setRecordDetail(null)}/>}
     {adjustmentEditor&&<AdjustmentEditorModal record={adjustmentEditor.row} canViewBonus={canViewAdjustmentBonus} canViewDeduction={canViewAdjustmentDeduction} onClose={()=>setAdjustmentEditor(null)} onSaved={revealSavedAdjustment} onRefreshConfirm={()=>refreshMainList('刷新奖金 / 扣款结果')}/>}
-    {employeeDetail&&<EmployeeDrawer detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>{employeeRequest.current+=1;setEmployeeDetail(null);setEmployeeDetailLoading(false)}}/>}
+    {employeeDetail&&<EmployeeDrawer key={employeeDetail?.employee?.id||employeeDetail?.employee?.employee_no||employeeDetail?.id||'attendance-employee'} detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>{employeeRequest.current+=1;setEmployeeDetail(null);setEmployeeDetailLoading(false)}}/>}
   </div>
 }
 

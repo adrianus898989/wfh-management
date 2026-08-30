@@ -10,17 +10,29 @@ export function assignedScopeCandidates(employees = [], positions = [], teamIds 
     : []
   const eligiblePositionIds = new Set(eligibleEmployees.map(currentScopePositionId).filter(Boolean))
 
+  const eligiblePositions = (positions || []).filter(position => {
+    const positionTeamIds = Array.isArray(position?.team_ids)
+      ? position.team_ids.map(clean).filter(Boolean)
+      : []
+    if (positionTeamIds.length) return positionTeamIds.some(teamId => selectedTeamIds.has(teamId))
+    return eligiblePositionIds.has(clean(position?.id))
+  })
+
+  const candidatePositionIds = (positions || []).length
+    ? new Set(eligiblePositions.map(position => clean(position?.id)).filter(Boolean))
+    : eligiblePositionIds
+
   return {
     employees: eligibleEmployees,
-    positions: (positions || []).filter(position => eligiblePositionIds.has(clean(position?.id))),
-    positionIds: eligiblePositionIds,
+    positions: eligiblePositions,
+    positionIds: candidatePositionIds,
   }
 }
 
-export function pruneAssignedScopeSelection(selection = {}, employees = [], teams = []) {
+export function pruneAssignedScopeSelection(selection = {}, employees = [], teams = [], positions = []) {
   const validTeamIds = new Set((teams || []).map(team => clean(team?.id)).filter(Boolean))
   const teamIds = [...new Set((selection.teamIds || []).map(clean).filter(teamId => validTeamIds.has(teamId)))]
-  const candidates = assignedScopeCandidates(employees, [], teamIds)
+  const candidates = assignedScopeCandidates(employees, positions, teamIds)
   const eligibleEmployeeIds = new Set(candidates.employees.map(employee => clean(employee?.id)).filter(Boolean))
 
   return {

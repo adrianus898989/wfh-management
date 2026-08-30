@@ -76,7 +76,6 @@ const formatTime = (value, locale) => {
     year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false,
   }).format(date)
 }
-
 const alertDetailsTarget = row => {
   const target = adminAlertTarget(row?.alert_type)
   if (!row?.id || row?.alert_type === 'payout_change') return target
@@ -586,25 +585,38 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
   const requestRef = useRef(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const [draft, setDraft] = useState({ date_from:'', date_to:'', search:'' })
+  const [applied, setApplied] = useState({ date_from:'', date_to:'', search:'' })
   const [expandedId, setExpandedId] = useState('')
-  const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, pages:1 })
-  const filters = useMemo(() => adminAlertEmployeeHistoryFilters(employeeId), [employeeId])
+  const [state, setState] = useState({ loading:true, error:'', rows:[], total:0, page:1, pageSize:20, pages:1 })
+  const employeeFilters = useMemo(() => adminAlertEmployeeHistoryFilters(employeeId), [employeeId])
 
-  const load = async (nextPage=page, nextSize=pageSize) => {
-    if (!filters) {
-      setState({ loading:false, error:'', rows:[], total:0, pages:1 })
+  const load = async (nextPage=page, nextSize=pageSize, nextFilters=applied) => {
+    if (!employeeFilters) {
+      setState({ loading:false, error:'', rows:[], total:0, page:1, pageSize:nextSize, pages:1 })
       return
     }
     const requestId = ++requestRef.current
     setState(current => ({ ...current, loading:true, error:'' }))
     try {
-      const data = await loadAlertPage(filters, nextPage, nextSize)
+      const data = await loadAlertPage({
+        ...employeeFilters,
+        date_from:clean(nextFilters.date_from),
+        date_to:clean(nextFilters.date_to),
+        search:clean(nextFilters.search),
+      }, nextPage, nextSize)
       if (requestId !== requestRef.current) return
+      const resolvedPage = Math.max(1, numeric(data.page) || nextPage)
+      const resolvedPageSize = Math.max(1, numeric(data.page_size) || nextSize)
+      setPage(resolvedPage)
+      setPageSize(resolvedPageSize)
       setState({
         loading:false,
         error:'',
         rows:Array.isArray(data.rows) ? data.rows : [],
         total:numeric(data.total),
+        page:resolvedPage,
+        pageSize:resolvedPageSize,
         pages:Math.max(1, numeric(data.pages)),
       })
     } catch (error) {
@@ -618,12 +630,37 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
   }
 
   useEffect(() => {
+    const nextFilters = { date_from:'', date_to:'', search:'' }
     setPage(1)
+    setDraft(nextFilters)
+    setApplied(nextFilters)
     setExpandedId('')
-    setState({ loading:true, error:'', rows:[], total:0, pages:1 })
-    load(1, pageSize)
+    setState({ loading:true, error:'', rows:[], total:0, page:1, pageSize, pages:1 })
+    load(1, pageSize, nextFilters)
     return () => { requestRef.current += 1 }
   }, [employeeId, locale])
+
+  const updateDraft = (key, value) => setDraft(current => ({ ...current, [key]:value }))
+  const submitFilters = event => {
+    event.preventDefault()
+    if (draft.date_from && draft.date_to && draft.date_from > draft.date_to) {
+      setState(current => ({ ...current, error:locale === 'en' ? 'The start date cannot be after the end date.' : '日期起不能晚于日期止。' }))
+      return
+    }
+    const next = { ...draft, search:clean(draft.search) }
+    setApplied(next)
+    setPage(1)
+    setExpandedId('')
+    load(1, pageSize, next)
+  }
+  const resetFilters = () => {
+    const next = { date_from:'', date_to:'', search:'' }
+    setDraft(next)
+    setApplied(next)
+    setPage(1)
+    setExpandedId('')
+    load(1, pageSize, next)
+  }
 
   const toggleRow = async row => {
     const opening = String(expandedId) !== String(row.id)
@@ -648,6 +685,12 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
       <div><h3>{locale === 'en' ? 'Warning history' : '员工预警记录'}</h3><p>{locale === 'en' ? 'Only warnings visible within your current permissions and employee scope are shown.' : '仅显示当前账号权限与员工范围内可查看的历史预警。'}</p></div>
       <span className="employee-exam-count">{state.total} {locale === 'en' ? 'records' : '条'}</span>
     </div>
+    <form className="employee-history-filters employee-alert-history-filters" onSubmit={submitFilters}>
+      <label><span>{locale === 'en' ? 'Date from' : '日期起'}</span><input type="date" value={draft.date_from} max={draft.date_to || undefined} onChange={event => updateDraft('date_from', event.target.value)}/></label>
+      <label><span>{locale === 'en' ? 'Date to' : '日期止'}</span><input type="date" value={draft.date_to} min={draft.date_from || undefined} onChange={event => updateDraft('date_to', event.target.value)}/></label>
+      <label className="employee-history-search"><span>{locale === 'en' ? 'Search' : '搜索'}</span><input value={draft.search} onChange={event => updateDraft('search', event.target.value)} placeholder={locale === 'en' ? 'Search warning title, summary, or date' : '搜索预警标题、摘要或日期'}/></label>
+      <div className="employee-alert-history-filter-actions"><button type="submit" disabled={state.loading}>{locale === 'en' ? 'Search' : '查询'}</button><button type="button" disabled={state.loading || (!draft.date_from && !draft.date_to && !draft.search)} onClick={resetFilters}>{locale === 'en' ? 'Reset' : '重置'}</button></div>
+    </form>
     {state.error && <div className="employee-alert-history-error">{state.error}</div>}
     {state.loading && !state.rows.length
       ? <div className="employee-exam-empty">{locale === 'en' ? 'Loading warning history…' : '正在读取预警历史…'}</div>
@@ -683,13 +726,14 @@ export function EmployeeAlertHistoryPanel({ employeeId }) {
           })}
         </div>}
     {state.total > 0 && <Pagination
-      page={page}
+      page={state.page}
       pages={state.pages}
       total={state.total}
-      pageSize={pageSize}
+      pageSize={state.pageSize}
+      pageSizeOptions={[20,30,50,100]}
       loading={state.loading}
-      onPage={next => { setPage(next); load(next, pageSize) }}
-      onPageSize={next => { setPageSize(next); setPage(1); load(1, next) }}
+      onPage={next => { setPage(next); load(next, pageSize, applied) }}
+      onPageSize={next => { setPageSize(next); setPage(1); load(1, next, applied) }}
     />}
   </section>
 }

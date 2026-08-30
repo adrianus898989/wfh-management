@@ -7,6 +7,7 @@ import { isCurrentLiveRequest, staleSnapshotNotice } from '../lib/requestConsist
 import { Pagination } from './DataPageControls'
 import { employeeMetricCountLabel, employeeRiskGradeFromTotal } from '../lib/employeeDrawerState'
 import { calculatedConnectivityDuration, normaliseConnectivityStatus } from '../lib/connectivityIncidentState'
+import { filterEmployeePayrollHistory } from '../lib/employeeRecordFilters'
 
 const text=value=>String(value??'').trim()
 const EVIDENCE_BUCKET='connectivity-evidence'
@@ -353,13 +354,95 @@ export function ConnectivityRecordsPage(){
   </div>
 }
 
+const DRAWER_HISTORY_PAGE_SIZES=[20,30,50,100]
+const emptyDrawerHistoryFilters=()=>({from:'',to:'',keyword:''})
+
+function useDrawerHistoryPage({data,loading,error,rpcName}){
+  const employeeId=text(data?.employee_id)
+  const serverMode=Boolean(data?.server_paging&&employeeId)
+  const [filters,setFilters]=useState(emptyDrawerHistoryFilters)
+  const [applied,setApplied]=useState(emptyDrawerHistoryFilters)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(20)
+  const [remote,setRemote]=useState({employeeId:'',data:null,loading:false,error:''})
+  const aliveRef=useRef(true)
+  const requestRef=useRef(0)
+  const employeeRef=useRef(employeeId)
+  employeeRef.current=employeeId
+
+  useEffect(()=>{
+    aliveRef.current=true
+    return()=>{aliveRef.current=false;requestRef.current+=1}
+  },[])
+  useEffect(()=>{
+    requestRef.current+=1
+    const nextSize=DRAWER_HISTORY_PAGE_SIZES.includes(Number(data?.page_size))?Number(data.page_size):20
+    setFilters(emptyDrawerHistoryFilters())
+    setApplied(emptyDrawerHistoryFilters())
+    setPage(1)
+    setPageSize(nextSize)
+    setRemote({employeeId,data:serverMode?data:null,loading:false,error:''})
+  },[employeeId,serverMode])
+
+  const load=async(nextPage=page,nextSize=pageSize,nextFilters=applied)=>{
+    if(!serverMode)return
+    const targetEmployeeId=employeeId
+    const token=++requestRef.current
+    setRemote(current=>({
+      employeeId:targetEmployeeId,
+      data:current.employeeId===targetEmployeeId?current.data:null,
+      loading:true,
+      error:'',
+    }))
+    try{
+      const {data:nextData,error:nextError}=await supabase.rpc(rpcName,{
+        p_employee_id:targetEmployeeId,
+        p_date_from:nextFilters.from||null,
+        p_date_to:nextFilters.to||null,
+        p_search:text(nextFilters.keyword),
+        p_page:nextPage,
+        p_page_size:nextSize,
+      })
+      if(!aliveRef.current||requestRef.current!==token||employeeRef.current!==targetEmployeeId)return
+      if(nextError)setRemote(current=>({...current,employeeId:targetEmployeeId,loading:false,error:nextError.message||'读取失败'}))
+      else setRemote({employeeId:targetEmployeeId,data:nextData||{},loading:false,error:''})
+    }catch(nextError){
+      if(!aliveRef.current||requestRef.current!==token||employeeRef.current!==targetEmployeeId)return
+      setRemote(current=>({...current,employeeId:targetEmployeeId,loading:false,error:nextError?.message||'读取失败'}))
+    }
+  }
+  const query=()=>{
+    if(filters.from&&filters.to&&filters.from>filters.to){
+      setRemote(current=>({...current,error:'日期起不能晚于日期止。'}))
+      return
+    }
+    const next={...filters,keyword:text(filters.keyword)}
+    setApplied(next);setPage(1);load(1,pageSize,next)
+  }
+  const reset=()=>{
+    const next=emptyDrawerHistoryFilters()
+    setFilters(next);setApplied(next);setPage(1);load(1,pageSize,next)
+  }
+  const changePage=next=>{setPage(next);load(next,pageSize,applied)}
+  const changePageSize=next=>{setPageSize(next);setPage(1);load(1,next,applied)}
+  const matchingRemote=remote.employeeId===employeeId?remote:null
+  const effectiveData=serverMode?(matchingRemote?.data||data):data
+  return {
+    serverMode,filters,setFilters,query,reset,page,pageSize,changePage,changePageSize,
+    data:effectiveData,
+    loading:serverMode?Boolean(matchingRemote?.loading||(loading&&!effectiveData)):loading,
+    error:serverMode?(matchingRemote?.error||error):error,
+  }
+}
+
 export function EmployeeConnectivityPanel({data,loading,error,title,t}){
   const tr=typeof t==='function'?t:(_key,fallback,values={})=>Object.entries(values).reduce(
     (result,[key,value])=>result.replaceAll(`{${key}}`,String(value)),
     fallback,
   )
-  const rows=data?.rows||[]
-  const [filters,setFilters]=useState({from:'',to:'',keyword:''})
+  const history=useDrawerHistoryPage({data,loading,error,rpcName:'admin_employee_connectivity_history_page'})
+  const rows=history.data?.rows||[]
+  const filters=history.filters
   const translatedType=value=>value==='power_outage'?tr('connectivity.power','停电'):value==='internet_outage'?tr('connectivity.internet','断网'):value||'—'
   const translatedStatus=value=>({reported:tr('connectivity.ongoing','进行中'),verified:tr('connectivity.verified','已核实'),resolved:tr('connectivity.resolved','已恢复'),rejected:tr('connectivity.rejected','不成立')}[value]||value||'—')
   const translatedDuration=value=>{
@@ -368,7 +451,7 @@ export function EmployeeConnectivityPanel({data,loading,error,title,t}){
     const hours=Math.floor(minutes/60),rest=minutes%60
     return `${hours?tr('connectivity.hours','{count}小时',{count:hours}):''}${hours&&rest?' ':''}${rest?tr('connectivity.minutes','{count}分钟',{count:rest}):''}`
   }
-  const visibleRows=useMemo(()=>rows.filter(row=>{
+  const locallyFilteredRows=useMemo(()=>rows.filter(row=>{
     const date=text(row.incident_date).slice(0,10)
     if(filters.from&&(!date||date<filters.from))return false
     if(filters.to&&(!date||date>filters.to))return false
@@ -377,21 +460,27 @@ export function EmployeeConnectivityPanel({data,loading,error,title,t}){
     return [row.details,row.incident_type,row.status,translatedType(row.incident_type),translatedStatus(row.status),row.incident_date]
       .some(value=>text(value).toLocaleLowerCase().includes(keyword))
   }),[rows,filters,t])
-  const update=(key,value)=>setFilters(current=>({...current,[key]:value}))
-  const reset=()=>setFilters({from:'',to:'',keyword:''})
-  const total=(filters.from||filters.to||filters.keyword)?visibleRows.length:(data?.total||visibleRows.length)
-  return <section className="detail-panel employee-connectivity-panel"><div className="detail-panel-head"><h3>{title||tr('connectivity.title','停电 / 断网记录')}</h3><span className="employee-exam-count">{tr('common.totalItems','共 {count} 条',{count:total})}</span></div>{loading?<div className="connectivity-empty">{tr('connectivity.loading','正在读取记录…')}</div>:error?<div className="connectivity-empty error">{error}</div>:<><div className="employee-history-filters employee-connectivity-filters">
+  const visibleRows=history.serverMode?rows:locallyFilteredRows
+  const update=(key,value)=>history.setFilters(current=>({...current,[key]:value}))
+  const total=history.serverMode?Number(history.data?.total||0):(filters.from||filters.to||filters.keyword)?visibleRows.length:(history.data?.total||visibleRows.length)
+  return <section className="detail-panel employee-connectivity-panel"><div className="detail-panel-head"><h3>{title||tr('connectivity.title','停电 / 断网记录')}</h3><span className="employee-exam-count">{tr('common.totalItems','共 {count} 条',{count:total})}</span></div>{history.loading&&!history.data?<div className="connectivity-empty">{tr('connectivity.loading','正在读取记录…')}</div>:<>{history.error&&<div className="connectivity-empty error" role="alert">{history.error}</div>}<div className="employee-history-filters employee-connectivity-filters">
     <label><span>{tr('filters.dateFrom','日期起')}</span><input type="date" value={filters.from} onChange={event=>update('from',event.target.value)}/></label>
     <label><span>{tr('filters.dateTo','日期止')}</span><input type="date" value={filters.to} onChange={event=>update('to',event.target.value)}/></label>
-    <label className="employee-history-search"><span>{tr('filters.search','搜索')}</span><input value={filters.keyword} onChange={event=>update('keyword',event.target.value)} placeholder={tr('connectivity.searchPlaceholder','搜索类型、状态或情况说明')}/></label>
-    {(filters.from||filters.to||filters.keyword)&&<button type="button" onClick={reset}>{tr('filters.reset','重置')}</button>}
-  </div>{visibleRows.length?<div className="employee-connectivity-list">{visibleRows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{translatedType(row.incident_type)}</span></div><div><small>{tr('connectivity.timeDuration','时间 / 持续')}</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||tr('connectivity.ongoing','进行中')} · {row.ended_at?translatedDuration(row.duration_minutes):tr('connectivity.ongoing','进行中')}</p></div><div><small>{tr('connectivity.status','状态')}</small><p>{translatedStatus(row.status)}</p></div><div className="employee-connectivity-details"><small>{tr('connectivity.details','情况说明')}</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>{tr('connectivity.evidence','证明')}</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url} t={t}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">{tr('connectivity.none','暂无停电或断网记录')}</div>}</>}</section>
+    <label className="employee-history-search"><span>{tr('filters.search','搜索')}</span><input value={filters.keyword} onChange={event=>update('keyword',event.target.value)} onKeyDown={event=>event.key==='Enter'&&history.serverMode&&history.query()} placeholder={tr('connectivity.searchPlaceholder','搜索类型、状态或情况说明')}/></label>
+    <div className="connectivity-filter-actions">{history.serverMode&&<button type="button" className="primary-action" onClick={history.query} disabled={history.loading}>{history.loading?tr('filters.querying','查询中…'):tr('filters.query','查询')}</button>}{(history.serverMode||filters.from||filters.to||filters.keyword)&&<button type="button" className="secondary-action" onClick={history.reset}>{tr('filters.reset','重置')}</button>}</div>
+  </div>{visibleRows.length?<div className="employee-connectivity-list">{visibleRows.map(row=><article key={row.id}><div className="employee-connectivity-identity"><strong>{row.incident_date}</strong><span className={`connectivity-type ${row.incident_type}`}>{translatedType(row.incident_type)}</span></div><div><small>{tr('connectivity.timeDuration','时间 / 持续')}</small><p>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||tr('connectivity.ongoing','进行中')} · {row.ended_at?translatedDuration(row.duration_minutes):tr('connectivity.ongoing','进行中')}</p></div><div><small>{tr('connectivity.status','状态')}</small><p>{translatedStatus(row.status)}</p></div><div className="employee-connectivity-details"><small>{tr('connectivity.details','情况说明')}</small><p>{row.details||'—'}</p></div><div className="connectivity-panel-proof"><small>{tr('connectivity.evidence','证明')}</small><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url} t={t}/>{!evidenceItems(row).length&&!row.evidence_url?<p>—</p>:null}</div></article>)}</div>:<div className="connectivity-empty">{tr('connectivity.none','暂无停电或断网记录')}</div>}{history.serverMode&&<Pagination page={Number(history.data?.page||history.page)} pages={Number(history.data?.pages||1)} total={Number(history.data?.total||0)} pageSize={history.pageSize} pageSizeOptions={DRAWER_HISTORY_PAGE_SIZES} loading={history.loading} onPage={history.changePage} onPageSize={history.changePageSize}/>}</>}</section>
 }
 
 export function EmployeePayrollHistoryPanel({data,loading,error}){
-  const rows=data?.rows||[]
+  const history=useDrawerHistoryPage({data,loading,error,rpcName:'admin_employee_payroll_history_page'})
+  const rows=history.data?.rows||[]
+  const filters=history.filters
+  const update=(key,value)=>history.setFilters(current=>({...current,[key]:value}))
+  const locallyFilteredRows=useMemo(()=>filterEmployeePayrollHistory(rows,filters),[rows,filters])
+  const visibleRows=history.serverMode?rows:locallyFilteredRows
+  const total=history.serverMode?Number(history.data?.total||0):(filters.from||filters.to||filters.keyword)?visibleRows.length:Number(history.data?.total??visibleRows.length)
   const money=(value,currency)=>{try{return new Intl.NumberFormat('zh-CN',{style:'currency',currency:currency||'USD',maximumFractionDigits:2}).format(Number(value||0))}catch{return `${Number(value||0).toLocaleString()} ${currency||''}`}}
-  return <section className="detail-panel employee-payroll-panel"><div className="detail-panel-head"><h3>工资记录</h3><span className="employee-exam-count">{data?.total||0} 份</span></div>{loading?<div className="connectivity-empty">正在读取工资记录…</div>:error?<div className="connectivity-empty error">{error}</div>:rows.length?<div className="employee-payroll-list">{rows.map(row=><article key={row.id}><header><div><strong>{String(row.period_start).slice(0,7)}</strong><span>{row.title}</span></div><span className={`payroll-match ${row.status==='published'?'ok':'neutral'}`}>{row.status==='published'?'已发布':'待发布'}</span></header><div className="employee-payroll-grid"><span><small>基础工资</small><b>{money(row.base_salary,row.currency)}</b></span><span><small>出勤工资</small><b>{money(row.attendance_salary,row.currency)}</b></span><span><small>扣款 / 调整</small><b>{money(Number(row.leave_deduction||0)+Number(row.late_deduction||0)+Number(row.absence_deduction||0)+Number(row.performance_adjustment||0)+Number(row.deposit_adjustment||0),row.currency)}</b></span><span><small>实发工资</small><b className="total">{money(row.total_pay,row.currency)}</b></span></div>{row.remark&&<p>{row.remark}</p>}</article>)}</div>:<div className="connectivity-empty">暂无工资记录</div>}</section>
+  return <section className="detail-panel employee-payroll-panel"><div className="detail-panel-head"><h3>工资记录</h3><span className="employee-exam-count">{total} 份</span></div>{history.loading&&!history.data?<div className="connectivity-empty">正在读取工资记录…</div>:<>{history.error&&<div className="connectivity-empty error" role="alert">{history.error}</div>}<div className="employee-history-filters"><label><span>日期起</span><input type="date" value={filters.from} max={filters.to||undefined} onChange={event=>update('from',event.target.value)}/></label><label><span>日期止</span><input type="date" value={filters.to} min={filters.from||undefined} onChange={event=>update('to',event.target.value)}/></label><label className="employee-history-search"><span>搜索</span><input value={filters.keyword} onChange={event=>update('keyword',event.target.value)} onKeyDown={event=>event.key==='Enter'&&history.query()} placeholder="搜索月份、日期、批次、币种、金额或备注"/></label><div className="connectivity-filter-actions">{history.serverMode&&<button type="button" className="primary-action" onClick={history.query} disabled={history.loading}>{history.loading?'查询中…':'查询'}</button>}<button type="button" className="secondary-action" onClick={history.reset} disabled={!filters.from&&!filters.to&&!filters.keyword}>重置</button></div></div>{visibleRows.length?<div className="employee-payroll-list">{visibleRows.map(row=><article key={row.id}><header><div><strong>{String(row.period_start).slice(0,7)}</strong><span>{row.title}</span></div><span className={`payroll-match ${row.status==='published'?'ok':'neutral'}`}>{row.status==='published'?'已发布':'待发布'}</span></header><div className="employee-payroll-grid"><span><small>基础工资</small><b>{money(row.base_salary,row.currency)}</b></span><span><small>出勤工资</small><b>{money(row.attendance_salary,row.currency)}</b></span><span><small>扣款 / 调整</small><b>{money(Number(row.leave_deduction||0)+Number(row.late_deduction||0)+Number(row.absence_deduction||0)+Number(row.performance_adjustment||0)+Number(row.deposit_adjustment||0),row.currency)}</b></span><span><small>实发工资</small><b className="total">{money(row.total_pay,row.currency)}</b></span></div>{row.remark&&<p>{row.remark}</p>}</article>)}</div>:<div className="connectivity-empty">{rows.length?'暂无符合筛选条件的工资记录':'暂无工资记录'}</div>}{history.serverMode&&<Pagination page={Number(history.data?.page||history.page)} pages={Number(history.data?.pages||1)} total={Number(history.data?.total||0)} pageSize={history.pageSize} pageSizeOptions={DRAWER_HISTORY_PAGE_SIZES} loading={history.loading} onPage={history.changePage} onPageSize={history.changePageSize}/>}</>}</section>
 }
 
 export function EmployeeProfileMetrics({data,loading}){

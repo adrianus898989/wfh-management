@@ -356,7 +356,8 @@ export default function OnlineTrainingPage(){
     setViewing(null)
     const assignmentMode=myRoster.length?'linked':canAdminSelect?'admin':'unmatched'
     const sourceRows=assignmentMode==='linked'?myRoster:[]
-    const draft=reportWithRoster(blankReport(bootstrap.access),sourceRows,bootstrap.access.employee_name)
+    const reporterName=text(bootstrap?.auto_assignment?.trainer_name)||text(bootstrap.access.employee_name)
+    const draft=reportWithRoster(blankReport({...bootstrap.access,employee_name:reporterName}),sourceRows,reporterName)
     setError('')
     setPendingFiles([])
     setEditor({original:null,assignmentMode,rosterLoading:false,validation:null,draft,members:sourceRows.map(memberFromRoster)})
@@ -811,7 +812,7 @@ export default function OnlineTrainingPage(){
     {trainerHistory&&<OverlayPortal><TrainerHistoryModal state={trainerHistory} onClose={closeTrainerHistory} onOpen={openView} onDelete={requestDelete}/></OverlayPortal>}
     {viewing&&<OverlayPortal><ViewModal row={viewing} returnToHistory={Boolean(trainerHistory)} onClose={closeViewer} onProfile={openProfile} onOpenImage={setLightbox} onEdit={()=>{const source=viewing;closeViewer();closeTrainerHistory();openEdit(source)}} onDelete={()=>requestDelete(viewing)} onCopy={()=>copyTelegram(viewing)} onReview={reviewReport}/></OverlayPortal>}
     {deleteTarget&&<OverlayPortal><ConfirmModal saving={saving} title={deleteTarget.title} error={deleteError} onCancel={cancelDelete} onConfirm={archiveReport}/></OverlayPortal>}
-    {profile&&!profile.error&&<EmployeeDrawer detail={profile.detail||{employee:{}}} loading={profile.loading} readOnly onClose={closeProfile}/>}
+    {profile&&!profile.error&&<EmployeeDrawer key={profile.detail?.employee?.id||profile.detail?.employee?.employee_no||profile.person?.employee_id||'training-employee'} detail={profile.detail||{employee:{}}} loading={profile.loading} readOnly onClose={closeProfile}/>}
     {profile?.error&&<OverlayPortal><ProfileErrorDrawer state={profile} onClose={closeProfile}/></OverlayPortal>}
     {history&&<OverlayPortal><HistoryModal state={history} onClose={closeHistory} onProfile={openProfile} onSelectDate={selectHistoryDate} onDelete={requestDelete}/></OverlayPortal>}
     {lightbox&&<OverlayPortal><div className="ot-lightbox" onClick={()=>setLightbox(null)}><button>×</button><img src={lightbox.url} alt={lightbox.name||'培训截图'}/><span>{lightbox.name||'培训截图'}</span></div></OverlayPortal>}

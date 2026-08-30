@@ -16,7 +16,8 @@ begin
     raise exception 'management risk RPC lost its session, permission or current-roster guard';
   end if;
 
-  if position('public.backend_employee_in_scope(roster.employee_id)' in v_definition)=0
+  if (position('authorized_employee_ids as materialized' in v_definition)=0
+     and position('public.backend_employee_in_scope(roster.employee_id)' in v_definition)=0)
      or position('public.user_scope_teams' in v_definition)>0
      or position('v_scope=''own_team''' in replace(v_definition,' ',''))>0 then
     raise exception 'management risk RPC lost its current-roster data-scope boundary';
@@ -51,6 +52,20 @@ begin
      or position('''daily''' in v_definition)=0
      or position('''weekly''' in v_definition)=0 then
     raise exception 'management risk JSON contract regressed';
+  end if;
+
+  if position('organization_rank' in v_definition)=0
+     or position(
+       'metric.dimension=''group'' and metric.organization_rank<=v_top_limit'
+       in v_definition
+     )=0
+     or position(
+       'metric.dimension=''manager'' and metric.organization_rank<=v_top_limit'
+       in v_definition
+     )=0
+     or position('option_groups as materialized' in v_definition)=0
+     or position('option_managers as materialized' in v_definition)=0 then
+    raise exception 'management risk ranking payload is no longer bounded while options remain complete';
   end if;
 
   if position('''name'',option.team_name' in replace(v_definition,' ',''))=0

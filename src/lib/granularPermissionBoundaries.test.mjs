@@ -6,6 +6,7 @@ const migration = await readFile(new URL('../../supabase/migrations/202608271130
 const examHome = await readFile(new URL('../../supabase/migrations/20260828052000_exam_overview_single_rpc.sql', import.meta.url), 'utf8')
 const payroll = await readFile(new URL('../../supabase/migrations/20260827113100_payroll_page_permission_boundaries.sql', import.meta.url), 'utf8')
 const payrollCorrections = await readFile(new URL('../../supabase/migrations/20260827140000_payroll_batch_correction_workflow.sql', import.meta.url), 'utf8')
+const payrollCoexistence = await readFile(new URL('../../supabase/migrations/20260830153000_payroll_published_stream_isolation.sql', import.meta.url), 'utf8')
 const training = await readFile(new URL('../../supabase/migrations/20260827113200_online_training_page_permission_boundaries.sql', import.meta.url), 'utf8')
 const adjustmentAlignment = await readFile(new URL('../../supabase/migrations/20260827113300_adjustment_edit_permission_alignment.sql', import.meta.url), 'utf8')
 const adjustmentFilters = await readFile(new URL('../../supabase/migrations/20260829041328_preserve_admin_adjustment_currency_filter.sql', import.meta.url), 'utf8')
@@ -169,13 +170,14 @@ test('payroll correction lifecycle is recoverable, guarded and fully audited', (
   }
 })
 
-test('payroll readers expose actor snapshots and explain archived or missing publication state', () => {
+test('payroll readers expose actor snapshots and explain published coexistence or missing state', () => {
   assert.match(payrollCorrections,/admin_payroll_actor_name[\s\S]+login_username[\s\S]+login_email/)
   assert.match(payrollCorrections,/admin_payroll_batch_metadata[\s\S]+created_by_name[\s\S]+updated_by_name[\s\S]+published_by_name/)
   assert.match(payrollCorrections,/admin_payroll_enrich_page[\s\S]+admin_payroll_granular_page/)
   assert.match(payrollCorrections,/当前无有效发布批次，最近批次已删除\/作废/)
-  assert.match(payrollCorrections,/已归档表示同月份新批次发布后自动替代旧批次/)
-  assert.match(payrollPage,/导入 \{batch\.created_by_name\|\|'—'\} · \{dateTime\(batch\.created_at\)\}[\s\S]+最近操作 \{batch\.updated_by_name\|\|'—'\} · \{dateTime\(batch\.updated_at\)\}/)
+  assert.match(payrollCoexistence,/Publishes one draft without archiving any other batch\. All uploaded published batches coexist\./)
+  assert.match(payrollCoexistence,/correction_of_batch_id source/)
+  assert.match(payrollPage,/文档批次 \/ 导入时间[\s\S]+上传人[\s\S]+selected\?\.created_by_name[\s\S]+最近操作人[\s\S]+selected\?\.updated_by_name/)
   assert.match(payrollPage,/selected\?\.published_by_name/)
   assert.match(payrollPage,/admin_payroll_update_batch/)
   assert.match(payrollPage,/admin_payroll_void_batch/)
@@ -183,7 +185,8 @@ test('payroll readers expose actor snapshots and explain archived or missing pub
   assert.match(payrollPage,/admin_payroll_clone_correction/)
   assert.match(payrollPage,/\['draft','archived'\]\.includes\(selected\.status\)[\s\S]+保存名称\/备注/)
   assert.match(payrollPage,/已发布批次的金额保持只读；可创建纠正草稿，或经加强确认后撤下并移入“已删除”/)
-  assert.match(payrollPage,/当前无有效发布批次，最近批次已删除\/归档/)
+  assert.match(payrollPage,/每次已发布的工资上传都会独立保留并对对应员工可见/)
+  assert.doesNotMatch(payrollPage,/同月份的新批次发布后，旧发布批次会自动归档/)
 })
 
 test('training and employee mutations enforce current page permissions', () => {
@@ -236,10 +239,11 @@ test('bonus and deduction visibility is independently configurable on both admin
 
   assert.match(employeePage, /canViewAdjustments=adminAccess\.hasPermission\(PERMISSIONS\.ADJUSTMENT_PAGE_VIEW\)&&\(canViewAdjustmentBonus\|\|canViewAdjustmentDeduction\)/)
   assert.match(employeePage, /\['penalties','奖金 \/ 扣款',canViewAdjustments\]/)
-  assert.match(employeePage, /if\(!canViewAdjustments\)[\s\S]+admin_employee_adjustment_history/)
+  assert.match(employeePage, /EmployeeAdjustmentPanel employeeId=\{e\.id\}[\s\S]+canViewBonus=\{canViewAdjustmentBonus\}[\s\S]+canViewDeduction=\{canViewAdjustmentDeduction\}/)
   assert.match(employeePage, /EmployeeAdjustmentPanel[\s\S]+canViewBonus=\{canViewAdjustmentBonus\}[\s\S]+canViewDeduction=\{canViewAdjustmentDeduction\}/)
   assert.match(employeePage, /canViewAdjustmentLogs=canViewAudit[\s\S]+ADJUSTMENT_PAGE_VIEW[\s\S]+hasAnyPermission\(\[PERMISSIONS\.ADJUSTMENT_BONUS_VIEW,PERMISSIONS\.ADJUSTMENT_DEDUCTION_VIEW\]\)/)
-  assert.match(attendanceRecords, /EmployeeAdjustmentPanel\(\{data,loading,error,canViewBonus=false,canViewDeduction=false\}\)/)
+  assert.match(attendanceRecords, /EmployeeAdjustmentPanel\(\{employeeId,canViewBonus=false,canViewDeduction=false\}\)/)
+  assert.match(attendanceRecords, /useEmployeeHistoryRpc\('admin_employee_adjustment_history_filtered',employeeId,canViewBonus\|\|canViewDeduction\)/)
   assert.match(attendanceRecords, /summaryItems=\[\.\.\.\(canViewBonus[\s\S]+\.\.\.\(canViewDeduction/)
   assert.match(attendanceRecords, /adjustmentVisibilityKind[\s\S]+categoryAllowed=kind==='bonus'\?canViewBonus:kind==='deduction'\?canViewDeduction:canViewBonus&&canViewDeduction/)
 

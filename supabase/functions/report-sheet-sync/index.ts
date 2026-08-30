@@ -1,4 +1,14 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import {
+  claimSheetSyncLease,
+  releaseSheetSyncLease,
+  SheetSyncDeadlineError,
+  SheetSyncLease,
+  SheetSyncRpcError,
+  sheetSyncDatabaseErrorIsRetryable,
+  sheetSyncRpcWithDeadline,
+} from "../_shared/sheetSyncRuntime.ts";
+import { assertOrderSnapshotSafe } from "./orderSnapshotGuard.mjs";
 
 // Reuse the existing project cron secret. The raw value stays in Supabase
 // Vault; only its SHA-256 digest is committed here.
@@ -22,6 +32,13 @@ const ORDER_SHEETS = ['工作表4', '填表']
 const ORDER_CHUNK_SIZE = 5_000
 const ERROR_CHUNK_SIZE = 500
 const FETCH_TIMEOUT_MS = 25_000
+const REPORT_SYNC_JOB = 'report-sheet-sync'
+const LEASE_TTL_SECONDS = 300
+const ORDER_CHUNK_RPC_TIMEOUT_MS = 9_000
+const CACHE_BATCH_SIZE = 250
+const CACHE_BATCH_RPC_TIMEOUT_MS = 6_000
+const CACHE_MAX_BATCHES = 24
+const CACHE_DRAIN_BUDGET_MS = 15_000
 
 const text = (value: unknown) => String(value ?? '').trim()
 const MANILA_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
@@ -30,11 +47,13 @@ const MANILA_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: '2-digit',
   day: '2-digit',
 })
-const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
+const json = (value: unknown, status = 200, extraHeaders: HeadersInit = {}) => new Response(JSON.stringify(value), {
   status,
   headers: {
     'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
     'connection': 'keep-alive',
+    ...Object.fromEntries(new Headers(extraHeaders).entries()),
   },
 })
 
@@ -703,15 +722,100 @@ function orderRowsFromCsv(raw: string) {
   return { chunks, sourceRows, validRows, latestDate }
 }
 
-async function syncOrderSheets(service: any) {
+async function renewReportSyncLease(service: any, lease: SheetSyncLease) {
+  const { data, error } = await sheetSyncRpcWithDeadline<Record<string, unknown>>(
+    service,
+    'claim_sheet_sync_runtime_lease',
+    {
+      p_job_name: lease.jobName,
+      p_holder: lease.holder,
+      p_ttl_seconds: LEASE_TTL_SECONDS,
+    },
+    3_500,
+  )
+  if (error) throw new SheetSyncRpcError('report_lease_renew_failed', error)
+  if (!data || data.ok !== true || data.acquired !== true) {
+    throw new SheetSyncRpcError('report_lease_lost', {
+      code: '55P03',
+      message: 'report sheet sync lease is no longer held by this invocation',
+    })
+  }
+}
+
+async function drainReportOrderCache(
+  service: any,
+  renewLease: () => Promise<void>,
+) {
+  const startedAt = Date.now()
+  let batches = 0
+  let processed = 0
+  let refreshed = 0
+  let remaining = 0
+  let busy = false
+  let deferred = false
+  let retryableCode = ''
+
+  while (batches < CACHE_MAX_BATCHES && Date.now() - startedAt < CACHE_DRAIN_BUDGET_MS) {
+    await renewLease()
+    const { data, error } = await sheetSyncRpcWithDeadline<Record<string, unknown>>(
+      service,
+      'refresh_dirty_report_order_account_cache',
+      { p_limit: CACHE_BATCH_SIZE },
+      CACHE_BATCH_RPC_TIMEOUT_MS,
+    )
+    if (error) {
+      if (sheetSyncDatabaseErrorIsRetryable(error)) {
+        deferred = true
+        retryableCode = text(error.code)
+        break
+      }
+      throw new SheetSyncRpcError('report_cache_refresh_failed', error)
+    }
+    if (!data || data.ok !== true) {
+      throw new SheetSyncRpcError('report_cache_refresh_invalid', null)
+    }
+
+    batches += 1
+    const batchProcessed = Math.max(0, Number(data.processed) || 0)
+    processed += batchProcessed
+    refreshed += Math.max(0, Number(data.refreshed) || 0)
+    remaining = Math.max(0, Number(data.remaining) || 0)
+    busy = data.busy === true
+    if (busy || remaining === 0 || batchProcessed === 0) break
+  }
+
+  if (busy || remaining > 0) deferred = true
+  return {
+    batches,
+    processed,
+    refreshed,
+    remaining,
+    busy,
+    deferred,
+    retryable_code: retryableCode || undefined,
+    duration_ms: Date.now() - startedAt,
+  }
+}
+
+async function syncOrderSheets(
+  service: any,
+  renewLease: () => Promise<void>,
+) {
+  await renewLease()
   const { data: existingRows, error: existingError } = await service
     .from('report_order_sync_chunks')
-    .select('source_sheet,chunk_index,content_hash')
+    .select('source_sheet,chunk_index,content_hash,row_count')
   if (existingError) throw new Error(`订单同步状态读取失败: ${existingError.message}`)
   const existing = new Map((existingRows || []).map((row: any) => [
     `${text(row.source_sheet)}|${Number(row.chunk_index)}`,
     text(row.content_hash),
   ]))
+  const baselineRows = new Map<string, number>()
+  for (const row of existingRows || []) {
+    const sourceSheet = text(row.source_sheet)
+    const previousRows = baselineRows.get(sourceSheet) || 0
+    baselineRows.set(sourceSheet, previousRows + Math.max(0, Number(row.row_count) || 0))
+  }
   const results: any[] = []
   let latestDate = ''
   let totalRows = 0
@@ -719,6 +823,11 @@ async function syncOrderSheets(service: any) {
 
   for (const sourceSheet of ORDER_SHEETS) {
     const parsed = orderRowsFromCsv(await fetchOrderCsv(sourceSheet))
+    const guard = assertOrderSnapshotSafe({
+      sourceSheet,
+      incomingRows: parsed.validRows,
+      baselineRows: baselineRows.get(sourceSheet) || 0,
+    })
     latestDate = parsed.latestDate > latestDate ? parsed.latestDate : latestDate
     totalRows += parsed.validRows
     const chunkCount = Math.ceil(parsed.sourceRows / ORDER_CHUNK_SIZE)
@@ -745,18 +854,26 @@ async function syncOrderSheets(service: any) {
     }
     changes.sort((left, right) => left.chunkIndex - right.chunkIndex)
 
-    // A single account can occur in several chunks. Process chunks in order so
-    // their cache refreshes cannot race each other (the RPC also takes a DB lock
-    // as a second line of defence against overlapping function invocations).
+    // A single account can occur in several chunks. Process chunks in order;
+    // the whole-run Edge lease blocks overlapping scheduled invocations and the
+    // RPC keeps a fail-fast per-chunk lock for direct service-role callers.
     for (const change of changes) {
-      const { error } = await service.rpc('sync_report_order_chunk', {
-        p_source_sheet: sourceSheet,
-        p_chunk_index: change.chunkIndex,
-        p_chunk_size: ORDER_CHUNK_SIZE,
-        p_content_hash: change.hash,
-        p_rows: change.rows,
-      })
-      if (error) throw new Error(`订单同步 ${sourceSheet} #${change.chunkIndex}: ${error.message}`)
+      await renewLease()
+      const { error } = await sheetSyncRpcWithDeadline(
+        service,
+        'sync_report_order_chunk',
+        {
+          p_source_sheet: sourceSheet,
+          p_chunk_index: change.chunkIndex,
+          p_chunk_size: ORDER_CHUNK_SIZE,
+          p_content_hash: change.hash,
+          p_rows: change.rows,
+        },
+        ORDER_CHUNK_RPC_TIMEOUT_MS,
+      )
+      if (error) {
+        throw new SheetSyncRpcError(`report_order_chunk_${sourceSheet}_${change.chunkIndex}`, error)
+      }
     }
     changedChunks += changes.length
     results.push({
@@ -766,28 +883,56 @@ async function syncOrderSheets(service: any) {
       chunks: chunkCount,
       changed_chunks: changes.length,
       latest_date: parsed.latestDate,
+      guard,
     })
   }
 
-  return { sources: results, rows: totalRows, changed_chunks: changedChunks, latest_date: latestDate }
+  // Drain even when no sheet chunk changed. If an earlier Edge isolate died
+  // after committing raw rows, its durable dirty queue is completed here.
+  const cacheRefresh = await drainReportOrderCache(service, renewLease)
+  return {
+    sources: results,
+    rows: totalRows,
+    changed_chunks: changedChunks,
+    latest_date: latestDate,
+    cache_refresh: cacheRefresh,
+  }
 }
 
 Deno.serve(async (request) => {
   const startedAt = Date.now()
-  try {
-    if (request.method !== 'POST') {
-      return json({ error: 'method' }, 405)
-    }
-    const cronToken = request.headers.get('x-report-cron-token') || ''
-    if (!cronToken || !secureEqual(await sha256(cronToken), CRON_TOKEN_HASH)) {
-      return json({ error: 'unauthorized' }, 401)
-    }
+  if (request.method !== 'POST') {
+    return json({ error: 'method' }, 405)
+  }
+  const cronToken = request.headers.get('x-report-cron-token') || ''
+  if (!cronToken || !secureEqual(await sha256(cronToken), CRON_TOKEN_HASH)) {
+    return json({ error: 'unauthorized' }, 401)
+  }
 
-    const service = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-      { auth: { persistSession: false } },
-    )
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!supabaseUrl || !serviceRoleKey) {
+    return json({ ok: false, error: 'sync_request_failed' }, 500)
+  }
+  const service = createClient(
+    supabaseUrl,
+    serviceRoleKey,
+    { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } },
+  )
+  let lease: SheetSyncLease | null = null
+  let preserveLeaseUntilExpiry = false
+
+  try {
+    const claim = await claimSheetSyncLease(service, REPORT_SYNC_JOB, LEASE_TTL_SECONDS)
+    if (!claim.acquired) {
+      return json(
+        { ok: false, error: 'sync_busy', retry_after_seconds: claim.retryAfterSeconds },
+        503,
+        { 'retry-after': String(claim.retryAfterSeconds) },
+      )
+    }
+    lease = claim.lease
+    const renewLease = () => renewReportSyncLease(service, lease!)
 
     const rawErrorResults = await Promise.allSettled(
       ERROR_SOURCES.map((source) => fetchJson(source.url)),
@@ -885,7 +1030,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    const orderSyncResult = await syncOrderSheets(service)
+    const orderSyncResult = await syncOrderSheets(service, renewLease)
     const snapshotPlans: Array<[string, unknown[], string, number?]> = [
       [
         '效率表/网站数据状态',
@@ -957,10 +1102,44 @@ Deno.serve(async (request) => {
       at: new Date().toISOString(),
     })
   } catch (error) {
-    console.error(error)
+    if (error instanceof SheetSyncDeadlineError) {
+      // The HTTP abort may race with the database cancellation. Keep the TTL
+      // lease until expiry so a second invocation cannot overlap uncertain
+      // in-flight work; the dirty queue makes the next run resumable.
+      preserveLeaseUntilExpiry = true
+      console.error('report-sheet-sync deadline', { rpc: error.rpcName })
+      return json({
+        ok: false,
+        error: 'database_timeout',
+        rpc: error.rpcName,
+        duration_ms: Date.now() - startedAt,
+      }, 503, { 'retry-after': String(LEASE_TTL_SECONDS) })
+    }
+    if (error instanceof SheetSyncRpcError && sheetSyncDatabaseErrorIsRetryable(error)) {
+      console.warn('report-sheet-sync retryable database error', { code: error.code })
+      return json({
+        ok: false,
+        error: 'sync_busy',
+        duration_ms: Date.now() - startedAt,
+      }, 503, { 'retry-after': '10' })
+    }
+    console.error('report-sheet-sync failed', {
+      error: error instanceof Error ? error.name : 'unexpected_error',
+    })
     return json({
-      error: error instanceof Error ? error.message : JSON.stringify(error),
+      ok: false,
+      error: 'sync_request_failed',
       duration_ms: Date.now() - startedAt,
     }, 500)
+  } finally {
+    if (lease && !preserveLeaseUntilExpiry) {
+      try {
+        await releaseSheetSyncLease(service, lease)
+      } catch (error) {
+        console.warn('report-sheet-sync lease_release_failed', {
+          error: error instanceof Error ? error.name : 'unknown',
+        })
+      }
+    }
   }
 })

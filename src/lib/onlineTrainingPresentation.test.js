@@ -12,6 +12,17 @@ import {
 
 const onlineTrainingPage=readFileSync(new URL('../pages/OnlineTrainingPage.jsx',import.meta.url),'utf8')
 const onlineTrainingStyles=readFileSync(new URL('../styles-online-training.css',import.meta.url),'utf8')
+const employeeHistoryPageSizeMigration=readFileSync(new URL('../../supabase/migrations/20260830141000_online_training_employee_history_page_size.sql',import.meta.url),'utf8')
+
+test('employee teacher-history pages allow 100 rows without replacing their scoped reader',()=>{
+  assert.match(employeeHistoryPageSizeMigration,/pg_get_functiondef\(v_function::oid\)/)
+  assert.match(employeeHistoryPageSizeMigration,/online_training_list\(text,date,date,uuid,integer,integer\)/)
+  assert.match(employeeHistoryPageSizeMigration,/least\(greatest\(coalesce\(p_page_size, 12\), 1\), 50\)/)
+  assert.match(employeeHistoryPageSizeMigration,/least\(greatest\(coalesce\(p_page_size, 12\), 1\), 100\)/)
+  assert.match(employeeHistoryPageSizeMigration,/online_training_list_page_size_guard_changed/)
+  assert.match(employeeHistoryPageSizeMigration,/revoke all on function[\s\S]+from public,anon,authenticated,service_role;[\s\S]+grant execute on function[\s\S]+to authenticated;/)
+  assert.doesNotMatch(employeeHistoryPageSizeMigration,/admin_alert|1_day|3_day|7_day/)
+})
 
 test('employee daily-report table keeps the requested employee-first columns',()=>{
   assert.deepEqual(employeeTrainingTableRow({
@@ -57,6 +68,16 @@ test('authoritative trainer directory fills id and hire date without replacing u
   assert.equal(rows[0].trainer_hire_date,'2026-01-13')
   assert.equal(rows[1].trainer_employee_no,'AUTHOR-1')
   assert.equal(rows[1].trainer_hire_date,'')
+})
+
+test('new reports keep the roster actor label while employee master remains authoritative',()=>{
+  const openCreate=onlineTrainingPage.slice(
+    onlineTrainingPage.indexOf('const openCreate=()=>'),
+    onlineTrainingPage.indexOf('const openView=async'),
+  )
+  assert.match(openCreate,/bootstrap\?\.auto_assignment\?\.trainer_name/)
+  assert.match(openCreate,/reportWithRoster\(blankReport\(\{\.\.\.bootstrap\.access,employee_name:reporterName\}\),sourceRows,reporterName\)/)
+  assert.doesNotMatch(openCreate,/reportWithRoster\(blankReport\(bootstrap\.access\),sourceRows,bootstrap\.access\.employee_name\)/)
 })
 
 test('history selection keeps a selected row and safely falls back to the latest row',()=>{

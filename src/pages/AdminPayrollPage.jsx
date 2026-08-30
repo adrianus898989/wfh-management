@@ -11,6 +11,12 @@ import { useAdminI18n } from '../lib/adminI18n'
 import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
 import { PAYROLL_CURRENCY_OPTIONS, payrollCurrencyLabel } from '../lib/payrollCurrency'
 import { filterPayrollBatches, payrollBatchIdentity, payrollBatchSourcePresentation, payrollMatchState, summarizePayrollRows } from '../lib/payrollImportState'
+import {
+  PAYROLL_PAY_CYCLE_OPTIONS,
+  PAYROLL_POPULATION_OPTIONS,
+  payrollPayCycleLabel,
+  payrollPopulationLabel,
+} from '../lib/payrollStream'
 import { supabase } from '../lib/supabase'
 
 const PAYOUT_CHANGE_VIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW
@@ -216,7 +222,14 @@ export default function AdminPayrollPage(){
   const [state,setState]=useState({loading:true,error:'',data:null})
   const [batchId,setBatchId]=useState(null)
   const [fileState,setFileState]=useState({file:null,rows:[],error:'',loading:false})
-  const [form,setForm]=useState({period:payrollMonth(),title:'',currency:'PHP',notes:''})
+  const [form,setForm]=useState({
+    period:payrollMonth(),
+    title:'',
+    currency:'PHP',
+    populationKey:'pure_remote',
+    payCycleKey:'monthly',
+    notes:'',
+  })
   const [message,setMessage]=useState('')
   const [saving,setSaving]=useState(false)
   const [rowFilter,setRowFilter]=useState('all')
@@ -310,6 +323,7 @@ export default function AdminPayrollPage(){
     try{
       const payload={
         period_start:`${form.period}-01`,title:form.title||`${form.period} 工资`,currency:form.currency,
+        population_key:form.populationKey,pay_cycle_key:form.payCycleKey,
         source_type:'upload',source_file_name:fileState.file?.name||'',notes:form.notes,
       }
       const {data,error}=await supabase.rpc('admin_payroll_import',{p_batch:payload,p_rows:fileState.rows})
@@ -495,7 +509,7 @@ export default function AdminPayrollPage(){
         </button>):<div className="payroll-empty-small">{tab==='已发布'?(state.data?.empty_reason||'当前无有效发布批次，最近批次已删除/归档；请到“导入记录”核对。'):'暂无对应工资批次'}</div>}
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
-        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&access.hasPermission(PERMISSIONS.PAYROLL_PENDING_PUBLISH)&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.delete&&access.hasPermission(PERMISSIONS.PAYROLL_IMPORT_HISTORY_DELETE)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除记录</button>}</div></div>
+        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {payrollPopulationLabel(visibleSelected.population_key)} · {payrollPayCycleLabel(visibleSelected.pay_cycle_key)} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&access.hasPermission(PERMISSIONS.PAYROLL_PENDING_PUBLISH)&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.delete&&access.hasPermission(PERMISSIONS.PAYROLL_IMPORT_HISTORY_DELETE)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除记录</button>}</div></div>
         <div className="payroll-summary-grid"><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职 / 试用</span><strong>{rowStateCounts.active}</strong><small>在职与试用</small></button><button type="button" className={rowFilter==='suspended'?'active':''} onClick={()=>setRowFilter('suspended')}><span>停用员工</span><strong>{rowStateCounts.suspended}</strong><small>停用 / inactive</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{rowStateCounts.resigned}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{rowStateCounts.total} 人 · {payrollCurrencyLabel(visibleSelected.currency)}</small></div></div>
         <div className="payroll-record-filters">
           <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
@@ -517,10 +531,12 @@ export default function AdminPayrollPage(){
 function PayrollUploadWorkspace({fileRef,fileState,form,saving,setForm,onFile,onImport}){
   return <>
     <section className="payroll-upload-card payroll-import-record-upload">
-      <div className="payroll-upload-copy"><span>↑</span><div><h2>上传工资表</h2><p>选择工资月份和币种后上传 XLSX、CSV 或 TSV；导入成功后会先进入“待发布工资表”。</p></div></div>
+      <div className="payroll-upload-copy"><span>↑</span><div><h2>上传工资表</h2><p>选择工资月份、人员类型、工资周期和币种后上传；只有同一条工资流的新批次才会替换旧批次。</p></div></div>
       <div className="payroll-import-form">
         <label>工资月份<input type="month" value={form.period} onChange={event=>setForm({...form,period:event.target.value})}/></label>
         <label>批次名称<input value={form.title} onChange={event=>setForm({...form,title:event.target.value})} placeholder={`${form.period} 工资`}/></label>
+        <label>人员类型<select value={form.populationKey} onChange={event=>setForm({...form,populationKey:event.target.value})}>{PAYROLL_POPULATION_OPTIONS.map(option=><option key={option.code} value={option.code}>{option.label}</option>)}</select></label>
+        <label>工资周期<select value={form.payCycleKey} onChange={event=>setForm({...form,payCycleKey:event.target.value})}>{PAYROLL_PAY_CYCLE_OPTIONS.map(option=><option key={option.code} value={option.code}>{option.label}</option>)}</select></label>
         <label>对应币种<select value={form.currency} onChange={event=>setForm({...form,currency:event.target.value})}>{PAYROLL_CURRENCY_OPTIONS.map(option=><option key={option.code} value={option.code}>{option.code} · {option.label}</option>)}</select></label>
         <label className="wide">备注<input value={form.notes} onChange={event=>setForm({...form,notes:event.target.value})} placeholder="例如：2026年8月正式工资"/></label>
       </div>
@@ -532,7 +548,7 @@ function PayrollUploadWorkspace({fileRef,fileState,form,saving,setForm,onFile,on
       {fileState.error&&<div className="payroll-file-error">{fileState.error}</div>}
     </section>
     {fileState.rows.length>0&&<section className="payroll-preview-card">
-      <div className="payroll-section-head"><div><h2>导入预览</h2><p>共 {fileState.rows.length} 行 · 币种 {form.currency}；发布前先写入“待发布工资表”。</p></div><button disabled={saving} onClick={onImport}>{saving?'导入中…':'确认导入'}</button></div>
+      <div className="payroll-section-head"><div><h2>导入预览</h2><p>共 {fileState.rows.length} 行 · {payrollPopulationLabel(form.populationKey)} · {payrollPayCycleLabel(form.payCycleKey)} · 币种 {form.currency}；发布前先写入“待发布工资表”。</p></div><button disabled={saving} onClick={onImport}>{saving?'导入中…':'确认导入'}</button></div>
       <PayrollRows rows={fileState.rows.slice(0,60)} currency={form.currency} preview/>
     </section>}
   </>
@@ -747,7 +763,7 @@ function PayrollImportHistory({batches,deletedBatches=[],canEdit=false,canDelete
   return <>
     <section className="payroll-import-history-card">
       <div className="payroll-import-history-head">
-        <div><h2>导入批次</h2><p>已归档表示同月份新批次发布后自动替代旧批次；历史数据仍会保留。</p></div>
+        <div><h2>导入批次</h2><p>每次导入均单独保留并逐条显示；同月多个文件不会在此列表合并或覆盖。</p></div>
         <span>{history.length===historySource.length?`共 ${historySource.length} 个批次`:`筛选 ${history.length} / ${historySource.length} 个批次`}</span>
       </div>
       <div className="payroll-import-history-filters">
@@ -757,7 +773,7 @@ function PayrollImportHistory({batches,deletedBatches=[],canEdit=false,canDelete
         <button type="button" disabled={!historySearch&&historyStatus==='all'&&historyCurrency==='all'} onClick={()=>{setHistorySearch('');setHistoryStatus('all');setHistoryCurrency('all')}}>重置</button>
       </div>
       <div className="payroll-import-history-list">
-        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>来源 / 批次类别</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span>操作</span></div>
+        <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>来源 / 批次</span><span>工资月份</span><span>操作轨迹</span><span>人数</span><span>总金额</span><span>状态</span><span>操作</span></div>
         {history.length?pagedHistory.map(batch=>{
           const hasTotal=batch.total_amount!==undefined&&batch.total_amount!==null
           const source=payrollBatchSourcePresentation(batch)
@@ -771,10 +787,9 @@ function PayrollImportHistory({batches,deletedBatches=[],canEdit=false,canDelete
             openBatch(batch)
           }}>
             <span className="payroll-import-file"><b>{source.sourceFileName||batch.title||'未命名工资文档'}</b><small>批次 #{payrollBatchIdentity(batch)}</small></span>
-            <span className="payroll-import-source"><b>{source.sourceLabel}</b><small title={source.category}>{source.category}</small></span>
+            <span className="payroll-import-source"><b><i>来源</i>{source.sourceLabel}</b><small title={source.category}><i>批次</i>{source.category}</small></span>
             <span className="payroll-import-period">{String(batch.period_start||'').slice(0,7)||'—'}</span>
-            <span className="payroll-import-actors"><b>导入 {batch.created_by_name||'—'} · {dateTime(batch.created_at)}</b><small>最近操作 {batch.updated_by_name||'—'} · {dateTime(batch.updated_at)}</small>{batch.published_at&&<small>发布 {batch.published_by_name||'—'} · {dateTime(batch.published_at)}</small>}</span>
-            <span className="payroll-import-time">{dateTime(batch.created_at)}</span>
+            <span className="payroll-import-actors"><span><i>导入</i><b>{batch.created_by_name||'—'}</b><time>{dateTime(batch.created_at)}</time></span><span><i>最近</i><b>{batch.updated_by_name||'—'}</b><time>{dateTime(batch.updated_at)}</time></span>{batch.published_at&&<span><i>发布</i><b>{batch.published_by_name||'—'}</b><time>{dateTime(batch.published_at)}</time></span>}</span>
             <span className="payroll-import-count"><b>{Number(batch.row_count||0).toLocaleString()}</b><small>人</small></span>
             <span className="payroll-import-total"><b>{hasTotal?money(batch.total_amount,batch.currency):'—'}</b><small>{batch.currency||'USD'}</small></span>
             <span><i className={`payroll-batch-status ${payrollBatchStatusClass(batch)}`}>{payrollBatchDisplayStatus(batch)}</i></span>
@@ -817,7 +832,7 @@ function PayrollImportHistory({batches,deletedBatches=[],canEdit=false,canDelete
             <div><span>币种 / 状态</span><strong>{selected?.currency||'USD'} · {payrollBatchDisplayStatus(selected)}</strong></div>
             <div><span>纠正来源</span><strong>{selected?.correction_of_batch_id?`批次 #${selected.correction_of_batch_id}`:'原始导入'}</strong></div>
           </div>
-          {selected?.status==='archived'&&!selected?.voided_at&&<div className="payroll-lifecycle-note">“已归档”不是删除：同月份的新批次发布后，旧发布批次会自动归档，员工只看到当前有效发布批次。</div>}
+          {selected?.status==='archived'&&!selected?.voided_at&&<div className="payroll-lifecycle-note">“已归档”不是被最新月份覆盖：现在每次已发布的工资上传都会独立保留并对对应员工可见；此批次仅可能来自历史纠正流程或人工归档，请结合下方原因与操作记录核对。</div>}
           {selected?.voided_at&&<div className="payroll-lifecycle-note is-voided">该记录已删除：{selected?.void_reason||'未填写原因'} · 操作人 {selected?.voided_by_name||'—'} · {dateTime(selected?.voided_at)}。工资明细和审计历史仍完整保留，可恢复。</div>}
           {(canEdit||canDelete)&&selected&&!panel.loading&&!panel.error&&<section className="payroll-batch-correction-box">
             <div><strong>批次管理</strong><p>{selected.voided_at?'这是可恢复的业务删除；恢复会回到删除前的状态。':selected.status==='published'?'已发布批次的金额保持只读；可创建纠正草稿，或经加强确认后撤下并移入“已删除”。':selected.status==='archived'?'归档批次可维护名称/备注、复制纠正草稿，或移入“已删除”。':'草稿可维护名称/备注，或移入“已删除”。'}</p></div>

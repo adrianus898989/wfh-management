@@ -1,6 +1,8 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentation'
 import { attendanceHistoryRemark } from '../lib/attendancePresentation'
+import { supabase } from '../lib/supabase'
+import { Pagination } from './DataPageControls'
 
 const text = value => String(value ?? '').trim()
 
@@ -72,27 +74,113 @@ function SummaryItem({label,value,tone=''}){
 }
 
 const historyDate=row=>text(row?.event_date||row?.incident_date).slice(0,10)
-const historyMatches=(row,filters,fields=[])=>{
-  const date=historyDate(row)
-  if(filters.from&&(!date||date<filters.from))return false
-  if(filters.to&&(!date||date>filters.to))return false
-  const keyword=text(filters.keyword).toLocaleLowerCase()
-  if(!keyword)return true
-  return fields.some(field=>text(typeof field==='function'?field(row):row?.[field]).toLocaleLowerCase().includes(keyword))
-}
 
-function HistoryFilters({filters,setFilters,placeholder='搜索备注或内容'}){
+function HistoryFilters({filters,setFilters,onSubmit,onReset,loading=false,placeholder='搜索备注或内容'}){
   const update=(key,value)=>setFilters(current=>({...current,[key]:value}))
-  const reset=()=>setFilters({from:'',to:'',keyword:''})
-  return <div className="employee-history-filters">
+  return <form className="employee-history-filters" onSubmit={event=>{event.preventDefault();onSubmit()}}>
     <label><span>日期起</span><input type="date" value={filters.from} onChange={event=>update('from',event.target.value)}/></label>
     <label><span>日期止</span><input type="date" value={filters.to} onChange={event=>update('to',event.target.value)}/></label>
     <label className="employee-history-search"><span>搜索</span><input value={filters.keyword} onChange={event=>update('keyword',event.target.value)} placeholder={placeholder}/></label>
-    {(filters.from||filters.to||filters.keyword)&&<button type="button" onClick={reset}>重置</button>}
-  </div>
+    <button type="submit" disabled={loading}>{loading?'查询中…':'查询'}</button>
+    {(filters.from||filters.to||filters.keyword)&&<button type="button" disabled={loading} onClick={onReset}>重置</button>}
+  </form>
 }
 
 const emptyHistoryFilters=()=>({from:'',to:'',keyword:''})
+const HISTORY_PAGE_SIZES=[20,30,50,100]
+
+function useEmployeeHistoryRpc(rpcName,employeeIdValue,enabled=true){
+  const employeeId=text(employeeIdValue)
+  const [draftFilters,setDraftFilters]=useState(emptyHistoryFilters)
+  const [appliedFilters,setAppliedFilters]=useState(emptyHistoryFilters)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(20)
+  const [filtersEmployeeId,setFiltersEmployeeId]=useState('')
+  const [state,setState]=useState({employeeId:'',data:null,loading:false,error:''})
+
+  useEffect(()=>{
+    setDraftFilters(emptyHistoryFilters())
+    setAppliedFilters(emptyHistoryFilters())
+    setPage(1)
+    setPageSize(20)
+    setFiltersEmployeeId(employeeId)
+    setState({employeeId:'',data:null,loading:false,error:''})
+  },[employeeId,rpcName])
+
+  useEffect(()=>{
+    if(!enabled||!employeeId||filtersEmployeeId!==employeeId||!supabase)return
+    let active=true
+    setState(current=>({...current,employeeId,loading:true,error:''}))
+    supabase.rpc(rpcName,{
+      p_employee_id:employeeId,
+      p_date_from:appliedFilters.from||null,
+      p_date_to:appliedFilters.to||null,
+      p_search:text(appliedFilters.keyword)||null,
+      p_page:page,
+      p_page_size:pageSize,
+    }).then(({data,error})=>{
+      if(!active)return
+      if(error){
+        setState(current=>({...current,employeeId,loading:false,error:error.message||'记录读取失败'}))
+        return
+      }
+      setState({employeeId,data:data||null,loading:false,error:''})
+    }).catch(error=>{
+      if(active)setState(current=>({...current,employeeId,loading:false,error:error?.message||'记录读取失败'}))
+    })
+    return()=>{active=false}
+  },[rpcName,employeeId,filtersEmployeeId,enabled,appliedFilters,page,pageSize])
+
+  const data=state.employeeId===employeeId?state.data:null
+  const apply=()=>{
+    if(draftFilters.from&&draftFilters.to&&draftFilters.from>draftFilters.to){
+      setState(current=>({...current,employeeId,error:'日期起不能晚于日期止'}))
+      return
+    }
+    setPage(1)
+    setAppliedFilters({...draftFilters,keyword:text(draftFilters.keyword)})
+  }
+  const reset=()=>{
+    const empty=emptyHistoryFilters()
+    setDraftFilters(empty)
+    setPage(1)
+    setAppliedFilters(empty)
+  }
+  const changePageSize=next=>{
+    if(!HISTORY_PAGE_SIZES.includes(Number(next)))return
+    setPageSize(Number(next))
+    setPage(1)
+  }
+
+  return {
+    data,
+    loading:state.employeeId===employeeId&&state.loading,
+    error:state.employeeId===employeeId?state.error:'',
+    filters:draftFilters,
+    setFilters:setDraftFilters,
+    apply,
+    reset,
+    page,
+    setPage,
+    pageSize,
+    setPageSize:changePageSize,
+  }
+}
+
+function HistoryPagination({data,loading,page,pageSize,onPage,onPageSize}){
+  const total=Number(data?.total||0)
+  if(total<=0)return null
+  return <Pagination
+    page={Number(data?.page||page||1)}
+    pages={Math.max(1,Number(data?.pages||1))}
+    total={total}
+    pageSize={Number(data?.page_size||pageSize||20)}
+    pageSizeOptions={HISTORY_PAGE_SIZES}
+    loading={loading}
+    onPage={onPage}
+    onPageSize={onPageSize}
+  />
+}
 
 const adjustmentVisibilityKind=row=>{
   const kind=text(row?.event_kind).toLowerCase()
@@ -103,6 +191,7 @@ const adjustmentVisibilityKind=row=>{
   if(kind&&Number.isFinite(amount)&&amount<0)return 'deduction'
   return 'unclassified'
 }
+const adjustmentSearchCategory=row=>adjustmentCategory(row)
 
 function RecordDetailsModal({row,onClose,adjustment=false}){
   if(!row)return null
@@ -122,53 +211,70 @@ function RecordDetailsModal({row,onClose,adjustment=false}){
   </div>
 }
 
-export function EmployeeAttendancePanel({data,loading,error}){
-  const sourceRows=data?.rows||data?.history||[]
+export function EmployeeAttendancePanel({employeeId}){
+  const query=useEmployeeHistoryRpc('admin_employee_attendance_history_filtered',employeeId)
+  const result=query.data
+  const sourceRows=result?.rows||result?.history||[]
   const rows=sourceRows.filter(row=>ATTENDANCE_EVENT_KINDS.has(text(row?.event_kind||row?.kind).toLowerCase()))
-  const [filters,setFilters]=useState(emptyHistoryFilters)
-  const visibleRows=useMemo(()=>rows.filter(row=>historyMatches(row,filters,['reason','note',row=>attendanceKindLabel(row.event_kind||row.kind)])),[rows,filters])
+  const resultLoading=query.loading||(!query.data&&!query.error&&Boolean(text(employeeId)))
+  const resultError=query.error
   return <section className="detail-panel employee-attendance-panel">
-    <div className="detail-panel-head"><div><h3>员工出勤记录</h3></div><span className="employee-exam-count">{visibleRows.length} 条</span></div>
-    {loading?<div className="attendance-panel-state">正在读取出勤记录…</div>:error?<div className="attendance-panel-state error">{error}</div>:<>
-      <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索状态、原因或备注"/>
-      {visibleRows.length?<div className="employee-attendance-compact-wrap"><table className="employee-attendance-compact-table">
+    <div className="detail-panel-head"><div><h3>员工出勤记录</h3></div><span className="employee-exam-count">{Number(result?.total||rows.length)} 条</span></div>
+    {!result&&resultLoading?<div className="attendance-panel-state">正在读取出勤记录…</div>:!result&&resultError?<div className="attendance-panel-state error">{resultError}</div>:<>
+      {resultError&&<div className="attendance-panel-state error">{resultError}</div>}
+      <HistoryFilters filters={query.filters} setFilters={query.setFilters} onSubmit={query.apply} onReset={query.reset} loading={resultLoading} placeholder="搜索状态、原因或备注"/>
+      {rows.length?<div className="employee-attendance-compact-wrap"><table className="employee-attendance-compact-table">
         <thead><tr><th>日期</th><th>类型</th><th>备注 / 原因</th></tr></thead>
-        <tbody>{visibleRows.map((row,index)=>{
+        <tbody>{rows.map((row,index)=>{
           const kind=row.event_kind||row.kind
           return <tr key={row.id||`${row.source_key}-${row.source_row}-${index}`}><td>{historyDate(row)||'—'}</td><td><span className={`attendance-kind ${kindTone(kind)}`}>{attendanceKindLabel(kind)}</span></td><td>{attendanceHistoryRemark(row)}</td></tr>
         })}</tbody>
       </table></div>:<div className="attendance-panel-state">暂无出勤记录</div>}
+      <HistoryPagination data={result} loading={resultLoading} page={query.page} pageSize={query.pageSize} onPage={query.setPage} onPageSize={query.setPageSize}/>
     </>}
   </section>
 }
 
-export function EmployeeAdjustmentPanel({data,loading,error,canViewBonus=false,canViewDeduction=false}){
-  const rows=data?.rows||data?.history||[]
-  const summary=data?.summary||{}
+export function EmployeeAdjustmentPanel({employeeId,canViewBonus=false,canViewDeduction=false}){
+  const query=useEmployeeHistoryRpc('admin_employee_adjustment_history_filtered',employeeId,canViewBonus||canViewDeduction)
+  const result=query.data
+  const serverPermissions=query.data?.permissions
+  if(serverPermissions){
+    canViewBonus=Boolean(serverPermissions.bonus)
+    canViewDeduction=Boolean(serverPermissions.deduction)
+  }
+  const sourceRows=result?.rows||result?.history||[]
+  // Defense in depth: the filtered RPC already applies the same category
+  // boundary before totals and pagination.
+  const rows=sourceRows.filter(row=>{
+    const kind=adjustmentVisibilityKind(row)
+    const categoryAllowed=kind==='bonus'?canViewBonus:kind==='deduction'?canViewDeduction:canViewBonus&&canViewDeduction
+    return categoryAllowed
+  })
+  const summary=result?.summary||{}
   const currencySummary=attendanceCurrencySummary(summary)
   const currencyValue=(currency,key)=>currencySummary[currency]?`${currency} ${formatNumber(currencySummary[currency]?.[key])||0}`:'—'
   const currencyCount=(currency,key)=>currencySummary[currency]?`${currencySummary[currency]?.[key]||0} 笔`:'—'
   const [selected,setSelected]=useState(null)
-  const [filters,setFilters]=useState(emptyHistoryFilters)
-  const visibleRows=useMemo(()=>rows.filter(row=>{
-    const kind=adjustmentVisibilityKind(row)
-    const categoryAllowed=kind==='bonus'?canViewBonus:kind==='deduction'?canViewDeduction:canViewBonus&&canViewDeduction
-    return categoryAllowed&&historyMatches(row,filters,['reason','note','raw_amount',row=>adjustmentCategory(row),row=>attendanceAmount(row),row=>attendanceKindLabel(row.event_kind)])
-  }),[rows,filters,canViewBonus,canViewDeduction])
+  const resultLoading=query.loading||(!query.data&&!query.error&&Boolean(text(employeeId)))
+  const resultError=query.error
   const panelTitle=canViewBonus&&canViewDeduction?'奖金 / 扣款记录':canViewBonus?'奖金记录':'扣款记录'
   const summaryItems=[...(canViewBonus?[['USD 奖金',`${currencyCount('USD','bonus_count')} · ${currencyValue('USD','bonus_total')}`,'positive'],['PHP 奖金',`${currencyCount('PHP','bonus_count')} · ${currencyValue('PHP','bonus_total')}`,'positive']]:[]),...(canViewDeduction?[['USD 扣款',`${currencyCount('USD','deduction_count')} · ${currencyValue('USD','deduction_total')}`,'negative'],['PHP 扣款',`${currencyCount('PHP','deduction_count')} · ${currencyValue('PHP','deduction_total')}`,'negative']]:[]),...(canViewBonus&&canViewDeduction?[['USD 净额',currencyValue('USD','net_amount')],['PHP 净额',currencyValue('PHP','net_amount')]]:[]),['币种待核对',summary.currency_review_count||0,'warning'],['金额未解析',summary.incomplete||0,'warning']]
+  useEffect(()=>setSelected(null),[query.page,query.pageSize,query.data])
   return <section className="detail-panel employee-attendance-panel employee-adjustment-panel">
-    <div className="detail-panel-head"><div><h3>{panelTitle}</h3></div><span className="employee-exam-count">{visibleRows.length} 条</span></div>
-    {loading?<div className="attendance-panel-state">正在读取奖金 / 扣款记录…</div>:error?<div className="attendance-panel-state error">{error}</div>:<>
-      <HistoryFilters filters={filters} setFilters={setFilters} placeholder="搜索类型、金额、奖金、扣款或原因"/>
+    <div className="detail-panel-head"><div><h3>{panelTitle}</h3></div><span className="employee-exam-count">{Number(result?.total||rows.length)} 条</span></div>
+    {!result&&resultLoading?<div className="attendance-panel-state">正在读取奖金 / 扣款记录…</div>:!result&&resultError?<div className="attendance-panel-state error">{resultError}</div>:<>
+      {resultError&&<div className="attendance-panel-state error">{resultError}</div>}
+      <HistoryFilters filters={query.filters} setFilters={query.setFilters} onSubmit={query.apply} onReset={query.reset} loading={resultLoading} placeholder="搜索类型、金额、奖金、扣款或原因"/>
       <div className="employee-adjustment-summary">
         {summaryItems.map(([label,value,tone])=><SummaryItem key={label} label={label} value={value} tone={tone}/>)}
       </div>
-      {visibleRows.length?<div className="employee-adjustment-list">{visibleRows.map((row,index)=><article key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
+      {rows.length?<div className="employee-adjustment-list">{rows.map((row,index)=><article key={row.id||`${row.source_key}-${row.source_row}-${index}`}>
         <div className="employee-adjustment-amount"><span className={`attendance-kind ${kindTone(row.event_kind)}`}>{attendanceKindLabel(row.event_kind)}</span><b className={kindTone(row.event_kind)}>{attendanceAmount(row)}</b><small>{row.event_date||'—'}</small></div>
-        <div className="employee-adjustment-copy"><small>类型</small><strong>{adjustmentCategory(row)}</strong><small>原因</small><p>{adjustmentReason(row)}</p></div>
+        <div className="employee-adjustment-copy" title={adjustmentSearchCategory(row)}><small>类型</small><strong>{adjustmentCategory(row)}</strong><small>原因</small><p>{adjustmentReason(row)}</p></div>
         <button type="button" onClick={()=>setSelected(row)}>详情</button>
       </article>)}</div>:<div className="attendance-panel-state">暂无奖金 / 扣款记录</div>}
+      <HistoryPagination data={result} loading={resultLoading} page={query.page} pageSize={query.pageSize} onPage={query.setPage} onPageSize={query.setPageSize}/>
     </>}
     {selected&&<RecordDetailsModal row={selected} adjustment onClose={()=>setSelected(null)}/>}
   </section>

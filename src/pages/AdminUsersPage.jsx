@@ -14,6 +14,11 @@ import { accountControlPatch, patchAccountRows } from '../lib/adminAccountRowUpd
 
 const USER_TABS = ['backend', 'staff', 'roles']
 const blankAccessSearch = () => ({ account:'', employee:'', context:'', status:'all' })
+const mergeRowsById = (current = [], incoming = []) => {
+  const rows = new Map((current || []).map(row => [row.id, row]))
+  for (const row of incoming || []) if (row?.id) rows.set(row.id, row)
+  return [...rows.values()]
+}
 
 const accountDateTime = value => {
   const date = new Date(value || '')
@@ -137,6 +142,18 @@ export default function AdminUsersPage() {
     ...extra,
   })
   const fetchRecoveryRoles = () => call({ action:'role_list' })
+  const fetchRecoveryScopeDirectory = ({
+    targetAuthUserId,
+    teamIds = [],
+    employeeQuery = '',
+    includeSelection = false,
+  }) => call({
+    action:'scope_directory',
+    target_auth_user_id:targetAuthUserId,
+    team_ids:teamIds,
+    employee_query:employeeQuery,
+    include_selection:includeSelection,
+  })
 
   const load = async () => {
     setLoading(true)
@@ -204,6 +221,56 @@ export default function AdminUsersPage() {
       window.clearTimeout(timer)
     }
   }, [data?.recovery_account_mode, accountModal?.mode, accountModal?.form?.employee_id, accountModal?.form?.employee_search])
+  useEffect(() => {
+    if (!data?.recovery_account_mode || !data?.recovery_scope_editor ||
+        accountModal?.mode !== 'edit' || !accountModal?.scope_directory_loaded ||
+        accountModal?.form?.data_scope !== 'assigned_teams') return undefined
+    const targetAuthUserId = String(accountModal?.form?.auth_user_id || '')
+    const teamIds = accountModal?.form?.team_ids || []
+    const employeeQuery = String(accountModal?.form?.scope_employee_search || '').trim()
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      setAccountModal(current => current?.form?.auth_user_id === targetAuthUserId
+        ? ({ ...current, scope_loading:true, scope_load_error:'' })
+        : current)
+      try {
+        const result = await fetchRecoveryScopeDirectory({
+          targetAuthUserId,
+          teamIds,
+          employeeQuery,
+          includeSelection:false,
+        })
+        if (cancelled) return
+        setData(current => current ? ({
+          ...current,
+          teams:result?.teams || [],
+          positions:mergeRowsById(current.positions, result?.positions),
+          employees:mergeRowsById(current.employees, result?.employees),
+          recovery_scope_directory_truncated:result?.truncated || {},
+        }) : current)
+        setAccountModal(current => current?.form?.auth_user_id === targetAuthUserId
+          ? ({ ...current, scope_loading:false, scope_load_error:'' })
+          : current)
+      } catch (scopeError) {
+        if (!cancelled) setAccountModal(current => current?.form?.auth_user_id === targetAuthUserId
+          ? ({ ...current, scope_loading:false, scope_load_error:scopeError.message || '当前排班组织目录读取失败' })
+          : current)
+      }
+    }, 300)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [
+    data?.recovery_account_mode,
+    data?.recovery_scope_editor,
+    accountModal?.mode,
+    accountModal?.scope_directory_loaded,
+    accountModal?.form?.auth_user_id,
+    accountModal?.form?.data_scope,
+    (accountModal?.form?.team_ids || []).join(','),
+    accountModal?.form?.scope_employee_search,
+  ])
 
   const setTab = next => {
     if (data?.degraded && next === 'staff') return
@@ -279,11 +346,17 @@ export default function AdminUsersPage() {
     ...(scopeDirectoryDiagnostics.unmatchedTeamEmployeeNos || []),
     ...(scopeDirectoryDiagnostics.unmatchedPositionEmployeeNos || []),
   ].length
-  const recoverySupportedScopes = new Set(
+  const recoveryCreateSupportedScopes = new Set(
+    recoveryAccountMode ? data?.supported_data_scopes || [] : ['all', 'self', 'own_team', 'assigned_teams']
+  )
+  const recoveryEditSupportedScopes = new Set(
     recoveryAccountMode
-      ? data?.supported_data_scopes || []
+      ? data?.supported_edit_data_scopes || data?.supported_data_scopes || []
       : ['all', 'self', 'own_team', 'assigned_teams']
   )
+  const recoverySupportedScopes = accountModal?.mode === 'edit'
+    ? recoveryEditSupportedScopes
+    : recoveryCreateSupportedScopes
 
   useEffect(() => {
     if ((sharedAccess.loading && !data) || visibleTabs.includes(tab)) return
@@ -377,7 +450,7 @@ export default function AdminUsersPage() {
   const openCreate = () => {
     const form = blankAccount()
     if (recoveryAccountMode) {
-      form.data_scope = recoverySupportedScopes.has('all') ? 'all' : [...recoverySupportedScopes][0] || 'self'
+      form.data_scope = recoveryCreateSupportedScopes.has('all') ? 'all' : [...recoveryCreateSupportedScopes][0] || 'self'
     }
     setAccountModal({ mode: 'create', form, batch: [], error: '', saving: false })
   }
@@ -392,11 +465,15 @@ export default function AdminUsersPage() {
       teamIds: scopeTeams.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.team_id),
       positionIds: scopePositions.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.position_id),
       employeeIds: scopeEmployees.filter(x => x.auth_user_id === a.auth_user_id).map(x => x.employee_id),
-    }, employees, teams)
-    setAccountModal({
+    }, employees, teams, positions)
+    const modal = {
       mode: 'edit',
       error: '',
       saving: false,
+      scope_loading:Boolean(recoveryAccountMode && data?.recovery_scope_editor && canManageScope),
+      scope_directory_loaded:false,
+      scope_load_error:'',
+      original_data_scope:a.data_scope || 'own_team',
       removedStaleTeamIds,
       form: {
         auth_user_id: a.auth_user_id,
@@ -417,7 +494,74 @@ export default function AdminUsersPage() {
         scope_position_selected_only: false,
         scope_employee_selected_only: false,
       }
+    }
+    setAccountModal(modal)
+
+    if (!recoveryAccountMode || !data?.recovery_scope_editor || !canManageScope) return
+    fetchRecoveryScopeDirectory({
+      targetAuthUserId:a.auth_user_id,
+      includeSelection:true,
+    }).then(result => {
+      const nextTeams = result?.teams || []
+      const nextPositions = result?.positions || []
+      const nextEmployees = result?.employees || []
+      const selection = result?.selection || {}
+      const validTeamIds = new Set(nextTeams.map(team => team.id))
+      const validPositionIds = new Set(nextPositions.map(position => position.id))
+      const validEmployeeIds = new Set(nextEmployees.map(employee => employee.id))
+      const teamIds = (selection.team_ids || []).filter(id => validTeamIds.has(id))
+      const positionIds = (selection.position_ids || []).filter(id => validPositionIds.has(id))
+      const employeeIds = (selection.employee_ids || []).filter(id => validEmployeeIds.has(id))
+      setData(current => current ? ({
+        ...current,
+        teams:nextTeams,
+        positions:nextPositions,
+        employees:mergeRowsById(current.employees, nextEmployees),
+        recovery_scope_directory_truncated:result?.truncated || {},
+      }) : current)
+      setAccountModal(current => current?.form?.auth_user_id === a.auth_user_id ? ({
+        ...current,
+        scope_loading:false,
+        scope_directory_loaded:true,
+        scope_load_error:'',
+        removedStaleTeamIds:selection.stale_team_ids || [],
+        form:{
+          ...current.form,
+          team_ids:teamIds,
+          position_ids:positionIds,
+          employee_ids:employeeIds,
+        },
+      }) : current)
+    }).catch(scopeError => {
+      setAccountModal(current => current?.form?.auth_user_id === a.auth_user_id ? ({
+        ...current,
+        scope_loading:false,
+        scope_directory_loaded:false,
+        scope_load_error:scopeError.message || '当前排班组织目录读取失败',
+      }) : current)
     })
+  }
+
+  const validateAccountScopeDraft = (form) => {
+    if (!form.role_id) return '请选择角色。'
+    const preservingRecoveryAssignedScope = recoveryAccountMode && accountModal?.mode === 'edit' &&
+      accountModal?.original_data_scope === 'assigned_teams' && form.data_scope === 'assigned_teams' && !canManageScope
+    if (recoveryAccountMode && !recoverySupportedScopes.has(form.data_scope) && !preservingRecoveryAssignedScope) {
+      return '恢复期间该管理范围暂不可安全授权，请选择当前允许的范围。'
+    }
+    if (['self', 'own_team'].includes(form.data_scope) && !form.employee_id) return '“仅本人”或“关联员工所在团队”必须先关联员工档案。'
+    if (form.data_scope === 'assigned_teams' && !preservingRecoveryAssignedScope && !form.team_ids.length) return '指定范围必须先选择至少一个团队；团队是不可越过的数据边界。'
+    if (form.data_scope === 'assigned_teams' && !preservingRecoveryAssignedScope) {
+      const pruned = pruneAssignedScopeSelection({
+        teamIds: form.team_ids,
+        positionIds: form.position_ids,
+        employeeIds: form.employee_ids,
+      }, employees, teams, positions)
+      if (pruned.teamIds.length !== form.team_ids.length) return '已选团队不在当前排班组织目录，请重新选择。'
+      if (pruned.positionIds.length !== form.position_ids.length) return '已选岗位不属于所选团队，请重新选择。'
+      if (pruned.employeeIds.length !== form.employee_ids.length) return '指定员工必须属于所选团队，不能添加团队外人员。'
+    }
+    return ''
   }
 
   const validateAccountDraft = (form) => {
@@ -427,23 +571,7 @@ export default function AdminUsersPage() {
     if (!(password.length >= 10 && /[A-Z]/.test(password) && /[a-z]/.test(password) && /[0-9]/.test(password) && /[^A-Za-z0-9]/.test(password))) {
       return '临时密码至少 10 位，并包含大小写字母、数字和特殊符号。'
     }
-    if (!form.role_id) return '请选择角色。'
-    if (recoveryAccountMode && !recoverySupportedScopes.has(form.data_scope)) {
-      return '恢复期间该管理范围暂不可安全授权，请选择当前允许的范围。'
-    }
-    if (['self', 'own_team'].includes(form.data_scope) && !form.employee_id) return '“仅本人”或“关联员工所在团队”必须先关联员工档案。'
-    if (form.data_scope === 'assigned_teams' && !form.team_ids.length) return '指定范围必须先选择至少一个团队；团队是不可越过的数据边界。'
-    if (form.data_scope === 'assigned_teams') {
-      const pruned = pruneAssignedScopeSelection({
-        teamIds: form.team_ids,
-        positionIds: form.position_ids,
-        employeeIds: form.employee_ids,
-      }, employees, teams)
-      if (pruned.teamIds.length !== form.team_ids.length) return '已选团队不在当前排班组织目录，请重新选择。'
-      if (pruned.positionIds.length !== form.position_ids.length) return '已选岗位不属于所选团队，请重新选择。'
-      if (pruned.employeeIds.length !== form.employee_ids.length) return '指定员工必须属于所选团队，不能添加团队外人员。'
-    }
-    return ''
+    return validateAccountScopeDraft(form)
   }
 
   const queueAccount = () => {
@@ -478,9 +606,16 @@ export default function AdminUsersPage() {
       : []
     const validationError = mode === 'create' && accounts.length === 1 && !accountModal.batch.length
       ? validateAccountDraft(form)
+      : mode === 'edit'
+        ? validateAccountScopeDraft(form)
+        : ''
+    const scopeDirectoryError = mode === 'edit' && recoveryAccountMode && canManageScope && form.data_scope === 'assigned_teams'
+      ? accountModal.scope_loading
+        ? '当前排班组织目录仍在读取，请稍候。'
+        : accountModal.scope_load_error || (!accountModal.scope_directory_loaded ? '当前排班组织目录尚未安全加载，请重试。' : '')
       : ''
-    if (validationError) {
-      setAccountModal(x => ({ ...x, error: validationError, saving: false }))
+    if (validationError || scopeDirectoryError) {
+      setAccountModal(x => ({ ...x, error: validationError || scopeDirectoryError, saving: false }))
       return
     }
     setAccountModal(x => ({ ...x, error: '', saving: true }))
@@ -528,6 +663,11 @@ export default function AdminUsersPage() {
           employee_id:form.employee_id,
           role_id:form.role_id,
           data_scope:form.data_scope,
+          ...(form.data_scope === 'assigned_teams' && canManageScope ? {
+            team_ids:form.team_ids,
+            position_ids:form.position_ids,
+            employee_ids:form.employee_ids,
+          } : {}),
         } : {
           action:'update_backend',
           auth_user_id:form.auth_user_id,
@@ -872,7 +1012,8 @@ export default function AdminUsersPage() {
   const accountEmployeeMatches = accountEmployeeQuery
     ? employees.filter(emp => `${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(accountEmployeeQuery)).slice(0, 8)
     : []
-  const scopeCanEdit = accountModal?.mode !== 'edit' || canManageScope
+  const scopeCanEdit = (accountModal?.mode !== 'edit' || canManageScope) &&
+    !accountModal?.scope_loading && !accountModal?.scope_load_error
   const scopeTeamIds = accountModal?.form?.team_ids || []
   const scopePositionIds = accountModal?.form?.position_ids || []
   const scopeEmployeeIds = accountModal?.form?.employee_ids || []
@@ -921,7 +1062,7 @@ export default function AdminUsersPage() {
           teamIds: next,
           positionIds: nextForm.position_ids,
           employeeIds: nextForm.employee_ids,
-        }, employees, teams)
+        }, employees, teams, positions)
         nextForm.team_ids = pruned.teamIds
         nextForm.position_ids = pruned.positionIds
         nextForm.employee_ids = pruned.employeeIds
@@ -1203,7 +1344,7 @@ export default function AdminUsersPage() {
 
             {accountModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{accountModal.error}</div>}
             <div className="account-session-note"><strong>范围与登录</strong><span>关联员工只提供身份与团队上下文；管理范围选择“全部数据”时不会自动降级为“自己团队”。同一个后台账号同时只保留一个浏览器会话，新设备登录会结束旧设备会话。</span></div>
-            {recoveryAccountMode && <div className="account-session-note"><strong>稳定恢复模式</strong><span>只显示服务端确认可委派的角色与范围；编辑时员工关联保持不变，现有指定范围可原样保留或切换为允许的简化范围。</span></div>}
+            {recoveryAccountMode && <div className="account-session-note"><strong>稳定恢复模式</strong><span>只显示服务端确认可委派的角色与范围；员工关联保持不变。指定团队、岗位和员工候选来自当前排班标准组织目录，保存时服务端会再次核对硬边界。</span></div>}
             <div className="account-modal-body"><div className="form-grid">
               <label className="form-span">搜索并关联员工档案（可选）
                 <input
@@ -1251,7 +1392,7 @@ export default function AdminUsersPage() {
                   {recoverySupportedScopes.has('all') && <option value="all">全部数据</option>}
                 </select>
                 {accountModal.mode === 'edit' && !canManageScope && <small>当前账号没有“管理账号数据范围”权限。</small>}
-                {recoveryAccountMode && accountModal.mode === 'edit' && accountModal.form.data_scope === 'assigned_teams' && <small>恢复期间不会接收前端团队明细；保存会在服务端原样保留现有边界。</small>}
+                {recoveryAccountMode && accountModal.mode === 'edit' && accountModal.form.data_scope === 'assigned_teams' && <small>指定团队是不可越过的硬边界；岗位和指定员工都必须属于已选团队。</small>}
               </label>
 
               {accountModal.mode === 'create' && <label>登录 OTP
@@ -1261,8 +1402,11 @@ export default function AdminUsersPage() {
                 </select>
               </label>}
 
-              {accountModal.form.data_scope === 'assigned_teams' && !recoveryAccountMode && (
+              {accountModal.form.data_scope === 'assigned_teams' && (!recoveryAccountMode || data?.recovery_scope_editor) && (
                 <div className="scope-panel">
+                  {accountModal.scope_loading && <div className="scope-current-team-note"><strong>正在读取</strong><span>正在加载当前排班标准团队、岗位和员工候选。</span></div>}
+                  {accountModal.scope_load_error && <div className="scope-current-team-note warning"><strong>读取失败</strong><span>{accountModal.scope_load_error}。请关闭后重新打开编辑窗口再试。</span></div>}
+                  {(data?.recovery_scope_directory_truncated?.teams || data?.recovery_scope_directory_truncated?.positions || data?.recovery_scope_directory_truncated?.employees) && <div className="scope-current-team-note warning"><strong>候选已限量</strong><span>团队最多 100 个、岗位最多 200 个、员工每次最多 100 人；员工可继续按 ID 或姓名搜索，服务端保存仍会核对完整当前排班目录。</span></div>}
                   <div className="scope-current-team-note">
                     <strong>范围计算规则</strong>
                     <span>已选团队是硬边界。基础范围 = 已选团队 ∩ 可选岗位；不选岗位表示团队内全部当前人员。指定员工只能从已选团队内补充，不能查看任何团队外数据；所有页面和预警中心都按同一结果限制。</span>

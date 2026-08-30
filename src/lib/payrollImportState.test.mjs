@@ -70,7 +70,7 @@ test('payroll import history presents only persisted source and category fields'
   })
   assert.equal(payrollBatchSourcePresentation({source_type:'friend_supabase',title:'外部批次'}).sourceLabel,'外部 Supabase 导入')
   assert.equal(payrollBatchSourcePresentation({source_type:'partner_feed',title:'已记录类别'}).sourceLabel,'partner_feed')
-  assert.match(page, /<span>来源 \/ 批次类别<\/span>/)
+  assert.match(page, /<span>来源 \/ 批次<\/span>/)
   assert.match(page, /source\.sourceLabel[\s\S]+source\.category/)
   assert.match(page, /<span>币种<\/span><select value=\{historyCurrency\}/)
   assert.match(page, /historyCurrency==='all'/)
@@ -78,9 +78,9 @@ test('payroll import history presents only persisted source and category fields'
 })
 
 test('payroll import history renders recorded actor timestamps without fabricating an editor', () => {
-  assert.match(page, /导入 \{batch\.created_by_name\|\|'—'\} · \{dateTime\(batch\.created_at\)\}/)
-  assert.match(page, /最近操作 \{batch\.updated_by_name\|\|'—'\} · \{dateTime\(batch\.updated_at\)\}/)
-  assert.match(page, /发布 \{batch\.published_by_name\|\|'—'\} · \{dateTime\(batch\.published_at\)\}/)
+  assert.match(page, /<i>导入<\/i><b>\{batch\.created_by_name\|\|'—'\}<\/b><time>\{dateTime\(batch\.created_at\)\}<\/time>/)
+  assert.match(page, /<i>最近<\/i><b>\{batch\.updated_by_name\|\|'—'\}<\/b><time>\{dateTime\(batch\.updated_at\)\}<\/time>/)
+  assert.match(page, /<i>发布<\/i><b>\{batch\.published_by_name\|\|'—'\}<\/b><time>\{dateTime\(batch\.published_at\)\}<\/time>/)
   assert.doesNotMatch(page, /updated_by_name\|\|batch\.created_by_name/)
 })
 

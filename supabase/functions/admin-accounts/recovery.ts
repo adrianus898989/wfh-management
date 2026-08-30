@@ -15,6 +15,9 @@ const AUTH_MUTATION_TIMEOUT_MS = 12_000
 const DEFAULT_ACCOUNT_PAGE_SIZE = 20
 const ACCOUNT_PAGE_SIZE_OPTIONS = new Set([20, 30, 50, 100, 200])
 const ACCOUNT_EMPLOYEE_LOOKUP_LIMIT = 10
+const RECOVERY_SCOPE_TEAM_LIMIT = 100
+const RECOVERY_SCOPE_POSITION_LIMIT = 200
+const RECOVERY_SCOPE_EMPLOYEE_LIMIT = 100
 const RECOVERY_ROLE_LIMIT = 100
 const RECOVERY_PERMISSION_LIMIT = 500
 const RECOVERY_ROLE_PERMISSION_LIMIT = 5_000
@@ -27,12 +30,14 @@ const RECOVERY_ACCOUNT_ACTIONS = [
   'toggle_otp',
   'reset_password',
   'reset_mfa',
+  'update_backend',
 ]
 const RECOVERY_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
   toggle_active:'account.disable',
   toggle_otp:'account.otp_toggle',
   reset_password:'account.reset_password',
   reset_mfa:'backend_account.mfa_reset',
+  update_backend:'account.edit',
 }
 
 function cors(origin: string | null) {
@@ -59,6 +64,13 @@ const clean = (value: unknown) => String(value ?? '').trim()
 const uuidLike = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 const passwordOk = (value: string) => value.length >= 10 &&
   /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value) && /[^A-Za-z0-9]/.test(value)
+
+function boundedUuidArray(value: unknown, limit: number): string[] | null {
+  if (!Array.isArray(value)) return null
+  const ids = [...new Set(value.map(clean).filter(Boolean))]
+  if (ids.length > limit || ids.some(id => !uuidLike(id))) return null
+  return ids
+}
 
 function backendStatus(value: any) {
   return Number(value?.status || value?.statusCode || value?.context?.status || 0)
@@ -127,7 +139,7 @@ Deno.serve(async (req: Request) => {
     // through to the former full-directory bootstrap implementation.
     if (![
       'access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions',
-      'account_list', 'create_backend', ...RECOVERY_ACCOUNT_ACTIONS,
+      'scope_directory', 'account_list', 'create_backend', ...RECOVERY_ACCOUNT_ACTIONS,
     ].includes(action)) {
       return json(req, {
         ok: false,
@@ -293,7 +305,7 @@ Deno.serve(async (req: Request) => {
     const loadRecoveryBackendTarget = async (targetAuthUserId: string) => {
       const { data:target, error:targetError } = await bounded(
         admin.from('user_access')
-          .select('auth_user_id,backend_enabled,active,otp_required,roles(code,active)')
+          .select('auth_user_id,employee_id,role_id,data_scope,backend_enabled,active,otp_required,roles(code,active)')
           .eq('auth_user_id', targetAuthUserId)
           .eq('backend_enabled', true)
           .maybeSingle(),
@@ -623,6 +635,90 @@ Deno.serve(async (req: Request) => {
       return json(req, { ok:true, saved })
     }
 
+    if (action === 'scope_directory') {
+      const allowedFields = new Set([
+        'action', 'target_auth_user_id', 'team_ids', 'employee_query', 'include_selection',
+      ])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, { ok:false, error:'指定范围目录请求包含不受支持的字段', code:'invalid_input_field' }, 400)
+      }
+      if (!can('account.edit') || !can('scope.manage')) {
+        return json(req, {
+          ok:false,
+          error:'当前账号没有编辑账号及管理数据范围权限',
+          code:'permission_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+      if (!delegatedRecoveryAccounts) {
+        return json(req, {
+          ok:false,
+          error:'当前账号的数据范围不能委派指定团队',
+          code:'scope_not_supported',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+
+      const targetAuthUserId = clean(body?.target_auth_user_id)
+      const teamIds = boundedUuidArray(body?.team_ids ?? [], RECOVERY_SCOPE_TEAM_LIMIT)
+      const employeeQuery = clean(body?.employee_query)
+      const includeSelection = body?.include_selection == null ? true : body.include_selection
+      if (!uuidLike(targetAuthUserId) || teamIds == null || employeeQuery.length > 64 || typeof includeSelection !== 'boolean') {
+        return json(req, { ok:false, error:'指定范围目录参数不正确', code:'invalid_scope_directory' }, 400)
+      }
+      if (targetAuthUserId === userData.user.id) {
+        return json(req, { ok:false, error:'当前登录账号不能在这里修改自身范围', code:'current_account_protected' }, 400)
+      }
+
+      let actionAllowed = false
+      try {
+        actionAllowed = await recoveryBackendActionAllowed(targetAuthUserId, 'account.edit')
+      } catch {
+        return retryable(req, '账号范围授权暂时无法确认，请稍后重试')
+      }
+      if (!actionAllowed) {
+        return json(req, {
+          ok:false,
+          error:'该账号不在你可编辑的数据范围内',
+          code:'permission_or_scope_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+
+      const { data:directory, error:directoryError } = await bounded(
+        admin.rpc('admin_recovery_account_scope_directory', {
+          p_actor_user_id:userData.user.id,
+          p_target_user_id:targetAuthUserId,
+          p_team_ids:teamIds,
+          p_employee_query:employeeQuery,
+          p_include_selection:includeSelection,
+        }),
+        'RECOVERY_ACCOUNT_SCOPE_DIRECTORY',
+      )
+      if (directoryError || !directory) {
+        const message = clean(directoryError?.message)
+        const code = clean(directoryError?.code).toUpperCase()
+        if (code === '42501' || /permission_or_scope_denied/i.test(message)) {
+          return json(req, { ok:false, error:'该账号不在你可编辑的数据范围内', code:'permission_or_scope_denied' }, 403)
+        }
+        if (code === 'P0002' || /account_not_found/i.test(message)) {
+          return json(req, { ok:false, error:'后台账号不存在', code:'account_not_found' }, 404)
+        }
+        if (code === '22023' || /invalid|limit|query_too_long/i.test(message)) {
+          return json(req, { ok:false, error:'指定范围目录参数不正确', code:'invalid_scope_directory' }, 400)
+        }
+        return retryable(req, '当前排班组织目录暂时读取失败，请稍后重试')
+      }
+      return json(req, {
+        ok:true,
+        recovery_scope_editor:true,
+        ...directory,
+      })
+    }
+
     if (action === 'account_list') {
       if (!can('backend_account.view')) {
         return json(req, {
@@ -702,12 +798,19 @@ Deno.serve(async (req: Request) => {
         employees = Array.isArray(data) ? data.slice(0, ACCOUNT_EMPLOYEE_LOOKUP_LIMIT) : []
       }
 
-      const roles = !employeeLookupOnly && can('account.create') ? await loadAssignableRoles() : []
+      const roles = !employeeLookupOnly && (can('account.create') || can('account.edit'))
+        ? await loadAssignableRoles()
+        : []
       const supportedDataScopes = isFounder
         ? ['all', 'self', 'own_team']
         : caller.data_scope === 'all'
           ? ['self', 'own_team']
           : ['self']
+      const supportedEditDataScopes = [...supportedDataScopes]
+      const recoveryScopeEditor = delegatedRecoveryAccounts && can('account.edit') && can('scope.manage')
+      if (recoveryScopeEditor && !supportedEditDataScopes.includes('assigned_teams')) {
+        supportedEditDataScopes.push('assigned_teams')
+      }
       return json(req, {
         ok:true,
         degraded:true,
@@ -734,6 +837,8 @@ Deno.serve(async (req: Request) => {
         roles,
         assignable_role_ids:roles.map((role:any) => role.id),
         supported_data_scopes:supportedDataScopes,
+        supported_edit_data_scopes:supportedEditDataScopes,
+        recovery_scope_editor:recoveryScopeEditor,
       })
     }
 
@@ -764,7 +869,12 @@ Deno.serve(async (req: Request) => {
           ? new Set(['action', 'auth_user_id', 'otp_required'])
           : action === 'reset_password'
             ? new Set(['action', 'auth_user_id', 'password'])
-            : new Set(['action', 'auth_user_id'])
+            : action === 'update_backend'
+              ? new Set([
+                  'action', 'auth_user_id', 'employee_id', 'role_id', 'data_scope',
+                  'team_ids', 'position_ids', 'employee_ids',
+                ])
+              : new Set(['action', 'auth_user_id'])
       if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
         return json(req, { ok:false, error:'账号恢复请求包含不受支持的字段', code:'invalid_input_field' }, 400)
       }
@@ -806,6 +916,95 @@ Deno.serve(async (req: Request) => {
           retryable:false,
           preserve_session:true,
         }, 403)
+      }
+
+      if (action === 'update_backend') {
+        const roleId = clean(body?.role_id)
+        const employeeId = clean(body?.employee_id) || null
+        const dataScope = clean(body?.data_scope)
+        const hasScopeFilters = ['team_ids', 'position_ids', 'employee_ids']
+          .some(key => Object.prototype.hasOwnProperty.call(body || {}, key))
+        const teamIds = hasScopeFilters
+          ? boundedUuidArray(body?.team_ids, RECOVERY_SCOPE_TEAM_LIMIT)
+          : []
+        const positionIds = hasScopeFilters
+          ? boundedUuidArray(body?.position_ids, RECOVERY_SCOPE_POSITION_LIMIT)
+          : []
+        const employeeIds = hasScopeFilters
+          ? boundedUuidArray(body?.employee_ids, RECOVERY_SCOPE_EMPLOYEE_LIMIT)
+          : []
+        if (!uuidLike(roleId) || (employeeId && !uuidLike(employeeId))) {
+          return json(req, { ok:false, error:'角色或员工标识不正确', code:'invalid_identifier' }, 400)
+        }
+        if (hasScopeFilters && (teamIds == null || positionIds == null || employeeIds == null)) {
+          return json(req, { ok:false, error:'指定团队、岗位或员工范围不正确', code:'invalid_assigned_scope' }, 400)
+        }
+        if (hasScopeFilters && !can('scope.manage')) {
+          return json(req, { ok:false, error:'当前账号没有管理账号数据范围权限', code:'scope_manage_required' }, 403)
+        }
+        const { data:saved, error:saveError } = await bounded(
+          hasScopeFilters
+            ? admin.rpc('admin_recovery_update_backend_account_v2', {
+                p_actor_user_id:userData.user.id,
+                p_target_user_id:targetAuthUserId,
+                p_employee_id:employeeId,
+                p_role_id:roleId,
+                p_data_scope:dataScope,
+                p_team_ids:teamIds,
+                p_position_ids:positionIds,
+                p_employee_ids:employeeIds,
+              })
+            : admin.rpc('admin_recovery_update_backend_account', {
+                p_actor_user_id:userData.user.id,
+                p_target_user_id:targetAuthUserId,
+                p_employee_id:employeeId,
+                p_role_id:roleId,
+                p_data_scope:dataScope,
+              }),
+          'RECOVERY_BACKEND_ACCOUNT_UPDATE',
+        )
+        if (saveError) {
+          const message = clean(saveError.message)
+          const code = clean(saveError.code).toUpperCase()
+          if (code === 'P0002' || /account_not_found/i.test(message)) {
+            return json(req, { ok:false, error:'后台账号不存在', code:'account_not_found' }, 404)
+          }
+          if (code === '42501' || /permission|protected|not_assignable|not_delegable|scope_manage/i.test(message)) {
+            return json(req, {
+              ok:false,
+              error:/role_not_assignable/i.test(message)
+                ? '只能授予当前账号明确获准管理的下级角色'
+                : '该账号、角色或管理范围不在你可操作的授权边界内',
+              code:/role_not_assignable/i.test(message) ? 'role_not_assignable' : 'permission_or_scope_denied',
+            }, 403)
+          }
+          if (/employee_relink_temporarily_paused/i.test(message)) {
+            return json(req, {
+              ok:false,
+              error:'稳定恢复期间员工关联保持不变；员工换绑待完整目录恢复后处理',
+              code:'employee_relink_temporarily_paused',
+            }, 409)
+          }
+          if (/assigned_scope_boundary_missing/i.test(message)) {
+            return json(req, {
+              ok:false,
+              error:'该账号现有指定范围缺少有效团队边界，已停止保存以避免扩大权限',
+              code:'assigned_scope_boundary_missing',
+            }, 409)
+          }
+          if (/assigned_scope_requires_team|team_filter_not_in_current_roster|position_filter_not_in_selected_current_team|employee_filter_not_in_selected_current_team|assigned_scope_limit_exceeded/i.test(message)) {
+            return json(req, {
+              ok:false,
+              error:'指定范围已不是当前排班组织中的有效团队、岗位或员工，请重新选择',
+              code:'invalid_assigned_scope',
+            }, 400)
+          }
+          if (code === '22023' || /employee_required|invalid_account|role_not_available/i.test(message)) {
+            return json(req, { ok:false, error:'账号角色或管理范围不正确', code:'invalid_account_edit' }, 400)
+          }
+          return retryable(req, '后台账号资料暂时保存失败，请稍后重试')
+        }
+        return json(req, { ok:true, saved })
       }
 
       if (action === 'toggle_active' || action === 'toggle_otp') {
