@@ -120,5 +120,6 @@ export function isTerminalBankRequestSuccess(value: unknown): boolean {
   const body = object(value);
   if (body.ok !== true || body.paused === true || body.error) return false;
   if (body.dry_run === true) return body.write_performed === false;
+  if (body.completed === true && typeof body.write_performed === "boolean") return true;
   return body.write_performed === true;
 }

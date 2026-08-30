@@ -14,6 +14,10 @@ const notesMigration = await readFile(
   new URL('../../supabase/migrations/20260828012000_employee_private_notes.sql', import.meta.url),
   'utf8',
 )
+const notesCompactMigration = await readFile(
+  new URL('../../supabase/migrations/20260829170000_employee_private_note_compact_batch_history.sql', import.meta.url),
+  'utf8',
+)
 const employeePage = await readFile(new URL('../pages/AdminEmployeesPage.jsx', import.meta.url), 'utf8')
 const employeeStyles = await readFile(new URL('../styles-employee-v27.css', import.meta.url), 'utf8')
 const permissions = await readFile(new URL('../config/permissions.js', import.meta.url), 'utf8')
@@ -126,10 +130,14 @@ test('public note audit stores only non-reversible metadata, never a body or bod
   assert.match(notesMigration, /审计不保存正文/g)
 })
 
-test('employee drawer reveals no note tab or request without the dedicated permission', () => {
+test('employee drawer embeds a compact note summary in basic information without a separate tab', () => {
   assert.match(employeePage, /canViewPrivateNotes=adminAccess\.hasAnyPermission\(\[PERMISSIONS\.EMPLOYEE_PRIVATE_NOTE_VIEW,PERMISSIONS\.EMPLOYEE_PRIVATE_NOTE_MANAGE\]\)/)
-  assert.match(employeePage, /\['private_notes','内部备注',canViewPrivateNotes\]/)
-  assert.match(employeePage, /activeSection==='private_notes'&&canViewPrivateNotes&&<EmployeePrivateNotesPanel/)
+  assert.doesNotMatch(employeePage, /\['private_notes','内部备注',canViewPrivateNotes\]/)
+  assert.doesNotMatch(employeePage, /activeSection==='private_notes'/)
+  assert.match(employeePage, /<InfoPanel title="基本资料"[\s\S]+<EmployeePrivateNoteSummary employeeId=\{e\.id\} canManage=\{canManagePrivateNotes\}/)
+  assert.match(employeePage, /employee-private-note-summary-copy/)
+  assert.match(employeeStyles, /-webkit-line-clamp:2/)
+  assert.match(employeePage, /管理备注':'查看备注/)
   assert.match(employeePage, /admin_employee_private_notes/)
   assert.match(employeePage, /admin_employee_private_note_create/)
   assert.match(employeePage, /admin_employee_private_note_update/)
@@ -138,7 +146,56 @@ test('employee drawer reveals no note tab or request without the dedicated permi
   assert.match(employeePage, /const mountedRef=useRef\(true\)/)
   assert.match(employeePage, /requestRef\.current!==requestId\|\|employeeRef\.current!==targetEmployeeId/)
   assert.match(employeePage, /setState\(\{loading:Boolean\(employeeId\),error:'',rows:\[\],total:0\}\)/)
-  assert.match(employeePage, /<EmployeePrivateNotesPanel key=\{e\.id\}/)
+  assert.match(employeePage, /<EmployeePrivateNotesPanel employeeId=\{employeeId\} canManage=\{canManage\}/)
+})
+
+test('private note history stays private, scoped and append-only', () => {
+  const history = functionBody(notesCompactMigration, 'public.admin_employee_private_note_history')
+  assert.match(notesCompactMigration, /employee_private_note_revisions_employee_history_idx/i)
+  assert.match(history, /current_app_session_is_valid\('admin'\)/i)
+  assert.match(history, /employee\.private_note\.(?:view|manage)/i)
+  assert.match(history, /can_manage_employee\(p_employee_id\)/i)
+  assert.match(history, /employee_private\.employee_note_revisions/i)
+  assert.match(notesCompactMigration, /revoke all on function public\.admin_employee_private_note_history[\s\S]+from public,anon,authenticated/i)
+  assert.match(notesCompactMigration, /grant execute on function public\.admin_employee_private_note_history[\s\S]+to authenticated/i)
+  assert.doesNotMatch(notesCompactMigration, /delete from employee_private\./i)
+  assert.match(employeePage, /查看完整修改历史/)
+  assert.match(employeePage, /admin_employee_private_note_history/)
+  assert.match(employeePage, /changed_by_username/)
+  assert.match(employeePage, /function EmployeePrivateNoteHistory\(\{employeeId,refreshToken=0\}\)/)
+  assert.match(employeePage, /\[employeeId,page,refreshToken,retryToken\]/)
+  assert.match(employeePage, /setHistoryRevision\(value=>value\+1\)/)
+  assert.match(employeePage, /<EmployeePrivateNoteHistory employeeId=\{employeeId\} refreshToken=\{historyRevision\}\/>/)
+})
+
+test('batch notes are scope checked, replay safe, append-only and expose partial failures', () => {
+  const batch = functionBody(notesCompactMigration, 'public.admin_employee_private_note_batch_create')
+  assert.match(notesCompactMigration, /employee_private_notes_batch_request_employee_uidx/i)
+  assert.match(batch, /current_app_session_is_valid\('admin'\)/i)
+  assert.match(batch, /has_permission\('employee\.private_note\.manage'\)/i)
+  assert.match(batch, /can_manage_employee\(v_employee\)/i)
+  assert.match(batch, /cardinality\(p_employee_ids\)[\s\S]+between 1 and 50/i)
+  assert.match(batch, /batch_request_key=p_request_key/i)
+  assert.match(batch, /idempotent_replay/i)
+  assert.match(batch, /request_key_payload_conflict/i)
+  assert.match(batch, /v_failures:=v_failures\|\|jsonb_build_array/i)
+  assert.match(batch, /insert into employee_private\.employee_notes/i)
+  assert.match(batch, /insert into employee_private\.employee_note_revisions/i)
+  assert.match(batch, /insert into public\.audit_logs/i)
+  assert.doesNotMatch(batch, /update employee_private\.employee_notes/i)
+  assert.doesNotMatch(batch, /delete from/i)
+  assert.match(employeePage, /admin_employee_private_note_batch_create/)
+  assert.match(employeePage, /失败清单/)
+  assert.match(employeePage, /可使用相同防重编号重试，不会重复新增已成功的备注/)
+  assert.match(employeePage, /不会替换或覆盖任何旧备注/)
+})
+
+test('batch note selection and write controls are hidden without manage permission', () => {
+  assert.match(employeePage, /canManagePrivateNotes=adminAccess\.hasPermission\(PERMISSIONS\.EMPLOYEE_PRIVATE_NOTE_MANAGE\)/)
+  assert.match(employeePage, /canManagePrivateNotes&&selectedPrivateNoteCount>0/)
+  assert.match(employeePage, /canManagePrivateNotes&&<th className="employee-note-select-cell"/)
+  assert.match(employeePage, /canManagePrivateNotes&&<td className="employee-note-select-cell"/)
+  assert.match(employeePage, /selectedPrivateNoteCount>=50/)
 })
 
 test('only the employee detail mask loses backdrop blur', () => {

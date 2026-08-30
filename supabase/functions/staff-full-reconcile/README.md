@@ -20,6 +20,22 @@ schedule, lifecycle, status, team, position, or compensation data.
   storing source rows or secrets. A replay preserves the original read/write
   result; reused request IDs with a different payload fail.
 - Only bank-owned payment fields and the two bank contact mirrors are updated.
+- A database ownership guard quarantines a row as
+  `source_ownership_conflict` when the employee is `现场转居家`, the existing
+  payment profile belongs to a source other than `银行信息`, its payment-mode
+  owner is neither `银行信息` nor `employment_type`, or its contact profile
+  belongs to another source. A conflicting row is not written and does not
+  stop safe rows in the same maximum-eight-row batch.
+- The guard locks only the matched employee/profile rows with `NOWAIT`. A busy
+  admin edit fails fast for retry instead of waiting and consuming a database
+  connection. Conflict-only requests are stored as completed no-write ledger
+  receipts, so Apps Script does not retry intentional quarantines forever.
+- A single-row request whose effective payment/contact values are already
+  identical is completed as `no_changes`: business rows keep their existing
+  `updated_at` values and no duplicate business audit is produced; only the
+  secret-free idempotency receipt is stored. Multi-row batches retain the
+  original ordered core semantics because current and lifecycle IDs can target
+  the same person more than once.
 - Empty incoming payment/contact/address cells preserve existing non-empty
   values; this recovery path has no delete semantics.
 - `export_profile_chunk` and any destructive full-snapshot reconciliation stay

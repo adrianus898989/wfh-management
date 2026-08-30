@@ -89,6 +89,8 @@ test('bank batches are bounded to the Apps Script chunk size', async () => {
 
 test('only completed writes or explicit read-only plans are terminal success', () => {
   assert.equal(isTerminalBankRequestSuccess({ ok: true, write_performed: true }), true)
+  assert.equal(isTerminalBankRequestSuccess({ ok: true, completed: true, write_performed: false }), true)
+  assert.equal(isTerminalBankRequestSuccess({ ok: true, completed: false, write_performed: false }), false)
   assert.equal(isTerminalBankRequestSuccess({ ok: true, dry_run: true, write_performed: false }), true)
   assert.equal(isTerminalBankRequestSuccess({ ok: true, delegated: true, write_performed: false }), false)
   assert.equal(isTerminalBankRequestSuccess({ ok: true, write_performed: true, paused: true }), false)
