@@ -247,7 +247,7 @@ export default function AdminUsersPage() {
       (key === 'roles' && recoveryRoleMode)
     ))
   const canCreateBackend = callerCan('account.create')
-  const canEditBackend = !recoveryAccountMode && callerCan('account.edit')
+  const canEditBackend = (!recoveryAccountMode && callerCan('account.edit')) || recoveryCan('update_backend')
   const canToggleBackend = (!recoveryAccountMode && callerCan('account.disable')) || recoveryCan('toggle_active')
   const canDeleteBackend = !recoveryAccountMode && callerCan('account.delete')
   const canResetBackendPassword = (!recoveryAccountMode && callerCan('account.reset_password')) || recoveryCan('reset_password')
@@ -298,7 +298,11 @@ export default function AdminUsersPage() {
   const creationRoles = callerFounder
     ? editableRoles
     : editableRoles.filter(role => assignableRoleIds.has(role.id))
-  const modalRoles = accountModal?.mode === 'create' ? creationRoles : editableRoles
+  const modalRoles = accountModal?.mode === 'create'
+    ? creationRoles
+    : recoveryAccountMode
+      ? editableRoles.filter(role => assignableRoleIds.has(role.id))
+      : editableRoles
   const normalizedSearch = searchQuery.trim().toLowerCase()
   const matchesSearch = (...values) => !normalizedSearch || values.some(value => String(value || '').toLowerCase().includes(normalizedSearch))
   const normalizedAccessSearch = Object.fromEntries(Object.entries(accessSearchQuery).map(([key, value]) => [key, String(value || '').trim().toLowerCase()]))
@@ -518,15 +522,21 @@ export default function AdminUsersPage() {
           return
         }
       } else {
-        await call({
-          action: 'update_backend',
-          auth_user_id: form.auth_user_id,
-          employee_id: form.employee_id,
-          role_id: form.role_id,
-          data_scope: form.data_scope,
-          team_ids: form.team_ids,
-          position_ids: form.position_ids,
-          employee_ids: form.employee_ids,
+        await call(recoveryAccountMode ? {
+          action:'update_backend',
+          auth_user_id:form.auth_user_id,
+          employee_id:form.employee_id,
+          role_id:form.role_id,
+          data_scope:form.data_scope,
+        } : {
+          action:'update_backend',
+          auth_user_id:form.auth_user_id,
+          employee_id:form.employee_id,
+          role_id:form.role_id,
+          data_scope:form.data_scope,
+          team_ids:form.team_ids,
+          position_ids:form.position_ids,
+          employee_ids:form.employee_ids,
         })
       }
       const operation=mode==='create'?'创建后台账号':'编辑后台账号'
@@ -1065,7 +1075,7 @@ export default function AdminUsersPage() {
               </table></div>
               {recoveryAccountMode && <>
                 <div className="recovery-account-note">
-                  <span><strong>稳定恢复模式</strong>：账号列表支持完整分页；拥有对应权限的账号可操作其可管理角色与范围内的账号。编辑、删除与批量创建继续暂停。</span>
+                  <span><strong>稳定恢复模式</strong>：账号列表支持完整分页；拥有对应权限的账号可编辑其可管理账号的角色与受控范围。员工换绑、删除与批量创建继续暂停。</span>
                 </div>
                 <Pagination
                   page={accountPage}
@@ -1193,11 +1203,11 @@ export default function AdminUsersPage() {
 
             {accountModal.error && <div className="page-error" style={{margin:'0 0 12px'}}>{accountModal.error}</div>}
             <div className="account-session-note"><strong>范围与登录</strong><span>关联员工只提供身份与团队上下文；管理范围选择“全部数据”时不会自动降级为“自己团队”。同一个后台账号同时只保留一个浏览器会话，新设备登录会结束旧设备会话。</span></div>
-            {recoveryAccountMode && <div className="account-session-note"><strong>稳定恢复模式</strong><span>当前一次只创建 1 个账号，并只显示服务端确认可委派的角色与范围；指定团队范围将在完整范围选择器安全恢复后再开放。</span></div>}
+            {recoveryAccountMode && <div className="account-session-note"><strong>稳定恢复模式</strong><span>只显示服务端确认可委派的角色与范围；编辑时员工关联保持不变，现有指定范围可原样保留或切换为允许的简化范围。</span></div>}
             <div className="account-modal-body"><div className="form-grid">
               <label className="form-span">搜索并关联员工档案（可选）
                 <input
-                  disabled={accountModal.mode === 'edit' && !canManageScope}
+                  disabled={accountModal.mode === 'edit' && (recoveryAccountMode || !canManageScope)}
                   placeholder="输入员工 ID 或姓名搜索；也可不关联"
                   value={accountModal.form.employee_search}
                   onChange={e => {
@@ -1211,7 +1221,7 @@ export default function AdminUsersPage() {
                   }}
                 />
               </label>
-              {accountModal.form.employee_id ? <div className="linked-employee"><strong>✓ 已关联：{accountModal.form.employee_search}</strong>{(accountModal.mode !== 'edit' || canManageScope) && <button type="button" onClick={()=>setAccountModal(x=>({...x,error:'',form:{...x.form,employee_id:'',employee_search:'',data_scope:['own_team','self'].includes(x.form.data_scope)?'all':x.form.data_scope}}))}>重新选择</button>}</div> : accountEmployeeQuery && <div className="employee-search-results">
+              {accountModal.form.employee_id ? <div className="linked-employee"><strong>✓ 已关联：{accountModal.form.employee_search}</strong>{(accountModal.mode !== 'edit' || (!recoveryAccountMode && canManageScope)) && <button type="button" onClick={()=>setAccountModal(x=>({...x,error:'',form:{...x.form,employee_id:'',employee_search:'',data_scope:['own_team','self'].includes(x.form.data_scope)?'all':x.form.data_scope}}))}>重新选择</button>}</div> : accountEmployeeQuery && <div className="employee-search-results">
                 {accountEmployeeMatches.map(emp => <button type="button" className="employee-search-option" key={emp.id} onClick={()=>setAccountModal(x=>({...x,error:'',form:{...x.form,employee_id:emp.id,employee_search:`${emp.employee_no} · ${emp.full_name}`}}))}><strong>{emp.employee_no}</strong><small>{emp.full_name}</small><span>{emp.teams?.name||'未分团队'} · {emp.positions?.name||'未分岗位'}</span></button>)}
                 {accountEmployeeMatches.length===0 && <div className="empty-state">没有匹配的员工档案，请检查员工 ID 或姓名。</div>}
               </div>}
@@ -1234,12 +1244,14 @@ export default function AdminUsersPage() {
 
               <label>管理范围
                 <select disabled={accountModal.mode === 'edit' && !canManageScope} value={accountModal.form.data_scope} onChange={e => setAccountModal(x => ({...x, form:{...x.form, data_scope:e.target.value}}))}>
+                  {recoveryAccountMode && accountModal.mode === 'edit' && accountModal.form.data_scope === 'assigned_teams' && <option value="assigned_teams">指定范围（保持现有团队 / 岗位）</option>}
                   {recoverySupportedScopes.has('self') && <option value="self" disabled={!accountModal.form.employee_id}>仅关联员工本人</option>}
                   {recoverySupportedScopes.has('own_team') && <option value="own_team" disabled={!accountModal.form.employee_id}>关联员工所在团队</option>}
                   {recoverySupportedScopes.has('assigned_teams') && <option value="assigned_teams">指定团队 / 岗位 / 指定员工</option>}
                   {recoverySupportedScopes.has('all') && <option value="all">全部数据</option>}
                 </select>
                 {accountModal.mode === 'edit' && !canManageScope && <small>当前账号没有“管理账号数据范围”权限。</small>}
+                {recoveryAccountMode && accountModal.mode === 'edit' && accountModal.form.data_scope === 'assigned_teams' && <small>恢复期间不会接收前端团队明细；保存会在服务端原样保留现有边界。</small>}
               </label>
 
               {accountModal.mode === 'create' && <label>登录 OTP
@@ -1249,7 +1261,7 @@ export default function AdminUsersPage() {
                 </select>
               </label>}
 
-              {accountModal.form.data_scope === 'assigned_teams' && (
+              {accountModal.form.data_scope === 'assigned_teams' && !recoveryAccountMode && (
                 <div className="scope-panel">
                   <div className="scope-current-team-note">
                     <strong>范围计算规则</strong>
