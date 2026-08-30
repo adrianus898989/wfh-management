@@ -40,29 +40,42 @@
   word-break:break-word!important;
 }
 .employee-master-table th{font-size:9px!important;white-space:nowrap!important;}
-.employee-master-table th:nth-child(1){width:4%!important;}
-.employee-master-table th:nth-child(2){width:6%!important;}
-.employee-master-table th:nth-child(3){width:12%!important;}
-.employee-master-table th:nth-child(4){width:4%!important;}
-.employee-master-table th:nth-child(5){width:5%!important;}
-.employee-master-table th:nth-child(6){width:5%!important;}
-.employee-master-table th:nth-child(7){width:5%!important;}
-.employee-master-table th:nth-child(8){width:5%!important;}
-.employee-master-table th:nth-child(9){width:10%!important;}
-.employee-master-table th:nth-child(10){width:7%!important;}
-.employee-master-table th:nth-child(11){width:6%!important;}
-.employee-master-table th:nth-child(12){width:8%!important;}
-.employee-master-table th:nth-child(13){width:8%!important;}
-.employee-master-table th:nth-child(14){width:4%!important;}
-.employee-master-table th:nth-child(15){width:4%!important;}
-.employee-master-table th:nth-child(16){width:6%!important;}
-.employee-master-table td:nth-child(1),
-.employee-master-table td:nth-child(2),
-.employee-master-table td:nth-child(10),
-.employee-master-table td:nth-child(11),
-.employee-master-table td:nth-child(14),
-.employee-master-table td:nth-child(15),
-.employee-master-table td:nth-child(16){white-space:nowrap!important;}
+/* Use field classes instead of positional selectors. The optional note checkbox may
+   appear only for authorized accounts and must never shift the business columns. */
+.employee-master-table .employee-col-level{width:4%!important;}
+.employee-master-table .employee-col-id{width:6%!important;}
+.employee-master-table .employee-col-name{width:13%!important;}
+.employee-master-table .employee-col-country{width:4.5%!important;}
+.employee-master-table .employee-col-team{width:4.5%!important;}
+.employee-master-table .employee-col-trainer{width:4.5%!important;}
+.employee-master-table .employee-col-position{width:4.5%!important;}
+.employee-master-table .employee-col-shift{width:6%!important;}
+.employee-master-table .employee-col-type{width:8.5%!important;}
+.employee-master-table .employee-col-hire-date{width:7%!important;}
+.employee-master-table .employee-col-tenure{width:5%!important;}
+.employee-master-table .employee-col-created{width:7%!important;}
+.employee-master-table .employee-col-operator{width:6%!important;}
+.employee-master-table .employee-col-profile{width:4%!important;}
+.employee-master-table .employee-col-account{width:4%!important;}
+.employee-master-table .employee-col-action{width:7%!important;min-width:104px!important;}
+.employee-master-table .employee-col-id,
+.employee-master-table .employee-col-name,
+.employee-master-table .employee-col-hire-date,
+.employee-master-table .employee-col-tenure,
+.employee-master-table .employee-col-created,
+.employee-master-table .employee-col-operator,
+.employee-master-table .employee-col-profile,
+.employee-master-table .employee-col-account,
+.employee-master-table .employee-col-action{white-space:nowrap!important;}
+.employee-master-table .employee-name-value{
+  display:block!important;
+  max-width:100%!important;
+  overflow:hidden!important;
+  overflow-wrap:normal!important;
+  text-overflow:ellipsis!important;
+  white-space:nowrap!important;
+  word-break:normal!important;
+}
 .employee-master-table .operator-chip{
   display:block!important;
   max-width:100%!important;
@@ -97,15 +110,15 @@
 @media (max-width:1050px){
   .employee-core-search-grid,.v24-advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
   .table-scroll:has(.employee-master-table){overflow-x:auto!important;}
-  .employee-master-table{min-width:980px!important;table-layout:auto!important;}
+  .employee-master-table{min-width:1320px!important;table-layout:fixed!important;}
 }
 
 
 /* V27.11: employee actions stay horizontal; filter actions are a clean bottom row. */
 .archive-filter-actions{display:flex!important;justify-content:flex-end!important;align-items:center!important;gap:8px!important;margin-top:12px!important;padding-top:10px!important;border-top:1px solid #e5ecf4!important;position:static!important}
 .employee-master-table .row-actions{display:flex!important;flex-wrap:nowrap!important;align-items:center!important;gap:5px!important}
-.employee-master-table th:last-child,.employee-master-table td:last-child{width:112px!important;min-width:112px!important;white-space:nowrap!important}
-.employee-master-table .row-actions .table-action{white-space:nowrap!important;padding-left:9px!important;padding-right:9px!important}
+.employee-master-table .employee-col-action{white-space:nowrap!important}
+.employee-master-table .row-actions .table-action{white-space:nowrap!important;padding-left:7px!important;padding-right:7px!important}
 
 /* Error table: semantic widths; stale hidden columns cannot shift after the risk column is inserted. */
 .rp-errors-table{width:100%!important;min-width:1220px!important;table-layout:fixed!important}

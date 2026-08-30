@@ -2020,17 +2020,17 @@ export default function AdminEmployeesPage(){
       <div className="data-card">
         {loading&&rows.length===0?<div className="empty-state">读取中...</div>:rows.length===0?<div className="empty-state">暂无符合条件的员工</div>:<div className="table-scroll">
           <table className="data-table employee-master-table">
-            <thead><tr>{canManagePrivateNotes&&<th className="employee-note-select-cell"><input type="checkbox" aria-label="选择当前页员工用于批量备注" checked={rows.length>0&&rows.every(row=>Boolean(privateNoteSelection[row.id]))} onChange={event=>togglePrivateNotePage(event.target.checked)}/></th>}<th>等级</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>老师</th><th>岗位</th><th>班次</th><th>员工类型</th><th>入职日期</th><th>入职时长</th><th>录入时间</th><th>操作人账号</th><th>资料</th><th>账号</th><th>操作</th></tr></thead>
+            <thead><tr>{canManagePrivateNotes&&<th className="employee-note-select-cell"><input type="checkbox" aria-label="选择当前页员工用于批量备注" checked={rows.length>0&&rows.every(row=>Boolean(privateNoteSelection[row.id]))} onChange={event=>togglePrivateNotePage(event.target.checked)}/></th>}<th className="employee-col-level">等级</th><th className="employee-col-id">员工ID</th><th className="employee-col-name">姓名</th><th className="employee-col-country">员工国家</th><th className="employee-col-team">团队</th><th className="employee-col-trainer">老师</th><th className="employee-col-position">岗位</th><th className="employee-col-shift">班次</th><th className="employee-col-type">员工类型</th><th className="employee-col-hire-date">入职日期</th><th className="employee-col-tenure">入职时长</th><th className="employee-col-created">录入时间</th><th className="employee-col-operator">操作人账号</th><th className="employee-col-profile">资料</th><th className="employee-col-account">账号</th><th className="employee-col-action">操作</th></tr></thead>
             <tbody>{rows.map(r=>{
               const risk=employeeRiskMeta(r)
               const portalAccount=employeePortalAccountPresentation(r)
               return <tr key={r.id}>
                 {canManagePrivateNotes&&<td className="employee-note-select-cell"><input type="checkbox" aria-label={`选择 ${r.employee_no} ${r.full_name} 用于批量备注`} checked={Boolean(privateNoteSelection[r.id])} disabled={!privateNoteSelection[r.id]&&selectedPrivateNoteCount>=50} onChange={()=>togglePrivateNoteEmployee(r)}/></td>}
-                <td>{risk?<span className={`employee-risk-badge ${risk.className}`} data-admin-i18n-skip title={locale==='en'?`Total errors: ${Number(r.total_error_count||0)}`:`累计错误 ${Number(r.total_error_count||0)} 笔`}>{risk[locale]||risk.zh}</span>:'—'}</td>
-                <td><strong>{r.employee_no}</strong></td><td>{r.full_name}</td><td>{r.country||r.nationality||'-'}</td><td>{r.teams?.name||'-'}</td><td>{r.online_trainer||r.trainer_name||'-'}</td><td>{r.positions?.name||'-'}</td><td>{r.shift_name||'-'}</td><td>{typeName(r.employment_type)}</td><td className="employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td>{formatDateTime(r.created_at)}</td><td><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
-                <td>{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
-                <td><span className={portalAccount.className}>{portalAccount.label}</span></td>
-                <td><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{portalAccount.canGenerateActivationCode&&(meta.actions?.can_generate_activation_code||canGenerateActivationCode)&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
+                <td className="employee-col-level">{risk?<span className={`employee-risk-badge ${risk.className}`} data-admin-i18n-skip title={locale==='en'?`Total errors: ${Number(r.total_error_count||0)}`:`累计错误 ${Number(r.total_error_count||0)} 笔`}>{risk[locale]||risk.zh}</span>:'—'}</td>
+                <td className="employee-col-id"><strong>{r.employee_no}</strong></td><td className="employee-col-name"><span className="employee-name-value" title={r.full_name}>{r.full_name}</span></td><td className="employee-col-country">{r.country||r.nationality||'-'}</td><td className="employee-col-team">{r.teams?.name||'-'}</td><td className="employee-col-trainer">{r.online_trainer||r.trainer_name||'-'}</td><td className="employee-col-position">{r.positions?.name||'-'}</td><td className="employee-col-shift">{r.shift_name||'-'}</td><td className="employee-col-type">{typeName(r.employment_type)}</td><td className="employee-col-hire-date employee-hire-date-cell">{text(r.hire_date).slice(0,10)||'-'}</td><td className="employee-col-tenure"><strong>{tenureCompactLabel(r.hire_date,r.resign_date,r.status)}</strong></td><td className="employee-col-created">{formatDateTime(r.created_at)}</td><td className="employee-col-operator"><span className="operator-chip">{operatorDisplay(r.operator_account)}</span></td>
+                <td className="employee-col-profile">{r.missing_count>0?<span className="missing-chip">待完善 {r.missing_count}</span>:<span className="profile-chip">完整</span>}</td>
+                <td className="employee-col-account"><span className={portalAccount.className}>{portalAccount.label}</span></td>
+                <td className="employee-col-action"><div className="row-actions"><button className="table-action" onClick={()=>openDetail(r)}>查看</button>{portalAccount.canGenerateActivationCode&&(meta.actions?.can_generate_activation_code||canGenerateActivationCode)&&<button className="table-action" disabled={activationLoading===text(r.employee_no)} onClick={()=>generateCode(r.employee_no)}>{activationLoading===text(r.employee_no)?'获取中…':'激活码'}</button>}</div></td>
               </tr>
             })}</tbody>
           </table>
@@ -2520,7 +2520,7 @@ const privateNoteRequestKey=()=>globalThis.crypto?.randomUUID?.()||'xxxxxxxx-xxx
 function privateNoteError(error){
   const message=text(error?.message||error)
   if(message.includes('private_note_version_conflict'))return '备注已被其他人修改，请刷新后再编辑。'
-  if(message.includes('private_note_archived'))return '这条备注已经归档，请刷新列表。'
+  if(message.includes('private_note_archived'))return '这条备注已经删除，请刷新列表。'
   if(message.includes('employee_out_of_scope'))return '该员工不在当前账号的管理范围内。'
   if(message.includes('permission_denied'))return '当前账号没有内部备注操作权限。'
   if(message.includes('invalid_private_note_category'))return '备注分类无效，请重新选择。'
@@ -2610,8 +2610,8 @@ function EmployeePrivateNotesPanel({employeeId,canManage,onChanged}){
     await load({announceFailure:true,operation:`刷新${operation}结果`})
     onChanged?.()
   }
-  const archive=async note=>{
-    if(!window.confirm('确定归档这条内部备注？记录及修订历史会保留，不会删除。'))return
+  const remove=async note=>{
+    if(!window.confirm('确定删除这条内部备注？删除后不再显示，操作记录和修改历史仍会保留。'))return
     const targetEmployeeId=employeeId
     setSaving(true);setMessage('')
     const {error}=await supabase.rpc('admin_employee_private_note_archive',{p_note_id:note.id,p_expected_version:Number(note.version||0)})
@@ -2621,17 +2621,17 @@ function EmployeePrivateNotesPanel({employeeId,canManage,onChanged}){
       const message=privateNoteError(error)
       setMessage(message)
       notify({
-        type:'error',module:EMPLOYEE_TOAST_MODULE,operation:'归档内部备注',reason:message,
-        dedupeKey:employeeToastDedupeKey('归档内部备注','error',targetEmployeeId),
+        type:'error',module:EMPLOYEE_TOAST_MODULE,operation:'删除内部备注',reason:message,
+        dedupeKey:employeeToastDedupeKey('删除内部备注','error',targetEmployeeId),
         retry:()=>load({announceFailure:true,operation:'刷新内部备注确认'}),retryLabel:'刷新确认',
       })
       return
     }
     if(form?.id===note.id)setForm(null)
-    const successMessage='备注已归档，历史审计仍保留。'
+    const successMessage='备注已删除，操作记录和修改历史仍保留。'
     setMessage(successMessage)
-    notify({type:'success',module:EMPLOYEE_TOAST_MODULE,operation:'归档内部备注',reason:successMessage,dedupeKey:employeeToastDedupeKey('归档内部备注','success',targetEmployeeId)})
-    await load({announceFailure:true,operation:'刷新归档内部备注结果'})
+    notify({type:'success',module:EMPLOYEE_TOAST_MODULE,operation:'删除内部备注',reason:successMessage,dedupeKey:employeeToastDedupeKey('删除内部备注','success',targetEmployeeId)})
+    await load({announceFailure:true,operation:'刷新删除内部备注结果'})
     onChanged?.()
   }
   return <section className="detail-panel employee-private-notes-panel">
@@ -2643,7 +2643,7 @@ function EmployeePrivateNotesPanel({employeeId,canManage,onChanged}){
       <footer><span>{text(form.note_text).length} / 2000</span><div><button type="button" disabled={saving} onClick={()=>setForm(null)}>取消</button><button className="primary-action" type="submit" disabled={saving}>{saving?'保存中…':form.id?'保存修改':'保存备注'}</button></div></footer>
     </form>}
     {state.loading?<div className="employee-section-placeholder"><p>正在读取内部备注…</p></div>:state.error?<div className="employee-section-placeholder"><p>{state.error}</p><button type="button" onClick={()=>load({announceFailure:true})}>重新读取</button></div>:state.rows.length?<div className="employee-private-note-list">{state.rows.map(note=><article key={note.id}>
-      <header><div><b>{PRIVATE_NOTE_CATEGORIES[note.category]||'其他'}</b>{note.incident_date&&<time>事件日期 · {text(note.incident_date).slice(0,10)}</time>}</div>{canManage&&<div><button type="button" disabled={saving} onClick={()=>startEdit(note)}>编辑</button><button type="button" className="danger-outline" disabled={saving} onClick={()=>archive(note)}>归档</button></div>}</header>
+      <header><div><b>{PRIVATE_NOTE_CATEGORIES[note.category]||'其他'}</b>{note.incident_date&&<time>事件日期 · {text(note.incident_date).slice(0,10)}</time>}</div>{canManage&&<div><button type="button" disabled={saving} onClick={()=>startEdit(note)}>编辑</button><button type="button" className="danger-outline" disabled={saving} onClick={()=>remove(note)}>删除</button></div>}</header>
       <p>{note.note_text}</p>
       <footer><span>创建：{note.created_by_username||'后台账号'} · {formatDateTime(note.created_at)}</span><span>更新：{note.updated_by_username||'后台账号'} · {formatDateTime(note.updated_at)} · v{note.version}</span></footer>
     </article>)}</div>:<div className="employee-section-placeholder"><p>暂无内部备注。</p>{canManage&&<button type="button" onClick={startCreate}>新增第一条备注</button>}</div>}
@@ -2664,11 +2664,11 @@ function EmployeePrivateNoteHistory({employeeId,refreshToken=0}){
     })
     return()=>{alive=false}
   },[employeeId,page,refreshToken,retryToken])
-  const actionLabel={create:'新增',update:'修改',archive:'归档'}
+  const actionLabel={create:'新增',update:'修改',archive:'删除'}
   return <section className="employee-private-note-history">
-    <div className="employee-private-note-history-head"><div><h4>完整修改历史</h4><p>每次新增、修改及归档都会独立保留。</p></div><span>{state.total} 条</span></div>
+    <div className="employee-private-note-history-head"><div><h4>完整修改历史</h4><p>每次新增、修改及删除都会独立保留。</p></div><span>{state.total} 条</span></div>
     {state.loading?<div className="employee-section-placeholder"><p>正在读取修改历史…</p></div>:state.error?<div className="employee-section-placeholder"><p>{state.error}</p><button type="button" onClick={()=>setRetryToken(value=>value+1)}>重新读取</button></div>:state.rows.length?<div className="employee-private-note-history-list">{state.rows.map(row=><article key={row.id}>
-      <header><div><b>{actionLabel[row.action]||row.action}</b><span>{PRIVATE_NOTE_CATEGORIES[row.category]||'其他'} · v{row.version}</span>{row.archived&&<em>已归档</em>}</div><time>{row.changed_by_username||'后台账号'} · {formatDateTime(row.changed_at)}</time></header>
+      <header><div><b>{actionLabel[row.action]||row.action}</b><span>{PRIVATE_NOTE_CATEGORIES[row.category]||'其他'} · v{row.version}</span>{row.archived&&<em>已删除</em>}</div><time>{row.changed_by_username||'后台账号'} · {formatDateTime(row.changed_at)}</time></header>
       <p>{row.note_text}</p>
       {row.incident_date&&<footer>事件日期 · {text(row.incident_date).slice(0,10)}</footer>}
     </article>)}</div>:<div className="employee-section-placeholder"><p>暂无修改历史。</p></div>}
@@ -2684,7 +2684,7 @@ function EmployeePrivateNotesDialog({employeeId,canManage,onClose,onChanged}){
     onChanged?.()
   }
   return <div className="modal-mask employee-action-modal-mask employee-private-note-dialog-mask" onMouseDown={onClose}><div className="modal-card employee-private-note-dialog" onMouseDown={event=>event.stopPropagation()}>
-    <div className="modal-head"><div><span className="modal-kicker">INTERNAL NOTES</span><h2>管理内部备注</h2><p>仅授权后台账号可见；所有修改均保留操作账号、时间和版本。</p></div><button type="button" onClick={onClose}>×</button></div>
+    <div className="modal-head"><div><span className="modal-kicker">INTERNAL NOTES</span><h2>管理内部备注</h2></div><button type="button" onClick={onClose}>×</button></div>
     <div className="employee-private-note-dialog-body">
       <EmployeePrivateNotesPanel employeeId={employeeId} canManage={canManage} onChanged={handleNotesChanged}/>
       <button type="button" className="employee-private-note-history-toggle" onClick={()=>setShowHistory(value=>!value)}>{showHistory?'收起完整修改历史':'查看完整修改历史'}</button>

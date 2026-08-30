@@ -53,7 +53,7 @@ test('员工档案原生表头与数据行列数一致，等级只渲染一次',
 
   assert.ok(headerCount > 0)
   assert.equal(headerCount, rowCount)
-  assert.equal((headerSource.match(/<th>等级<\/th>/g) || []).length, 1)
+  assert.equal((headerSource.match(/<th\b[^>]*>等级<\/th>/g) || []).length, 1)
   assert.equal((rowSource.match(/employee-risk-badge/g) || []).length, 1)
   assert.match(pageSource, /normal:\{zh:'正常',en:'Normal'/)
   assert.match(rowSource, /data-admin-i18n-skip/)

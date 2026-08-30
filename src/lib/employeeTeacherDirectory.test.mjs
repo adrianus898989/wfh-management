@@ -8,7 +8,7 @@ test('employee directory uses the current online training teacher instead of the
   const writeEdge = await readFile(new URL('../../supabase/functions/admin-employee-write/index.ts', import.meta.url), 'utf8')
   const migration = await readFile(new URL('../../supabase/migrations/20260827152000_backend_scope_position_intersection.sql', import.meta.url), 'utf8')
 
-  assert.match(page, /<th>老师<\/th>/)
+  assert.match(page, /<th\b[^>]*>老师<\/th>/)
   assert.match(page, /r\.online_trainer\|\|r\.trainer_name\|\|'-'/)
   assert.match(page, /filters\.teacher/)
   assert.match(page, /meta\.options\?\.trainers/)
