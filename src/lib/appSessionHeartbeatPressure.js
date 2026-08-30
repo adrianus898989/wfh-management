@@ -1,4 +1,5 @@
-export const APP_HEARTBEAT_CROSS_TAB_WINDOW_MS = 45 * 1000
+export const APP_HEARTBEAT_CROSS_TAB_WINDOW_MS = 100 * 1000
+export const APP_SESSION_WAKE_FRESHNESS_MS = 90 * 1000
 
 const memoryHeartbeatAt = new Map()
 
@@ -20,13 +21,63 @@ const writeLastDispatch = (storage, key, value) => {
   try { storage?.setItem(key, String(value)) } catch (_) { /* memory fallback */ }
 }
 
+const verificationStampKey = portal =>
+  `wfh_${portal === 'admin' ? 'admin' : 'staff'}_session_verified_at`
+
+/** Record only a completed server verification, never a request dispatch. */
+export const markAppSessionVerified = ({
+  portal,
+  at = Date.now(),
+  storage = typeof window === 'undefined' ? null : window.localStorage,
+} = {}) => {
+  const key = verificationStampKey(portal)
+  const stamp = Number(at)
+  if (!Number.isFinite(stamp) || stamp <= 0) return
+  writeLastDispatch(storage, key, stamp)
+}
+
+/**
+ * Focus and visibility can fire together, and every open tab receives them.
+ * A recent completed claim/heartbeat is enough to keep the current verified
+ * view; the next normal heartbeat still renews the five-minute server lease.
+ */
+export const appSessionVerificationIsFresh = ({
+  portal,
+  at = Date.now(),
+  maxAge = APP_SESSION_WAKE_FRESHNESS_MS,
+  storage = typeof window === 'undefined' ? null : window.localStorage,
+} = {}) => {
+  const current = Number(at)
+  const last = readLastDispatch(storage, verificationStampKey(portal))
+  const age = current - last
+  return last > 0 && Number.isFinite(age) && age >= 0 && age < maxAge
+}
+
+/** Serialize slow focus/visibility revalidation across same-portal tabs. */
+export const runCoalescedAppSessionWake = ({
+  portal,
+  isFresh,
+  run,
+  locks = typeof navigator === 'undefined' ? null : navigator.locks,
+} = {}) => {
+  if (typeof isFresh !== 'function' || typeof run !== 'function') {
+    throw new TypeError('wake freshness and runner are required')
+  }
+  const safePortal = portal === 'admin' ? 'admin' : 'staff'
+  const verify = () => isFresh() ? coalescedHeartbeatResult() : run()
+  if (locks?.request) {
+    return locks.request(`wfh:${safePortal}:app-session-wake`, { mode:'exclusive' }, verify)
+  }
+  return verify()
+}
+
 /**
  * Coalesce the same portal heartbeat across tabs on one browser/origin.
  *
  * A successful claim is still performed by every newly authenticated app
  * shell. Only the recurring heartbeat is shared. The server lease lasts five
- * minutes, so a 45-second browser-local window removes duplicate tab traffic
- * without weakening live revocation or changing the one-minute server cadence.
+ * minutes, so a 100-second browser-local window removes duplicate tab traffic
+ * while the active-tab heartbeat still runs every two minutes.
  */
 export const runCoalescedAppHeartbeat = async ({
   portal,

@@ -10,6 +10,7 @@ const training = await readFile(new URL('../../supabase/migrations/2026082711320
 const adjustmentAlignment = await readFile(new URL('../../supabase/migrations/20260827113300_adjustment_edit_permission_alignment.sql', import.meta.url), 'utf8')
 const adjustmentFilters = await readFile(new URL('../../supabase/migrations/20260829041328_preserve_admin_adjustment_currency_filter.sql', import.meta.url), 'utf8')
 const adjustmentVisibility = await readFile(new URL('../../supabase/migrations/20260829110546_split_adjustment_visibility_permissions.sql', import.meta.url), 'utf8')
+const adjustmentCategoryClosure = await readFile(new URL('../../supabase/migrations/20260830062228_close_adjustment_category_permissions.sql', import.meta.url), 'utf8')
 const accounts = await readFile(new URL('../../supabase/functions/admin-accounts/index.ts', import.meta.url), 'utf8')
 const employees = await readFile(new URL('../../supabase/functions/admin-employees/index.ts', import.meta.url), 'utf8')
 const employeeWrite = await readFile(new URL('../../supabase/functions/admin-employee-write/index.ts', import.meta.url), 'utf8')
@@ -259,6 +260,39 @@ test('bonus and deduction rows are filtered by both private server readers befor
   assert.match(adjustmentVisibility, /revoke all on function attendance_private\.admin_attendance_home\(jsonb\)[\s\S]+from public,anon,authenticated,service_role/)
   assert.match(adjustmentVisibility, /revoke all on function attendance_private\.admin_employee_adjustment_history\(uuid,integer,integer\)[\s\S]+from public,anon,authenticated,service_role/)
   assert.doesNotMatch(adjustmentVisibility, /jsonb_array_elements\([^\n]+rows/)
+})
+
+test('adjustment audit and mutations close the category permission boundary before writes', () => {
+  const logs = adjustmentCategoryClosure.slice(
+    adjustmentCategoryClosure.indexOf('create or replace function public.admin_data_entry_logs'),
+    adjustmentCategoryClosure.indexOf('create or replace function public.admin_adjustment_editor_options'),
+  )
+  const editor = adjustmentCategoryClosure.slice(
+    adjustmentCategoryClosure.indexOf('create or replace function public.admin_adjustment_editor_options'),
+    adjustmentCategoryClosure.indexOf('create or replace function public.admin_adjustment_upsert'),
+  )
+  const upsert = adjustmentCategoryClosure.slice(
+    adjustmentCategoryClosure.indexOf('create or replace function public.admin_adjustment_upsert'),
+    adjustmentCategoryClosure.indexOf('revoke all on function public.admin_adjustment_editor_options'),
+  )
+
+  assert.match(logs, /adjustment\.bonus\.view[\s\S]+adjustment\.deduction\.view/)
+  assert.match(logs, /scoped as \([\s\S]+adjustment_visibility_kind\([\s\S]+filtered as materialized/)
+  assert.ok(logs.indexOf('adjustment_visibility_kind(') < logs.indexOf('filtered as materialized'))
+
+  assert.match(editor, /adjustment\.page\.create[\s\S]+adjustment\.page\.edit/)
+  assert.match(editor, /adjustment\.bonus\.view[\s\S]+adjustment\.deduction\.view/)
+
+  assert.match(upsert, /v_target_kind[\s\S]+adjustment\.bonus\.view[\s\S]+adjustment\.deduction\.view/)
+  assert.match(upsert, /select attendance_private\.adjustment_visibility_kind\([\s\S]+v_current_kind='unclassified'/)
+  assert.match(upsert, /v_current_kind is null[\s\S]+not \(v_can_bonus and v_can_deduction\)[\s\S]+permission_denied/)
+  assert.equal((upsert.match(/admin_adjustment_upsert_page_v1\(p_payload\)/g) ?? []).length, 1)
+  assert.doesNotMatch(upsert, /\binsert\s+into\b|\bupdate\s+public\.|\bdelete\s+from\b/i)
+  assert.ok(upsert.indexOf("v_current_kind='unclassified'") < upsert.indexOf('admin_adjustment_upsert_page_v1(p_payload)'))
+
+  assert.match(attendancePage, /canCreateAdjustment=access\.hasPermission\(PERMISSIONS\.ADJUSTMENT_PAGE_CREATE\)&&\(canViewAdjustmentBonus\|\|canViewAdjustmentDeduction\)/)
+  assert.match(attendancePage, /AdjustmentEditorModal record=\{adjustmentEditor\.row\} canViewBonus=\{canViewAdjustmentBonus\} canViewDeduction=\{canViewAdjustmentDeduction\}/)
+  assert.match(attendancePage, /numericAmount>0&&!canViewBonus[\s\S]+numericAmount<0&&!canViewDeduction/)
 })
 
 test('account overview payloads omit sensitive employee contact fields', () => {

@@ -43,6 +43,11 @@ import {
   currentAppReleaseIsRegistered,
   fetchPublishedAppReleaseId,
 } from './lib/releaseSession'
+import {
+  appSessionVerificationIsFresh,
+  markAppSessionVerified,
+  runCoalescedAppSessionWake,
+} from './lib/appSessionHeartbeatPressure'
 
 const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 6
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
@@ -248,6 +253,9 @@ function Protected({ children, mode }) {
         return false
       }
       leaseOwned = leaseEligible
+      // A coalesced heartbeat means another tab owns the in-flight request.
+      // Only the tab that received a real server decision publishes freshness.
+      if (!result.data.coalesced) markAppSessionVerified({ portal:mode })
       return true
     }
     const scheduleVerificationRetry = () => {
@@ -380,11 +388,16 @@ function Protected({ children, mode }) {
       return bootstrapPromise
     }
     bootstrap()
-    const scheduleBootstrap = () => {
+    const sessionVerificationIsFresh = () =>
+      leaseEligible && leaseOwned && appSessionVerificationIsFresh({ portal:mode })
+    const scheduleBootstrap = ({ skipIfFresh = false } = {}) => {
       window.clearTimeout(bootstrapTimer)
       // Avoid awaiting Supabase calls inside its auth callback. Re-run the full
       // access check on the next task so stale permissions never stay visible.
-      bootstrapTimer = window.setTimeout(() => { bootstrap() }, 0)
+      bootstrapTimer = window.setTimeout(() => {
+        if (skipIfFresh && sessionVerificationIsFresh()) return
+        bootstrap()
+      }, 0)
     }
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (!alive) return
@@ -395,13 +408,29 @@ function Protected({ children, mode }) {
         setState({ loading:false, session:null, access:null, aal:null, error:'' })
       } else if (session) {
         if (event === 'SIGNED_IN') touchSessionActivity(true)
-        scheduleBootstrap()
+        // TOKEN_REFRESHED is normal Supabase maintenance. Re-running access +
+        // IP claim for every rotation multiplies Edge/Auth load across tabs;
+        // retain the freshly rotated token and let the two-minute heartbeat
+        // renew the existing five-minute lease. Actual login/initial-session
+        // events still bootstrap when this shell has not been verified.
+        if (event === 'TOKEN_REFRESHED') {
+          setState(current => current.access ? ({ ...current, session }) : current)
+          return
+        }
+        scheduleBootstrap({
+          skipIfFresh:event === 'INITIAL_SESSION' || event === 'SIGNED_IN',
+        })
       }
     })
     authSubscription = data.subscription
-    const recover = (force = false) => {
+    const recover = ({ skipIfFresh = false } = {}) => {
       if (document.hidden || !navigator.onLine) return
-      return bootstrap(force)
+      if (!skipIfFresh) return bootstrap()
+      return runCoalescedAppSessionWake({
+        portal:mode,
+        isFresh:sessionVerificationIsFresh,
+        run:bootstrap,
+      })
     }
     const heartbeat = async () => {
       if (!alive || !leaseEligible || !leaseOwned || !navigator.onLine) return
@@ -413,9 +442,9 @@ function Protected({ children, mode }) {
         await markVerificationFailure(sessionCheckMessage)
       }
     }
-    const onVisible = () => { if (!document.hidden) recover() }
+    const onVisible = () => { if (!document.hidden) recover({ skipIfFresh:true }) }
     const onOnline = () => recover()
-    const onFocus = () => recover()
+    const onFocus = () => recover({ skipIfFresh:true })
     const onActivity = () => touchSessionActivity()
     // Edge responses can arrive after a token refresh or a new login.  Never
     // let one late response destroy the newer valid browser session.  Re-read

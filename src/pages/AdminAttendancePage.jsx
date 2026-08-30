@@ -244,7 +244,7 @@ export default function AdminAttendancePage(){
   const sectionTitle=pageChrome.active.sectionLabel||'排班与考勤'
   const pageTitle=pageChrome.active.itemLabel||tab
   const canViewEmployeeDirectory=access.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)
-  const canCreateAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_CREATE)
+  const canCreateAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_CREATE)&&(canViewAdjustmentBonus||canViewAdjustmentDeduction)
   const canEditAdjustment=access.hasPermission(PERMISSIONS.ADJUSTMENT_PAGE_EDIT)
 
   return <div className="content-page attendance-page">
@@ -277,7 +277,7 @@ export default function AdminAttendancePage(){
     </>}
 
     {recordDetail&&<AttendanceRecordModal row={recordDetail} adjustment={tabScope(tab)==='adjustment'} onClose={()=>setRecordDetail(null)}/>}
-    {adjustmentEditor&&<AdjustmentEditorModal record={adjustmentEditor.row} onClose={()=>setAdjustmentEditor(null)} onSaved={revealSavedAdjustment} onRefreshConfirm={()=>refreshMainList('刷新奖金 / 扣款结果')}/>}
+    {adjustmentEditor&&<AdjustmentEditorModal record={adjustmentEditor.row} canViewBonus={canViewAdjustmentBonus} canViewDeduction={canViewAdjustmentDeduction} onClose={()=>setAdjustmentEditor(null)} onSaved={revealSavedAdjustment} onRefreshConfirm={()=>refreshMainList('刷新奖金 / 扣款结果')}/>}
     {employeeDetail&&<EmployeeDrawer detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>{employeeRequest.current+=1;setEmployeeDetail(null);setEmployeeDetailLoading(false)}}/>}
   </div>
 }
@@ -364,7 +364,7 @@ function AttendanceRecordModal({row,adjustment,onClose}){
   </div></div>
 }
 
-function AdjustmentEditorModal({record,onClose,onSaved,onRefreshConfirm}){
+function AdjustmentEditorModal({record,canViewBonus=false,canViewDeduction=false,onClose,onSaved,onRefreshConfirm}){
   const {notify}=useAppToast()
   const editing=Boolean(record)
   const raw=adjustmentRaw(record)
@@ -415,9 +415,22 @@ function AdjustmentEditorModal({record,onClose,onSaved,onRefreshConfirm}){
   ]
   const months=(state.options.months||[]).length?state.options.months:['2026-09','2026-10','2026-11','2026-12']
   const monthEnd=['09','11'].includes(draft.source_month.slice(5,7))?'30':'31'
+  const amountMin=canViewBonus&&!canViewDeduction?'0.01':'-100000000'
+  const amountMax=canViewDeduction&&!canViewBonus?'-0.01':'100000000'
+  const amountRule=canViewBonus&&canViewDeduction
+    ?'正数 = 奖金，负数 = 扣除；币种由所选工作簿固定，不能手动混用。'
+    :canViewBonus
+      ?'当前权限只可录入或编辑奖金，金额必须为正数。'
+      :'当前权限只可录入或编辑扣款，金额必须为负数。'
 
   const submit=async event=>{
     event.preventDefault()
+    const numericAmount=Number(draft.amount)
+    if((numericAmount>0&&!canViewBonus)||(numericAmount<0&&!canViewDeduction)){
+      const reason=canViewBonus?'当前账号只有奖金权限，不能保存扣款。':'当前账号只有扣款权限，不能保存奖金。'
+      setState(current=>({...current,saving:false,error:`保存失败：${reason}`}))
+      return
+    }
     setState(current=>({...current,saving:true,error:''}))
     const currentRevision=Number(record?.sync_revision)||Number(raw.revision)||0
     const payload={
@@ -451,7 +464,7 @@ function AdjustmentEditorModal({record,onClose,onSaved,onRefreshConfirm}){
 
   return <div className="modal-mask attendance-main-modal-mask" onMouseDown={state.saving?undefined:onClose}><form className="attendance-main-modal adjustment-editor-modal" role="dialog" aria-modal="true" aria-labelledby="adjustment-editor-title" onMouseDown={event=>event.stopPropagation()} onSubmit={submit}>
     <header><div><small>ADJUSTMENT EDITOR</small><h2 id="adjustment-editor-title">{editing?'编辑奖金 / 扣款':'新增奖金 / 扣款'}</h2><p>先保存 Supabase，再由每分钟同步任务写入指定 Google 月份区块。</p></div><button type="button" aria-label="关闭" disabled={state.saving} onClick={onClose}>×</button></header>
-    <div className="adjustment-editor-callout"><b>金额正负规则</b><span>正数 = 奖金，负数 = 扣除；币种由所选工作簿固定，不能手动混用。</span></div>
+    <div className="adjustment-editor-callout"><b>金额与权限规则</b><span>{amountRule}</span></div>
     {state.error&&<div className="attendance-error adjustment-editor-error" role="alert"><span>{state.error}</span></div>}
     <div className="adjustment-editor-grid">
       <label><span>来源工作簿 / 范围 <em>必填</em></span><select value={draft.workbook_key} disabled={editing||state.loading||state.saving} onChange={event=>update('workbook_key',event.target.value)}>{workbooks.map(item=><option value={item.key} key={item.key}>{item.label}</option>)}</select>{editing&&<small>编辑时不可移动到另一份表</small>}</label>
@@ -459,7 +472,7 @@ function AdjustmentEditorModal({record,onClose,onSaved,onRefreshConfirm}){
       <label><span>员工 ID <em>必填</em></span><input list="adjustment-employee-options" value={draft.employee_no} disabled={state.saving} onChange={event=>update('employee_no',event.target.value)} placeholder="输入或选择员工 ID" required/><datalist id="adjustment-employee-options">{employees.map(employee=><option value={employee.employee_no} key={employee.id}>{employee.full_name} · {employee.team_name||'未分团队'}</option>)}</datalist><small>{selectedEmployee?`${selectedEmployee.full_name} · ${selectedEmployee.position_name||'未设岗位'}`:'保存时会再次核对员工与管理范围'}</small></label>
       <label><span>日期 <em>必填</em></span><input type="date" min={`${draft.source_month}-01`} max={`${draft.source_month}-${monthEnd}`} value={draft.event_date} disabled={state.saving} onChange={event=>update('event_date',event.target.value)} required/></label>
       <label><span>币种 <em>固定</em></span><input value={draft.currency} readOnly aria-readonly="true"/></label>
-      <label><span>金额 <em>必填</em></span><input type="number" step="0.01" min="-100000000" max="100000000" value={draft.amount} disabled={state.saving} onChange={event=>update('amount',event.target.value)} placeholder="例如 50 或 -20" required/><small>{Number(draft.amount)>0?'将记录为奖金':Number(draft.amount)<0?'将记录为扣除':'不能填写 0'}</small></label>
+      <label><span>金额 <em>必填</em></span><input type="number" step="0.01" min={amountMin} max={amountMax} value={draft.amount} disabled={state.saving} onChange={event=>update('amount',event.target.value)} placeholder={canViewBonus&&canViewDeduction?'例如 50 或 -20':canViewBonus?'例如 50':'例如 -20'} required/><small>{Number(draft.amount)>0?'将记录为奖金':Number(draft.amount)<0?'将记录为扣除':'不能填写 0'}</small></label>
       <label><span>类型 <em>必填</em></span><input maxLength="200" value={draft.category} disabled={state.saving} onChange={event=>update('category',event.target.value)} placeholder="例如：迟到 / 超时、质量奖励" required/><small>{draft.workbook_key==='home_ph'?'保存到菲律宾九列表的“类型”列；日期仍按上下半月区块同步':'保存到 Google 表格的“类型”列，也可在后台搜索'}</small></label>
       <label className="adjustment-editor-note"><span>原因 <em>必填</em></span><textarea rows="4" maxLength="4000" value={draft.note} disabled={state.saving} onChange={event=>update('note',event.target.value)} placeholder="说明奖金或扣除原因" required/><small>保存到 Google 表格的“备注”列</small></label>
     </div>

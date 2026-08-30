@@ -20,6 +20,20 @@ test('a late protected request revalidates without forcing a token rotation', ()
   assert.match(adminReports, /supabase\.auth\.getSession\(\)/)
 })
 
+test('routine auth and wake events do not repeat a fresh IP claim', () => {
+  const tokenRefreshStart = app.indexOf("if (event === 'TOKEN_REFRESHED')")
+  const tokenRefreshEnd = app.indexOf('scheduleBootstrap({', tokenRefreshStart)
+  const tokenRefreshBranch = app.slice(tokenRefreshStart, tokenRefreshEnd)
+  assert.match(tokenRefreshBranch, /setState\(current => current\.access/)
+  assert.match(tokenRefreshBranch, /return/)
+  assert.doesNotMatch(tokenRefreshBranch, /scheduleBootstrap/)
+  assert.match(app, /skipIfFresh:event === 'INITIAL_SESSION' \|\| event === 'SIGNED_IN'/)
+  assert.match(app, /const onVisible = \(\) => \{ if \(!document\.hidden\) recover\(\{ skipIfFresh:true \}\) \}/)
+  assert.match(app, /const onFocus = \(\) => recover\(\{ skipIfFresh:true \}\)/)
+  assert.match(app, /runCoalescedAppSessionWake\(\{[\s\S]{0,140}?isFresh:sessionVerificationIsFresh/)
+  assert.match(app, /if \(!result\.data\.coalesced\) markAppSessionVerified/)
+})
+
 test('transient revalidation failures keep an already verified page visible', () => {
   assert.match(app, /current\.session && current\.access[\s\S]{0,100}?error:''/)
   assert.match(app, /SESSION_VERIFICATION_RETRY_MAX_MS = 60 \* 1000/)

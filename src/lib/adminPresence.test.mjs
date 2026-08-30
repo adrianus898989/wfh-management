@@ -3,7 +3,11 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import {
   APP_HEARTBEAT_CROSS_TAB_WINDOW_MS,
+  APP_SESSION_WAKE_FRESHNESS_MS,
+  appSessionVerificationIsFresh,
+  markAppSessionVerified,
   runCoalescedAppHeartbeat,
+  runCoalescedAppSessionWake,
 } from './appSessionHeartbeatPressure.js'
 
 const component = await readFile(new URL('../components/AdminTopbar.jsx', import.meta.url), 'utf8')
@@ -168,6 +172,57 @@ test('cross-tab lock serializes simultaneous heartbeat dispatches', async () => 
   const results = await Promise.all([invoke(), invoke(), invoke()])
   assert.equal(calls, 1)
   assert.equal(results.filter(result => result.data.coalesced).length, 2)
+})
+
+test('wake recovery trusts only a recent completed server verification', () => {
+  const values = new Map()
+  const storage = {
+    getItem:key => values.get(key) || null,
+    setItem:(key,value) => values.set(key, value),
+  }
+  const now = 900_000
+
+  assert.equal(appSessionVerificationIsFresh({ portal:'admin', at:now, storage }), false)
+  markAppSessionVerified({ portal:'admin', at:now, storage })
+  assert.equal(appSessionVerificationIsFresh({ portal:'admin', at:now + 1, storage }), true)
+  assert.equal(appSessionVerificationIsFresh({
+    portal:'admin', at:now + APP_SESSION_WAKE_FRESHNESS_MS, storage,
+  }), false)
+  assert.equal(appSessionVerificationIsFresh({ portal:'staff', at:now + 1, storage }), false)
+  assert.equal(appSessionVerificationIsFresh({ portal:'admin', at:now - 1, storage }), false)
+})
+
+test('simultaneous tab wake recovery rechecks freshness inside one browser lock', async () => {
+  let tail = Promise.resolve()
+  const locks = {
+    request(_name, _options, callback) {
+      const result = tail.then(callback)
+      tail = result.catch(() => {})
+      return result
+    },
+  }
+  let fresh = false
+  let calls = 0
+  const invoke = () => runCoalescedAppSessionWake({
+    portal:'admin',
+    locks,
+    isFresh:()=>fresh,
+    run:async()=>{
+      calls += 1
+      await Promise.resolve()
+      fresh = true
+      return { data:{ok:true}, error:null }
+    },
+  })
+
+  const results = await Promise.all([invoke(), invoke(), invoke()])
+  assert.equal(calls, 1)
+  assert.equal(results.filter(result => result.data.coalesced).length, 2)
+})
+
+test('protected session recovery skips fresh focus cascades and token refresh bootstrap', () => {
+  assert.match(supabaseClient, /APP_SESSION_HEARTBEAT_MS=2\*60\*1000/)
+  assert.match(supabaseClient, /five minutes[\s\S]{0,180}?Two-minute renewals/)
 })
 
 test('admin presence controls remain visible while the page content scrolls', () => {
