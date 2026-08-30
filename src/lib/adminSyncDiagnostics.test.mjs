@@ -6,6 +6,7 @@ import {
   adminSyncDiagnosticEvidence,
   adminSyncDiagnosticLabel,
   adminSyncDiagnosticSourceRows,
+  adminSyncDiagnosticStatus,
 } from './adminSyncDiagnostics.js'
 
 const root=fileURLToPath(new URL('../../',import.meta.url))
@@ -21,6 +22,23 @@ test('diagnostic presentation explains exact mismatch evidence',()=>{
 test('source diagnostics include bounded aggregate evidence',()=>{
   const evidence=adminSyncDiagnosticEvidence({details:{row_count:604,unmatched_count:4,ambiguous_count:1}})
   assert.deepEqual(evidence,['604 行中有 4 行未匹配','1 行匹配到多名员工'])
+})
+
+test('diagnostic status is explicit and backwards compatible',()=>{
+  assert.equal(adminSyncDiagnosticStatus({diagnostic_status:'partial'}).label,'部分完成')
+  assert.equal(adminSyncDiagnosticStatus({issue_code:'source_sync_failed'}).label,'同步失败')
+  assert.equal(adminSyncDiagnosticStatus({issue_code:'cross_source_name_mismatch'}).label,'待核对')
+})
+
+test('v2 diagnostic contract adds status without another source scan',()=>{
+  const sql=read('supabase/migrations/20260830131653_admin_sync_diagnostics_status.sql')
+  assert.match(sql,/security invoker/i)
+  assert.match(sql,/public\.admin_sync_diagnostics\(p_filters,p_page,p_page_size\)/)
+  assert.match(sql,/jsonb_array_elements\(coalesce\(v_result->'rows'/)
+  assert.match(sql,/diagnostic_status/)
+  assert.match(sql,/grant execute[\s\S]+to authenticated,service_role/i)
+  assert.doesNotMatch(sql,/employee_master_sync_issues|attendance_sheet_sources|docs\.google|spreadsheet/i)
+  assert.doesNotMatch(sql,/error_spike|repeated_error|1_day|3_day|7_day/i)
 })
 
 test('database diagnostic endpoint is permission, scope and timeout bounded',()=>{
@@ -43,5 +61,13 @@ test('diagnostics UI loads only after explicit open and caps request time',()=>{
   assert.match(component,/setTimeout\(\(\)=>controller\.abort\(\),5000\)/)
   assert.match(component,/controllerRef\.current\?\.abort\(\)/)
   assert.match(component,/pageSizeOptions=\{\[20,30,50\]\}/)
-  assert.match(component,/admin_sync_diagnostics/)
+  assert.match(component,/admin_sync_diagnostics_v2/)
+  assert.match(component,/Source.+来源/)
+  assert.match(component,/Object \/ employee.+对象 \/ 员工/)
+  assert.match(component,/Mismatch type.+误差类型/)
+  assert.match(component,/Reason.+原因/)
+  assert.match(component,/Last detected.+最后检测/)
+  assert.match(component,/Status.+状态/)
+  assert.match(component,/adminSyncDiagnosticStatus/)
+  assert.match(component,/admin-sync-error" role="alert"/)
 })

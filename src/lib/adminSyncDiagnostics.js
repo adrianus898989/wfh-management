@@ -16,8 +16,22 @@ export const ADMIN_SYNC_DIAGNOSTIC_META=Object.freeze({
   source_parse_warning:{zh:'来源格式解析需要核对',en:'Source parsing needs review'},
 })
 
+export const ADMIN_SYNC_DIAGNOSTIC_STATUS_META=Object.freeze({
+  failed:{zh:'同步失败',en:'Failed',tone:'failed'},
+  partial:{zh:'部分完成',en:'Partial',tone:'partial'},
+  needs_review:{zh:'待核对',en:'Needs review',tone:'review'},
+  resolved:{zh:'已处理',en:'Resolved',tone:'resolved'},
+})
+
 export function adminSyncDiagnosticLabel(code,locale='zh'){
   return ADMIN_SYNC_DIAGNOSTIC_META[clean(code)]?.[locale]||clean(code)||'—'
+}
+
+export function adminSyncDiagnosticStatus(row,locale='zh'){
+  const explicit=clean(row?.diagnostic_status)
+  const fallback=row?.issue_code==='source_sync_failed'?'failed':row?.issue_code==='source_sync_partial'?'partial':'needs_review'
+  const code=ADMIN_SYNC_DIAGNOSTIC_STATUS_META[explicit]?explicit:fallback
+  return {code,...ADMIN_SYNC_DIAGNOSTIC_STATUS_META[code],label:ADMIN_SYNC_DIAGNOSTIC_STATUS_META[code][locale]}
 }
 
 export function adminSyncDiagnosticEvidence(row,locale='zh'){
@@ -44,4 +58,3 @@ export function adminSyncDiagnosticSourceRows(row,locale='zh'){
   if(row?.schedule_source_row)values.push(`${locale==='en'?'Schedule row':'排班行'} ${row.schedule_source_row}`)
   return values.join(' · ')||'—'
 }
-

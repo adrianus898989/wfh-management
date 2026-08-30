@@ -6,6 +6,7 @@ import {
   adminSyncDiagnosticEvidence,
   adminSyncDiagnosticLabel,
   adminSyncDiagnosticSourceRows,
+  adminSyncDiagnosticStatus,
 } from '../lib/adminSyncDiagnostics'
 
 const numeric=value=>Number.isFinite(Number(value))?Number(value):0
@@ -18,7 +19,7 @@ const formatTime=(value,locale)=>{
 }
 
 async function readDiagnostics(filters,page,pageSize,signal){
-  const query=supabase.rpc('admin_sync_diagnostics',{p_filters:filters,p_page:page,p_page_size:pageSize})
+  const query=supabase.rpc('admin_sync_diagnostics_v2',{p_filters:filters,p_page:page,p_page_size:pageSize})
   const {data,error}=signal?await query.abortSignal(signal):await query
   if(error)throw error
   return data||{rows:[],total:0,page,pages:1,page_size:pageSize,summary:{}}
@@ -88,15 +89,15 @@ export function AdminSyncDiagnosticsPanel({open,locale='zh'}){
     </div>
     {state.error&&<div className="admin-sync-error" role="alert">{state.error}</div>}
     <div className="admin-sync-table">
-      <div className="admin-sync-table-head"><span>{locale==='en'?'Module / source':'模块 / 来源'}</span><span>{locale==='en'?'Employee':'员工'}</span><span>{locale==='en'?'Mismatch':'差异原因'}</span><span>{locale==='en'?'Evidence':'具体误差'}</span><span>{locale==='en'?'Source row':'来源行'}</span><span>{locale==='en'?'Detected':'检测时间'}</span></div>
-      {state.loading&&!state.loaded?<div className="admin-sync-empty">{locale==='en'?'Reading bounded diagnostics…':'正在读取限定范围的同步差异…'}</div>:!state.rows.length?<div className="admin-sync-empty">{locale==='en'?'No matching persisted discrepancies.':'没有符合筛选条件的已记录差异。'}</div>:state.rows.map(row=><article key={`${row.diagnostic_kind}:${row.diagnostic_id}`}>
+      <div className="admin-sync-table-head"><span>{locale==='en'?'Source':'来源'}</span><span>{locale==='en'?'Object / employee':'对象 / 员工'}</span><span>{locale==='en'?'Mismatch type':'误差类型'}</span><span>{locale==='en'?'Reason':'原因'}</span><span>{locale==='en'?'Last detected':'最后检测'}</span><span>{locale==='en'?'Status':'状态'}</span></div>
+      {state.loading&&!state.loaded?<div className="admin-sync-empty">{locale==='en'?'Reading bounded diagnostics…':'正在读取限定范围的同步差异…'}</div>:!state.rows.length?<div className="admin-sync-empty">{locale==='en'?'No matching persisted discrepancies.':'没有符合筛选条件的已记录差异。'}</div>:state.rows.map(row=>{const status=adminSyncDiagnosticStatus(row,locale);const sourceRows=adminSyncDiagnosticSourceRows(row,locale);return <article key={`${row.diagnostic_kind}:${row.diagnostic_id}`}>
         <div><b>{row.diagnostic_kind==='employee_master'?(locale==='en'?'Employee master':'员工档案'):(locale==='en'?'Attendance / adjustments':'考勤 / 奖惩')}</b><span>{row.source_name||row.source_month||'—'}</span></div>
-        <div><b>{row.employee_no||'—'}</b><span>{row.employee_name||'—'}</span></div>
+        <div><b>{row.employee_no||row.source_name||'—'}</b><span>{row.employee_name||row.source_month||'—'}</span></div>
         <strong>{adminSyncDiagnosticLabel(row.issue_code,locale)}</strong>
-        <ul>{adminSyncDiagnosticEvidence(row,locale).map((item,index)=><li key={`${item}:${index}`}>{item}</li>)}</ul>
-        <span>{adminSyncDiagnosticSourceRows(row,locale)}</span>
+        <div className="admin-sync-reason"><ul>{adminSyncDiagnosticEvidence(row,locale).map((item,index)=><li key={`${item}:${index}`}>{item}</li>)}</ul>{sourceRows!=='—'&&<small>{sourceRows}</small>}</div>
         <time>{formatTime(row.detected_at,locale)}</time>
-      </article>)}
+        <span className={`admin-sync-status ${status.tone}`}>{status.label}</span>
+      </article>})}
     </div>
     <Pagination page={page} pages={state.pages} total={state.total} pageSize={pageSize} pageSizeOptions={[20,30,50]} loading={state.loading} onPage={next=>{setPage(next);load(next,pageSize,filters)}} onPageSize={next=>{setPageSize(next);setPage(1);load(1,next,filters)}}/>
   </section>
