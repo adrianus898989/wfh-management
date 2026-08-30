@@ -5,7 +5,7 @@ const PAYROLL_BATCH_STATUS_LABELS = {
   draft: '待发布',
   published: '已发布',
   archived: '已归档',
-  voided: '已作废',
+  voided: '已删除',
 }
 
 const PAYROLL_BATCH_SOURCE_LABELS = {

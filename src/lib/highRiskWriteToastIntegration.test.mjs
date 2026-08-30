@@ -27,7 +27,7 @@ test('payroll and payment-change writes retain inline errors and only retry safe
 
   assert.match(payroll, /operation:'导入工资'[^]*refresh:refreshImportHistory/)
   assert.match(payroll, /operation:'发布工资'[^]*refresh:\(\)=>load\(id,'待发布'\)/)
-  assert.match(payroll, /operation:'移除工资草稿'[^]*refresh:\(\)=>load\(batch\.id,'待发布'\)/)
+  assert.match(payroll, /operation:'删除工资导入记录'[^]*refresh:\(\)=>load\(batch\.id,'待发布'\)/)
   assert.doesNotMatch(payroll, /refresh:\s*(?:importRows|publish|deleteBatch|runBatchAction)\b/)
   assert.match(payroll, /setMessage\(reason\)[^]*writeFailureToast/)
 

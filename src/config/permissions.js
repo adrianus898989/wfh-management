@@ -166,6 +166,7 @@ export const PERMISSIONS = {
   PAYROLL_PUBLISHED_EXPORT: 'payroll.published.export',
   PAYROLL_IMPORT_HISTORY_VIEW: 'payroll.import_history.view',
   PAYROLL_IMPORT_HISTORY_EDIT: 'payroll.import_history.edit',
+  PAYROLL_IMPORT_HISTORY_DELETE: 'payroll.import_history.delete',
   PAYROLL_CHANGE_HISTORY_VIEW: 'payroll.change_history.view',
   PAYROLL_CHANGE_HISTORY_REVIEW: 'payroll.change_history.review',
 

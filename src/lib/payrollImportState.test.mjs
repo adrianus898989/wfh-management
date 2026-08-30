@@ -35,9 +35,24 @@ test('payroll import history can search actors and filter the effective lifecycl
   assert.deepEqual(filterPayrollBatches(batches, { status: 'voided' }).map(batch => batch.id), [2])
   assert.deepEqual(filterPayrollBatches(batches, { search: 'xiaonang001' }).map(batch => batch.id), [3])
   assert.deepEqual(filterPayrollBatches(batches, { search: '#4' }).map(batch => batch.id), [4])
-  assert.deepEqual(filterPayrollBatches(batches, { search: '已作废' }).map(batch => batch.id), [2])
-  assert.match(page, /批次状态[\s\S]+value="draft">待发布[\s\S]+value="voided">已作废/)
+  assert.deepEqual(filterPayrollBatches(batches, { search: '已删除' }).map(batch => batch.id), [2])
+  assert.match(page, /批次状态[\s\S]+value="draft">待发布[\s\S]+value="voided">已删除（可恢复）/)
   assert.match(page, /批次搜索[\s\S]+文档名 \/ 来源 \/ 批次类别 \/ 批次号 \/ 操作人 \/ 币种/)
+})
+
+test('payroll import batch summaries paginate locally without reloading Supabase', () => {
+  const historySource = page.slice(
+    page.indexOf('function PayrollImportHistory('),
+    page.indexOf('function PayrollRows('),
+  )
+  assert.match(page, /PAYROLL_IMPORT_HISTORY_PAGE_SIZE_OPTIONS=\[20,30,50,100,200\]/)
+  assert.match(historySource, /const pagedHistory=useMemo\(\(\)=>history\.slice\(/)
+  assert.match(historySource, /history\.length\?pagedHistory\.map\(batch=>/)
+  const pagination = historySource.match(/<Pagination\n\s+page=\{historyPage\}[\s\S]+?\/>/)?.[0] || ''
+  assert.match(pagination, /pageSizeOptions=\{PAYROLL_IMPORT_HISTORY_PAGE_SIZE_OPTIONS\}/)
+  assert.match(pagination, /onPage=\{setHistoryPage\}/)
+  assert.match(pagination, /onPageSize=\{value=>\{setHistoryPageSize\(value\);setHistoryPage\(1\)\}\}/)
+  assert.doesNotMatch(pagination, /supabase\.rpc|openBatch\(|load\(/)
 })
 
 test('payroll import history presents only persisted source and category fields', () => {
@@ -70,23 +85,20 @@ test('payroll import history renders recorded actor timestamps without fabricati
 })
 
 test('payroll import history exposes lifecycle-specific safe actions directly on each row', () => {
-  assert.match(page, /if\(!canEdit\)return '查看记录'/)
-  assert.match(page, /if\(batch\?\.voided_at\)return '恢复批次'/)
-  assert.match(page, /draft:'删除草稿'/)
-  assert.match(page, /archived:'作废记录'/)
-  assert.match(page, /published:'创建纠正草稿'/)
+  assert.match(page, /if\(batch\?\.voided_at\)return canDelete\?'恢复记录':''/)
+  assert.match(page, /status==='published'\)return canDelete\?'删除记录':canEdit\?'创建纠正草稿':''/)
+  assert.match(page, /\['draft','archived'\]\.includes\(status\)\)return canDelete\?'删除记录':''/)
   assert.match(page, /<span>状态<\/span><span>操作<\/span>/)
-  assert.match(page, /:payrollBatchActionLabel\(batch,canEdit\)/)
+  assert.match(page, /payrollBatchActionLabel\(batch,\{canEdit,canDelete\}\)/)
   const historyRow = page.match(/return <div key=\{payrollBatchIdentity\(batch\)\}[\s\S]+?<\/div>/)?.[0] || ''
   assert.match(historyRow, /onClick=\{\(\)=>openBatch\(batch\)\}/)
-  assert.match(historyRow, /removeDraftFromRow\(batch\)/)
-  assert.match(historyRow, /voidArchivedFromRow\(batch\)/)
+  assert.match(historyRow, /deleteRecordFromRow\(batch\)/)
   assert.match(historyRow, /restoreBatchFromRow\(batch\)/)
   assert.match(historyRow, /cloneCorrectionFromRow\(batch\)/)
-  assert.match(page, /window\.confirm\(`确认删除草稿/)
-  assert.match(page, /window\.prompt\(`请填写作废/)
-  assert.match(page, /admin_payroll_delete/)
-  assert.match(page, /admin_payroll_void_batch/)
+  assert.match(page, /DELETE PUBLISHED #\$\{batchId\}/)
+  assert.match(page, /admin_payroll_delete_record/)
+  assert.match(page, /canDelete&&!selected\.voided_at/)
+  assert.match(page, /canDelete&&selected\.voided_at/)
   assert.doesNotMatch(historyRow, /public\.payroll_batches|delete from/)
 })
 

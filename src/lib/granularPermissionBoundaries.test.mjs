@@ -181,7 +181,7 @@ test('payroll readers expose actor snapshots and explain archived or missing pub
   assert.match(payrollPage,/admin_payroll_restore_batch/)
   assert.match(payrollPage,/admin_payroll_clone_correction/)
   assert.match(payrollPage,/\['draft','archived'\]\.includes\(selected\.status\)[\s\S]+保存名称\/备注/)
-  assert.match(payrollPage,/已发布批次保持只读；请复制为纠正草稿/)
+  assert.match(payrollPage,/已发布批次的金额保持只读；可创建纠正草稿，或经加强确认后撤下并移入“已删除”/)
   assert.match(payrollPage,/当前无有效发布批次，最近批次已删除\/归档/)
 })
 

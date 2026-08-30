@@ -75,6 +75,7 @@ test('English sidebar tabs keep the same granular action permissions', () => {
   assert.ok(codes('考试记录表').has(PERMISSIONS.EXAM_RECORDS_DELETE))
   assert.ok(codes('待发布工资表').has(PERMISSIONS.PAYROLL_PENDING_PUBLISH))
   assert.ok(codes('导入记录').has(PERMISSIONS.PAYROLL_IMPORT_HISTORY_EDIT))
+  assert.ok(codes('导入记录').has(PERMISSIONS.PAYROLL_IMPORT_HISTORY_DELETE))
   assert.ok(codes('员工前端账号').has(PERMISSIONS.USER_MANAGE))
   assert.ok(codes('后台账号').has(PERMISSIONS.SCOPE_MANAGE))
   assert.ok(!codes('后台角色权限').has(PERMISSIONS.ROLE_MANAGE))

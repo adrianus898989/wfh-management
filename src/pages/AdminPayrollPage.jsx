@@ -18,6 +18,7 @@ const PAYOUT_CHANGE_REVIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_REVIEW
 const PAYMENT_CHANGE_TABS=new Set(['收款资料审核','申请记录'])
 const TABS = ['工资导入','待发布','已发布','导入记录','收款资料审核','申请记录']
 const PAYROLL_SUMMARY_ONLY_BATCH_ID=0
+const PAYROLL_IMPORT_HISTORY_PAGE_SIZE_OPTIONS=[20,30,50,100,200]
 const clean = value => String(value ?? '').trim()
 const key = value => clean(value).toLowerCase().replace(/[\s_\-\/()（）.：:]+/g,'')
 const payrollMonth=()=>{
@@ -52,16 +53,31 @@ const dateTime = value => {
   }).format(parsed).replaceAll('/','-')
 }
 const payrollBatchStatus=value=>({draft:'待发布',published:'已发布',archived:'已归档'}[clean(value).toLowerCase()]||clean(value)||'未知')
-const payrollBatchDisplayStatus=batch=>batch?.voided_at?'已作废':payrollBatchStatus(batch?.status)
+const payrollBatchDisplayStatus=batch=>batch?.voided_at?'已删除':payrollBatchStatus(batch?.status)
 const payrollBatchStatusClass=batch=>batch?.voided_at?'voided':clean(batch?.status).toLowerCase()
-const payrollBatchActionLabel=(batch,canEdit=false)=>{
-  if(!canEdit)return '查看记录'
-  if(batch?.voided_at)return '恢复批次'
-  return ({
-    draft:'删除草稿',
-    archived:'作废记录',
-    published:'创建纠正草稿',
-  })[clean(batch?.status).toLowerCase()]||''
+const payrollBatchActionLabel=(batch,{canEdit=false,canDelete=false}={})=>{
+  if(batch?.voided_at)return canDelete?'恢复记录':''
+  const status=clean(batch?.status).toLowerCase()
+  if(status==='published')return canDelete?'删除记录':canEdit?'创建纠正草稿':''
+  if(['draft','archived'].includes(status))return canDelete?'删除记录':''
+  return ''
+}
+const payrollDeleteRecordRequest=(batch,initialReason='')=>{
+  const batchId=Number(batch?.id||0)
+  if(!batchId)return null
+  const reasonInput=clean(initialReason)||window.prompt(`请填写删除“${batch?.title||`批次 #${batchId}`}”的原因（必填）：`,'')
+  if(reasonInput===null)return null
+  const reason=clean(reasonInput)
+  if(!reason){window.alert('删除原因不能为空。');return null}
+  const isPublished=clean(batch?.status).toLowerCase()==='published'
+  const confirmation=isPublished?`DELETE PUBLISHED #${batchId}`:`DELETE #${batchId}`
+  if(isPublished){
+    const typed=window.prompt(`这是已发布工资批次。删除后员工端将不再显示该批次，但工资明细与审计记录仍会保留并可恢复。\n请输入 ${confirmation} 继续：`,'')
+    if(typed===null)return null
+    if(clean(typed)!==confirmation){window.alert('确认文字不正确，未删除记录。');return null}
+  }
+  if(!window.confirm(`确认删除“${batch?.title||`批次 #${batchId}`}”？\n原因：${reason}\n这是可恢复的业务删除，不会物理删除工资明细或审计记录。`))return null
+  return {p_batch_id:batchId,p_reason:reason,p_confirmation:confirmation}
 }
 const ALIASES = {
   sequence:['序号','no','number','stt'],
@@ -338,20 +354,20 @@ export default function AdminPayrollPage(){
   }
 
   const deleteBatch=async batch=>{
-    if(batch.status!=='draft')return
-    if(!window.confirm(`确认移除草稿“${batch.title}”？\n工资记录不会被物理删除，将保留在“导入记录”并可恢复。`))return
+    const request=payrollDeleteRecordRequest(batch)
+    if(!request)return
     setSaving(true);setMessage('')
     try{
-      const {data,error}=await supabase.rpc('admin_payroll_delete',{p_batch_id:batch.id})
+      const {data,error}=await supabase.rpc('admin_payroll_delete_record',request)
       if(error)throw error
-      const success=`已移除草稿“${batch.title}”；${data?.rows||batch.row_count} 份工资记录仍保留在导入记录中，可随时恢复。`
+      const success=`已删除记录“${batch.title}”；${data?.rows||batch.row_count} 份工资明细和审计日志仍保留，可在“已删除”筛选中恢复。`
       setMessage(success)
-      notify(writeSuccessToast({module:'工资统计',operation:'移除工资草稿',reason:success,dedupeKey:`payroll:delete:${batch.id}:success`}))
+      notify(writeSuccessToast({module:'工资统计',operation:'删除工资导入记录',reason:success,dedupeKey:`payroll:delete:${batch.id}:success`}))
       setBatchId(null);setRowFilter('all');setRowSearch('');setPositionFilter('');setPlatformFilter('');await load(null)
     }catch(error){
       const reason=`删除失败：${error?.message||'服务暂时不可用，请稍后重试'}`
       setMessage(reason)
-      notify(writeFailureToast({module:'工资统计',operation:'移除工资草稿',error,reason,dedupeKey:`payroll:delete:${batch.id}:error`,refresh:()=>load(batch.id,'待发布')}))
+      notify(writeFailureToast({module:'工资统计',operation:'删除工资导入记录',error,reason,dedupeKey:`payroll:delete:${batch.id}:error`,refresh:()=>load(batch.id,'待发布')}))
     }finally{setSaving(false)}
   }
 
@@ -440,6 +456,7 @@ export default function AdminPayrollPage(){
   const canMutateWholePayroll=access.founder||access.dataScope==='all'
   const hasWholePayrollAction=access.hasAnyPermission([
     PERMISSIONS.PAYROLL_IMPORT_HISTORY_EDIT,
+    PERMISSIONS.PAYROLL_IMPORT_HISTORY_DELETE,
     PERMISSIONS.PAYROLL_PENDING_EDIT,
     PERMISSIONS.PAYROLL_PENDING_APPROVE,
     PERMISSIONS.PAYROLL_PENDING_PUBLISH,
@@ -465,7 +482,9 @@ export default function AdminPayrollPage(){
       {uploadWorkspace}
       <PayrollImportHistory
         batches={batches}
+        deletedBatches={state.data?.deleted_batches||[]}
         canEdit={Boolean(canMutateWholePayroll&&state.data?.permissions?.edit&&access.hasPermission(PERMISSIONS.PAYROLL_IMPORT_HISTORY_EDIT))}
+        canDelete={Boolean(canMutateWholePayroll&&state.data?.permissions?.delete&&access.hasPermission(PERMISSIONS.PAYROLL_IMPORT_HISTORY_DELETE))}
         onChanged={async nextMessage=>{setMessage(nextMessage);await load(PAYROLL_SUMMARY_ONLY_BATCH_ID,'导入记录')}}
         onOpenEmployee={openEmployee}
       />
@@ -476,7 +495,7 @@ export default function AdminPayrollPage(){
         </button>):<div className="payroll-empty-small">{tab==='已发布'?(state.data?.empty_reason||'当前无有效发布批次，最近批次已删除/归档；请到“导入记录”核对。'):'暂无对应工资批次'}</div>}
       </section>
       {visibleSelected&&<section className="payroll-preview-card">
-        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&access.hasPermission(PERMISSIONS.PAYROLL_PENDING_PUBLISH)&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.edit&&access.hasPermission(PERMISSIONS.PAYROLL_PENDING_EDIT)&&(visibleSelected.status!=='published'||state.data?.permissions?.publish)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除批次</button>}</div></div>
+        <div className="payroll-section-head"><div><h2>{visibleSelected.title}</h2><p>{visibleSelected.status==='published'?'已发布给员工':'仍在后台复核，员工暂时看不到'} · {visibleSelected.source_file_name||'系统数据'} · 币种 {visibleSelected.currency}</p></div><div className="payroll-section-actions">{visibleSelected.status==='draft'&&state.data?.permissions?.publish&&access.hasPermission(PERMISSIONS.PAYROLL_PENDING_PUBLISH)&&<button disabled={saving} onClick={()=>publish(visibleSelected.id)}>{saving?'发布中…':'发布给员工'}</button>}{state.data?.permissions?.delete&&access.hasPermission(PERMISSIONS.PAYROLL_IMPORT_HISTORY_DELETE)&&<button className="danger" disabled={saving} onClick={()=>deleteBatch(visibleSelected)}>删除记录</button>}</div></div>
         <div className="payroll-summary-grid"><button type="button" className={rowFilter==='active'?'active':''} onClick={()=>setRowFilter('active')}><span>在职 / 试用</span><strong>{rowStateCounts.active}</strong><small>在职与试用</small></button><button type="button" className={rowFilter==='suspended'?'active':''} onClick={()=>setRowFilter('suspended')}><span>停用员工</span><strong>{rowStateCounts.suspended}</strong><small>停用 / inactive</small></button><button type="button" className={rowFilter==='resigned'?'active':''} onClick={()=>setRowFilter('resigned')}><span>离职员工</span><strong>{rowStateCounts.resigned}</strong><small>历史记录保留</small></button><button type="button" className={`${rowFilter==='unmatched'?'active':''} ${unmatchedCount>0?'has-warning':''}`} disabled={unmatchedCount===0} onClick={unmatchedCount>0?()=>setRowFilter('unmatched'):undefined}><span>未匹配</span><strong className={unmatchedCount>0?'warn':''}>{unmatchedCount}</strong><small>{unmatchedCount>0?'需要核对':'没有数据'}</small></button><div><span>合计实发</span><strong>{money(rows.reduce((sum,row)=>sum+Number(row.total_pay||0),0),visibleSelected.currency)}</strong><small>{rowStateCounts.total} 人 · {payrollCurrencyLabel(visibleSelected.currency)}</small></div></div>
         <div className="payroll-record-filters">
           <label className="payroll-search-wide"><span>综合搜索</span><input value={rowSearch} onChange={event=>setRowSearch(event.target.value)} placeholder="员工ID / 姓名 / 盘口 / 卡号 / 收款姓名 / 备注"/></label>
@@ -519,7 +538,7 @@ function PayrollUploadWorkspace({fileRef,fileState,form,saving,setForm,onFile,on
   </>
 }
 
-function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
+function PayrollImportHistory({batches,deletedBatches=[],canEdit=false,canDelete=false,onChanged,onOpenEmployee}){
   const {notify}=useAppToast()
   const requestRef=useRef(0)
   const [panel,setPanel]=useState(null)
@@ -534,6 +553,8 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
   const [historySearch,setHistorySearch]=useState('')
   const [historyStatus,setHistoryStatus]=useState('all')
   const [historyCurrency,setHistoryCurrency]=useState('all')
+  const [historyPage,setHistoryPage]=useState(1)
+  const [historyPageSize,setHistoryPageSize]=useState(20)
   const [rowActionBusy,setRowActionBusy]=useState('')
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(20)
@@ -542,10 +563,21 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
     if(byCreated)return byCreated
     return Number(right.id||0)-Number(left.id||0)
   }),[batches])
-  const history=useMemo(()=>filterPayrollBatches(allHistory,{search:historySearch,status:historyStatus}).filter(batch=>{
+  const deletedHistory=useMemo(()=>[...(deletedBatches||[])].sort((left,right)=>{
+    const byDeleted=new Date(right.voided_at||right.updated_at||0).getTime()-new Date(left.voided_at||left.updated_at||0).getTime()
+    if(byDeleted)return byDeleted
+    return Number(right.id||0)-Number(left.id||0)
+  }),[deletedBatches])
+  const historySource=historyStatus==='voided'?deletedHistory:allHistory
+  const history=useMemo(()=>filterPayrollBatches(historySource,{search:historySearch,status:historyStatus}).filter(batch=>{
     if(historyCurrency==='all')return true
     return clean(batch?.currency).toUpperCase()===historyCurrency
-  }),[allHistory,historySearch,historyStatus,historyCurrency])
+  }),[historySource,historySearch,historyStatus,historyCurrency])
+  const historyPages=Math.max(1,Math.ceil(history.length/historyPageSize))
+  const pagedHistory=useMemo(()=>history.slice(
+    (historyPage-1)*historyPageSize,
+    historyPage*historyPageSize,
+  ),[history,historyPage,historyPageSize])
   const rows=panel?.rows||[]
   const selected=panel?.selected||panel?.batch||null
   const positionOptions=useMemo(()=>[...new Set(rows.map(row=>clean(row.position_name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[rows])
@@ -607,6 +639,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
       const nextMessage=typeof success==='function'?success(data||{}):success
       const operation={
         admin_payroll_update_batch:'更新工资批次',
+        admin_payroll_delete_record:'删除工资导入记录',
         admin_payroll_delete:'移除工资草稿',
         admin_payroll_void_batch:'作废工资批次',
         admin_payroll_restore_batch:'恢复工资批次',
@@ -620,6 +653,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
       const reason=error?.message||'批次操作失败'
       const operation={
         admin_payroll_update_batch:'更新工资批次',
+        admin_payroll_delete_record:'删除工资导入记录',
         admin_payroll_delete:'移除工资草稿',
         admin_payroll_void_batch:'作废工资批次',
         admin_payroll_restore_batch:'恢复工资批次',
@@ -637,13 +671,11 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
   const saveBatch=()=>runBatchAction('save','admin_payroll_update_batch',{
     p_batch_id:selected.id,p_title:editForm.title,p_notes:editForm.notes,
   },'批次名称和备注已更新。')
-  const removeDraft=()=>{
-    if(!window.confirm(`确认移除草稿“${selected.title}”？\n记录不会被物理删除，可在这里恢复。`))return
-    runBatchAction('void','admin_payroll_delete',{p_batch_id:selected.id},'草稿已安全移除；记录和审计日志仍保留，可恢复。')
+  const deleteRecord=()=>{
+    const request=payrollDeleteRecordRequest(selected,voidReason)
+    if(!request)return
+    runBatchAction('delete','admin_payroll_delete_record',request,'导入记录已移入“已删除”；工资明细和审计日志仍完整保留，可恢复。')
   }
-  const voidArchived=()=>runBatchAction('void','admin_payroll_void_batch',{
-    p_batch_id:selected.id,p_reason:voidReason,
-  },'归档批次已作废；数据未被删除，可恢复。')
   const restoreBatch=()=>runBatchAction('restore','admin_payroll_restore_batch',{
     p_batch_id:selected.id,
   },data=>`批次已恢复为“${payrollBatchStatus(data.status)}”。`)
@@ -660,6 +692,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
       if(error)throw error
       const nextMessage=typeof success==='function'?success(data||{}):success
       const operation={
+        admin_payroll_delete_record:'删除工资导入记录',
         admin_payroll_delete:'移除工资草稿',
         admin_payroll_void_batch:'作废工资批次',
         admin_payroll_restore_batch:'恢复工资批次',
@@ -670,6 +703,7 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
     }catch(error){
       const reason=error?.message||'批次操作失败'
       const operation={
+        admin_payroll_delete_record:'删除工资导入记录',
         admin_payroll_delete:'移除工资草稿',
         admin_payroll_void_batch:'作废工资批次',
         admin_payroll_restore_batch:'恢复工资批次',
@@ -681,17 +715,10 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
       }))
     }finally{setRowActionBusy('')}
   }
-  const removeDraftFromRow=batch=>{
-    if(!window.confirm(`确认删除草稿“${batch.title}”？\n这是可恢复的安全移除：工资记录和审计日志不会被物理删除。`))return
-    runRowBatchAction(batch,'delete','admin_payroll_delete',{p_batch_id:batch.id},'草稿已安全移除；记录和审计日志仍保留，可恢复。')
-  }
-  const voidArchivedFromRow=batch=>{
-    const prompted=window.prompt(`请填写作废“${batch.title}”的原因（必填）：`,'')
-    if(prompted===null)return
-    const reason=clean(prompted)
-    if(!reason){window.alert('作废原因不能为空。');return}
-    if(!window.confirm(`确认作废已归档批次“${batch.title}”？\n原因：${reason}\n这不会物理删除工资或审计记录。`))return
-    runRowBatchAction(batch,'void','admin_payroll_void_batch',{p_batch_id:batch.id,p_reason:reason},'归档批次已作废；数据未删除，可恢复。')
+  const deleteRecordFromRow=batch=>{
+    const request=payrollDeleteRecordRequest(batch)
+    if(!request)return
+    runRowBatchAction(batch,'delete','admin_payroll_delete_record',request,'导入记录已移入“已删除”；工资明细和审计日志仍完整保留，可恢复。')
   }
   const restoreBatchFromRow=batch=>{
     if(!window.confirm(`确认恢复批次“${batch.title}”？`))return
@@ -703,6 +730,8 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
   }
   useEffect(()=>{setPage(1)},[search,matchFilter,positionFilter,platformFilter,selected?.id])
   useEffect(()=>{setPage(current=>Math.min(current,pages))},[pages])
+  useEffect(()=>{setHistoryPage(1)},[historySearch,historyStatus,historyCurrency])
+  useEffect(()=>{setHistoryPage(current=>Math.min(current,historyPages))},[historyPages])
   useEffect(()=>{
     if(!panel)return undefined
     const previousOverflow=document.body.style.overflow
@@ -719,22 +748,23 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
     <section className="payroll-import-history-card">
       <div className="payroll-import-history-head">
         <div><h2>导入批次</h2><p>已归档表示同月份新批次发布后自动替代旧批次；历史数据仍会保留。</p></div>
-        <span>{history.length===allHistory.length?`共 ${allHistory.length} 个批次`:`筛选 ${history.length} / ${allHistory.length} 个批次`}</span>
+        <span>{history.length===historySource.length?`共 ${historySource.length} 个批次`:`筛选 ${history.length} / ${historySource.length} 个批次`}</span>
       </div>
       <div className="payroll-import-history-filters">
         <label><span>批次搜索</span><input value={historySearch} onChange={event=>setHistorySearch(event.target.value)} placeholder="文档名 / 来源 / 批次类别 / 批次号 / 操作人 / 币种"/></label>
-        <label><span>批次状态</span><select value={historyStatus} onChange={event=>setHistoryStatus(event.target.value)}><option value="all">全部状态</option><option value="draft">待发布</option><option value="published">已发布</option><option value="archived">已归档</option><option value="voided">已作废</option></select></label>
+        <label><span>批次状态</span><select value={historyStatus} onChange={event=>setHistoryStatus(event.target.value)}><option value="all">全部状态（不含已删除）</option><option value="draft">待发布</option><option value="published">已发布</option><option value="archived">已归档</option><option value="voided">已删除（可恢复）</option></select></label>
         <label><span>币种</span><select value={historyCurrency} onChange={event=>setHistoryCurrency(event.target.value)}><option value="all">全部币种</option>{PAYROLL_CURRENCY_OPTIONS.map(option=><option key={option.code} value={option.code}>{option.code} · {option.label}</option>)}</select></label>
         <button type="button" disabled={!historySearch&&historyStatus==='all'&&historyCurrency==='all'} onClick={()=>{setHistorySearch('');setHistoryStatus('all');setHistoryCurrency('all')}}>重置</button>
       </div>
       <div className="payroll-import-history-list">
         <div className="payroll-import-history-columns" aria-hidden="true"><span>导入文档</span><span>来源 / 批次类别</span><span>工资月份</span><span>操作人 / 时间</span><span>导入时间</span><span>人数</span><span>总金额</span><span>状态</span><span>操作</span></div>
-        {history.length?history.map(batch=>{
+        {history.length?pagedHistory.map(batch=>{
           const hasTotal=batch.total_amount!==undefined&&batch.total_amount!==null
           const source=payrollBatchSourcePresentation(batch)
           const busyPrefix=rowActionBusy.split(':')[0]
           const isBusy=rowActionBusy.endsWith(`:${payrollBatchIdentity(batch)}`)
           const lifecycleStatus=clean(batch.status).toLowerCase()
+          const actionLabel=payrollBatchActionLabel(batch,{canEdit,canDelete})
           return <div key={payrollBatchIdentity(batch)} className="payroll-import-history-row" role="button" tabIndex={0} onClick={()=>openBatch(batch)} onKeyDown={event=>{
             if(event.target!==event.currentTarget||!['Enter',' '].includes(event.key))return
             event.preventDefault()
@@ -750,16 +780,25 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
             <span><i className={`payroll-batch-status ${payrollBatchStatusClass(batch)}`}>{payrollBatchDisplayStatus(batch)}</i></span>
             <span className="payroll-import-row-actions" onClick={event=>event.stopPropagation()}>
               <button type="button" className="secondary" disabled={isBusy} onClick={()=>openBatch(batch)}>查看</button>
-              {canEdit&&payrollBatchActionLabel(batch,canEdit)&&<button type="button" className={['draft','archived'].includes(lifecycleStatus)&&!batch.voided_at?'danger':''} disabled={Boolean(rowActionBusy)} onClick={()=>{
+              {actionLabel&&<button type="button" className={!batch.voided_at&&canDelete?'danger':''} disabled={Boolean(rowActionBusy)} onClick={()=>{
                 if(batch.voided_at)restoreBatchFromRow(batch)
-                else if(lifecycleStatus==='draft')removeDraftFromRow(batch)
-                else if(lifecycleStatus==='archived')voidArchivedFromRow(batch)
+                else if(canDelete&&['draft','archived','published'].includes(lifecycleStatus))deleteRecordFromRow(batch)
                 else if(lifecycleStatus==='published')cloneCorrectionFromRow(batch)
-              }}>{isBusy?({delete:'删除中…',void:'作废中…',restore:'恢复中…',clone:'创建中…'}[busyPrefix]||'处理中…'):payrollBatchActionLabel(batch,canEdit)}</button>}
+              }}>{isBusy?({delete:'删除中…',restore:'恢复中…',clone:'创建中…'}[busyPrefix]||'处理中…'):actionLabel}</button>}
             </span>
           </div>
-        }):<div className="payroll-import-history-empty">{allHistory.length?'当前搜索与状态下没有导入批次':'暂无工资导入记录'}</div>}
+        }):<div className="payroll-import-history-empty">{historySource.length?'当前搜索与状态下没有导入批次':historyStatus==='voided'?'暂无已删除工资导入记录':'暂无工资导入记录'}</div>}
       </div>
+      <Pagination
+        page={historyPage}
+        pages={historyPages}
+        total={history.length}
+        pageSize={historyPageSize}
+        pageSizeOptions={PAYROLL_IMPORT_HISTORY_PAGE_SIZE_OPTIONS}
+        loading={Boolean(rowActionBusy)}
+        onPage={setHistoryPage}
+        onPageSize={value=>{setHistoryPageSize(value);setHistoryPage(1)}}
+      />
     </section>
     {panel&&<div className="payroll-batch-modal-backdrop" role="presentation" onMouseDown={closePanel}>
       <section className="payroll-batch-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-batch-modal-title" onMouseDown={event=>event.stopPropagation()}>
@@ -779,16 +818,17 @@ function PayrollImportHistory({batches,canEdit=false,onChanged,onOpenEmployee}){
             <div><span>纠正来源</span><strong>{selected?.correction_of_batch_id?`批次 #${selected.correction_of_batch_id}`:'原始导入'}</strong></div>
           </div>
           {selected?.status==='archived'&&!selected?.voided_at&&<div className="payroll-lifecycle-note">“已归档”不是删除：同月份的新批次发布后，旧发布批次会自动归档，员工只看到当前有效发布批次。</div>}
-          {selected?.voided_at&&<div className="payroll-lifecycle-note is-voided">该批次已作废：{selected?.void_reason||'未填写原因'} · 操作人 {selected?.voided_by_name||'—'} · {dateTime(selected?.voided_at)}。工资记录和审计历史仍完整保留。</div>}
-          {canEdit&&selected&&!panel.loading&&!panel.error&&<section className="payroll-batch-correction-box">
-            <div><strong>批次纠错</strong><p>{selected.voided_at?'可恢复被安全移除的批次。':selected.status==='published'?'已发布批次保持只读；请复制为纠正草稿后修改并重新发布。':selected.status==='archived'?'归档批次可修正名称/备注、作废记录或复制纠正草稿；工资金额保持只读。':'草稿可修改批次名称和备注，也可安全移除。'}</p></div>
-            {['draft','archived'].includes(selected.status)&&!selected.voided_at&&<div className="payroll-batch-edit-form"><label>批次名称<input value={editForm.title} maxLength={200} onChange={event=>setEditForm(current=>({...current,title:event.target.value}))}/></label><label>备注<textarea value={editForm.notes} maxLength={2000} onChange={event=>setEditForm(current=>({...current,notes:event.target.value}))}/></label></div>}
-            {selected.status==='archived'&&!selected.voided_at&&<label className="payroll-void-reason">作废原因<textarea value={voidReason} maxLength={1000} onChange={event=>setVoidReason(event.target.value)} placeholder="例如：导入文件或备注名称错误（必填）"/></label>}
+          {selected?.voided_at&&<div className="payroll-lifecycle-note is-voided">该记录已删除：{selected?.void_reason||'未填写原因'} · 操作人 {selected?.voided_by_name||'—'} · {dateTime(selected?.voided_at)}。工资明细和审计历史仍完整保留，可恢复。</div>}
+          {(canEdit||canDelete)&&selected&&!panel.loading&&!panel.error&&<section className="payroll-batch-correction-box">
+            <div><strong>批次管理</strong><p>{selected.voided_at?'这是可恢复的业务删除；恢复会回到删除前的状态。':selected.status==='published'?'已发布批次的金额保持只读；可创建纠正草稿，或经加强确认后撤下并移入“已删除”。':selected.status==='archived'?'归档批次可维护名称/备注、复制纠正草稿，或移入“已删除”。':'草稿可维护名称/备注，或移入“已删除”。'}</p></div>
+            {canEdit&&['draft','archived'].includes(selected.status)&&!selected.voided_at&&<div className="payroll-batch-edit-form"><label>批次名称<input value={editForm.title} maxLength={200} onChange={event=>setEditForm(current=>({...current,title:event.target.value}))}/></label><label>备注<textarea value={editForm.notes} maxLength={2000} onChange={event=>setEditForm(current=>({...current,notes:event.target.value}))}/></label></div>}
+            {canDelete&&!selected.voided_at&&<label className="payroll-void-reason">删除原因<textarea value={voidReason} maxLength={1000} onChange={event=>setVoidReason(event.target.value)} placeholder="例如：重复导入、文件月份错误或业务记录作废（必填）"/></label>}
             <div className="payroll-batch-correction-actions">
-              {selected.status==='draft'&&!selected.voided_at&&<><button type="button" disabled={Boolean(actionBusy)||!clean(editForm.title)} onClick={saveBatch}>{actionBusy==='save'?'保存中…':'保存批次资料'}</button><button type="button" className="danger" disabled={Boolean(actionBusy)} onClick={removeDraft}>{actionBusy==='void'?'移除中…':'删除草稿（可恢复）'}</button></>}
-              {selected.status==='archived'&&!selected.voided_at&&<><button type="button" disabled={Boolean(actionBusy)||!clean(editForm.title)} onClick={saveBatch}>{actionBusy==='save'?'保存中…':'保存名称/备注'}</button><button type="button" disabled={Boolean(actionBusy)} onClick={cloneCorrection}>{actionBusy==='clone'?'创建中…':'复制为纠正草稿'}</button><button type="button" className="danger" disabled={Boolean(actionBusy)||!clean(voidReason)} onClick={voidArchived}>{actionBusy==='void'?'作废中…':'作废导入记录'}</button></>}
-              {selected.status==='published'&&!selected.voided_at&&<button type="button" disabled={Boolean(actionBusy)} onClick={cloneCorrection}>{actionBusy==='clone'?'创建中…':'创建纠正草稿'}</button>}
-              {selected.voided_at&&<button type="button" disabled={Boolean(actionBusy)} onClick={restoreBatch}>{actionBusy==='restore'?'恢复中…':'恢复批次'}</button>}
+              {canEdit&&selected.status==='draft'&&!selected.voided_at&&<button type="button" disabled={Boolean(actionBusy)||!clean(editForm.title)} onClick={saveBatch}>{actionBusy==='save'?'保存中…':'保存批次资料'}</button>}
+              {canEdit&&selected.status==='archived'&&!selected.voided_at&&<><button type="button" disabled={Boolean(actionBusy)||!clean(editForm.title)} onClick={saveBatch}>{actionBusy==='save'?'保存中…':'保存名称/备注'}</button><button type="button" disabled={Boolean(actionBusy)} onClick={cloneCorrection}>{actionBusy==='clone'?'创建中…':'复制为纠正草稿'}</button></>}
+              {canEdit&&selected.status==='published'&&!selected.voided_at&&<button type="button" disabled={Boolean(actionBusy)} onClick={cloneCorrection}>{actionBusy==='clone'?'创建中…':'创建纠正草稿'}</button>}
+              {canDelete&&!selected.voided_at&&<button type="button" className="danger" disabled={Boolean(actionBusy)||!clean(voidReason)} onClick={deleteRecord}>{actionBusy==='delete'?'删除中…':'删除记录（可恢复）'}</button>}
+              {canDelete&&selected.voided_at&&<button type="button" disabled={Boolean(actionBusy)} onClick={restoreBatch}>{actionBusy==='restore'?'恢复中…':'恢复记录'}</button>}
             </div>
             {actionError&&<p className="payroll-batch-action-error">{actionError}</p>}
           </section>}
