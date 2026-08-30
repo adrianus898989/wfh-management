@@ -764,9 +764,6 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'online_presence') {
-      if (!can('account.online_presence.view')) {
-        return json(req, { error:'无在线账号查看权限' }, 403)
-      }
       const includeRows = body?.include_rows === true
       const allowedFields = includeRows
         ? new Set(['action', 'include_rows', 'portal', 'page', 'page_size'])
@@ -776,6 +773,9 @@ Deno.serve(async (req) => {
       }
 
       if (includeRows) {
+        if (!can('account.online_presence.view')) {
+          return json(req, { error:'无在线账号名单查看权限' }, 403)
+        }
         const portal = cleanString(body?.portal).toLowerCase()
         const page = Number(body?.page ?? 1)
         const pageSize = Number(body?.page_size ?? 20)
@@ -834,16 +834,16 @@ Deno.serve(async (req) => {
 
       try {
         // Background badge refreshes stay count-only and head-only.  The guard
-        // is authenticated even though the two count queries use service role.
+        // admits any current backend session but never authorises list rows.
         const { data:presenceAllowed, error:presenceGuardError } = await boundedPresence(
-          userClient.rpc('admin_online_presence_allowed'),
-          'PRESENCE_PERMISSION_GUARD',
+          userClient.rpc('admin_online_presence_counts_allowed'),
+          'PRESENCE_COUNT_SESSION_GUARD',
         )
         if (presenceGuardError) {
           console.error('online presence guard failed', presenceGuardError)
           return json(req, { error:'在线状态验证暂时失败，请重试' }, 503)
         }
-        if (presenceAllowed !== true) return json(req, { error:'无在线账号查看权限' }, 403)
+        if (presenceAllowed !== true) return json(req, { error:'无后台权限' }, 403)
 
         const nowIso = new Date().toISOString()
         const [adminCountResult, staffCountResult] = await Promise.all([

@@ -370,15 +370,6 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === 'online_presence') {
-      if (!can('account.online_presence.view')) {
-        return json(req, {
-          ok:false,
-          error:'无在线账号查看权限',
-          code:'permission_denied',
-          retryable:false,
-          preserve_session:true,
-        }, 403)
-      }
       const includeRows = body?.include_rows === true
       const allowedFields = includeRows
         ? new Set(['action', 'include_rows', 'portal', 'page', 'page_size'])
@@ -394,6 +385,15 @@ Deno.serve(async (req: Request) => {
       }
 
       if (includeRows) {
+        if (!can('account.online_presence.view')) {
+          return json(req, {
+            ok:false,
+            error:'无在线账号名单查看权限',
+            code:'permission_denied',
+            retryable:false,
+            preserve_session:true,
+          }, 403)
+        }
         const portal = clean(body?.portal).toLowerCase()
         const page = Number(body?.page ?? 1)
         const pageSize = Number(body?.page_size ?? 20)
@@ -460,15 +460,15 @@ Deno.serve(async (req: Request) => {
       }
 
       const { data:presenceAllowed, error:presenceAllowedError } = await bounded(
-        userClient.rpc('admin_online_presence_allowed'),
-        'PRESENCE_PERMISSION_GUARD',
+        userClient.rpc('admin_online_presence_counts_allowed'),
+        'PRESENCE_COUNT_SESSION_GUARD',
       )
-      if (presenceAllowedError) return retryable(req, '在线人数权限暂时验证失败，请重试')
+      if (presenceAllowedError) return retryable(req, '在线人数会话暂时验证失败，请重试')
       if (presenceAllowed !== true) {
         return json(req, {
           ok:false,
-          error:'无在线账号查看权限',
-          code:'permission_denied',
+          error:'无后台权限',
+          code:'backend_access_denied',
           retryable:false,
           preserve_session:true,
         }, 403)

@@ -9,6 +9,7 @@ const permissions = await readFile(new URL('../config/permissions.js', import.me
 const pagePermissions = await readFile(new URL('../config/adminPagePermissions.js', import.meta.url), 'utf8')
 const topbar = await readFile(new URL('../components/AdminTopbar.jsx', import.meta.url), 'utf8')
 const migration = await readFile(new URL('../../supabase/migrations/20260829012000_account_presence_and_role_delegation.sql', import.meta.url), 'utf8')
+const presenceSplitMigration = await readFile(new URL('../../supabase/migrations/20260830090000_split_presence_counts_and_lists.sql', import.meta.url), 'utf8')
 const boundedMigration = await readFile(new URL('../../supabase/migrations/20260829101500_bounded_recovery_backend_accounts.sql', import.meta.url), 'utf8')
 
 test('backend account list returns a privacy-projected creator label and creation timestamp', () => {
@@ -37,17 +38,22 @@ test('account search separates login identity, employee identity and role/scope 
   assert.match(page, /search:\{[\s\S]+username:String\(search\?\.account/)
 })
 
-test('online people and counts require one explicit permission in UI, Edge and database guard', () => {
+test('online lists require one explicit permission while counts require a valid backend session', () => {
   assert.match(permissions, /ACCOUNT_ONLINE_PRESENCE_VIEW: 'account\.online_presence\.view'/)
   assert.match(pagePermissions, /backend_accounts:[\s\S]+PERMISSIONS\.ACCOUNT_ONLINE_PRESENCE_VIEW/)
   assert.match(topbar, /permissions\?\.includes\(PERMISSIONS\.ACCOUNT_ONLINE_PRESENCE_VIEW\)/)
   assert.match(endpoint, /if \(!can\('account\.online_presence\.view'\)\)/)
   assert.match(recoveryEndpoint, /if \(!can\('account\.online_presence\.view'\)\)/)
-  assert.match(recoveryEndpoint, /userClient\.rpc\('admin_online_presence_allowed'\)/)
+  assert.match(recoveryEndpoint, /userClient\.rpc\('admin_online_presence_counts_allowed'\)/)
+  assert.match(topbar, /const canPresenceCounts = enabled/)
+  assert.match(topbar, /const canPresenceRows = Boolean\([\s\S]+PERMISSIONS\.ACCOUNT_ONLINE_PRESENCE_VIEW/)
   assert.match(migration, /insert into public\.permissions[\s\S]+'account\.online_presence\.view'[\s\S]+true/)
   assert.match(migration, /return public\.has_permission\('account\.online_presence\.view'\)/)
   assert.doesNotMatch(migration, /insert into public\.role_permissions/)
   assert.match(migration, /revoke all on function public\.admin_online_presence_allowed\(\)[\s\S]+from public, anon, authenticated, service_role/)
+  assert.match(presenceSplitMigration, /set name = '查看后台与员工在线名单'/)
+  assert.match(presenceSplitMigration, /select public\.admin_access_session_allowed\(\)/)
+  assert.match(presenceSplitMigration, /It does not authorise online identity rows/)
 })
 
 test('supervisor role creation uses a server-only allowlist without relaxing custom or elevated accounts', () => {

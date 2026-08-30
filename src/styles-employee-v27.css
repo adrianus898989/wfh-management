@@ -1,5 +1,22 @@
 /* WFH V27.3 — Employee Management interaction and analysis layout fixes.
    This file is intentionally isolated from styles-pro.css so existing employee styling stays untouched. */
+.employee-master-table th.employee-error-count-col,
+.employee-master-table td.employee-error-count-cell{
+  width:68px;
+  min-width:68px;
+  padding-right:7px;
+  padding-left:7px;
+  text-align:center;
+}
+.employee-error-count-cell strong{
+  color:#2d425e;
+  font-variant-numeric:tabular-nums;
+  font-size:11px;
+}
+.employee-error-count-cell span{
+  color:#8291a4;
+  font-size:8px;
+}
 .resignation-history-table-wrap{
   position:relative;
   min-height:420px;

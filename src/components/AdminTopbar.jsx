@@ -21,6 +21,8 @@ const PRESENCE_INITIAL_JITTER_MS = 15 * 1000
 const PRESENCE_POLL_JITTER_MS = 30 * 1000
 const PRESENCE_MAX_BACKOFF_MS = 15 * 60 * 1000
 const PRESENCE_PAGE_SIZE = 20
+const PRESENCE_DETAIL_CACHE_MS = 60 * 1000
+const PRESENCE_DETAIL_CACHE_LIMIT = 12
 const presenceJitter = maximum => Math.floor(Math.random() * Math.max(1, maximum))
 const presencePollDelay = failures => Math.min(
   PRESENCE_MAX_BACKOFF_MS,
@@ -56,13 +58,15 @@ export default function AdminTopbar({ access }) {
   const mountedRef = useRef(false)
   const countFlightRef = useRef(null)
   const detailFlightRef = useRef(null)
+  const detailCacheRef = useRef(new Map())
   const lastCountAtRef = useRef(0)
   const failureCountRef = useRef(0)
   const [open, setOpen] = useState(false)
   const [section, setSection] = useState('admin')
   const [presence, setPresence] = useState(emptyPresence)
   const enabled = Boolean(access && !access.loading && !access.error)
-  const canPresence = Boolean(
+  const canPresenceCounts = enabled
+  const canPresenceRows = Boolean(
     access?.founder ||
     access?.permissions?.includes('*') ||
     access?.permissions?.includes(PERMISSIONS.ACCOUNT_ONLINE_PRESENCE_VIEW)
@@ -70,7 +74,7 @@ export default function AdminTopbar({ access }) {
   const canManual = Boolean(access?.founder || access?.permissions?.includes('*') || access?.permissions?.includes(PERMISSIONS.ACCOUNT_MANUAL_VIEW))
 
   const loadCounts = ({ quiet=false, force=false } = {}) => {
-    if (!enabled || !canPresence) return Promise.resolve(false)
+    if (!canPresenceCounts) return Promise.resolve(false)
     const lastCompletedAt = lastCountAtRef.current
     const freshness = PRESENCE_COUNT_REFRESH_MS
     if (!force && lastCompletedAt && Date.now() - lastCompletedAt < freshness) {
@@ -131,12 +135,33 @@ export default function AdminTopbar({ access }) {
     return promise
   }
 
-  const loadRows = (portal, { page=1 } = {}) => {
-    if (!enabled || !canPresence || !['admin', 'staff'].includes(portal)) return Promise.resolve(false)
+  const loadRows = (portal, { page=1, force=false } = {}) => {
+    if (!enabled || !canPresenceRows || !['admin', 'staff'].includes(portal)) return Promise.resolve(false)
     const requestedPage = Math.max(1, Math.floor(Number(page) || 1))
+    const cacheKey = `${clean(access?.authUserId) || 'admin'}:${portal}:${requestedPage}`
     const currentFlight = detailFlightRef.current
-    if (currentFlight?.portal === portal && currentFlight?.page === requestedPage) {
+    if (!force && currentFlight?.portal === portal && currentFlight?.page === requestedPage) {
       return currentFlight.promise
+    }
+    const cached = detailCacheRef.current.get(cacheKey)
+    if (!force && cached && Date.now() - cached.cachedAt < PRESENCE_DETAIL_CACHE_MS) {
+      currentFlight?.controller.abort()
+      detailRequestRef.current += 1
+      setPresence(current => ({
+        ...current,
+        countOnly:false,
+        [portal]:{
+          ...current[portal],
+          rows:cached.rows,
+          page:cached.page,
+          pages:cached.pages,
+          total:cached.total,
+          detailLoading:false,
+          detailError:'',
+          detailLoadedAt:cached.detailLoadedAt,
+        },
+      }))
+      return Promise.resolve(true)
     }
     currentFlight?.controller.abort()
 
@@ -172,6 +197,19 @@ export default function AdminTopbar({ access }) {
         const total = Math.max(0, Number(pageResult.total || 0))
         const pages = Math.max(1, Number(pageResult.pages || 1))
         const resolvedPage = Math.min(pages, Math.max(1, Number(pageResult.page || requestedPage)))
+        const detailLoadedAt = data?.refreshed_at || new Date().toISOString()
+        detailCacheRef.current.delete(cacheKey)
+        detailCacheRef.current.set(cacheKey, {
+          rows:pageResult.rows,
+          page:resolvedPage,
+          pages,
+          total,
+          detailLoadedAt,
+          cachedAt:Date.now(),
+        })
+        while (detailCacheRef.current.size > PRESENCE_DETAIL_CACHE_LIMIT) {
+          detailCacheRef.current.delete(detailCacheRef.current.keys().next().value)
+        }
         setPresence(current => ({
           ...current,
           countOnly:false,
@@ -184,7 +222,7 @@ export default function AdminTopbar({ access }) {
             total,
             detailLoading:false,
             detailError:'',
-            detailLoadedAt:data?.refreshed_at || new Date().toISOString(),
+            detailLoadedAt,
           },
         }))
         return true
@@ -211,7 +249,7 @@ export default function AdminTopbar({ access }) {
   }
 
   useEffect(() => {
-    if (!enabled || !canPresence) return undefined
+    if (!canPresenceCounts) return undefined
     mountedRef.current = true
     let timer = 0
     let stopped = false
@@ -257,10 +295,11 @@ export default function AdminTopbar({ access }) {
       detailFlightRef.current?.controller.abort()
       countFlightRef.current = null
       detailFlightRef.current = null
+      detailCacheRef.current.clear()
       window.removeEventListener('focus', resume)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [enabled, canPresence, locale])
+  }, [canPresenceCounts, canPresenceRows, locale])
 
   useEffect(() => {
     if (!open) return undefined
@@ -284,17 +323,19 @@ export default function AdminTopbar({ access }) {
   const accountName = clean(access.fullName) || login
   const accountMeta = clean(access.fullName) && login !== accountName ? login : clean(access.roleCode)
   const selectedPresence = presence[section]
+  const selectedCount = selectedPresence?.count == null ? '…' : selectedPresence.count
   const rows = selectedPresence?.rows || []
   const selectSection = value => {
     setSection(value)
     setOpen(true)
-    loadRows(value, { page:1 })
+    if (presence[value]?.count == null) loadCounts({ force:true })
+    if (canPresenceRows) loadRows(value, { page:1 })
   }
 
   return <header className="admin-global-topbar">
     <div className="admin-global-topbar-spacer" />
     <div className="admin-global-topbar-actions">
-      {canPresence && <div className="admin-presence-control" ref={rootRef}>
+      {canPresenceCounts && <div className="admin-presence-control" ref={rootRef}>
         <div className="admin-presence-chips" aria-label={locale === 'en' ? 'Online users' : '在线人数'}>
           <button type="button" className={open && section === 'admin' ? 'active' : ''} onClick={() => selectSection('admin')} aria-expanded={open && section === 'admin'}>
             <i aria-hidden="true" />
@@ -308,26 +349,28 @@ export default function AdminTopbar({ access }) {
           </button>
         </div>
 
-        {open && <section className="admin-presence-popover" role="dialog" aria-modal="false" aria-label={locale === 'en' ? 'Online user list' : '在线人员列表'}>
+        {open && <section className="admin-presence-popover" role="dialog" aria-modal="false" aria-label={canPresenceRows ? (locale === 'en' ? 'Online user list' : '在线人员列表') : (locale === 'en' ? 'Online user counts' : '在线人数')}>
           <header>
-            <div><strong>{section === 'admin' ? (locale === 'en' ? 'Backend users online' : '后台在线人员') : (locale === 'en' ? 'Staff online' : '员工端在线人员')}</strong><small>{locale === 'en' ? 'Based on the current app session' : '按当前系统登录会话判断'}</small></div>
-            <button type="button" onClick={() => loadRows(section, { page:selectedPresence.page })} disabled={selectedPresence.detailLoading}>{selectedPresence.detailLoading ? (locale === 'en' ? 'Loading…' : '读取中…') : (locale === 'en' ? 'Refresh list' : '刷新名单')}</button>
+            <div><strong>{section === 'admin' ? (locale === 'en' ? (canPresenceRows ? 'Backend users online' : 'Backend online count') : (canPresenceRows ? '后台在线人员' : '后台在线人数')) : (locale === 'en' ? (canPresenceRows ? 'Staff online' : 'Staff online count') : (canPresenceRows ? '员工端在线人员' : '员工端在线人数'))}</strong><small>{canPresenceRows ? (locale === 'en' ? 'Based on the current app session' : '按当前系统登录会话判断') : (locale === 'en' ? 'Count only for this account' : '当前账号仅显示人数')}</small></div>
+            {canPresenceRows && <button type="button" onClick={() => loadRows(section, { page:selectedPresence.page, force:true })} disabled={selectedPresence.detailLoading}>{selectedPresence.detailLoading ? (locale === 'en' ? 'Loading…' : '读取中…') : (locale === 'en' ? 'Refresh list' : '刷新名单')}</button>}
           </header>
           {presence.countError && <p className="admin-presence-warning">{presence.countError}</p>}
-          {selectedPresence.detailError && <p className="admin-presence-error">{selectedPresence.detailError}</p>}
-          {selectedPresence.detailLoading && !rows.length
-            ? <p className="admin-presence-empty">{locale === 'en' ? 'Loading this page…' : '正在读取本页名单…'}</p>
-            : !rows.length && !selectedPresence.detailError
-            ? <p className="admin-presence-empty">{locale === 'en' ? 'No one is online in this portal.' : '当前没有在线账号。'}</p>
-            : rows.length > 0
-            ? <ul aria-busy={selectedPresence.detailLoading}>{rows.map((row, index) => <PresenceRow key={`${row.portal}-${row.employee_no || row.username || index}`} row={row} locale={locale} />)}</ul>
-            : null}
-          {(selectedPresence.detailLoadedAt || selectedPresence.total > 0) && <nav className="admin-presence-pagination" aria-label={locale === 'en' ? 'Online list pages' : '在线名单分页'}>
-            <button type="button" disabled={selectedPresence.detailLoading || selectedPresence.page <= 1} onClick={() => loadRows(section, { page:selectedPresence.page - 1 })}>{locale === 'en' ? 'Previous' : '上一页'}</button>
-            <span>{locale === 'en' ? `${selectedPresence.page} / ${selectedPresence.pages} · ${selectedPresence.total}` : `第 ${selectedPresence.page} / ${selectedPresence.pages} 页 · 共 ${selectedPresence.total} 人`}</span>
-            <button type="button" disabled={selectedPresence.detailLoading || selectedPresence.page >= selectedPresence.pages} onClick={() => loadRows(section, { page:selectedPresence.page + 1 })}>{locale === 'en' ? 'Next' : '下一页'}</button>
-          </nav>}
-          <footer><span className="admin-presence-live-dot" aria-hidden="true" />{locale === 'en' ? 'Counts refresh about every 3 minutes; lists load only when opened; offline after 5 minutes without a heartbeat.' : '人数约每 3 分钟更新；名单只在展开时读取；连续 5 分钟没有心跳即显示离线。'}</footer>
+          {canPresenceRows ? <>
+            {selectedPresence.detailError && <p className="admin-presence-error">{selectedPresence.detailError}</p>}
+            {selectedPresence.detailLoading && !rows.length
+              ? <p className="admin-presence-empty">{locale === 'en' ? 'Loading this page…' : '正在读取本页名单…'}</p>
+              : !rows.length && !selectedPresence.detailError
+              ? <p className="admin-presence-empty">{locale === 'en' ? 'No one is online in this portal.' : '当前没有在线账号。'}</p>
+              : rows.length > 0
+              ? <ul aria-busy={selectedPresence.detailLoading}>{rows.map((row, index) => <PresenceRow key={`${row.portal}-${row.employee_no || row.username || index}`} row={row} locale={locale} />)}</ul>
+              : null}
+            {(selectedPresence.detailLoadedAt || selectedPresence.total > 0) && <nav className="admin-presence-pagination" aria-label={locale === 'en' ? 'Online list pages' : '在线名单分页'}>
+              <button type="button" disabled={selectedPresence.detailLoading || selectedPresence.page <= 1} onClick={() => loadRows(section, { page:selectedPresence.page - 1 })}>{locale === 'en' ? 'Previous' : '上一页'}</button>
+              <span>{locale === 'en' ? `${selectedPresence.page} / ${selectedPresence.pages} · ${selectedPresence.total}` : `第 ${selectedPresence.page} / ${selectedPresence.pages} 页 · 共 ${selectedPresence.total} 人`}</span>
+              <button type="button" disabled={selectedPresence.detailLoading || selectedPresence.page >= selectedPresence.pages} onClick={() => loadRows(section, { page:selectedPresence.page + 1 })}>{locale === 'en' ? 'Next' : '下一页'}</button>
+            </nav>}
+          </> : <p className="admin-presence-count-only">{locale === 'en' ? `${selectedCount} online. Names require Founder or the online-list permission.` : `当前在线 ${selectedCount} 人。名单仅对 Founder 或已明确授予在线名单权限的角色显示。`}</p>}
+          <footer><span className="admin-presence-live-dot" aria-hidden="true" />{canPresenceRows ? (locale === 'en' ? 'Counts refresh about every 3 minutes; lists load on demand and reuse a short cache; offline after 5 minutes without a heartbeat.' : '人数约每 3 分钟更新；名单按需读取并短时复用缓存；连续 5 分钟没有心跳即显示离线。') : (locale === 'en' ? 'Counts refresh about every 3 minutes; no names are requested for this account.' : '人数约每 3 分钟更新；当前账号不会请求在线名单。')}</footer>
         </section>}
       </div>}
 

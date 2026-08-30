@@ -43,6 +43,8 @@
 /* Use field classes instead of positional selectors. The optional note checkbox may
    appear only for authorized accounts and must never shift the business columns. */
 .employee-master-table .employee-col-level{width:4%!important;}
+.employee-master-table .employee-error-count-col,
+.employee-master-table .employee-error-count-cell{width:4.5%!important;}
 .employee-master-table .employee-col-id{width:6%!important;}
 .employee-master-table .employee-col-name{width:13%!important;}
 .employee-master-table .employee-col-country{width:4.5%!important;}
