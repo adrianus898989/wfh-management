@@ -7,6 +7,7 @@ import appStyles from './styles.css?inline'
 import proStyles from './styles-pro.css?inline'
 import reportsStyles from './styles-reports.css?inline'
 import employeeV27Styles from './styles-employee-v27.css?inline'
+import adminDesignPreviewStyles from './styles-admin-design-preview.css?inline'
 import './stable-layout-hotfix.css'
 import './report-overview-v2712.css'
 import './ui-v2714.css'
@@ -21,12 +22,33 @@ import './styles-admin-ip-allowlist.css'
 import './styles-admin-root-layout.css'
 import './styles-management-risk.css'
 import { configured } from './lib/supabase'
+import { applyAdminDesignPreviewMode } from './lib/adminDesignPreview'
 
-for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles]')) old.remove()
+const runtimeBasePath = String(import.meta.env.BASE_URL || '/').replace(/\/+$/, '')
+const runtimeBrowserPath = window.location.pathname
+const runtimeAppPath = runtimeBasePath && (
+  runtimeBrowserPath === runtimeBasePath || runtimeBrowserPath.startsWith(`${runtimeBasePath}/`)
+)
+  ? runtimeBrowserPath.slice(runtimeBasePath.length) || '/'
+  : runtimeBrowserPath
+const isAdminRuntime = runtimeAppPath === '/admin' || runtimeAppPath.startsWith('/admin/')
+const adminDesignPreviewAvailable = isAdminRuntime
+const adminDesignPreviewEnabled = applyAdminDesignPreviewMode({ available: adminDesignPreviewAvailable })
+
+for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles],style[data-wfh-admin-design-preview]')) old.remove()
 const base = document.createElement('style'); base.setAttribute('data-wfh-inline-styles', 'true'); base.textContent = appStyles; document.head.appendChild(base)
 const pro = document.createElement('style'); pro.setAttribute('data-wfh-pro-styles', 'true'); pro.textContent = proStyles; document.head.appendChild(pro)
 const reports = document.createElement('style'); reports.setAttribute('data-wfh-reports-styles', 'true'); reports.textContent = reportsStyles; document.head.appendChild(reports)
 const employeeV27 = document.createElement('style'); employeeV27.setAttribute('data-wfh-employee-v27-styles', 'true'); employeeV27.textContent = employeeV27Styles; document.head.appendChild(employeeV27)
+const mountAdminDesignPreviewStyles = () => {
+  document.querySelector('style[data-wfh-admin-design-preview]')?.remove()
+  if (!adminDesignPreviewEnabled) return
+  const preview = document.createElement('style')
+  preview.setAttribute('data-wfh-admin-design-preview', 'true')
+  preview.textContent = adminDesignPreviewStyles
+  document.head.appendChild(preview)
+}
+mountAdminDesignPreviewStyles()
 document.documentElement.setAttribute('data-wfh-ui-build', 'exam-v1-team-position')
 window.addEventListener('vite:preloadError', event => {
   event.preventDefault()
@@ -38,15 +60,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><A
 // They are DOM driven; native report/employee pages own workload and grade data.
 // A missing environment configuration should still render the normal setup
 // screen instead of crashing while a legacy enhancer patches Supabase.
-const runtimeBasePath = String(import.meta.env.BASE_URL || '/').replace(/\/+$/, '')
-const runtimeBrowserPath = window.location.pathname
-const runtimeAppPath = runtimeBasePath && (
-  runtimeBrowserPath === runtimeBasePath || runtimeBrowserPath.startsWith(`${runtimeBasePath}/`)
-)
-  ? runtimeBrowserPath.slice(runtimeBasePath.length) || '/'
-  : runtimeBrowserPath
-const isAdminRuntime = runtimeAppPath === '/admin' || runtimeAppPath.startsWith('/admin/')
-
 // These compatibility layers inspect and patch admin-only tables.  Loading them
 // for staff used five extra chunks and five document-wide MutationObservers on
 // every employee session, even though no matching admin DOM can exist there.
@@ -62,5 +75,6 @@ if (configured && isAdminRuntime) {
     for (const start of starts) {
       try { await start() } catch (error) { console.error('Optional UI enhancer failed to start', error) }
     }
+    mountAdminDesignPreviewStyles()
   })()
 }
