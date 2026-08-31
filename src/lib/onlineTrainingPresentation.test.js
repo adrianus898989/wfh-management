@@ -154,9 +154,10 @@ test('trainer history signs attachment URLs only when one report is opened',()=>
 })
 
 test('trainer landing page uses one bounded server aggregation request per page',()=>{
+  const loadListStart=onlineTrainingPage.indexOf('const loadList=async')
   const loadListSource=onlineTrainingPage.slice(
-    onlineTrainingPage.indexOf('const loadList=async'),
-    onlineTrainingPage.indexOf('useEffect(()=>{loadBootstrap'),
+    loadListStart,
+    onlineTrainingPage.indexOf('\n  useEffect(()=>{',loadListStart),
   )
   assert.match(loadListSource,/requestedMode==='reports'\?'online_training_search_trainers':'online_training_search_people'/)
   assert.match(loadListSource,/p_page:nextPage/)

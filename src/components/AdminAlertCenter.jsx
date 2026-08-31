@@ -752,7 +752,18 @@ export function AdminAlertRecordsPage() {
   const canMarkRead = access.hasPermission('alert.mark_read')
   const canFollowUp = access.hasPermission('alert.follow_up')
   const canViewSyncDiagnostics = access.hasPermission(PERMISSIONS.ALERT_SYNC_DIAGNOSTICS_VIEW)
-  const [draft, setDraft] = useState({ search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false })
+  const emptyFilters = () => ({
+    employee_no:'',
+    employee_name:'',
+    team:'',
+    search:'',
+    status:'active',
+    alert_type:'',
+    group:'all',
+    severity:'',
+    unread_only:false,
+  })
+  const [draft, setDraft] = useState(emptyFilters)
   const [filters, setFilters] = useState(draft)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
@@ -817,7 +828,7 @@ export function AdminAlertRecordsPage() {
 
   const apply = () => { setFilters({ ...draft }); setPage(1); load(1, pageSize, draft) }
   const reset = () => {
-    const next = { search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:false }
+    const next = emptyFilters()
     setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
   }
   const selectGroup = group => {
@@ -834,7 +845,7 @@ export function AdminAlertRecordsPage() {
     window.requestAnimationFrame(() => recordsRef.current?.scrollIntoView({ behavior:'smooth', block:'start' }))
   }
   const showActive = ({ unreadOnly=false } = {}) => {
-    const next = { search:'', status:'active', alert_type:'', group:'all', severity:'', unread_only:unreadOnly }
+    const next = { ...emptyFilters(), unread_only:unreadOnly }
     setDraft(next); setFilters(next); setPage(1); load(1, pageSize, next)
     window.requestAnimationFrame(() => recordsRef.current?.scrollIntoView({ behavior:'smooth', block:'start' }))
   }
@@ -907,12 +918,19 @@ export function AdminAlertRecordsPage() {
     </section>
 
     <div className="admin-alert-filter-card">
-      <label><span>{locale === 'en' ? 'Employee / warning' : '员工 / 预警内容'}</span><input value={draft.search} onChange={event => setDraft(current => ({ ...current, search:event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} placeholder={locale === 'en' ? 'Employee ID, name or warning' : '员工ID、姓名或预警内容'} /></label>
-      <label><span>{locale === 'en' ? 'Status' : '状态'}</span><select value={draft.status} onChange={event => setDraft(current => ({ ...current, status:event.target.value }))}><option value="active">{locale === 'en' ? 'Active' : '进行中'}</option><option value="resolved">{locale === 'en' ? 'Resolved' : '已解除'}</option><option value="all">{locale === 'en' ? 'All' : '全部'}</option></select></label>
-      <label><span>{locale === 'en' ? 'Type' : '预警类型'}</span><select value={draft.alert_type} onChange={event => setDraft(current => ({ ...current, alert_type:event.target.value }))}><option value="">{locale === 'en' ? 'All types' : '全部类型'}</option>{typeOptions.map(([type, meta]) => <option key={type} value={type}>{meta[locale]}</option>)}</select></label>
-      <label><span>{locale === 'en' ? 'Severity' : '级别'}</span><select value={draft.severity} onChange={event => setDraft(current => ({ ...current, severity:event.target.value }))}><option value="">{locale === 'en' ? 'All levels' : '全部级别'}</option>{Object.entries(SEVERITY_META).map(([value, meta]) => <option value={value} key={value}>{meta[locale]}</option>)}</select></label>
-      <label className="admin-alert-unread-toggle"><input type="checkbox" checked={draft.unread_only} onChange={event => setDraft(current => ({ ...current, unread_only:event.target.checked }))}/><span>{locale === 'en' ? 'Unread only' : '只看未读'}</span></label>
-      <div className="admin-alert-filter-actions"><button type="button" className="primary-action" onClick={apply}>{locale === 'en' ? 'Search' : '查询'}</button><button type="button" className="secondary-action" onClick={reset}>{locale === 'en' ? 'Reset' : '重置'}</button></div>
+      <div className="admin-alert-identity-filters" role="group" aria-label={locale === 'en' ? 'Employee filters' : '员工筛选'}>
+        <label><span>{locale === 'en' ? 'Employee ID' : '员工 ID'}</span><input value={draft.employee_no} onChange={event => setDraft(current => ({ ...current, employee_no:event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} placeholder={locale === 'en' ? 'Search employee ID' : '输入员工 ID'} /></label>
+        <label><span>{locale === 'en' ? 'Employee name' : '员工姓名'}</span><input value={draft.employee_name} onChange={event => setDraft(current => ({ ...current, employee_name:event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} placeholder={locale === 'en' ? 'Search employee name' : '输入员工姓名'} /></label>
+        <label><span>{locale === 'en' ? 'Current team' : '当前团队'}</span><input value={draft.team} onChange={event => setDraft(current => ({ ...current, team:event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} placeholder={locale === 'en' ? 'Search current roster team' : '输入当前排班团队'} /></label>
+      </div>
+      <div className="admin-alert-warning-filters" role="group" aria-label={locale === 'en' ? 'Warning filters' : '预警筛选'}>
+        <label><span>{locale === 'en' ? 'Warning keyword' : '预警关键词'}</span><input value={draft.search} onChange={event => setDraft(current => ({ ...current, search:event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} placeholder={locale === 'en' ? 'Search title, summary or date' : '搜索标题、摘要或日期'} /></label>
+        <label><span>{locale === 'en' ? 'Status' : '状态'}</span><select value={draft.status} onChange={event => setDraft(current => ({ ...current, status:event.target.value }))}><option value="active">{locale === 'en' ? 'Active' : '进行中'}</option><option value="resolved">{locale === 'en' ? 'Resolved' : '已解除'}</option><option value="all">{locale === 'en' ? 'All' : '全部'}</option></select></label>
+        <label><span>{locale === 'en' ? 'Type' : '预警类型'}</span><select value={draft.alert_type} onChange={event => setDraft(current => ({ ...current, alert_type:event.target.value }))}><option value="">{locale === 'en' ? 'All types' : '全部类型'}</option>{typeOptions.map(([type, meta]) => <option key={type} value={type}>{meta[locale]}</option>)}</select></label>
+        <label><span>{locale === 'en' ? 'Severity' : '级别'}</span><select value={draft.severity} onChange={event => setDraft(current => ({ ...current, severity:event.target.value }))}><option value="">{locale === 'en' ? 'All levels' : '全部级别'}</option>{Object.entries(SEVERITY_META).map(([value, meta]) => <option value={value} key={value}>{meta[locale]}</option>)}</select></label>
+        <label className="admin-alert-unread-toggle"><input type="checkbox" checked={draft.unread_only} onChange={event => setDraft(current => ({ ...current, unread_only:event.target.checked }))}/><span>{locale === 'en' ? 'Unread only' : '只看未读'}</span></label>
+        <div className="admin-alert-filter-actions"><button type="button" className="primary-action" onClick={apply}>{locale === 'en' ? 'Search' : '查询'}</button><button type="button" className="secondary-action" onClick={reset}>{locale === 'en' ? 'Reset' : '重置'}</button></div>
+      </div>
     </div>
 
     {state.error && <div className="page-error employee-notice">{state.error}</div>}

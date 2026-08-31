@@ -30,7 +30,7 @@ test('daily route integrates only the active online training page', () => {
 })
 
 test('online training keeps initial and silent reads quiet while explicit failures can retry reads', () => {
-  assert.match(onlineTraining, /useEffect\(\(\)=>\{loadBootstrap\(\)\},\[\]\)/)
+  assert.match(onlineTraining, /useEffect\(\(\)=>\{\s*loadBootstrap\(\)\s*return\(\)=>\{[\s\S]*?bootstrapAbortRef\.current\?\.abort\(\)[\s\S]*?listAbortRef\.current\?\.abort\(\)[\s\S]*?\}\s*\},\[\]\)/)
   assert.match(onlineTraining, /setTimeout\(\(\)=>loadList\(\{silent:true\}\),0\)/)
   assert.match(onlineTraining, /const requestedOperation=operation\|\|\(announceFailure\?'查询线上培训记录':listIntentRef\.current\)/)
   assert.match(onlineTraining, /if\(requestedOperation\)notify\([\s\S]*?retry:\(\)=>loadList/)

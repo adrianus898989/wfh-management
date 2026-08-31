@@ -20,6 +20,7 @@ import '../styles-online-training.css'
 
 const BUCKET='online-training'
 const ONLINE_TRAINING_TOAST_MODULE='线上培训日报'
+const ONLINE_TRAINING_RPC_TIMEOUT_MS=12000
 const RPC_PAGE_SIZE=50
 const MAX_ATTACHMENTS=6
 const MAX_IMAGE_BYTES=4*1024*1024
@@ -48,9 +49,13 @@ const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
 const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
 const defaultFilters=()=>{const range=businessTodayRange();return{...EMPTY_FILTERS,from:range.date_from,to:range.date_to}}
-const delay=ms=>new Promise(resolve=>window.setTimeout(resolve,ms))
 const isTransientError=error=>/failed to fetch|networkerror|network request failed|load failed|connection|timeout/i.test(text(error?.message||error))
-const readableError=(error,fallback)=>isTransientError(error)?'连接短暂中断，请点击“重新读取”':text(error?.message)||fallback
+const isStatementTimeout=error=>text(error?.code)==='57014'||/statement timeout|canceling statement due to statement timeout/i.test(text(error?.message||error))
+const isAbortError=error=>error?.name==='AbortError'||/abort(?:ed|error)?/i.test(text(error?.message||error))
+const rpcTimeoutError=()=>Object.assign(new Error('查询超时，请点击“重新读取”'),{code:'ONLINE_TRAINING_RPC_TIMEOUT'})
+const readableError=(error,fallback)=>isStatementTimeout(error)
+  ?'查询超时，请点击“重新读取”'
+  :isTransientError(error)?'连接短暂中断，请点击“重新读取”':text(error?.message)||fallback
 
 async function optimiseUpload(file){
   if(file.type==='image/gif'||typeof createImageBitmap!=='function')return file
@@ -215,7 +220,10 @@ export default function OnlineTrainingPage(){
   const [history,setHistory]=useState(null)
   const [trainerHistory,setTrainerHistory]=useState(null)
   const [lightbox,setLightbox]=useState(null)
+  const bootstrapRequestRef=useRef(0)
+  const bootstrapAbortRef=useRef(null)
   const listRequestRef=useRef(0)
+  const listAbortRef=useRef(null)
   const historyRequestRef=useRef(0)
   const trainerHistoryRequestRef=useRef(0)
   const trainerRequestRef=useRef(0)
@@ -241,28 +249,39 @@ export default function OnlineTrainingPage(){
     return data
   }
 
-  const readCall=async(name,args={})=>{
-    let lastError
-    for(let attempt=0;attempt<3;attempt+=1){
-      try{return await call(name,args)}
-      catch(error){
-        lastError=error
-        if(!isTransientError(error)||attempt===2)throw error
-        await delay(250+(attempt*350))
-      }
-    }
-    throw lastError
+  const readCall=async(name,args={},signal=null)=>{
+    // Hot reads are deliberately single-attempt. In particular, PostgreSQL
+    // 57014 / statement timeout must surface now instead of multiplying one
+    // ten-second database timeout into a roughly thirty-second UI wait. The
+    // existing toast retry starts a fresh, explicit request when the user asks.
+    const query=supabase.rpc(name,args)
+    const {data,error:rpcError}=signal?await query.abortSignal(signal):await query
+    if(rpcError)throw rpcError
+    return data
   }
 
   const loadBootstrap=async({announceFailure=false}={})=>{
+    const requestId=++bootstrapRequestRef.current
+    bootstrapAbortRef.current?.abort()
+    const controller=new AbortController()
+    bootstrapAbortRef.current=controller
+    listRequestRef.current+=1
+    listAbortRef.current?.abort()
+    listAbortRef.current=null
+    let timedOut=false
+    const timeoutId=window.setTimeout(()=>{timedOut=true;controller.abort()},ONLINE_TRAINING_RPC_TIMEOUT_MS)
+    setSearching(false)
     setLoading(true)
     try{
-      const data=await readCall('online_training_context')
+      const data=await readCall('online_training_context',{},controller.signal)
+      if(requestId!==bootstrapRequestRef.current||controller.signal.aborted)return null
       setBootstrap(data)
       setError('')
       return data
     }catch(err){
-      const reason=readableError(err,'线上培训模块读取失败')
+      if(requestId!==bootstrapRequestRef.current||(!timedOut&&isAbortError(err)))return null
+      const failure=timedOut?rpcTimeoutError():err
+      const reason=readableError(failure,'线上培训模块读取失败')
       setError(reason)
       if(announceFailure)listIntentRef.current=''
       if(announceFailure)notify({
@@ -272,11 +291,20 @@ export default function OnlineTrainingPage(){
       })
       return null
     }
-    finally{setLoading(false)}
+    finally{
+      window.clearTimeout(timeoutId)
+      if(bootstrapAbortRef.current===controller)bootstrapAbortRef.current=null
+      if(requestId===bootstrapRequestRef.current)setLoading(false)
+    }
   }
 
   const loadList=async({silent=false,nextPage=page,announceFailure=false,operation='',throwOnError=false}={})=>{
     const requestId=++listRequestRef.current
+    listAbortRef.current?.abort()
+    const controller=new AbortController()
+    listAbortRef.current=controller
+    let timedOut=false
+    const timeoutId=window.setTimeout(()=>{timedOut=true;controller.abort()},ONLINE_TRAINING_RPC_TIMEOUT_MS)
     const requestedMode=mode
     const requestedOperation=operation||(announceFailure?'查询线上培训记录':listIntentRef.current)
     listIntentRef.current=''
@@ -286,6 +314,7 @@ export default function OnlineTrainingPage(){
         requestedMode==='reports'?'online_training_search_trainers':'online_training_search_people',{
           p_filters:filters,p_page:nextPage,p_page_size:pageSize,
         },
+        controller.signal,
       )
       const rows=data?.rows||[]
       if(requestId!==listRequestRef.current)return
@@ -295,7 +324,9 @@ export default function OnlineTrainingPage(){
       setError('')
       return true
     }catch(err){
-      const reason=readableError(err,'线上培训记录读取失败')
+      if(requestId!==listRequestRef.current||(!timedOut&&isAbortError(err)))return false
+      const failure=timedOut?rpcTimeoutError():err
+      const reason=readableError(failure,'线上培训记录读取失败')
       if(requestId===listRequestRef.current){
         setError(reason)
         if(requestedOperation)notify({
@@ -304,18 +335,32 @@ export default function OnlineTrainingPage(){
           retry:()=>loadList({silent:true,announceFailure:true,operation:'刷新线上培训记录'}),retryLabel:'重试',
         })
       }
-      if(throwOnError)throw err
+      if(throwOnError)throw failure
       return false
     }finally{
+      window.clearTimeout(timeoutId)
+      if(listAbortRef.current===controller)listAbortRef.current=null
       if(requestId===listRequestRef.current){setLoading(false);setSearching(false)}
     }
   }
 
-  useEffect(()=>{loadBootstrap()},[])
+  useEffect(()=>{
+    loadBootstrap()
+    return()=>{
+      bootstrapRequestRef.current+=1
+      listRequestRef.current+=1
+      bootstrapAbortRef.current?.abort()
+      listAbortRef.current?.abort()
+    }
+  },[])
   useEffect(()=>{
     if(!bootstrap)return
     const timer=setTimeout(()=>loadList({silent:true}),0)
-    return()=>clearTimeout(timer)
+    return()=>{
+      clearTimeout(timer)
+      listRequestRef.current+=1
+      listAbortRef.current?.abort()
+    }
   },[bootstrap,mode,page,pageSize,searchVersion])
   useEffect(()=>{
     if(!(editor||viewing||deleteTarget||profile||history||trainerHistory||lightbox))return
