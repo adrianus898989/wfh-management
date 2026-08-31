@@ -15,20 +15,28 @@ import { isCurrentLiveRequest, staleSnapshotNotice } from '../lib/requestConsist
 const TABS=['考试概览','考试记录','题库','人工批改']
 const TRAINING_TOAST_MODULE='考试管理'
 const OVERVIEW_RPC_TIMEOUT_MS=8000
+const OVERVIEW_ANALYTICS_RETRY_DELAY_MS=250
 const blankQuestion={series_name:'',team_name:'',position_name:'',question_en:'',question_zh:'',question_vi:'',points:5,difficulty:1,image_urls:[],active:true}
 const blankSessionFilters={employeeNo:'',employeeName:'',exam:'',team:'',position:'',status:'',grader:'',source:'',dateFrom:'',dateTo:''}
 const overviewAnalyticsRpcs=[
-  ['admin_exam_overview_analytics_summary',['summary','score_bands','sources']],
-  ['admin_exam_overview_analytics_dimensions',['series','positions','teams']],
-  ['admin_exam_overview_analytics_activity',['trend','daily_activity']],
-  ['admin_exam_overview_analytics_leaderboard',['leaderboard']]
+  ['admin_exam_overview_analytics_summary','summary','成绩汇总与答题分析',['summary','score_bands','sources']],
+  ['admin_exam_overview_analytics_dimensions','dimensions','盘口、岗位与团队分析',['series','positions','teams']],
+  ['admin_exam_overview_analytics_activity','activity','近期考试与成绩趋势',['trend','daily_activity']],
+  ['admin_exam_overview_analytics_leaderboard','leaderboard','考试排行榜',['leaderboard']]
 ]
+const overviewAnalyticsModuleKeys=overviewAnalyticsRpcs.map(([,moduleKey])=>moduleKey)
 const withOverviewAnalytics=(overview,analytics)=>({...overview,analytics:{...(overview?.analytics||{}),...(analytics||{})}})
 const plainObject=value=>Boolean(value)&&typeof value==='object'&&!Array.isArray(value)
 const validOverviewHome=value=>plainObject(value)&&typeof value._scope_key==='string'&&value._scope_key.length>0&&plainObject(value.counts)&&plainObject(value.current_counts)&&Array.isArray(value.sessions)&&plainObject(value.last_sync)&&plainObject(value.legacy)&&plainObject(value.legacy.counts)&&Array.isArray(value.legacy.sessions)&&plainObject(value.legacy.sync_state)
 const hasKeys=(value,keys)=>plainObject(value)&&keys.every(key=>Object.prototype.hasOwnProperty.call(value,key))
 const validOverviewAnalytics=(value,keys)=>plainObject(value)&&typeof value._scope_key==='string'&&keys.every(key=>Object.prototype.hasOwnProperty.call(value,key)&&(key==='summary'||key==='score_bands'?plainObject(value[key]):Array.isArray(value[key])))&&(!keys.includes('summary')||hasKeys(value.summary,['total_attempts','graded_attempts','current_attempts','legacy_attempts']))&&(!keys.includes('score_bands')||hasKeys(value.score_bands,['excellent','good','pass','fail']))
 const overviewAccessFailure=value=>/(not_authenticated|session_not_current|permission_denied|not authenticated|permission denied|\b401\b|\b403\b)/i.test(message(value))
+const retryableOverviewAnalyticsFailure=value=>{
+  const status=Number(value?.status||value?.statusCode)
+  const code=String(value?.code||'')
+  if([408,425,429,500,502,503,504].includes(status))return true
+  return /^(57014|PGRST000|PGRST001|PGRST002)$/.test(code)||/(statement timeout|canceling statement|timed? out|abort(?:ed)?|network|fetch failed|connection (?:reset|closed)|temporarily unavailable|gateway timeout)/i.test(message(value))
+}
 const todaySessionFilters=()=>{const day=businessTodayIso();return {...blankSessionFilters,dateFrom:day,dateTo:day}}
 const message=e=>e?.message||String(e||'操作失败')
 const labelValue=value=>String(value||'').trim()||'全部'
@@ -239,6 +247,7 @@ export default function AdminTrainingPage(){
     }
     setOverviewLoading(true);setError('')
     const requestScopeKey=overviewScopeKey
+    const overviewRequestActive=()=>isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey&&tabRef.current==='考试概览'
     const invokeOverviewRpc=async rpcName=>{
       const controller=new AbortController()
       overviewAbortRef.current?.abort();overviewAbortRef.current=controller
@@ -248,6 +257,22 @@ export default function AdminTrainingPage(){
         clearTimeout(timeoutId)
         if(overviewAbortRef.current===controller)overviewAbortRef.current=null
       }
+    }
+    const invokeOverviewAnalyticsRpc=async rpcName=>{
+      let latestResponse=null
+      for(let attempt=0;attempt<2;attempt+=1){
+        try{
+          latestResponse=await invokeOverviewRpc(rpcName)
+          if(!latestResponse?.error||!retryableOverviewAnalyticsFailure(latestResponse.error)||attempt===1)return latestResponse
+        }catch(rpcFailure){
+          if(!retryableOverviewAnalyticsFailure(rpcFailure)||attempt===1)throw rpcFailure
+          latestResponse={data:null,error:rpcFailure}
+        }
+        if(!overviewRequestActive())return {_cancelled:true,data:null,error:null}
+        await new Promise(resolve=>setTimeout(resolve,OVERVIEW_ANALYTICS_RETRY_DELAY_MS))
+        if(!overviewRequestActive())return {_cancelled:true,data:null,error:null}
+      }
+      return latestResponse
     }
     const promise=(async()=>{
       const invalidateOverview=()=>{
@@ -270,8 +295,16 @@ export default function AdminTrainingPage(){
 
         const prior=overviewSnapshotRef.current
         const serverScopeKey=result._scope_key
-        const priorReady=prior.scopeKey===requestScopeKey&&prior.hasData&&prior.data?._analytics_ready===true&&prior.data?._scope_key===serverScopeKey
-        let merged={...(result||{}),analytics:priorReady?prior.data.analytics:null,_analytics_ready:priorReady,_analytics_partial:false}
+        const priorScopeMatches=prior.scopeKey===requestScopeKey&&prior.hasData&&prior.data?._scope_key===serverScopeKey
+        const priorAnalytics=priorScopeMatches&&plainObject(prior.data?.analytics)?prior.data.analytics:null
+        const priorLoadedModules=priorAnalytics?overviewAnalyticsRpcs.filter(([, , ,requiredKeys])=>requiredKeys.every(key=>Object.prototype.hasOwnProperty.call(priorAnalytics,key))).map(([,moduleKey])=>moduleKey):[]
+        const loadedAnalyticsModules=new Set(priorLoadedModules)
+        const failedAnalyticsModules=new Map()
+        const staleAnalyticsModules=new Set()
+        let merged={...(result||{}),analytics:priorAnalytics,_analytics_ready:loadedAnalyticsModules.size>0,_analytics_partial:false,_analytics_loaded_modules:[...loadedAnalyticsModules],_analytics_failed_modules:[],_analytics_stale_modules:[]}
+        const syncAnalyticsMeta=()=>{
+          merged={...merged,_analytics_ready:loadedAnalyticsModules.size>0,_analytics_partial:failedAnalyticsModules.size>0,_analytics_loaded_modules:[...loadedAnalyticsModules],_analytics_failed_modules:[...failedAnalyticsModules.values()],_analytics_stale_modules:[...staleAnalyticsModules]}
+        }
         const publish=()=>{
           if(!isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey||tabRef.current!=='考试概览')return false
           const snapshot={scopeKey:requestScopeKey,hasData:true,data:merged}
@@ -279,37 +312,44 @@ export default function AdminTrainingPage(){
           return true
         }
         if(!publish())return
-        setOverviewStaleNotice(priorReady?'基础数据已更新；考试分析刷新中，暂显示上次成功结果。':'')
+        setOverviewStaleNotice(priorLoadedModules.length?'基础数据已更新；考试分析刷新中，暂显示上次成功结果。':'')
 
-        let partialAnalytics=false,completedAnalytics=0
-        for(const [rpcName,requiredKeys] of overviewAnalyticsRpcs){
+        for(const [rpcName,moduleKey,moduleLabel,requiredKeys] of overviewAnalyticsRpcs){
           if(tabRef.current!=='考试概览')return
           try{
-            const {data:analyticsPart,error:analyticsError}=await invokeOverviewRpc(rpcName)
-            if(!isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey||tabRef.current!=='考试概览')return
+            const analyticsResponse=await invokeOverviewAnalyticsRpc(rpcName)
+            if(analyticsResponse?._cancelled||!overviewRequestActive())return
+            const {data:analyticsPart,error:analyticsError}=analyticsResponse||{}
             if(analyticsError){
-              partialAnalytics=true
               if(overviewAccessFailure(analyticsError)){const reason=message(analyticsError);setError(reason);publishFailure(reason);invalidateOverview();return}
+              failedAnalyticsModules.set(moduleKey,moduleLabel)
+              if(loadedAnalyticsModules.has(moduleKey))staleAnalyticsModules.add(moduleLabel)
+              syncAnalyticsMeta();if(!publish())return
               continue
             }
             if(!validOverviewAnalytics(analyticsPart,requiredKeys)){
-              partialAnalytics=true
+              failedAnalyticsModules.set(moduleKey,moduleLabel)
+              if(loadedAnalyticsModules.has(moduleKey))staleAnalyticsModules.add(moduleLabel)
+              syncAnalyticsMeta();if(!publish())return
               continue
             }
             if(analyticsPart._scope_key!==serverScopeKey){const reason='权限范围已变化，请刷新重试。';setError(reason);publishFailure(reason);invalidateOverview();return}
             const {_scope_key:_ignoredScopeKey,...analyticsPatch}=analyticsPart
             merged=withOverviewAnalytics(merged,analyticsPatch)
-            completedAnalytics+=1
+            loadedAnalyticsModules.add(moduleKey);failedAnalyticsModules.delete(moduleKey);staleAnalyticsModules.delete(moduleLabel);syncAnalyticsMeta()
             if(!publish())return
           }catch(analyticsError){
-            if(!isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey||tabRef.current!=='考试概览')return
-            partialAnalytics=true
+            if(!overviewRequestActive())return
             if(overviewAccessFailure(analyticsError)){const reason=message(analyticsError);setError(reason);publishFailure(reason);invalidateOverview();return}
+            failedAnalyticsModules.set(moduleKey,moduleLabel)
+            if(loadedAnalyticsModules.has(moduleKey))staleAnalyticsModules.add(moduleLabel)
+            syncAnalyticsMeta();if(!publish())return
           }
         }
-        merged={...merged,_analytics_ready:priorReady||completedAnalytics===overviewAnalyticsRpcs.length,_analytics_partial:partialAnalytics}
+        syncAnalyticsMeta()
         if(!publish())return
-        setOverviewStaleNotice(partialAnalytics?'部分分析暂不可用；已保留本次成功结果，请稍后刷新重试。':'')
+        const failedModuleLabels=[...failedAnalyticsModules.values()]
+        setOverviewStaleNotice(failedModuleLabels.length?`暂时无法更新：${failedModuleLabels.join('、')}。系统已自动重试一次；其他成功分析正常显示。`:'')
       }catch(e){
         if(isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey&&tabRef.current==='考试概览'){
           const reason=message(e)
@@ -464,23 +504,36 @@ export default function AdminTrainingPage(){
 
 function Overview({counts,data,onTab,visibleTabs,onEmployee}){
   const analytics=data?.analytics||{},analyticsReady=data?._analytics_ready===true
+  const loadedModules=new Set(Array.isArray(data?._analytics_loaded_modules)?data._analytics_loaded_modules:(analyticsReady?overviewAnalyticsModuleKeys:[]))
+  const failedModules=Array.isArray(data?._analytics_failed_modules)?data._analytics_failed_modules:[]
+  const staleModules=Array.isArray(data?._analytics_stale_modules)?data._analytics_stale_modules:[]
+  const activityReady=loadedModules.has('activity')
   const old=data?.legacy?.counts||{}
   const current=data?.current_counts||{}
-  const daily=analyticsReady?recentDays(analytics.daily_activity,7):[]
+  const daily=activityReady?recentDays(analytics.daily_activity,7):[]
   const cards=[
     ['题库',counts.questions||0,'题库','题目'],['记录',counts.total_sessions||0,'考试记录','全部'],['待批改',counts.pending_grading||0,'人工批改','份'],['已完成',counts.completed||0,'考试记录','份'],
     ['本系统',current.total_sessions||0,null,'份'],['旧考试',old.total_sessions||0,null,`已评 ${old.completed||0} · 待评 ${old.pending_grading||0}`],['已匹配',old.matched||0,null,`未匹配 ${old.unmatched||0}`]
   ]
-  const analyticsMessage=data?._analytics_partial?'部分分析暂不可用，基础记录与计数不受影响。':'正在读取考试分析…'
-  return <><section className="exam-overview-strip">{cards.map(([label,value,target,note],index)=>{const allowed=target&&visibleTabs.includes(target);const content=<><span>{label}</span><strong>{value}</strong><small>{note}{allowed?' · 查看 →':''}</small></>;return allowed?<button key={label} onClick={()=>onTab(target)}>{content}</button>:<div key={label} className={index===5?'legacy':''}>{content}</div>})}</section><div className="exam-two exam-overview-lower"><section className="exam-panel exam-recent-panel"><div className="exam-section-title"><div><h2>最近考试</h2><p>近 7 天每日提交与最新记录</p></div>{visibleTabs.includes('考试记录')&&<button onClick={()=>onTab('考试记录')}>查看全部</button>}</div>{analyticsReady?<div className="exam-daily-strip">{daily.map((x,index)=><div key={x.activity_day} className={index===0?'today':''}><span>{index===0?'今日':String(x.activity_day).slice(5)}</span><strong>{x.submitted} 份</strong><small>本系统 {x.current_submitted} · 旧考试 {x.legacy_submitted}</small><small>已评 {x.graded} · 待评 {x.pending}</small></div>)}</div>:<div className="exam-empty compact">{analyticsMessage}</div>}<div className="exam-recent-scroll"><Sessions rows={(data?.sessions||[]).slice(0,12)} compact onEmployee={onEmployee}/></div></section><section className="exam-panel adaptive-rule-panel"><h2>考试规则</h2><div><b>仅匹配团队</b><span>员工自行选择岗位与盘口</span></div><div><b>14 题 · 100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>连续计时 · 自动保存</span></div></section></div>{analyticsReady?<ExamAnalytics analytics={analytics} onEmployee={onEmployee}/>:<section className="exam-panel exam-analytics"><div className="exam-empty">{analyticsMessage}</div></section>}</>
+  const analyticsMessage=failedModules.length?`暂时无法更新：${failedModules.join('、')}。${staleModules.length?'相关区域暂显示上次成功结果；':''}其他成功分析与基础计数不受影响。`:'正在读取考试分析…'
+  return <><section className="exam-overview-strip">{cards.map(([label,value,target,note],index)=>{const allowed=target&&visibleTabs.includes(target);const content=<><span>{label}</span><strong>{value}</strong><small>{note}{allowed?' · 查看 →':''}</small></>;return allowed?<button key={label} onClick={()=>onTab(target)}>{content}</button>:<div key={label} className={index===5?'legacy':''}>{content}</div>})}</section><div className="exam-two exam-overview-lower"><section className="exam-panel exam-recent-panel"><div className="exam-section-title"><div><h2>最近考试</h2><p>近 7 天每日提交与最新记录</p></div>{visibleTabs.includes('考试记录')&&<button onClick={()=>onTab('考试记录')}>查看全部</button>}</div>{activityReady?<div className="exam-daily-strip">{daily.map((x,index)=><div key={x.activity_day} className={index===0?'today':''}><span>{index===0?'今日':String(x.activity_day).slice(5)}</span><strong>{x.submitted} 份</strong><small>本系统 {x.current_submitted} · 旧考试 {x.legacy_submitted}</small><small>已评 {x.graded} · 待评 {x.pending}</small></div>)}</div>:<div className="exam-empty compact">{failedModules.includes('近期考试与成绩趋势')?'近期考试与成绩趋势暂不可用，考试记录仍正常显示。':'正在读取近期考试趋势…'}</div>}<div className="exam-recent-scroll"><Sessions rows={(data?.sessions||[]).slice(0,12)} compact onEmployee={onEmployee}/></div></section><section className="exam-panel adaptive-rule-panel"><h2>考试规则</h2><div><b>仅匹配团队</b><span>员工自行选择岗位与盘口</span></div><div><b>14 题 · 100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>连续计时 · 自动保存</span></div></section></div>{analyticsReady?<ExamAnalytics analytics={analytics} loadedModules={[...loadedModules]} failedModules={failedModules} staleModules={staleModules} onEmployee={onEmployee}/>:<section className="exam-panel exam-analytics"><div className="exam-empty">{analyticsMessage}</div></section>}</>
 }
 
-function ExamAnalytics({analytics,onEmployee}){
+function ExamAnalytics({analytics,loadedModules=[],failedModules=[],staleModules=[],onEmployee}){
+  const available=new Set(loadedModules)
+  const summaryReady=available.has('summary'),dimensionsReady=available.has('dimensions'),activityReady=available.has('activity'),leaderboardReady=available.has('leaderboard')
   const summary=analytics.summary||{},series=analytics.series||[],positions=analytics.positions||[],teams=analytics.teams||[],leaderboard=analytics.leaderboard||[],bands=analytics.score_bands||{},trend=analytics.trend||[]
   const duration=Number(summary.avg_duration_seconds||0),durationText=duration?`${Math.floor(duration/60)}分${Math.round(duration%60)}秒`:'—'
   const facts=[['考试总次数',summary.total_attempts||0,'次'],['平均分',score(summary.avg_score),'分'],['平均用时',durationText,''],['通过率',score(summary.pass_rate),'%'],['已通过',summary.pass_count||0,'次'],['未通过',summary.fail_count||0,'次']]
   const graded=Number(summary.graded_attempts||0),bandRows=[['优秀 90–100',bands.excellent||0,'excellent'],['良好 80–89',bands.good||0,'good'],['及格 60–79',bands.pass||0,'pass'],['未通过 0–59',bands.fail||0,'fail']]
-  return <section className="exam-panel exam-analytics"><div className="exam-analytics-title"><div><small>EXAM INTELLIGENCE</small><h2>考试数据分析中心</h2><p>成绩、团队表现与排行榜合并本系统及旧考试；逐题统计只采用已同步的真实答案。</p></div><div className="exam-answer-block"><small>逐题真实结果</small><div className="exam-answer-source"><b>本系统</b><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-answer-source legacy"><b>旧考试</b><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.legacy_correct_count||0}</b></span><span className="partial">半对 <b>{summary.legacy_partial_count||0}</b></span><span className="wrong">错误 <b>{summary.legacy_wrong_count||0}</b></span><span className="pending">待评 <b>{summary.legacy_answer_pending_count||0}</b></span></div></div></div></div><div className="exam-analytics-facts">{facts.map(([label,value,unit])=><div key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>)}</div><div className="exam-analytics-visuals"><AnalyticsColumnChart title="盘口 / 系列平均分" rows={series}/><AnalyticsColumnChart title="岗位平均分" rows={positions} green/><div className="exam-distribution-card"><header><div><h3>成绩分布</h3><p>已完成评分的考试</p></div><b>{graded}<small>份</small></b></header><div className="exam-score-bands">{bandRows.map(([label,value,tone])=><div key={label}><span>{label}</span><i><em className={tone} style={{width:`${graded?Math.max(3,value/graded*100):0}%`}}/></i><b>{value}</b></div>)}</div></div><TrendChart rows={trend}/></div><div className="exam-analytics-charts"><AnalyticsBars title="团队平均分" rows={teams}/><Leaderboard rows={leaderboard} onEmployee={onEmployee}/></div></section>
+  const partialMessage=failedModules.length?`暂时无法更新：${failedModules.join('、')}。系统已自动重试一次；${staleModules.length?'相关区域暂显示上次成功结果，':''}其余分析正常显示。`:''
+  return <section className="exam-panel exam-analytics">
+    <div className="exam-analytics-title"><div><small>EXAM INTELLIGENCE</small><h2>考试数据分析中心</h2><p>成绩、团队表现与排行榜合并本系统及旧考试；逐题统计只采用已同步的真实答案。</p></div>{summaryReady&&<div className="exam-answer-block"><small>逐题真实结果</small><div className="exam-answer-source"><b>本系统</b><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-answer-source legacy"><b>旧考试</b><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.legacy_correct_count||0}</b></span><span className="partial">半对 <b>{summary.legacy_partial_count||0}</b></span><span className="wrong">错误 <b>{summary.legacy_wrong_count||0}</b></span><span className="pending">待评 <b>{summary.legacy_answer_pending_count||0}</b></span></div></div></div>}</div>
+    {partialMessage&&<div className="exam-analytics-partial-note"><b>部分分析刷新失败</b><span>{partialMessage}</span></div>}
+    {summaryReady&&<div className="exam-analytics-facts">{facts.map(([label,value,unit])=><div key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>)}</div>}
+    {(dimensionsReady||summaryReady||activityReady)&&<div className="exam-analytics-visuals">{dimensionsReady&&<AnalyticsColumnChart title="盘口 / 系列平均分" rows={series}/>}{dimensionsReady&&<AnalyticsColumnChart title="岗位平均分" rows={positions} green/>}{summaryReady&&<div className="exam-distribution-card"><header><div><h3>成绩分布</h3><p>已完成评分的考试</p></div><b>{graded}<small>份</small></b></header><div className="exam-score-bands">{bandRows.map(([label,value,tone])=><div key={label}><span>{label}</span><i><em className={tone} style={{width:`${graded?Math.max(3,value/graded*100):0}%`}}/></i><b>{value}</b></div>)}</div></div>}{activityReady&&<TrendChart rows={trend}/>}</div>}
+    {(dimensionsReady||leaderboardReady)&&<div className="exam-analytics-charts">{dimensionsReady&&<AnalyticsBars title="团队平均分" rows={teams}/>}{leaderboardReady&&<Leaderboard rows={leaderboard} onEmployee={onEmployee}/>}</div>}
+  </section>
 }
 
 function AnalyticsColumnChart({title,rows,green=false}){

@@ -58,7 +58,7 @@ test('exam management gates page reads, leaves progressive partial analytics inl
   assert.match(training, /const \{notify\}=useAppToast\(\)/)
   assert.match(training, /const requestedOperation=questionReadIntentRef\.current[\s\S]*?if\(requestedOperation\)notify\(/)
   assert.match(training, /const requestedOperation=sessionReadIntentRef\.current[\s\S]*?if\(requestedOperation\)notify\(/)
-  assert.match(training, /setOverviewStaleNotice\(partialAnalytics\?'部分分析暂不可用/)
+  assert.match(training, /setOverviewStaleNotice\(failedModuleLabels\.length\?`暂时无法更新：\$\{failedModuleLabels\.join\('、'\)\}/)
   assert.doesNotMatch(training, /alert\(message\(/)
   assert.match(training, /\{error&&<div className="exam-error">\{error\}<\/div>\}/)
   assert.match(training, /questionSearchVersion/)
