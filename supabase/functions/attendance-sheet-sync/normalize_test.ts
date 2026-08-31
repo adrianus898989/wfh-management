@@ -300,6 +300,40 @@ Deno.test("休假填表 is authoritative over the monthly grid and preserves the
   assert(rows[0].raw_values.source_tab === "休假填表", "leave provenance was not preserved");
 });
 
+Deno.test("coalesces identical annual source duplicates while retaining both physical rows", async () => {
+  const config = annualConfig("home_ph_annual_2026_09");
+  const duplicate = ["2026-09-06", "Duplicate", "PH-DUP-1", "公休", "same note"];
+  const values = annualMatrices(config, [], [], [], [duplicate, [...duplicate]]);
+  const result = await normalizeAnnual(config, values);
+
+  assert(result.rows.length === 1, "identical source duplicates were double counted");
+  assert(result.parse_warning_count === 1, "coalesced duplicate was not reported as a warning");
+  assert(
+    result.rows[0].raw_values.duplicate_source_physical_rows === "3,4",
+    "duplicate physical-row provenance was not retained",
+  );
+});
+
+Deno.test("fails closed on conflicting annual duplicates with sanitized row locators", async () => {
+  const config = annualConfig("home_ph_annual_2026_09");
+  const values = annualMatrices(config, [], [], [], [
+    ["2026-09-06", "Duplicate", "PH-DUP-2", "公休", "first note"],
+    ["2026-09-06", "Duplicate", "PH-DUP-2", "公休", "conflicting note"],
+  ]);
+  let message = "";
+  try {
+    await normalizeAnnual(config, values);
+  } catch (error) {
+    message = error instanceof Error ? error.message : "";
+  }
+
+  assert(
+    message === "snapshot_duplicate_record_key:attendance:rows_3_4",
+    `conflicting duplicate did not fail with sanitized row locators: ${message}`,
+  );
+  assert(!message.includes("PH-DUP-2") && !message.includes("Duplicate"), "duplicate error leaked identity data");
+});
+
 Deno.test("legacy six-column standard adjustments remain readable without shifting note/date", async () => {
   const config = annualConfig("onsite_annual_2026_09");
   const values = annualMatrices(

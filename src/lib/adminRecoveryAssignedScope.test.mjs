@@ -11,7 +11,7 @@ test('recovery edge exposes a bounded current-organization scope directory', asy
   const directory = edge.slice(directoryStart, accountListStart)
 
   assert.ok(directoryStart > 0 && accountListStart > directoryStart)
-  assert.match(directory, /can\('account\.edit'\) \|\| !can\('scope\.manage'\)/)
+  assert.match(directory, /\(createMode \? can\('account\.create'\) : can\('account\.edit'\)\) \|\| !can\('scope\.manage'\)/)
   assert.match(directory, /recoveryBackendActionAllowed\(targetAuthUserId, 'account\.edit'\)/)
   assert.match(directory, /admin_recovery_account_scope_directory/)
   assert.match(directory, /RECOVERY_SCOPE_TEAM_LIMIT/)

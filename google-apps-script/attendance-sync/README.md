@@ -63,13 +63,22 @@ monthly tab/gid, and `填表` gid. The raw sync token stays only in Apps Script
 Properties. The committed Edge code contains only its SHA-256 digest.
 
 Annual record identity is derived from employee ID (name only when ID is blank),
-event date, event kind/adjustment slot, and logical source. It does not use the
+event date, source block/adjustment slot, and logical source. It does not use the
 physical Google row number. Row insertions therefore update audit location rather
 than deleting and recreating the logical event. Employee matching in Supabase is
 also exact employee ID first, followed by unique normalized name only when needed.
 The fixed source metadata is authoritative for adjustment currency: onsite and
 Vietnam/Indonesia/Myanmar are always USD, and Philippines is always PHP, even
 before an employee can be matched or a country value is available.
+
+The database still rejects automatic removals by default. Migration
+`20260831123000_attendance_count_preserving_date_corrections.sql` adds one narrow
+exception for correcting a date: at most five old keys may move, the complete
+snapshot may not shrink, and every employee/source-block/event-kind count must
+stay equal or increase. Removing a record, changing its employee/type, or a
+larger correction remains blocked for explicit review. Failed-run diagnostics
+retain the proposed record count and detected deletion count instead of showing
+misleading zeroes after the staging transaction rolls back.
 
 ## Deployment preparation
 
@@ -84,8 +93,8 @@ headers are missing or malformed.
 
 Then install the attendance chain in this order:
 
-1. Apply `20260825144614_annual_attendance_sep_dec_incremental_sync.sql` after
-   review.
+1. Apply `20260825144614_annual_attendance_sep_dec_incremental_sync.sql`, then
+   `20260831123000_attendance_count_preserving_date_corrections.sql`, after review.
 2. Deploy `supabase/functions/attendance-sheet-sync` with Supabase JWT verification
    disabled. Google Apps Script cannot mint a Supabase user JWT; the function
    validates the high-entropy shared token before parsing.
@@ -102,6 +111,9 @@ Then install the attendance chain in this order:
    reconciliation.
 
 `runAttendanceReconciliation()` is the deliberate force-retry entrypoint.
+Run it once after deploying the correction migration when the current hash was
+already blocked by the former any-delete rule; the existing blocked hash will
+otherwise wait for another relevant sheet edit.
 `removeAttendanceSyncTriggers()` removes only the handlers managed here.
 
 ## Verification before deployment

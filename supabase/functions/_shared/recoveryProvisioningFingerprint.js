@@ -5,7 +5,7 @@ const clean = value => String(value ?? '').trim()
 export function recoveryProvisioningMaterial(input) {
   // A JSON array is deliberately used instead of a delimiter-joined string so
   // attacker-controlled values cannot create ambiguous field boundaries.
-  return JSON.stringify([
+  const material = [
     RECOVERY_FINGERPRINT_VERSION,
     clean(input.actorUserId).toLowerCase(),
     clean(input.username).toLowerCase(),
@@ -14,7 +14,21 @@ export function recoveryProvisioningMaterial(input) {
     clean(input.dataScope).toLowerCase(),
     input.otpRequired === true,
     String(input.password ?? ''),
-  ])
+  ]
+  // Preserve the deployed material exactly for existing scopes so a retry of
+  // an older recovery create remains idempotent. Assigned scopes are new and
+  // must bind their complete, canonicalized hard boundary to the fingerprint.
+  if (clean(input.dataScope).toLowerCase() === 'assigned_teams') {
+    const ids = value => [...new Set((Array.isArray(value) ? value : [])
+      .map(item => clean(item).toLowerCase())
+      .filter(Boolean))].sort()
+    material.push({
+      team_ids:ids(input.teamIds),
+      position_ids:ids(input.positionIds),
+      employee_ids:ids(input.employeeIds),
+    })
+  }
+  return JSON.stringify(material)
 }
 
 export async function buildRecoveryProvisioningFingerprint(secretKey, input) {

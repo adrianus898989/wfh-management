@@ -637,12 +637,16 @@ Deno.serve(async (req: Request) => {
 
     if (action === 'scope_directory') {
       const allowedFields = new Set([
-        'action', 'target_auth_user_id', 'team_ids', 'employee_query', 'include_selection',
+        'action', 'target_auth_user_id', 'team_ids', 'employee_query', 'include_selection', 'create_mode',
       ])
       if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
         return json(req, { ok:false, error:'指定范围目录请求包含不受支持的字段', code:'invalid_input_field' }, 400)
       }
-      if (!can('account.edit') || !can('scope.manage')) {
+      const createMode = body?.create_mode === true
+      if (body?.create_mode != null && typeof body.create_mode !== 'boolean') {
+        return json(req, { ok:false, error:'指定范围目录参数不正确', code:'invalid_scope_directory' }, 400)
+      }
+      if (!(createMode ? can('account.create') : can('account.edit')) || !can('scope.manage')) {
         return json(req, {
           ok:false,
           error:'当前账号没有编辑账号及管理数据范围权限',
@@ -665,11 +669,35 @@ Deno.serve(async (req: Request) => {
       const teamIds = boundedUuidArray(body?.team_ids ?? [], RECOVERY_SCOPE_TEAM_LIMIT)
       const employeeQuery = clean(body?.employee_query)
       const includeSelection = body?.include_selection == null ? true : body.include_selection
-      if (!uuidLike(targetAuthUserId) || teamIds == null || employeeQuery.length > 64 || typeof includeSelection !== 'boolean') {
+      if ((!createMode && !uuidLike(targetAuthUserId)) || (createMode && targetAuthUserId) ||
+          teamIds == null || employeeQuery.length > 64 || typeof includeSelection !== 'boolean') {
         return json(req, { ok:false, error:'指定范围目录参数不正确', code:'invalid_scope_directory' }, 400)
       }
-      if (targetAuthUserId === userData.user.id) {
+      if (!createMode && targetAuthUserId === userData.user.id) {
         return json(req, { ok:false, error:'当前登录账号不能在这里修改自身范围', code:'current_account_protected' }, 400)
+      }
+
+      if (createMode) {
+        const { data:directory, error:directoryError } = await bounded(
+          admin.rpc('admin_recovery_new_backend_scope_directory', {
+            p_actor_user_id:userData.user.id,
+            p_team_ids:teamIds,
+            p_employee_query:employeeQuery,
+          }),
+          'RECOVERY_CREATE_SCOPE_DIRECTORY',
+        )
+        if (directoryError || !directory) {
+          const message = clean(directoryError?.message)
+          const code = clean(directoryError?.code).toUpperCase()
+          if (code === '42501' || /permission|scope_manage/i.test(message)) {
+            return json(req, { ok:false, error:'当前账号没有创建指定范围账号的权限', code:'permission_or_scope_denied' }, 403)
+          }
+          if (code === '22023' || /invalid|limit|query_too_long/i.test(message)) {
+            return json(req, { ok:false, error:'指定范围目录参数不正确', code:'invalid_scope_directory' }, 400)
+          }
+          return retryable(req, '当前排班组织目录暂时读取失败，请稍后重试')
+        }
+        return json(req, { ok:true, recovery_scope_editor:true, create_mode:true, ...directory })
       }
 
       let actionAllowed = false
@@ -808,8 +836,12 @@ Deno.serve(async (req: Request) => {
           : ['self']
       const supportedEditDataScopes = [...supportedDataScopes]
       const recoveryScopeEditor = delegatedRecoveryAccounts && can('account.edit') && can('scope.manage')
+      const recoveryCreateScopeEditor = delegatedRecoveryAccounts && can('account.create') && can('scope.manage')
       if (recoveryScopeEditor && !supportedEditDataScopes.includes('assigned_teams')) {
         supportedEditDataScopes.push('assigned_teams')
+      }
+      if (recoveryCreateScopeEditor && !supportedDataScopes.includes('assigned_teams')) {
+        supportedDataScopes.push('assigned_teams')
       }
       return json(req, {
         ok:true,
@@ -838,7 +870,7 @@ Deno.serve(async (req: Request) => {
         assignable_role_ids:roles.map((role:any) => role.id),
         supported_data_scopes:supportedDataScopes,
         supported_edit_data_scopes:supportedEditDataScopes,
-        recovery_scope_editor:recoveryScopeEditor,
+        recovery_scope_editor:recoveryScopeEditor || recoveryCreateScopeEditor,
       })
     }
 
@@ -1159,6 +1191,7 @@ Deno.serve(async (req: Request) => {
       }
       const allowedInputFields = new Set([
         'action', 'username', 'password', 'role_id', 'employee_id', 'data_scope', 'otp_required',
+        'team_ids', 'position_ids', 'employee_ids',
       ])
       if (Object.keys(body || {}).some(key => !allowedInputFields.has(key))) {
         return json(req, { ok:false, error:'恢复期间仅支持单个账号与受控范围创建', code:'unsupported_create_field' }, 400)
@@ -1169,6 +1202,17 @@ Deno.serve(async (req: Request) => {
       const employeeId = clean(body?.employee_id)
       const dataScope = clean(body?.data_scope)
       const otpRequired = body?.otp_required === true
+      const hasScopeFilters = ['team_ids', 'position_ids', 'employee_ids']
+        .some(key => Object.prototype.hasOwnProperty.call(body || {}, key))
+      const teamIds = hasScopeFilters
+        ? boundedUuidArray(body?.team_ids, RECOVERY_SCOPE_TEAM_LIMIT)
+        : []
+      const positionIds = hasScopeFilters
+        ? boundedUuidArray(body?.position_ids, RECOVERY_SCOPE_POSITION_LIMIT)
+        : []
+      const employeeIds = hasScopeFilters
+        ? boundedUuidArray(body?.employee_ids, RECOVERY_SCOPE_EMPLOYEE_LIMIT)
+        : []
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
         return json(req, { ok:false, error:'用户名只允许3-32位字母、数字、._-', code:'invalid_username' }, 400)
       }
@@ -1177,6 +1221,9 @@ Deno.serve(async (req: Request) => {
       }
       if (!uuidLike(roleId) || (employeeId && !uuidLike(employeeId))) {
         return json(req, { ok:false, error:'角色或员工标识不正确', code:'invalid_identifier' }, 400)
+      }
+      if (hasScopeFilters && (teamIds == null || positionIds == null || employeeIds == null)) {
+        return json(req, { ok:false, error:'指定团队、岗位或员工范围不正确', code:'invalid_assigned_scope' }, 400)
       }
 
       const assignableRoles = await loadAssignableRoles()
@@ -1189,6 +1236,7 @@ Deno.serve(async (req: Request) => {
         : caller.data_scope === 'all'
           ? new Set(['self', 'own_team'])
           : new Set(['self'])
+      if (delegatedRecoveryAccounts && can('scope.manage')) supportedDataScopes.add('assigned_teams')
       if (!supportedDataScopes.has(dataScope)) {
         return json(req, {
           ok:false,
@@ -1196,11 +1244,14 @@ Deno.serve(async (req: Request) => {
           code:'data_scope_not_delegable',
         }, 403)
       }
-      if (dataScope !== 'all' && !employeeId) {
+      if (['self', 'own_team'].includes(dataScope) && !employeeId) {
         return json(req, { ok:false, error:'该管理范围必须关联员工档案', code:'employee_required' }, 400)
       }
-      if (!isFounder && !employeeId) {
+      if (!isFounder && !employeeId && dataScope !== 'assigned_teams') {
         return json(req, { ok:false, error:'非 Founder 创建账号必须关联范围内员工档案', code:'employee_required' }, 403)
+      }
+      if (dataScope === 'assigned_teams' && (!hasScopeFilters || !teamIds.length)) {
+        return json(req, { ok:false, error:'指定范围必须选择至少一个当前团队', code:'assigned_scope_requires_team' }, 400)
       }
       if (employeeId) {
         const [{ data:employeeInScope, error:scopeError }, { data:employee, error:employeeError }] = await Promise.all([
@@ -1228,6 +1279,9 @@ Deno.serve(async (req: Request) => {
           roleId,
           employeeId,
           dataScope,
+          teamIds:teamIds || [],
+          positionIds:positionIds || [],
+          employeeIds:employeeIds || [],
           otpRequired,
           password,
         })
@@ -1402,7 +1456,7 @@ Deno.serve(async (req: Request) => {
       let finalized:any = null
       let finalizeError:any = null
       try {
-        const result = await admin.rpc('admin_recovery_finalize_backend_account', {
+        const result = await admin.rpc('admin_recovery_finalize_backend_account_v2', {
           p_auth_user_id:authUserId,
           p_employee_id:employeeId || null,
           p_role_id:roleId,
@@ -1411,6 +1465,9 @@ Deno.serve(async (req: Request) => {
           p_otp_required:otpRequired,
           p_data_scope:dataScope,
           p_actor_user_id:userData.user.id,
+          p_team_ids:teamIds || [],
+          p_position_ids:positionIds || [],
+          p_employee_ids:employeeIds || [],
         })
         finalized = result.data
         finalizeError = result.error

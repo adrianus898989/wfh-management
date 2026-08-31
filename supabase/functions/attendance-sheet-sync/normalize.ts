@@ -660,18 +660,54 @@ async function normalizeAnnualSnapshot(
   const leaves = leavesRaw.map((row) => row.map(stringValue));
   const adjustments = adjustmentsRaw.map((row) => row.map(stringValue));
   const adjustmentMetadata = metadataRaw.map((row) => row.map(stringValue));
-  const pending: Array<Promise<NormalizedRecord>> = [];
-  const stableKeys = new Set<string>();
+  type PendingAnnualRecord = Omit<NormalizedRecord, "content_hash" | "source_row" | "source_item_key">;
+  const pending = new Map<string, PendingAnnualRecord>();
   const authoritativeLeaveDays = new Set<string>();
   let warningCount = 0;
 
+  const duplicateBusinessValue = (row: PendingAnnualRecord) => {
+    const { raw_values: _rawValues, source_updated_at: _sourceUpdatedAt, ...business } = row;
+    return JSON.stringify(business);
+  };
+  const sourcePhysicalRow = (row: PendingAnnualRecord) => {
+    const value = Number.parseInt(stringValue(row.raw_values.source_physical_row), 10);
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  };
+
   const addRecord = (
-    row: Omit<NormalizedRecord, "content_hash" | "source_row" | "source_item_key">,
+    row: PendingAnnualRecord,
     logicalKey: string,
   ) => {
-    if (stableKeys.has(logicalKey)) throw new Error("snapshot_duplicate_record_key");
-    stableKeys.add(logicalKey);
-    pending.push(applyStableIdentity(row, logicalKey));
+    const existing = pending.get(logicalKey);
+    if (!existing) {
+      pending.set(logicalKey, row);
+      return;
+    }
+
+    const existingRow = sourcePhysicalRow(existing);
+    const duplicateRow = sourcePhysicalRow(row);
+    if (duplicateBusinessValue(existing) !== duplicateBusinessValue(row)) {
+      const block = row.source_block.replace(/[^a-z_]/g, "") || "record";
+      throw new Error(
+        `snapshot_duplicate_record_key:${block}:rows_${existingRow}_${duplicateRow}`,
+      );
+    }
+
+    const duplicateRows = new Set([
+      ...stringValue(existing.raw_values.duplicate_source_physical_rows)
+        .split(",")
+        .map((value) => Number.parseInt(value, 10))
+        .filter((value) => Number.isSafeInteger(value) && value > 0),
+      existingRow,
+      duplicateRow,
+    ]);
+    existing.raw_values = {
+      ...existing.raw_values,
+      duplicate_source_physical_rows: [...duplicateRows]
+        .sort((left, right) => left - right)
+        .join(","),
+    };
+    warningCount += 1;
   };
 
   // The dedicated 休假填表 is the authoritative 9–12 month source. It carries
@@ -898,7 +934,9 @@ async function normalizeAnnualSnapshot(
   }
 
   return {
-    rows: await Promise.all(pending),
+    rows: await Promise.all(
+      [...pending.entries()].map(([logicalKey, row]) => applyStableIdentity(row, logicalKey)),
+    ),
     readRowCount: Math.max(attendance.length - 1, 0) + Math.max(leaves.length - 2, 0) +
       Math.max(adjustments.length - 2, 0),
     warningCount,

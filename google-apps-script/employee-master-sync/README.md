@@ -21,11 +21,20 @@
    - 优先级固定为员工主档、排班、考勤；任一被选中的来源 URL 必须与正式地址完全一致，最终请求地址始终固定为正式 `employee-master-sync`，不会由任意 URL 拼接。原始 token 仍不写入代码或日志。
 4. 运行 `installEmployeeMasterSync` 并授权。
 
-安装过程会先完成一次全量只读校验，再建立两张表的 onEdit 触发器和一个五分钟
-兜底触发器，然后尝试首次入库。若当前存在重复 ID，同一错误 hash 会被阻断，
-不会每五分钟重复请求；六小时后周期任务会有限重试，修正表格后也会自动继续。
+安装过程会先完成一次全量只读校验，再建立两张表的 onEdit、一个每分钟 dirty
+刷新器和一个十分钟兜底对账触发器，然后尝试首次入库。onEdit 本身只写 dirty
+token，不读取整表；刷新器在最后一次编辑至少 45 秒后合并读取两份原子快照。
+若当前存在重复 ID，同一错误 hash 会被阻断，不会重复请求；六小时后周期任务会
+有限重试，修正表格后也会自动继续。
 401/403/429 和服务端错误不会永久阻断同一 hash。内容没变时不会调用 Supabase；
 每六小时最多强制一次完整对账。
+
+若生产触发器清单里两个 `employeeMasterOnEdit` 与
+`reconcileEmployeeMaster` 都正常、唯独缺少
+`flushPendingEmployeeMasterSync`，不要运行完整安装器。只运行一次
+`installMissingEmployeeMasterFlushTrigger`：它只补一个每分钟 flusher，重复运行不
+会新增副本，也不会删除或重建现有触发器。代码复制到 Apps Script 但未运行此
+函数时，Google 不会自动创建触发器。
 
 ## 安全规则
 

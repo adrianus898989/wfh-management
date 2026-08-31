@@ -147,12 +147,14 @@ export default function AdminUsersPage() {
     teamIds = [],
     employeeQuery = '',
     includeSelection = false,
+    createMode = false,
   }) => call({
     action:'scope_directory',
     target_auth_user_id:targetAuthUserId,
     team_ids:teamIds,
     employee_query:employeeQuery,
     include_selection:includeSelection,
+    create_mode:createMode,
   })
 
   const load = async () => {
@@ -223,14 +225,15 @@ export default function AdminUsersPage() {
   }, [data?.recovery_account_mode, accountModal?.mode, accountModal?.form?.employee_id, accountModal?.form?.employee_search])
   useEffect(() => {
     if (!data?.recovery_account_mode || !data?.recovery_scope_editor ||
-        accountModal?.mode !== 'edit' || !accountModal?.scope_directory_loaded ||
+        !['create', 'edit'].includes(accountModal?.mode) || !accountModal?.scope_directory_loaded ||
         accountModal?.form?.data_scope !== 'assigned_teams') return undefined
+    const createMode = accountModal?.mode === 'create'
     const targetAuthUserId = String(accountModal?.form?.auth_user_id || '')
     const teamIds = accountModal?.form?.team_ids || []
     const employeeQuery = String(accountModal?.form?.scope_employee_search || '').trim()
     let cancelled = false
     const timer = window.setTimeout(async () => {
-      setAccountModal(current => current?.form?.auth_user_id === targetAuthUserId
+      setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
         ? ({ ...current, scope_loading:true, scope_load_error:'' })
         : current)
       try {
@@ -239,6 +242,7 @@ export default function AdminUsersPage() {
           teamIds,
           employeeQuery,
           includeSelection:false,
+          createMode,
         })
         if (cancelled) return
         setData(current => current ? ({
@@ -248,11 +252,11 @@ export default function AdminUsersPage() {
           employees:mergeRowsById(current.employees, result?.employees),
           recovery_scope_directory_truncated:result?.truncated || {},
         }) : current)
-        setAccountModal(current => current?.form?.auth_user_id === targetAuthUserId
+        setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
           ? ({ ...current, scope_loading:false, scope_load_error:'' })
           : current)
       } catch (scopeError) {
-        if (!cancelled) setAccountModal(current => current?.form?.auth_user_id === targetAuthUserId
+        if (!cancelled) setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
           ? ({ ...current, scope_loading:false, scope_load_error:scopeError.message || '当前排班组织目录读取失败' })
           : current)
       }
@@ -452,7 +456,12 @@ export default function AdminUsersPage() {
     if (recoveryAccountMode) {
       form.data_scope = recoveryCreateSupportedScopes.has('all') ? 'all' : [...recoveryCreateSupportedScopes][0] || 'self'
     }
-    setAccountModal({ mode: 'create', form, batch: [], error: '', saving: false })
+    setAccountModal({
+      mode: 'create', form, batch: [], error: '', saving: false,
+      scope_loading:false,
+      scope_directory_loaded:Boolean(!recoveryAccountMode || form.data_scope !== 'assigned_teams'),
+      scope_load_error:'',
+    })
   }
   const openCreateStaff = () => setStaffModal({ form: blankStaffAccount(), error: '', saving: false })
 
@@ -609,7 +618,7 @@ export default function AdminUsersPage() {
       : mode === 'edit'
         ? validateAccountScopeDraft(form)
         : ''
-    const scopeDirectoryError = mode === 'edit' && recoveryAccountMode && canManageScope && form.data_scope === 'assigned_teams'
+    const scopeDirectoryError = recoveryAccountMode && canManageScope && form.data_scope === 'assigned_teams'
       ? accountModal.scope_loading
         ? '当前排班组织目录仍在读取，请稍候。'
         : accountModal.scope_load_error || (!accountModal.scope_directory_loaded ? '当前排班组织目录尚未安全加载，请重试。' : '')
@@ -630,6 +639,11 @@ export default function AdminUsersPage() {
             employee_id:form.employee_id,
             data_scope:form.data_scope,
             otp_required:form.otp_required,
+            ...(form.data_scope === 'assigned_teams' && canManageScope ? {
+              team_ids:form.team_ids,
+              position_ids:form.position_ids,
+              employee_ids:form.employee_ids,
+            } : {}),
           })
           notify(writeSuccessToast({
             module:'后台账号',operation:'创建后台账号',reason:`${form.username || '后台账号'} 已创建。`,

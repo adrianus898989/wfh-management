@@ -178,6 +178,44 @@ test('blocked hash state supports timestamped cooldown and legacy values', () =>
   });
 });
 
+test('dirty state supports timestamped tokens and legacy markers', () => {
+  assert.deepEqual(evaluateJson(`employeeMasterDirtyState_(JSON.stringify({
+    token: 'edit-token', dirty_at: 1234
+  }))`), {
+    token: 'edit-token', dirtyAt: 1234,
+  });
+  assert.deepEqual(evaluateJson(`employeeMasterDirtyState_('legacy-dirty')`), {
+    token: 'legacy-dirty', dirtyAt: 0,
+  });
+});
+
+test('installer creates the missing minute flusher and exposes a non-destructive repair helper', () => {
+  assert.match(source, /const EMPLOYEE_MASTER_FLUSH_HANDLER = 'flushPendingEmployeeMasterSync'/);
+  assert.match(source, /function flushPendingEmployeeMasterSync\(\)/);
+  assert.match(
+    source,
+    /newTrigger\(EMPLOYEE_MASTER_FLUSH_HANDLER\)[\s\S]*?\.everyMinutes\(1\)[\s\S]*?\.create\(\)/,
+  );
+  const repairBody = source.match(
+    /function installMissingEmployeeMasterFlushTrigger\(\) \{([\s\S]*?)\n\}/,
+  )?.[1] ?? '';
+  assert.match(repairBody, /getProjectTriggers\(\)/);
+  assert.match(repairBody, /existing\.length === 1/);
+  assert.doesNotMatch(repairBody, /removeEmployeeMasterSyncTriggers/);
+  assert.doesNotMatch(repairBody, /deleteTrigger/);
+});
+
+test('a registered deterministic block does not cause minute-by-minute full-table reads', () => {
+  assert.match(
+    source,
+    /if \(!allowPeriodicReconciliation \|\| blockStillCoolingDown\) return true;/,
+  );
+  assert.match(
+    source,
+    /if \(complete && properties\.getProperty\(EMPLOYEE_MASTER_DIRTY_PROPERTY\) === stored\)/,
+  );
+});
+
 test('home onEdit ownership stops at column L while raw validation remains A:P', () => {
   const columns = evaluateJson(`({
     raw: EMPLOYEE_MASTER_HOME_SOURCE.columnCount,

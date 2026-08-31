@@ -143,13 +143,17 @@ test('recovery backend creation is single-account, scope-contained and role fail
   assert.match(create, /loadAssignableRoles\(\)/)
   assert.match(edge, /from\('backend_role_assignment_rules'\)[\s\S]+\.eq\('grantor_role_id', caller\.role_id\)[\s\S]+\.eq\('active', true\)/)
   assert.match(create, /userClient\.rpc\('backend_employee_in_scope'/)
-  assert.match(create, /new Set\(\['self'\]\)/)
+  assert.match(create, /supportedDataScopes\.add\('assigned_teams'\)/)
+  assert.match(create, /team_ids', 'position_ids', 'employee_ids'/)
+  assert.match(create, /assigned_scope_requires_team/)
   assert.match(create, /admin\.auth\.admin\.createUser/)
-  assert.match(create, /admin_recovery_finalize_backend_account/)
+  assert.match(create, /admin_recovery_finalize_backend_account_v2/)
   assert.match(create, /p_actor_user_id:userData\.user\.id/)
   assert.match(create, /admin\.auth\.admin\.deleteUser\(authUserId\)/)
   assert.doesNotMatch(create, /create_backend_batch|body\.accounts|listUsers/)
-  assert.doesNotMatch(create, /assigned_teams/)
+  assert.match(create, /p_team_ids:teamIds/)
+  assert.match(create, /p_position_ids:positionIds/)
+  assert.match(create, /p_employee_ids:employeeIds/)
 })
 
 test('recovery backend creation is deterministic and reconciles every mutation fault', async () => {
@@ -174,7 +178,7 @@ test('recovery backend creation is deterministic and reconciles every mutation f
 
   for (const mutation of [
     'admin.auth.admin.createUser',
-    "admin.rpc('admin_recovery_finalize_backend_account'",
+    "admin.rpc('admin_recovery_finalize_backend_account_v2'",
     'admin.auth.admin.updateUserById',
     'admin.auth.admin.deleteUser',
   ]) {
@@ -183,7 +187,7 @@ test('recovery backend creation is deterministic and reconciles every mutation f
     assert.doesNotMatch(create.slice(Math.max(0, mutationIndex - 80), mutationIndex), /bounded\(\s*$/)
   }
 
-  const finalize = create.indexOf("admin.rpc('admin_recovery_finalize_backend_account'")
+  const finalize = create.indexOf("admin.rpc('admin_recovery_finalize_backend_account_v2'")
   const reconcile = create.indexOf('const { data:committedRows', finalize)
   const rollback = create.indexOf('admin.auth.admin.deleteUser(authUserId)', reconcile)
   assert.ok(finalize > 0 && reconcile > finalize && rollback > reconcile)
@@ -234,6 +238,24 @@ test('recovery provisioning fingerprint is a stable server-keyed HMAC over every
     const fingerprint = await buildRecoveryProvisioningFingerprint(secretKey, { ...base, ...changed })
     assert.notEqual(fingerprint, first, `fingerprint must bind ${Object.keys(changed)[0]}`)
   }
+
+  const assigned = {
+    ...base,
+    dataScope:'assigned_teams',
+    teamIds:['team-b', 'team-a'],
+    positionIds:['position-a'],
+    employeeIds:['employee-a'],
+  }
+  const assignedFingerprint = await buildRecoveryProvisioningFingerprint(secretKey, assigned)
+  assert.notEqual(assignedFingerprint, first)
+  assert.equal(
+    assignedFingerprint,
+    await buildRecoveryProvisioningFingerprint(secretKey, { ...assigned, teamIds:['team-a', 'team-b', 'team-a'] }),
+  )
+  assert.notEqual(
+    assignedFingerprint,
+    await buildRecoveryProvisioningFingerprint(secretKey, { ...assigned, employeeIds:['employee-b'] }),
+  )
 })
 
 test('recovery identity behavior rejects a different duplicate and resumes only an exact response-loss retry', () => {
@@ -263,13 +285,13 @@ test('recovery identity lookup requires the exact HMAC and removes the deployed 
   const dashboardStart = edge.indexOf("if (action === 'dashboard')", createStart)
   const create = edge.slice(createStart, dashboardStart)
 
-  assert.match(edge, /buildRecoveryProvisioningFingerprint\(secretKey, \{[\s\S]+actorUserId:userData\.user\.id[\s\S]+username,[\s\S]+roleId,[\s\S]+employeeId,[\s\S]+dataScope,[\s\S]+otpRequired,[\s\S]+password,/)
+  assert.match(edge, /buildRecoveryProvisioningFingerprint\(secretKey, \{[\s\S]+actorUserId:userData\.user\.id[\s\S]+username,[\s\S]+roleId,[\s\S]+employeeId,[\s\S]+dataScope,[\s\S]+teamIds:[\s\S]+positionIds:[\s\S]+employeeIds:[\s\S]+otpRequired,[\s\S]+password,/)
   assert.match(create, /p_fingerprint:provisioningFingerprint/)
   assert.match(create, /\[RECOVERY_PROVISIONING_FINGERPRINT_KEY\]:provisioningFingerprint/)
   assert.match(create, /code:'provisioning_fingerprint_conflict'/)
   const conflictReturn = create.indexOf("if (disposition === 'conflict')")
   const passwordMutation = create.indexOf('admin.auth.admin.updateUserById')
-  const finalizerMutation = create.indexOf("admin.rpc('admin_recovery_finalize_backend_account'")
+  const finalizerMutation = create.indexOf("admin.rpc('admin_recovery_finalize_backend_account_v2'")
   assert.ok(conflictReturn > 0 && passwordMutation > conflictReturn && finalizerMutation > passwordMutation)
 
   assert.match(migration, /revoke all on function public\.admin_recovery_find_backend_auth_identity\(text, text\)[\s\S]+from public, anon, authenticated, service_role/)

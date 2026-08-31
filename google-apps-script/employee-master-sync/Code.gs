@@ -39,9 +39,11 @@ const EMPLOYEE_MASTER_SCHEDULE_HEADERS = Object.freeze([
 ]);
 
 const EMPLOYEE_MASTER_ON_EDIT_HANDLER = 'employeeMasterOnEdit';
+const EMPLOYEE_MASTER_FLUSH_HANDLER = 'flushPendingEmployeeMasterSync';
 const EMPLOYEE_MASTER_RECONCILE_HANDLER = 'reconcileEmployeeMaster';
 const EMPLOYEE_MASTER_MANAGED_HANDLERS = Object.freeze([
   EMPLOYEE_MASTER_ON_EDIT_HANDLER,
+  EMPLOYEE_MASTER_FLUSH_HANDLER,
   EMPLOYEE_MASTER_RECONCILE_HANDLER,
   // This project replaces the old schedule-only writer.
   'scheduleSheetOnEdit',
@@ -49,8 +51,10 @@ const EMPLOYEE_MASTER_MANAGED_HANDLERS = Object.freeze([
   'syncScheduleSheet',
 ]);
 const EMPLOYEE_MASTER_HASH_PROPERTY = 'EMPLOYEE_MASTER_LAST_HASH_dual_source_v1';
+const EMPLOYEE_MASTER_DIRTY_PROPERTY = 'EMPLOYEE_MASTER_DIRTY_dual_source_v1';
 const EMPLOYEE_MASTER_BLOCKED_HASH_PROPERTY = 'EMPLOYEE_MASTER_BLOCKED_HASH_dual_source_v1';
 const EMPLOYEE_MASTER_LAST_SUCCESS_PROPERTY = 'EMPLOYEE_MASTER_LAST_SUCCESS_AT_dual_source_v1';
+const EMPLOYEE_MASTER_DEBOUNCE_MS = 45 * 1000;
 const EMPLOYEE_MASTER_FORCE_RECONCILE_AFTER_MS = 6 * 60 * 60 * 1000;
 const EMPLOYEE_MASTER_BLOCK_RETRY_AFTER_MS = 6 * 60 * 60 * 1000;
 const EMPLOYEE_MASTER_EXPECTED_SCHEDULE_URL =
@@ -62,7 +66,8 @@ const EMPLOYEE_MASTER_EXPECTED_URL =
 
 /**
  * 两张来源表的可安装 onEdit。只有固定 gid 和主数据列的编辑会触发读取。
- * 每次写入 Supabase 前都同时读取两份完整快照，避免先后到达导致误离职。
+ * 编辑事件只写一个轻量 dirty token；分钟级 flusher 再同时读取两份完整快照，
+ * 避免大批粘贴产生并发全表读取，也避免两份来源先后到达导致误离职。
  */
 function employeeMasterOnEdit(event) {
   if (!event || !event.source || !event.range) return;
@@ -76,15 +81,40 @@ function employeeMasterOnEdit(event) {
   // Home M:P (pay/performance) is validated in the raw A:P snapshot but is
   // outside employee-master ownership, so those edits must not make HTTP calls.
   if (event.range.getColumn() > source.syncColumnCount) return;
-  syncEmployeeMasterInternal_(false, 'change', false);
+  PropertiesService.getScriptProperties().setProperty(
+    EMPLOYEE_MASTER_DIRTY_PROPERTY,
+    JSON.stringify({ token: Utilities.getUuid(), dirty_at: Date.now() })
+  );
 }
 
 /**
- * 五分钟只做 hash 对账；内容没变不会请求 Supabase。每六小时最多强制一次
+ * 分钟级刷新器。成功、内容已恢复到上一份成功 hash，或当前 hash 已记录为
+ * 确定性阻断后清 dirty；锁冲突和网络错误保留 token。新编辑会生成新 token，
+ * 而十分钟对账仍会在冷却后有界重试，避免坏 hash 永久每分钟读取两张整表。
+ */
+function flushPendingEmployeeMasterSync() {
+  const properties = PropertiesService.getScriptProperties();
+  const stored = properties.getProperty(EMPLOYEE_MASTER_DIRTY_PROPERTY);
+  const dirty = employeeMasterDirtyState_(stored);
+  if (!dirty.token) return;
+  if (dirty.dirtyAt > 0 && Date.now() - dirty.dirtyAt < EMPLOYEE_MASTER_DEBOUNCE_MS) return;
+  const complete = syncEmployeeMasterInternal_(false, 'change', false);
+  if (complete && properties.getProperty(EMPLOYEE_MASTER_DIRTY_PROPERTY) === stored) {
+    properties.deleteProperty(EMPLOYEE_MASTER_DIRTY_PROPERTY);
+  }
+}
+
+/**
+ * 十分钟只做 hash 对账；内容没变不会请求 Supabase。每六小时最多强制一次
  * 完整对账，让数据库快照在被意外清空时能够自愈。
  */
 function reconcileEmployeeMaster() {
-  syncEmployeeMasterInternal_(false, 'change', true);
+  const properties = PropertiesService.getScriptProperties();
+  const stored = properties.getProperty(EMPLOYEE_MASTER_DIRTY_PROPERTY);
+  const complete = syncEmployeeMasterInternal_(false, 'change', true);
+  if (complete && stored && properties.getProperty(EMPLOYEE_MASTER_DIRTY_PROPERTY) === stored) {
+    properties.deleteProperty(EMPLOYEE_MASTER_DIRTY_PROPERTY);
+  }
 }
 
 function runEmployeeMasterReconciliation() {
@@ -107,15 +137,41 @@ function installEmployeeMasterSync() {
     .forSpreadsheet(EMPLOYEE_MASTER_SCHEDULE_SOURCE.spreadsheetId)
     .onEdit()
     .create();
+  ScriptApp.newTrigger(EMPLOYEE_MASTER_FLUSH_HANDLER)
+    .timeBased()
+    .everyMinutes(1)
+    .create();
   ScriptApp.newTrigger(EMPLOYEE_MASTER_RECONCILE_HANDLER)
     .timeBased()
-    .everyMinutes(5)
+    .everyMinutes(10)
     .create();
 
   // Triggers deliberately exist before this call. A duplicate-ID snapshot is
   // blocked by hash (zero repeat HTTP), while the next correction changes the
   // hash and is picked up automatically.
   syncEmployeeMasterInternal_(true, 'manual', false);
+}
+
+/**
+ * 生产环境仅缺 flusher 时使用。它不会删除或重建两个 onEdit 与 reconcile，
+ * 且重复运行不会制造重复触发器。
+ */
+function installMissingEmployeeMasterFlushTrigger() {
+  const config = employeeMasterSyncConfig_();
+  if (!config.url || !config.token) {
+    throw new Error('请先设置员工主档同步 URL 与 token。');
+  }
+  const existing = ScriptApp.getProjectTriggers().filter(function (trigger) {
+    return trigger.getHandlerFunction() === EMPLOYEE_MASTER_FLUSH_HANDLER;
+  });
+  if (existing.length > 1) {
+    throw new Error('检测到多个员工主档 flusher；请先人工核对，未自动删除任何触发器。');
+  }
+  if (existing.length === 1) return;
+  ScriptApp.newTrigger(EMPLOYEE_MASTER_FLUSH_HANDLER)
+    .timeBased()
+    .everyMinutes(1)
+    .create();
 }
 
 function removeEmployeeMasterSyncTriggers() {
@@ -128,7 +184,7 @@ function removeEmployeeMasterSyncTriggers() {
 
 function syncEmployeeMasterInternal_(force, triggerKind, allowPeriodicReconciliation) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(15000)) return;
+  if (!lock.tryLock(15000)) return false;
   try {
     const config = employeeMasterSyncConfig_();
     if (!config.url || !config.token) throw new Error('员工主档同步脚本属性不完整。');
@@ -149,10 +205,10 @@ function syncEmployeeMasterInternal_(force, triggerKind, allowPeriodicReconcilia
         Date.now() - blocked.blockedAt < EMPLOYEE_MASTER_BLOCK_RETRY_AFTER_MS;
       // onEdit never retries an unchanged deterministic bad snapshot. The
       // periodic reconciler gets one retry after the bounded cooldown; another
-      // deterministic rejection renews the cooldown, avoiding five-minute spam.
-      if (!allowPeriodicReconciliation || blockStillCoolingDown) return;
+      // deterministic rejection renews the cooldown, avoiding timer spam.
+      if (!allowPeriodicReconciliation || blockStillCoolingDown) return true;
     }
-    if (!force && !periodicDue && previousHash === snapshot.hash) return;
+    if (!force && !periodicDue && previousHash === snapshot.hash) return true;
 
     const requestId = Utilities.getUuid();
     const payload = {
@@ -224,6 +280,7 @@ function syncEmployeeMasterInternal_(force, triggerKind, allowPeriodicReconcilia
       pending_departure: result.pending_departure || 0,
       archived: result.archived || 0,
     }));
+    return true;
   } finally {
     lock.releaseLock();
   }
@@ -369,6 +426,22 @@ function employeeMasterCanonicalDate_(value, displayValue, timezone) {
     return Utilities.formatDate(value, timezone, 'yyyy-MM-dd');
   }
   return String(displayValue || '').trim();
+}
+
+function employeeMasterDirtyState_(stored) {
+  if (!stored) return { token: '', dirtyAt: 0 };
+  try {
+    const parsed = JSON.parse(stored);
+    if (parsed && typeof parsed === 'object') {
+      return {
+        token: String(parsed.token || ''),
+        dirtyAt: Number(parsed.dirty_at || 0),
+      };
+    }
+  } catch (_error) {
+    // Legacy/plain dirty markers remain actionable immediately.
+  }
+  return { token: String(stored), dirtyAt: 0 };
 }
 
 function employeeMasterBlockedState_(stored) {
