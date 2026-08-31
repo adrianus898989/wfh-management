@@ -322,6 +322,100 @@
   opacity:.58;
   cursor:wait;
 }
+
+/* Employee filter preview V1 — query-only, one component at a time.
+   This intentionally leaves the shell, navigation, KPIs, table and drawer untouched. */
+.employee-page[data-employee-design-preview="employees-filter-v1"] .archive-filter-card{
+  overflow:visible;
+  padding:0!important;
+  border:1px solid #dce5ef;
+  border-radius:12px;
+  background:#fff;
+  box-shadow:none;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .archive-filter-card::before{
+  content:'搜索与筛选';
+  display:flex;
+  align-items:center;
+  min-height:39px;
+  padding:0 13px;
+  border-bottom:1px solid #edf1f5;
+  color:#3e526c;
+  font-size:11px;
+  font-weight:800;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid{
+  grid-template-columns:repeat(3,minmax(0,1fr))!important;
+  gap:10px 11px!important;
+  padding:12px 13px!important;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid>.pro-filter-field,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid>label{
+  gap:6px;
+  color:#65768c;
+  font-size:10px;
+  font-weight:750;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid input,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid select,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid input,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid select,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid .smart-filter-combo>input{
+  height:36px!important;
+  border-color:#d5dfea!important;
+  border-radius:8px!important;
+  background:#fff!important;
+  color:#2f425b!important;
+  font-size:11px!important;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid input:focus,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid select:focus,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid input:focus,
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid select:focus{
+  border-color:#7ea4ea!important;
+  box-shadow:0 0 0 3px rgba(64,112,211,.08)!important;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .archive-filter-actions{
+  grid-column:1/-1!important;
+  justify-content:flex-end!important;
+  gap:7px!important;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .archive-filter-actions>button{
+  min-height:36px;
+  padding:0 12px;
+  border-radius:8px;
+  font-size:10.5px;
+}
+.employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid{
+  grid-template-columns:repeat(4,minmax(0,1fr))!important;
+  margin:0!important;
+  padding:12px 13px 13px!important;
+  border-top:1px solid #edf1f5!important;
+  background:#fbfcfe;
+}
+@media(min-width:1450px){
+  .employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid{
+    grid-template-columns:repeat(6,minmax(0,1fr))!important;
+  }
+}
+@media(max-width:1100px){
+  .employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid,
+  .employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  }
+}
+@media(max-width:760px){
+  .employee-page[data-employee-design-preview="employees-filter-v1"] .archive-filter-card::before{
+    min-height:37px;
+  }
+  .employee-page[data-employee-design-preview="employees-filter-v1"] .employee-core-search-grid{
+    grid-template-columns:1fr!important;
+    padding:11px!important;
+  }
+  .employee-page[data-employee-design-preview="employees-filter-v1"] .employee-filter-grid{
+    grid-template-columns:1fr!important;
+  }
+}
 .activation-code-mask{
   z-index:10300!important;
   display:flex!important;

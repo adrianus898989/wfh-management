@@ -30,6 +30,7 @@ jobs:
           node-version: 24
 
       - run: npm install
+      - run: npm run test:employee-visual-preview
       - run: npm run test:frontend-regressions
       - run: npm run build
 
