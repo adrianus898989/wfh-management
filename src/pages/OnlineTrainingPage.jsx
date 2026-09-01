@@ -11,6 +11,8 @@ import {
   trainerTrainingTableRow,
 } from '../lib/onlineTrainingPresentation'
 import {businessTodayRange} from '../lib/adminQueryDefaults'
+import {PERMISSIONS} from '../config/permissions'
+import {useAdminAccess} from '../lib/adminAccess'
 import {Pagination} from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
 import {useAppToast} from '../components/AppToastProvider'
@@ -199,6 +201,8 @@ function OverlayPortal({children}){
 
 export default function OnlineTrainingPage(){
   const {notify}=useAppToast()
+  const access=useAdminAccess()
+  const canViewEmployeeDirectory=access.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)
   const [bootstrap,setBootstrap]=useState(null)
   const [mode,setMode]=useState('reports')
   const [filters,setFilters]=useState(defaultFilters)
@@ -367,6 +371,11 @@ export default function OnlineTrainingPage(){
     const prior=document.body.style.overflow;document.body.style.overflow='hidden'
     return()=>{document.body.style.overflow=prior}
   },[editor,viewing,deleteTarget,profile,history,trainerHistory,lightbox])
+  useEffect(()=>{
+    if(canViewEmployeeDirectory)return
+    profileRequestRef.current+=1
+    setProfile(null)
+  },[canViewEmployeeDirectory])
 
   const myRoster=bootstrap?.my_roster||[]
   const filterOptions=useMemo(()=>{
@@ -635,11 +644,23 @@ export default function OnlineTrainingPage(){
     }
   }
 
-  const openProfile=async employeeId=>{
+  const openProfile=async (employeeId,employeeNo='',employeeName='')=>{
+    if(!canViewEmployeeDirectory)return
     const requestId=++profileRequestRef.current
-    setProfile({loading:true,detail:{employee:{id:employeeId}},error:''})
+    const targetEmployeeNo=text(employeeNo).toUpperCase()
+    let resolvedEmployeeId=text(employeeId)
+    setProfile({loading:true,detail:{employee:{id:resolvedEmployeeId,employee_no:targetEmployeeNo,full_name:text(employeeName)}},error:''})
     try{
-      const {data,error:edgeError}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:employeeId}})
+      if(!resolvedEmployeeId){
+        if(!targetEmployeeNo)throw new Error('缺少员工ID，无法打开员工档案')
+        const {data:found,error:findError}=await supabase.functions.invoke('admin-employees',{body:{action:'list',page:1,page_size:20,filters:{employee_no:targetEmployeeNo,status:''}}})
+        if(requestId!==profileRequestRef.current)return
+        if(findError||found?.error)throw new Error(await edgeFunctionErrorMessage({data:found,error:findError,fallback:'员工档案定位失败'}))
+        const exact=(found?.rows||[]).filter(row=>text(row.employee_no).toUpperCase()===targetEmployeeNo)
+        if(exact.length!==1)throw new Error(exact.length?'员工ID对应多份档案，请到员工档案查询表核对':'找不到对应员工档案，或该员工不在当前账号管理范围内')
+        resolvedEmployeeId=text(exact[0].id)
+      }
+      const {data,error:edgeError}=await supabase.functions.invoke('admin-employees',{body:{action:'detail',employee_id:resolvedEmployeeId}})
       if(requestId!==profileRequestRef.current)return
       if(edgeError||data?.error)throw new Error(await edgeFunctionErrorMessage({data,error:edgeError,fallback:'员工完整档案读取失败'}))
       setProfile({loading:false,detail:data,error:''})
@@ -649,7 +670,7 @@ export default function OnlineTrainingPage(){
       setProfile({loading:false,detail:null,error:reason})
       notify({
         type:'error',module:ONLINE_TRAINING_TOAST_MODULE,operation:'读取员工档案',reason,
-        dedupeKey:'online-training:employee-profile:read:error',retry:()=>openProfile(employeeId),retryLabel:'重试',
+        dedupeKey:'online-training:employee-profile:read:error',retry:()=>openProfile(employeeId,employeeNo,employeeName),retryLabel:'重试',
       })
     }
   }
@@ -844,8 +865,8 @@ export default function OnlineTrainingPage(){
       <div className="ot-filter-foot"><span>首次进入显示本月至今；修改任何条件后点击“查询”</span><strong>{activeFilterCount?`已应用 ${activeFilterCount} 项条件 · `:''}{mode==='reports'?`${result.total||0} 名培训人员 · 共 ${result.report_total||0} 份日报`:`${result.total||0} 名员工`}</strong></div>
     </form>
     {(loading&&!bootstrap)||(searching&&!result.rows.length)?<ListSkeleton mode={mode}/>:
-      mode==='reports'?<ReportList rows={result.rows} onHistory={loadTrainerHistory}/>
-      :<PeopleList rows={result.rows} onHistory={openHistory}/>
+      mode==='reports'?<ReportList rows={result.rows} canOpenProfile={canViewEmployeeDirectory} onProfile={openProfile} onHistory={loadTrainerHistory}/>
+      :<PeopleList rows={result.rows} canOpenProfile={canViewEmployeeDirectory} onProfile={openProfile} onHistory={openHistory}/>
     }
 
     {!loading&&result.total>0&&<Pagination page={page} pages={result.pages||1} total={result.total} pageSize={pageSize} pageSizeOptions={[20,30,50,100]} onPage={next=>{listIntentRef.current='查询线上培训分页';setPage(next);setSearchVersion(version=>version+1)}} onPageSize={next=>{listIntentRef.current='调整线上培训分页';setPageSize(next);setPage(1);setSearchVersion(version=>version+1)}}/>}
@@ -864,13 +885,19 @@ export default function OnlineTrainingPage(){
   </div>
 }
 
-function ReportList({rows,onHistory}){
+function EmployeeProfileId({employeeId,employeeNo,employeeName,canOpen,onOpen}){
+  const label=text(employeeNo)||'—'
+  if(!canOpen||label==='—')return <strong className="ot-cell-id">{label}</strong>
+  return <button type="button" className="ot-table-link" title="打开完整员工档案" aria-label={`查看员工档案 ${label}`} onClick={()=>onOpen(employeeId,employeeNo,employeeName)}>{label}</button>
+}
+
+function ReportList({rows,canOpenProfile,onProfile,onHistory}){
   if(!rows?.length)return <div className="ot-empty"><span>培</span><h3>没有匹配的培训人员</h3><p>可以调整员工、组织或日期条件后重新查询。</p></div>
   return <section className="ot-compact-table-shell" aria-label="培训人员日报列表"><table className="ot-compact-table">
     <thead><tr><th>入职日期</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>培训人</th><th>日报数量</th><th>最近日报</th><th>操作</th></tr></thead>
     <tbody>{rows.map(trainer=>{const item=trainerTrainingTableRow(trainer);return <tr key={item.key}>
       <td data-label="入职日期">{dateText(item.hireDate)}</td>
-      <td data-label="员工ID"><strong className="ot-cell-id">{item.employeeNo||'—'}</strong></td>
+      <td data-label="员工ID"><EmployeeProfileId employeeId={item.employeeId} employeeNo={item.employeeNo} employeeName={item.name} canOpen={canOpenProfile} onOpen={onProfile}/></td>
       <td data-label="姓名"><strong className="ot-person-name">{item.name||'未填写'}</strong></td>
       <td data-label="团队 / 岗位"><div className="ot-stacked-cell"><strong>{item.teams.join(' / ')||'—'}</strong><span>{item.positions.join(' / ')||'—'}</span></div></td>
       <td data-label="培训人"><div className="ot-stacked-cell"><strong>{item.name||'—'}</strong><span>{trainer.group_names?.join(' / ')||'线上培训'}</span></div></td>
@@ -886,13 +913,13 @@ function ListSkeleton({mode}){
   return <section className="ot-compact-table-shell ot-compact-table-loading" aria-label="正在读取日报列表" aria-busy="true"><div className="ot-loading-columns" aria-hidden="true">{Array.from({length:8},(_,index)=><i key={index}/>)}</div>{Array.from({length:count},(_,index)=><div className="ot-loading-row" key={index} aria-hidden="true">{Array.from({length:8},(_,cell)=><i key={cell}/>)}</div>)}</section>
 }
 
-function PeopleList({rows,onHistory}){
+function PeopleList({rows,canOpenProfile,onProfile,onHistory}){
   if(!rows?.length)return <div className="ot-empty"><span>人</span><h3>没有找到员工培训记录</h3><p>可以输入员工ID或姓名搜索。</p></div>
   return <section className="ot-compact-table-shell" aria-label="员工日报列表"><table className="ot-compact-table">
     <thead><tr><th>入职日期</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>培训人</th><th>日报数量</th><th>最近日报</th><th>操作</th></tr></thead>
     <tbody>{rows.map(person=>{const item=employeeTrainingTableRow(person);return <tr key={item.key}>
       <td data-label="入职日期">{dateText(item.hireDate)}</td>
-      <td data-label="员工ID"><strong className="ot-cell-id">{item.employeeNo||'—'}</strong></td>
+      <td data-label="员工ID"><EmployeeProfileId employeeId={item.employeeId} employeeNo={item.employeeNo} employeeName={item.name} canOpen={canOpenProfile} onOpen={onProfile}/></td>
       <td data-label="姓名"><strong className="ot-person-name">{item.name||'未填写'}</strong></td>
       <td data-label="团队 / 岗位"><div className="ot-stacked-cell"><strong>{item.team||'—'}</strong><span>{item.position||'—'}</span></div></td>
       <td data-label="培训人"><div className="ot-stacked-cell"><strong>{item.trainer||'—'}</strong><span>{person.group_name||person.shift_name||'—'}</span></div></td>

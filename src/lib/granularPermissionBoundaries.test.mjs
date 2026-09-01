@@ -25,6 +25,7 @@ const attendanceRecords = await readFile(new URL('../components/AttendanceRecord
 const permissionConfig = await readFile(new URL('../config/permissions.js', import.meta.url), 'utf8')
 const adminPagePermissions = await readFile(new URL('../config/adminPagePermissions.js', import.meta.url), 'utf8')
 const trainingPage = await readFile(new URL('../pages/AdminTrainingPage.jsx', import.meta.url), 'utf8')
+const onlineTrainingPage = await readFile(new URL('../pages/OnlineTrainingPage.jsx', import.meta.url), 'utf8')
 
 test('attendance and exam wrappers constrain filters, payloads and grading status', () => {
   assert.match(migration, /admin_attendance_page_filters[\s\S]+include_mirrors',false/)
@@ -205,6 +206,11 @@ test('training and employee mutations enforce current page permissions', () => {
   assert.match(employees, /employee\.directory\.resign[\s\S]+employee\.resignations\.resign/)
   assert.match(employeeWrite, /employee\.change_history\.view/)
   assert.match(employeeWrite, /employee\.directory\.view/)
+  assert.match(onlineTrainingPage, /canViewEmployeeDirectory=access\.hasPermission\(PERMISSIONS\.EMPLOYEE_DIRECTORY_VIEW\)/)
+  assert.match(onlineTrainingPage, /if\(!canViewEmployeeDirectory\)return/)
+  assert.match(onlineTrainingPage, /canOpenProfile=\{canViewEmployeeDirectory\}/)
+  assert.match(employees, /else \{[\s\S]+requirePermission\(service, caller, "employee\.directory\.view"\)/)
+  assert.match(employees, /if \(action === "detail"\)[\s\S]+q = applyScope\(q,scope\)/)
 })
 
 test('adjustment edits use their own selectable permission instead of approval', () => {

@@ -4,6 +4,7 @@ const count=value=>Math.max(0,Number(value)||0)
 export function employeeTrainingTableRow(person={}){
   return {
     key:text(person.employee_id)||text(person.employee_no)||text(person.employee_name),
+    employeeId:text(person.employee_id),
     hireDate:text(person.hire_date),
     employeeNo:text(person.employee_no),
     name:text(person.employee_name),
@@ -20,6 +21,7 @@ export function employeeTrainingTableRow(person={}){
 export function trainerTrainingTableRow(trainer={}){
   return {
     key:text(trainer.trainer_key)||text(trainer.trainer_employee_no)||text(trainer.trainer_name),
+    employeeId:text(trainer.trainer_employee_id),
     hireDate:text(trainer.trainer_hire_date),
     employeeNo:text(trainer.trainer_employee_no),
     name:text(trainer.trainer_name),

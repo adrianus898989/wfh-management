@@ -30,7 +30,7 @@ test('employee daily-report table keeps the requested employee-first columns',()
     team_name:'AR印尼',position_name:'彩金',trainer_name:'小王',report_count:'7',recorded_days:'6',
     missing_days:'1',last_report_date:'2026-08-25',
   }),{
-    key:'uuid-1',hireDate:'2026-01-13',employeeNo:'CJ00007',name:'Dohren',team:'AR印尼',position:'彩金',
+    key:'uuid-1',employeeId:'uuid-1',hireDate:'2026-01-13',employeeNo:'CJ00007',name:'Dohren',team:'AR印尼',position:'彩金',
     trainer:'小王',reportCount:7,recordedDays:6,missingDays:1,lastReportDate:'2026-08-25',
   })
 })
@@ -40,9 +40,24 @@ test('trainer table does not invent an employee id or hire date from trainees',(
     trainer_key:'trainer-a',trainer_name:'Trainer A',team_names:['AR印度'],position_names:['线上培训'],
     report_count:2,recorded_days:2,employee_count:5,last_report_date:'2026-08-25',
   })
+  assert.equal(row.employeeId,'')
   assert.equal(row.employeeNo,'')
   assert.equal(row.hireDate,'')
   assert.deepEqual(row.teams,['AR印度'])
+})
+
+test('employee IDs open the existing scoped profile drawer only with directory permission',()=>{
+  assert.match(onlineTrainingPage,/const access=useAdminAccess\(\)/)
+  assert.match(onlineTrainingPage,/canViewEmployeeDirectory=access\.hasPermission\(PERMISSIONS\.EMPLOYEE_DIRECTORY_VIEW\)/)
+  assert.match(onlineTrainingPage,/if\(!canViewEmployeeDirectory\)return/)
+  assert.match(onlineTrainingPage,/action:'list',page:1,page_size:20,filters:\{employee_no:targetEmployeeNo,status:''\}/)
+  assert.match(onlineTrainingPage,/exact\.length!==1/)
+  assert.match(onlineTrainingPage,/action:'detail',employee_id:resolvedEmployeeId/)
+  assert.match(onlineTrainingPage,/function EmployeeProfileId\([\s\S]+if\(!canOpen\|\|label==='—'\)return <strong className="ot-cell-id">/)
+  assert.match(onlineTrainingPage,/className="ot-table-link"[\s\S]+onClick=\{\(\)=>onOpen\(employeeId,employeeNo,employeeName\)\}/)
+  assert.match(onlineTrainingPage,/canOpenProfile=\{canViewEmployeeDirectory\}/)
+  assert.match(onlineTrainingPage,/if\(canViewEmployeeDirectory\)return[\s\S]+profileRequestRef\.current\+=1[\s\S]+setProfile\(null\)/)
+  assert.match(onlineTrainingStyles,/\.ot-table-link:focus-visible\{outline:2px solid #76a3f4/)
 })
 
 test('trainer identity lookup is batched by trainer key and keeps trainer fields separate from trainees',()=>{
