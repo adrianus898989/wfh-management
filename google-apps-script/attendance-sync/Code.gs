@@ -195,6 +195,20 @@ const ATTENDANCE_SYNC_DEBOUNCE_MS = 45 * 1000;
 const ATTENDANCE_SYNC_EXPECTED_URL =
   'https://ibvntgtydsavdiyqekrq.supabase.co/functions/v1/attendance-sheet-sync';
 
+// One reviewed transition only. The source, old snapshot, new snapshot and
+// expected row/delete counts were reconciled against production before this
+// code was written. Any later Google Sheet edit changes the snapshot hash and
+// makes this authorization fail closed.
+const ATTENDANCE_SYNC_REVIEWED_HOME_PH_SEP_DELETE = Object.freeze({
+  sourceKey: 'home_ph_annual_2026_09',
+  previousSnapshotHash: '527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071',
+  snapshotHash: 'f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126',
+  expectedDeleteCount: 9,
+  expectedReadRowCount: 720,
+  expectedCanonicalRecordCount: 295,
+  expectedParseWarningCount: 7,
+});
+
 /**
  * Legacy August edits stay immediate. Annual edits only mark the exact affected
  * logical month; this handler performs no annual sheet reads and no HTTP calls.
@@ -473,6 +487,19 @@ function runAttendanceReconciliation() {
 }
 
 /**
+ * Executes only the reviewed Home-PH September transition. This is deliberately
+ * separate from runAttendanceReconciliation(), which must never grant a delete
+ * override to all attendance sources.
+ */
+function runReviewedHomePhSeptember2026Reconciliation() {
+  const source = ATTENDANCE_SYNC_ANNUAL_SOURCES.filter(function (candidate) {
+    return candidate.sourceKey === ATTENDANCE_SYNC_REVIEWED_HOME_PH_SEP_DELETE.sourceKey;
+  });
+  if (source.length !== 1) throw new Error('Reviewed attendance source is not uniquely configured.');
+  syncAttendanceSourcesInternal_(source, true, 'manual', false, true);
+}
+
+/**
  * One-time authorization entrypoint. It creates five source-bound onEdit
  * triggers, a one-minute dirty-month flusher, and one daily full validation.
  */
@@ -515,7 +542,7 @@ function removeAttendanceSyncTriggers() {
   });
 }
 
-function syncAttendanceSourcesInternal_(sources, force, triggerKind, dirtyOnly) {
+function syncAttendanceSourcesInternal_(sources, force, triggerKind, dirtyOnly, reviewedLargeDelete) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;
   try {
@@ -524,7 +551,7 @@ function syncAttendanceSourcesInternal_(sources, force, triggerKind, dirtyOnly) 
     const failures = [];
     sources.forEach(function (source) {
       try {
-        syncOneAttendanceSource_(source, config, force, triggerKind, dirtyOnly);
+        syncOneAttendanceSource_(source, config, force, triggerKind, dirtyOnly, reviewedLargeDelete);
       } catch (error) {
         const message = error && error.message ? error.message : 'unknown failure';
         failures.push(source.sourceKey + ': ' + message);
@@ -537,7 +564,7 @@ function syncAttendanceSourcesInternal_(sources, force, triggerKind, dirtyOnly) 
   }
 }
 
-function syncOneAttendanceSource_(source, config, force, triggerKind, dirtyOnly) {
+function syncOneAttendanceSource_(source, config, force, triggerKind, dirtyOnly, reviewedLargeDelete) {
   const properties = PropertiesService.getScriptProperties();
   const dirtyKey = ATTENDANCE_SYNC_DIRTY_PREFIX + source.sourceKey;
   if (dirtyOnly && !properties.getProperty(dirtyKey)) return;
@@ -589,6 +616,22 @@ function syncOneAttendanceSource_(source, config, force, triggerKind, dirtyOnly)
     captured_at: new Date().toISOString(),
     values: snapshot.values,
   };
+  if (reviewedLargeDelete === true) {
+    const reviewed = ATTENDANCE_SYNC_REVIEWED_HOME_PH_SEP_DELETE;
+    if (triggerKind !== 'manual' || source.sourceKey !== reviewed.sourceKey) {
+      throw new Error('Reviewed attendance delete override source mismatch.');
+    }
+    if (snapshot.hash !== reviewed.snapshotHash) {
+      throw new Error('Reviewed attendance snapshot changed; re-audit before deleting old records.');
+    }
+    payload.allow_large_delete = true;
+    payload.expected_delete_count = reviewed.expectedDeleteCount;
+    payload.expected_previous_snapshot_hash = reviewed.previousSnapshotHash;
+    payload.expected_snapshot_hash = reviewed.snapshotHash;
+    payload.expected_read_row_count = reviewed.expectedReadRowCount;
+    payload.expected_canonical_record_count = reviewed.expectedCanonicalRecordCount;
+    payload.expected_parse_warning_count = reviewed.expectedParseWarningCount;
+  }
 
   let response;
   try {

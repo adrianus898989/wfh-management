@@ -1,6 +1,7 @@
 import {
   ALLOWED_SOURCES,
   type AnnualSourceConfig,
+  isReviewedLargeDeleteOverride,
   normalizeSnapshot,
   sha256Hex,
 } from "./normalize.ts";
@@ -73,6 +74,107 @@ Deno.test("capture timestamps do not change per-record content hashes", async ()
   const first = await normalizeSnapshot({ ...base, captured_at: "2026-08-24T01:02:03.000Z" });
   const second = await normalizeSnapshot({ ...base, captured_at: "2026-08-24T02:03:04.000Z" });
   assert(first.rows[0].content_hash === second.rows[0].content_hash, "capture time changed content identity");
+});
+
+Deno.test("ordinary manual and automatic snapshots never enable the large-delete override", async () => {
+  const values = [...headers, ["A", "公休", "2026-8-1", "", "", "", "", "", "", "", "", "", "", ""]];
+  const snapshotHash = await sha256Hex(JSON.stringify(values));
+  const base = {
+    source,
+    snapshot_hash: snapshotHash,
+    captured_at: "2026-08-24T01:02:03.000Z",
+    values,
+  };
+  const change = await normalizeSnapshot({
+    ...base,
+    request_id: "123e4567-e89b-42d3-a456-426614174001",
+    trigger_kind: "change",
+    allow_large_delete: true,
+  });
+  const daily = await normalizeSnapshot({
+    ...base,
+    request_id: "123e4567-e89b-42d3-a456-426614174002",
+    trigger_kind: "daily_reconcile",
+    allow_large_delete: true,
+  });
+  const manual = await normalizeSnapshot({
+    ...base,
+    request_id: "123e4567-e89b-42d3-a456-426614174003",
+    trigger_kind: "manual",
+  });
+  const defaultTrigger = await normalizeSnapshot({
+    ...base,
+    request_id: "123e4567-e89b-42d3-a456-426614174004",
+    allow_large_delete: true,
+  });
+  let invalidRejected = false;
+  try {
+    await normalizeSnapshot({
+      ...base,
+      request_id: "123e4567-e89b-42d3-a456-426614174005",
+      trigger_kind: "manual_override",
+      allow_large_delete: true,
+    });
+  } catch (error) {
+    invalidRejected = error instanceof Error && error.message === "invalid_trigger_kind";
+  }
+
+  assert(change.allow_large_delete === false, "change trigger trusted a caller-supplied delete override");
+  assert(daily.allow_large_delete === false, "daily reconciliation enabled the delete override");
+  assert(manual.allow_large_delete === false, "ordinary manual reconciliation enabled the delete override");
+  assert(defaultTrigger.allow_large_delete === false, "default change trigger enabled the delete override");
+  assert(invalidRejected, "unknown trigger kind reached the delete override contract");
+});
+
+Deno.test("large-delete override requires the exact reviewed Home-PH September transition", () => {
+  const reviewed = {
+    requested: true,
+    triggerKind: "manual",
+    sourceKey: "home_ph_annual_2026_09",
+    snapshotHash: "f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126",
+    expectedDeleteCount: 9,
+    expectedPreviousSnapshotHash: "527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071",
+    expectedSnapshotHash: "f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126",
+    expectedReadRowCount: 720,
+    expectedCanonicalRecordCount: 295,
+    expectedParseWarningCount: 7,
+    readRowCount: 720,
+    canonicalRecordCount: 295,
+    parseWarningCount: 7,
+  };
+
+  assert(isReviewedLargeDeleteOverride(reviewed), "the reviewed transition was not authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, requested: false }), "implicit override was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, triggerKind: "change" }), "change trigger was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, triggerKind: "daily_reconcile" }), "daily trigger was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, sourceKey: "home_ph_annual_2026_10" }), "another source was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, expectedDeleteCount: 8 }), "wrong delete count was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, canonicalRecordCount: 0 }), "empty snapshot was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, snapshotHash: "0".repeat(64) }), "another target snapshot was authorized");
+  assert(!isReviewedLargeDeleteOverride({
+    ...reviewed,
+    expectedPreviousSnapshotHash: "0".repeat(64),
+  }), "another previous snapshot was authorized");
+});
+
+Deno.test("manual delete request fails closed unless every reviewed field matches", async () => {
+  const values = [...headers, ["A", "公休", "2026-8-1", "", "", "", "", "", "", "", "", "", "", ""]];
+  let rejected = false;
+  try {
+    await normalizeSnapshot({
+      request_id: "123e4567-e89b-42d3-a456-426614174006",
+      trigger_kind: "manual",
+      source,
+      snapshot_hash: await sha256Hex(JSON.stringify(values)),
+      captured_at: "2026-08-24T01:02:03.000Z",
+      values,
+      allow_large_delete: true,
+      expected_delete_count: 9,
+    });
+  } catch (error) {
+    rejected = error instanceof Error && error.message === "invalid_manual_delete_override";
+  }
+  assert(rejected, "partial manual delete authorization was accepted");
 });
 
 Deno.test("verifies the untrimmed padded A:N snapshot before parsing", async () => {

@@ -264,3 +264,66 @@ test('Philippines resolver fails closed on a wrong title or incomplete metadata 
     return attendanceResolveAnnualAdjustmentSources_(sheet, ATTENDANCE_SYNC_ANNUAL_WORKBOOKS[2]);
   })()`, context), /metadata headers/);
 });
+
+test('generic reconciliation does not grant the reviewed delete override', () => {
+  const calls = json(`(function () {
+    var original = syncAttendanceSourcesInternal_;
+    var captured = [];
+    try {
+      syncAttendanceSourcesInternal_ = function (sources, force, triggerKind, dirtyOnly, reviewedLargeDelete) {
+        captured.push({
+          sourceKeys: sources.map(function (source) { return source.sourceKey; }),
+          force: force,
+          triggerKind: triggerKind,
+          dirtyOnly: dirtyOnly,
+          reviewedLargeDelete: reviewedLargeDelete === true
+        });
+      };
+      reconcileAttendanceSheets();
+      runAttendanceReconciliation();
+      runReviewedHomePhSeptember2026Reconciliation();
+      return captured;
+    } finally {
+      syncAttendanceSourcesInternal_ = original;
+    }
+  })()`);
+
+  assert.deepEqual(calls, [
+    {
+      sourceKeys: calls[0].sourceKeys,
+      force: false,
+      triggerKind: 'daily_reconcile',
+      dirtyOnly: false,
+      reviewedLargeDelete: false,
+    },
+    {
+      sourceKeys: calls[1].sourceKeys,
+      force: true,
+      triggerKind: 'manual',
+      dirtyOnly: false,
+      reviewedLargeDelete: false,
+    },
+    {
+      sourceKeys: ['home_ph_annual_2026_09'],
+      force: true,
+      triggerKind: 'manual',
+      dirtyOnly: false,
+      reviewedLargeDelete: true,
+    },
+  ]);
+  assert.equal(calls[0].sourceKeys.length, 14);
+  assert.equal(calls[1].sourceKeys.length, 14);
+  assert.match(source, /syncAttendanceSourcesInternal_\(due, false, 'change', true\)/);
+});
+
+test('reviewed delete payload is pinned to the audited source, hashes and counts', () => {
+  assert.match(source, /sourceKey:\s*'home_ph_annual_2026_09'/);
+  assert.match(source, /previousSnapshotHash:\s*'527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071'/);
+  assert.match(source, /snapshotHash:\s*'f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126'/);
+  assert.match(source, /expectedDeleteCount:\s*9/);
+  assert.match(source, /expectedReadRowCount:\s*720/);
+  assert.match(source, /expectedCanonicalRecordCount:\s*295/);
+  assert.match(source, /expectedParseWarningCount:\s*7/);
+  assert.match(source, /if \(snapshot\.hash !== reviewed\.snapshotHash\)/);
+  assert.match(source, /payload\.allow_large_delete = true/);
+});

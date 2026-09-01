@@ -9,6 +9,7 @@
     "test:edge-employee-scope": "node --test src/lib/edgeEmployeeScope.test.mjs",
     "test:admin-ip-preflight": "node --test src/lib/adminIpPreflight.test.mjs",
     "test:role-permission-recovery": "node --test src/lib/adminRolePermissionRecovery.test.mjs",
+    "test:attendance-scoped-delete": "node --test src/lib/attendanceScopedManualDeleteOverride.test.mjs google-apps-script/attendance-sync/Code.test.mjs",
     "dev": "vite",
     "build": "vite build && node scripts/write-release-manifest.mjs",
     "preview": "vite preview",

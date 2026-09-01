@@ -246,7 +246,13 @@ export type NormalizedSnapshot = {
   read_row_count: number;
   parser_version: string;
   parse_warning_count: number;
-  allow_large_delete: false;
+  allow_large_delete: boolean;
+  expected_delete_count: number | null;
+  expected_previous_snapshot_hash: string | null;
+  expected_snapshot_hash: string | null;
+  expected_read_row_count: number | null;
+  expected_canonical_record_count: number | null;
+  expected_parse_warning_count: number | null;
   rows: NormalizedRecord[];
 };
 
@@ -254,9 +260,52 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const SHA256_RE = /^[0-9a-f]{64}$/i;
 const MAX_CELL_LENGTH = 40_000;
 
+const REVIEWED_HOME_PH_SEP_DELETE = Object.freeze({
+  sourceKey: "home_ph_annual_2026_09",
+  previousSnapshotHash: "527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071",
+  snapshotHash: "f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126",
+  deleteCount: 9,
+  readRowCount: 720,
+  canonicalRecordCount: 295,
+  parseWarningCount: 7,
+});
+
 const stringValue = (value: unknown) => String(value ?? "").trim();
 const nullableText = (value: unknown) => stringValue(value) || null;
 const headerKey = (value: unknown) => stringValue(value).replace(/[\s\u3000_\-—–/]+/g, "").toLowerCase();
+
+export function isReviewedLargeDeleteOverride(input: {
+  requested: boolean;
+  triggerKind: string;
+  sourceKey: string;
+  snapshotHash: string;
+  expectedDeleteCount: unknown;
+  expectedPreviousSnapshotHash: unknown;
+  expectedSnapshotHash: unknown;
+  expectedReadRowCount: unknown;
+  expectedCanonicalRecordCount: unknown;
+  expectedParseWarningCount: unknown;
+  readRowCount: number;
+  canonicalRecordCount: number;
+  parseWarningCount: number;
+}): boolean {
+  return input.requested &&
+    input.triggerKind === "manual" &&
+    input.sourceKey === REVIEWED_HOME_PH_SEP_DELETE.sourceKey &&
+    input.snapshotHash === REVIEWED_HOME_PH_SEP_DELETE.snapshotHash &&
+    input.expectedDeleteCount === REVIEWED_HOME_PH_SEP_DELETE.deleteCount &&
+    stringValue(input.expectedPreviousSnapshotHash).toLowerCase() ===
+      REVIEWED_HOME_PH_SEP_DELETE.previousSnapshotHash &&
+    stringValue(input.expectedSnapshotHash).toLowerCase() ===
+      REVIEWED_HOME_PH_SEP_DELETE.snapshotHash &&
+    input.expectedReadRowCount === REVIEWED_HOME_PH_SEP_DELETE.readRowCount &&
+    input.expectedCanonicalRecordCount === REVIEWED_HOME_PH_SEP_DELETE.canonicalRecordCount &&
+    input.expectedParseWarningCount === REVIEWED_HOME_PH_SEP_DELETE.parseWarningCount &&
+    input.readRowCount === REVIEWED_HOME_PH_SEP_DELETE.readRowCount &&
+    input.canonicalRecordCount === REVIEWED_HOME_PH_SEP_DELETE.canonicalRecordCount &&
+    input.parseWarningCount === REVIEWED_HOME_PH_SEP_DELETE.parseWarningCount &&
+    input.canonicalRecordCount > 0;
+}
 
 export async function sha256Hex(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
@@ -961,6 +1010,28 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSnaps
     ? await normalizeLegacySnapshot(payload, source, capturedAt, snapshotHash)
     : await normalizeAnnualSnapshot(payload, source, capturedAt, snapshotHash);
 
+  // Only an explicit request for the one audited transition can cross the
+  // database's large-delete guard. Automatic triggers always remain false.
+  const requestedLargeDelete = payload.allow_large_delete === true;
+  const reviewedLargeDelete = isReviewedLargeDeleteOverride({
+    requested: requestedLargeDelete,
+    triggerKind,
+    sourceKey: source.sourceKey,
+    snapshotHash,
+    expectedDeleteCount: payload.expected_delete_count,
+    expectedPreviousSnapshotHash: payload.expected_previous_snapshot_hash,
+    expectedSnapshotHash: payload.expected_snapshot_hash,
+    expectedReadRowCount: payload.expected_read_row_count,
+    expectedCanonicalRecordCount: payload.expected_canonical_record_count,
+    expectedParseWarningCount: payload.expected_parse_warning_count,
+    readRowCount: result.readRowCount,
+    canonicalRecordCount: result.rows.length,
+    parseWarningCount: result.warningCount,
+  });
+  if (requestedLargeDelete && triggerKind === "manual" && !reviewedLargeDelete) {
+    throw new Error("invalid_manual_delete_override");
+  }
+
   return {
     request_id: requestId,
     trigger_kind: triggerKind as TriggerKind,
@@ -982,7 +1053,19 @@ export async function normalizeSnapshot(input: unknown): Promise<NormalizedSnaps
     read_row_count: result.readRowCount,
     parser_version: PARSER_VERSION,
     parse_warning_count: result.warningCount,
-    allow_large_delete: false,
+    allow_large_delete: reviewedLargeDelete,
+    expected_delete_count: reviewedLargeDelete ? REVIEWED_HOME_PH_SEP_DELETE.deleteCount : null,
+    expected_previous_snapshot_hash: reviewedLargeDelete
+      ? REVIEWED_HOME_PH_SEP_DELETE.previousSnapshotHash
+      : null,
+    expected_snapshot_hash: reviewedLargeDelete ? REVIEWED_HOME_PH_SEP_DELETE.snapshotHash : null,
+    expected_read_row_count: reviewedLargeDelete ? REVIEWED_HOME_PH_SEP_DELETE.readRowCount : null,
+    expected_canonical_record_count: reviewedLargeDelete
+      ? REVIEWED_HOME_PH_SEP_DELETE.canonicalRecordCount
+      : null,
+    expected_parse_warning_count: reviewedLargeDelete
+      ? REVIEWED_HOME_PH_SEP_DELETE.parseWarningCount
+      : null,
     rows: result.rows,
   };
 }
