@@ -6,6 +6,10 @@ const migration = await readFile(new URL(
   '../../supabase/migrations/20260901124150_attendance_scoped_manual_delete_override.sql',
   import.meta.url,
 ), 'utf8');
+const refreshMigration = await readFile(new URL(
+  '../../supabase/migrations/20260901131500_refresh_home_ph_sep_reviewed_snapshot.sql',
+  import.meta.url,
+), 'utf8');
 
 const reviewedGuard = migration.match(/v_guard_new text := \$new\$([\s\S]*?)\$new\$;/)?.[1] ?? '';
 const emptyGuard = migration.match(/v_empty_new text := \$new\$([\s\S]*?)\$new\$;/)?.[1] ?? '';
@@ -43,6 +47,30 @@ test('ingest remains private and service-role only', () => {
   );
   assert.match(
     migration,
+    /grant execute on function attendance_private\.ingest_annual_attendance_snapshot\(jsonb\)[\s\S]*to service_role/,
+  );
+});
+
+test('follow-up migration replaces only the re-audited target hash and read count', () => {
+  assert.match(refreshMigration, /f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126/);
+  assert.match(refreshMigration, /9390bd569f7eeaeb0f563d1598a05159db3f334d0af53c0944a6ff7a59bee651/);
+  assert.match(refreshMigration, /v_old_hash_count <> 1/);
+  assert.match(refreshMigration, /v_old_read_count <> 1/);
+  assert.match(refreshMigration, /v_expected_read_row_count\\s\*=\\s\*720/);
+  assert.match(refreshMigration, /v_expected_read_row_count = 721/);
+});
+
+test('follow-up migration preserves the remaining reviewed boundary and privileges', () => {
+  assert.match(refreshMigration, /527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071/);
+  assert.match(refreshMigration, /v_expected_delete_count\\s\*=\\s\*9/);
+  assert.match(refreshMigration, /v_expected_canonical_record_count\\s\*=\\s\*295/);
+  assert.match(refreshMigration, /v_expected_parse_warning_count\\s\*=\\s\*7/);
+  assert.match(
+    refreshMigration,
+    /revoke all on function attendance_private\.ingest_annual_attendance_snapshot\(jsonb\)[\s\S]*from public, anon, authenticated/,
+  );
+  assert.match(
+    refreshMigration,
     /grant execute on function attendance_private\.ingest_annual_attendance_snapshot\(jsonb\)[\s\S]*to service_role/,
   );
 });

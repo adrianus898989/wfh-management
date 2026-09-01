@@ -327,9 +327,9 @@ test('generic reconciliation does not grant the reviewed delete override', () =>
 test('reviewed delete payload is pinned to the audited source, hashes and counts', () => {
   assert.match(source, /sourceKey:\s*'home_ph_annual_2026_09'/);
   assert.match(source, /previousSnapshotHash:\s*'527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071'/);
-  assert.match(source, /snapshotHash:\s*'f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126'/);
+  assert.match(source, /snapshotHash:\s*'9390bd569f7eeaeb0f563d1598a05159db3f334d0af53c0944a6ff7a59bee651'/);
   assert.match(source, /expectedDeleteCount:\s*9/);
-  assert.match(source, /expectedReadRowCount:\s*720/);
+  assert.match(source, /expectedReadRowCount:\s*721/);
   assert.match(source, /expectedCanonicalRecordCount:\s*295/);
   assert.match(source, /expectedParseWarningCount:\s*7/);
   assert.match(source, /if \(snapshot\.hash !== reviewed\.snapshotHash\)/);

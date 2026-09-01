@@ -263,9 +263,9 @@ const MAX_CELL_LENGTH = 40_000;
 const REVIEWED_HOME_PH_SEP_DELETE = Object.freeze({
   sourceKey: "home_ph_annual_2026_09",
   previousSnapshotHash: "527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071",
-  snapshotHash: "f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126",
+  snapshotHash: "9390bd569f7eeaeb0f563d1598a05159db3f334d0af53c0944a6ff7a59bee651",
   deleteCount: 9,
-  readRowCount: 720,
+  readRowCount: 721,
   canonicalRecordCount: 295,
   parseWarningCount: 7,
 });

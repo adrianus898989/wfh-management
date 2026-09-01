@@ -131,14 +131,14 @@ Deno.test("large-delete override requires the exact reviewed Home-PH September t
     requested: true,
     triggerKind: "manual",
     sourceKey: "home_ph_annual_2026_09",
-    snapshotHash: "f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126",
+    snapshotHash: "9390bd569f7eeaeb0f563d1598a05159db3f334d0af53c0944a6ff7a59bee651",
     expectedDeleteCount: 9,
     expectedPreviousSnapshotHash: "527f340c6cf16ab44dc76005f1148882380b84dd29e462441178d68c225b1071",
-    expectedSnapshotHash: "f6da820efa127e92d99bf0240380ef334e5007b093429d5ba1f30683ddf01126",
-    expectedReadRowCount: 720,
+    expectedSnapshotHash: "9390bd569f7eeaeb0f563d1598a05159db3f334d0af53c0944a6ff7a59bee651",
+    expectedReadRowCount: 721,
     expectedCanonicalRecordCount: 295,
     expectedParseWarningCount: 7,
-    readRowCount: 720,
+    readRowCount: 721,
     canonicalRecordCount: 295,
     parseWarningCount: 7,
   };
@@ -149,6 +149,10 @@ Deno.test("large-delete override requires the exact reviewed Home-PH September t
   assert(!isReviewedLargeDeleteOverride({ ...reviewed, triggerKind: "daily_reconcile" }), "daily trigger was authorized");
   assert(!isReviewedLargeDeleteOverride({ ...reviewed, sourceKey: "home_ph_annual_2026_10" }), "another source was authorized");
   assert(!isReviewedLargeDeleteOverride({ ...reviewed, expectedDeleteCount: 8 }), "wrong delete count was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, expectedReadRowCount: 720 }), "wrong expected read count was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, readRowCount: 720 }), "wrong actual read count was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, expectedCanonicalRecordCount: 294 }), "wrong expected canonical count was authorized");
+  assert(!isReviewedLargeDeleteOverride({ ...reviewed, parseWarningCount: 6 }), "wrong warning count was authorized");
   assert(!isReviewedLargeDeleteOverride({ ...reviewed, canonicalRecordCount: 0 }), "empty snapshot was authorized");
   assert(!isReviewedLargeDeleteOverride({ ...reviewed, snapshotHash: "0".repeat(64) }), "another target snapshot was authorized");
   assert(!isReviewedLargeDeleteOverride({
