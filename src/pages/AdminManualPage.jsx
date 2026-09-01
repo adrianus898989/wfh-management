@@ -1,5 +1,6 @@
 import React,{useMemo,useState} from 'react'
 import {Link} from 'react-router-dom'
+import AdminModuleNav from '../components/AdminModuleNav'
 import {adminNavigation} from '../config/navigation'
 import {adminPagePermissionCodes} from '../config/adminPagePermissions'
 import {ADMIN_SECTION_DESCRIPTIONS,adminPageDescription} from '../config/pageDescriptions'
@@ -71,6 +72,8 @@ export default function AdminManualPage(){
       <div><span>ADMIN OPERATIONS HANDBOOK</span><h1>后台功能和用途手册</h1><p>这里按当前账号的实际权限展示可访问页面；未授权页面不会出现在手册中。</p></div>
       <div className="admin-manual-scope"><small>当前数据范围</small><strong>{DATA_SCOPE_NAMES[access.dataScope]||access.dataScope||'由账号权限决定'}</strong><span>有效后台会话 · 服务端仍会再次校验</span></div>
     </header>
+
+    <AdminModuleNav/>
 
     <section className="admin-manual-notice">
       <strong>使用原则</strong>

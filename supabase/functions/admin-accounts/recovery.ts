@@ -10,6 +10,7 @@ import {
 
 const ALLOWED_ORIGIN = 'https://adrianus898989.github.io'
 const DEPENDENCY_TIMEOUT_MS = 8_000
+const AUTH_VERIFICATION_RETRY_DELAY_MS = 250
 const PRESENCE_DETAIL_TIMEOUT_MS = 4_000
 const AUTH_MUTATION_TIMEOUT_MS = 12_000
 const DEFAULT_ACCOUNT_PAGE_SIZE = 20
@@ -127,6 +128,31 @@ function retryable(req: Request, message: string, code = 'service_temporarily_un
   }, 503, '30')
 }
 
+async function verifyRequestUser(userClient: any, context: { action:string; requestId:string }) {
+  let lastResult: any = { data:{ user:null }, error:new Error('AUTH_USER_UNAVAILABLE') }
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      lastResult = await bounded(userClient.auth.getUser(), `AUTH_USER_${attempt}`)
+    } catch (error) {
+      lastResult = { data:{ user:null }, error }
+    }
+
+    const status = backendStatus(lastResult?.error)
+    if (!lastResult?.error || status === 401 || status === 403) return lastResult
+    if (attempt < 2) {
+      console.warn('admin-accounts auth verification retry', {
+        action:context.action,
+        request_id:context.requestId || null,
+        attempt,
+        status:status || null,
+        name:clean(lastResult.error?.name) || null,
+      })
+      await new Promise(resolve => setTimeout(resolve, AUTH_VERIFICATION_RETRY_DELAY_MS))
+    }
+  }
+  return lastResult
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors(req.headers.get('origin')) })
   if (req.method !== 'POST') return json(req, { ok:false, error:'Method not allowed' }, 405)
@@ -134,6 +160,7 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json().catch(() => ({}))
     const action = clean(body?.action || 'access')
+    const requestId = clean(req.headers.get('x-request-id') || req.headers.get('sb-request-id'))
     // Older production bundles used `bootstrap` for the shell permission read.
     // During recovery it is a read-only alias of `access`; it must never fall
     // through to the former full-directory bootstrap implementation.
@@ -178,7 +205,7 @@ Deno.serve(async (req: Request) => {
       auth: { persistSession:false, autoRefreshToken:false },
     })
 
-    const { data:userData, error:userError } = await bounded(userClient.auth.getUser(), 'AUTH_USER')
+    const { data:userData, error:userError } = await verifyRequestUser(userClient, { action, requestId })
     if (userError) {
       const status = backendStatus(userError)
       if (status === 401 || status === 403) {
@@ -190,7 +217,13 @@ Deno.serve(async (req: Request) => {
           preserve_session:false,
         }, 401)
       }
-      return retryable(req, '登录服务暂时繁忙，请稍后重试')
+      console.warn('admin-accounts auth verification unavailable', {
+        action,
+        request_id:requestId || null,
+        status:status || null,
+        name:clean(userError?.name) || null,
+      })
+      return retryable(req, '登录服务暂时繁忙，请稍后重试', 'auth_verification_temporarily_unavailable')
     }
     if (!userData?.user) {
       return json(req, {

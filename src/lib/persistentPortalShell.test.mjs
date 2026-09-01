@@ -16,12 +16,29 @@ test('admin and staff navigation retain one protected portal shell', () => {
 })
 
 test('route pages are lazy while each portal shell remains mounted', () => {
-  assert.match(app, /const lazyRoute = \(loader, exportName = 'default'\)/)
-  assert.match(app, /const AdminEmployeesPage = lazyRoute\(\(\) => import\('\.\/pages\/AdminEmployeesPage'\)\)/)
+  assert.match(app, /const lazyRoute = \(loader, exportName = 'default', \{ contentFallback = false \} = \{\}\)/)
+  assert.match(app, /const AdminEmployeesPage = lazyAdminRoute\(\(\) => import\('\.\/pages\/AdminEmployeesPage'\)\)/)
   assert.match(app, /const StaffPayrollPage = lazyRoute\(\(\) => import\('\.\/pages\/StaffPayrollPage'\)\)/)
   assert.match(app, /const StaffHome = lazyRoute\(\(\) => import\('\.\/pages\/PortalPage'\), 'StaffHome'\)/)
   assert.doesNotMatch(app, /^import AdminEmployeesPage from/m)
   assert.doesNotMatch(app, /^import StaffPayrollPage from/m)
+})
+
+test('authenticated admin shell warms only lazy admin chunks without mounting pages', () => {
+  assert.match(app, /LazyRoutePage\.preload = load/)
+  assert.match(app, /const ADMIN_ROUTE_PAGES = \[[\s\S]*AdminEmployeesPage[\s\S]*AdminManualPage/)
+  assert.match(app, /function AdminRouteChunkWarmup\(\)[\s\S]*await RoutePage\.preload\(\)/)
+  assert.match(app, /function AdminRouteChunkWarmup\(\)[\s\S]*requestIdleCallback/)
+  assert.match(app, /\{mode==='admin'&&<AdminRouteChunkWarmup\/>\}/)
+  const adminPages = app.match(/const ADMIN_ROUTE_PAGES = \[([\s\S]*?)\]/)?.[1] || ''
+  assert.doesNotMatch(adminPages, /Staff|Login|Mfa/)
+  assert.doesNotMatch(app, /function AdminRouteChunkWarmup\(\)[\s\S]*<RoutePage/)
+})
+
+test('nested admin route fallback uses an in-content skeleton instead of a viewport loading screen', () => {
+  assert.match(app, /function AdminRouteFallback\(\)[\s\S]*className="admin-route-loading"/)
+  assert.match(app, /const lazyAdminRoute = [^\n]+contentFallback:true/)
+  assert.doesNotMatch(app, /lazyAdminRoute[\s\S]{0,160}center-screen/)
 })
 
 test('admin-only legacy enhancers never load for staff paths', () => {

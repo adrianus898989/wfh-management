@@ -201,6 +201,8 @@ test('manual dynamically documents every navigation page without embedding recov
   assert.match(manualSource,/access\.hasAllPermissions/)
   assert.match(manualSource,/access\.hasAnyPermission/)
   assert.match(manualSource,/permissionCodes:pagePermissionCodes\(item\)/)
+  assert.match(manualSource,/import AdminModuleNav from ['"]\.\.\/components\/AdminModuleNav['"]/)
+  assert.match(manualSource,/<AdminModuleNav\s*\/>/)
   assert.match(manualStyles,/\.admin-manual-page-card/)
   assert.doesNotMatch(`${manualSource}\n${pageDescriptionSource}`,/(?:FOUNDER_(?:RECOVERY|SECRET|KEY)|recovery[_-]?key\s*[:=]\s*['"]|恢复密钥\s*[:：])/i)
 })

@@ -34,35 +34,86 @@ import {
 // Keep each route behind its own Suspense boundary.  The wrapper is the route
 // component, so a lazy child never unmounts the long-lived Protected/AppLayout
 // shell (and therefore never repeats access, IP-lease, presence or alert work).
-const lazyRoute = (loader, exportName = 'default') => {
-  const LazyPage = React.lazy(() => loader().then(module => ({ default:module[exportName] })))
-  return function LazyRoutePage(props) {
-    return <React.Suspense fallback={<div className="center-screen">Loading...</div>}>
+function AdminRouteFallback() {
+  return <div className="admin-route-loading" role="status" aria-label="正在打开页面">
+    <div className="admin-route-loading-heading"><i/><strong/><span/></div>
+    <div className="admin-route-loading-tabs">{Array.from({ length:7 }, (_, index) => <i key={index}/>)}</div>
+    <div className="admin-route-loading-filters">{Array.from({ length:5 }, (_, index) => <i key={index}/>)}</div>
+    <div className="admin-route-loading-grid"><i/><i/><i/></div>
+  </div>
+}
+
+const lazyRoute = (loader, exportName = 'default', { contentFallback = false } = {}) => {
+  let loadPromise
+  const load = () => {
+    if (!loadPromise) loadPromise = loader()
+      .then(module => ({ default:module[exportName] }))
+      .catch(error => { loadPromise = null; throw error })
+    return loadPromise
+  }
+  const LazyPage = React.lazy(load)
+  function LazyRoutePage(props) {
+    return <React.Suspense fallback={contentFallback?<AdminRouteFallback/>:<div className="center-screen">Loading...</div>}>
       <LazyPage {...props} />
     </React.Suspense>
   }
+  LazyRoutePage.preload = load
+  return LazyRoutePage
 }
+
+const lazyAdminRoute = (loader, exportName = 'default') => lazyRoute(loader, exportName, { contentFallback:true })
 
 const AdminLoginPage = lazyRoute(() => import('./pages/AdminLoginPage'))
 const StaffLoginPage = lazyRoute(() => import('./pages/StaffLoginPage'))
 const StaffRegisterPage = lazyRoute(() => import('./pages/StaffRegisterPage'))
 const MfaPage = lazyRoute(() => import('./pages/MfaPage'))
-const AdminEmployeesPage = lazyRoute(() => import('./pages/AdminEmployeesPage'))
-const AdminUsersPage = lazyRoute(() => import('./pages/AdminUsersPage'))
-const AdminIpAllowlistPage = lazyRoute(() => import('./pages/AdminIpAllowlistPage'))
-const AdminAttendancePage = lazyRoute(() => import('./pages/AdminAttendancePage'))
-const AdminReportsPage = lazyRoute(() => import('./pages/AdminReportsPage'))
-const AdminDailyWorkPage = lazyRoute(() => import('./pages/AdminDailyWorkPage'))
-const AdminTrainingPage = lazyRoute(() => import('./pages/AdminTrainingPage'))
+const AdminEmployeesPage = lazyAdminRoute(() => import('./pages/AdminEmployeesPage'))
+const AdminUsersPage = lazyAdminRoute(() => import('./pages/AdminUsersPage'))
+const AdminIpAllowlistPage = lazyAdminRoute(() => import('./pages/AdminIpAllowlistPage'))
+const AdminAttendancePage = lazyAdminRoute(() => import('./pages/AdminAttendancePage'))
+const AdminReportsPage = lazyAdminRoute(() => import('./pages/AdminReportsPage'))
+const AdminDailyWorkPage = lazyAdminRoute(() => import('./pages/AdminDailyWorkPage'))
+const AdminTrainingPage = lazyAdminRoute(() => import('./pages/AdminTrainingPage'))
 const StaffExamPage = lazyRoute(() => import('./pages/StaffExamPage'))
-const AdminPayrollPage = lazyRoute(() => import('./pages/AdminPayrollPage'))
+const AdminPayrollPage = lazyAdminRoute(() => import('./pages/AdminPayrollPage'))
 const StaffPayrollPage = lazyRoute(() => import('./pages/StaffPayrollPage'))
-const AdminPlanningPage = lazyRoute(() => import('./pages/AdminPlanningPage'))
-const AdminManualPage = lazyRoute(() => import('./pages/AdminManualPage'))
-const AdminActivityLogPage = lazyRoute(() => import('./pages/AdminActivityLogPage'))
-const AdminHome = lazyRoute(() => import('./pages/PortalPage'), 'AdminHome')
+const AdminPlanningPage = lazyAdminRoute(() => import('./pages/AdminPlanningPage'))
+const AdminManualPage = lazyAdminRoute(() => import('./pages/AdminManualPage'))
+const AdminActivityLogPage = lazyAdminRoute(() => import('./pages/AdminActivityLogPage'))
+const AdminHome = lazyAdminRoute(() => import('./pages/PortalPage'), 'AdminHome')
 const StaffHome = lazyRoute(() => import('./pages/PortalPage'), 'StaffHome')
 const ComingSoon = lazyRoute(() => import('./pages/PortalPage'), 'ComingSoon')
+
+const ADMIN_ROUTE_PAGES = [
+  AdminHome, AdminEmployeesPage, AdminAttendancePage, AdminReportsPage,
+  AdminDailyWorkPage, AdminTrainingPage, AdminPayrollPage, AdminUsersPage,
+  AdminIpAllowlistPage, AdminPlanningPage, AdminActivityLogPage, AdminManualPage,
+]
+
+function AdminRouteChunkWarmup() {
+  useEffect(() => {
+    let cancelled = false
+    let timer = 0
+    let idleHandle = 0
+    const preload = async () => {
+      for (const RoutePage of ADMIN_ROUTE_PAGES) {
+        if (cancelled) return
+        try { await RoutePage.preload() } catch (_) { /* Runtime recovery owns stale or unavailable assets. */ }
+      }
+    }
+    if (typeof window.requestIdleCallback === 'function') {
+      idleHandle = window.requestIdleCallback(() => { void preload() }, { timeout:2500 })
+    } else {
+      timer = window.setTimeout(() => { void preload() }, 1200)
+    }
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      if (idleHandle) window.cancelIdleCallback?.(idleHandle)
+    }
+  }, [])
+  return null
+}
 
 const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 6
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
@@ -523,7 +574,10 @@ function Protected({ children, mode }) {
 // admin-accounts requests.
 function PortalShell({ mode }) {
   return <Protected mode={mode}>
-    <AppLayout mode={mode}><Outlet /></AppLayout>
+    <>
+      {mode==='admin'&&<AdminRouteChunkWarmup/>}
+      <AppLayout mode={mode}><Outlet /></AppLayout>
+    </>
   </Protected>
 }
 

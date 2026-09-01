@@ -19,6 +19,12 @@ const mergeRowsById = (current = [], incoming = []) => {
   for (const row of incoming || []) if (row?.id) rows.set(row.id, row)
   return [...rows.values()]
 }
+const recoveryScopeRequestKey = ({ targetAuthUserId = '', teamIds = [], employeeQuery = '', createMode = false }) => [
+  createMode ? 'create' : 'edit',
+  String(targetAuthUserId || ''),
+  [...new Set(teamIds || [])].sort().join(','),
+  String(employeeQuery || '').trim().toLowerCase(),
+].join('|')
 
 const accountDateTime = value => {
   const date = new Date(value || '')
@@ -118,14 +124,23 @@ export default function AdminUsersPage() {
   const call = async (body) => {
     const { data, error } = await supabase.functions.invoke('admin-accounts', { body })
     if (error) {
-      let detail = ''
-      try { detail = (await error.context?.json())?.error || '' } catch {}
-      const failure = new Error(detail || data?.error || error?.message || '操作失败')
+      let payload = {}
+      try { payload = await error.context?.json() || {} } catch {}
+      const failure = new Error(payload?.error || data?.error || error?.message || '操作失败')
       const status = Number(error?.status || error?.context?.status || 0)
       if (status) failure.status = status
+      failure.code = payload?.code || data?.code || ''
+      failure.retryable = Boolean(payload?.retryable || data?.retryable || status === 503)
+      failure.preserveSession = Boolean(payload?.preserve_session || data?.preserve_session)
       throw failure
     }
-    if (data?.error) throw new Error(data.error)
+    if (data?.error) {
+      const failure = new Error(data.error)
+      failure.code = data?.code || ''
+      failure.retryable = Boolean(data?.retryable)
+      failure.preserveSession = Boolean(data?.preserve_session)
+      throw failure
+    }
     return data
   }
 
@@ -231,6 +246,8 @@ export default function AdminUsersPage() {
     const targetAuthUserId = String(accountModal?.form?.auth_user_id || '')
     const teamIds = accountModal?.form?.team_ids || []
     const employeeQuery = String(accountModal?.form?.scope_employee_search || '').trim()
+    const requestKey = recoveryScopeRequestKey({ targetAuthUserId, teamIds, employeeQuery, createMode })
+    if (accountModal?.scope_request_key === requestKey) return undefined
     let cancelled = false
     const timer = window.setTimeout(async () => {
       setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
@@ -253,7 +270,7 @@ export default function AdminUsersPage() {
           recovery_scope_directory_truncated:result?.truncated || {},
         }) : current)
         setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
-          ? ({ ...current, scope_loading:false, scope_load_error:'' })
+          ? ({ ...current, scope_loading:false, scope_load_error:'', scope_request_key:requestKey })
           : current)
       } catch (scopeError) {
         if (!cancelled) setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
@@ -270,6 +287,7 @@ export default function AdminUsersPage() {
     data?.recovery_scope_editor,
     accountModal?.mode,
     accountModal?.scope_directory_loaded,
+    accountModal?.scope_request_key,
     accountModal?.form?.auth_user_id,
     accountModal?.form?.data_scope,
     (accountModal?.form?.team_ids || []).join(','),
@@ -461,6 +479,7 @@ export default function AdminUsersPage() {
       scope_loading:false,
       scope_directory_loaded:Boolean(!recoveryAccountMode || form.data_scope !== 'assigned_teams'),
       scope_load_error:'',
+      scope_request_key:'',
     })
   }
   const openCreateStaff = () => setStaffModal({ form: blankStaffAccount(), error: '', saving: false })
@@ -482,6 +501,7 @@ export default function AdminUsersPage() {
       scope_loading:Boolean(recoveryAccountMode && data?.recovery_scope_editor && canManageScope),
       scope_directory_loaded:false,
       scope_load_error:'',
+      scope_request_key:'',
       original_data_scope:a.data_scope || 'own_team',
       removedStaleTeamIds,
       form: {
@@ -521,6 +541,12 @@ export default function AdminUsersPage() {
       const teamIds = (selection.team_ids || []).filter(id => validTeamIds.has(id))
       const positionIds = (selection.position_ids || []).filter(id => validPositionIds.has(id))
       const employeeIds = (selection.employee_ids || []).filter(id => validEmployeeIds.has(id))
+      const requestKey = recoveryScopeRequestKey({
+        targetAuthUserId:a.auth_user_id,
+        teamIds,
+        employeeQuery:'',
+        createMode:false,
+      })
       setData(current => current ? ({
         ...current,
         teams:nextTeams,
@@ -533,6 +559,7 @@ export default function AdminUsersPage() {
         scope_loading:false,
         scope_directory_loaded:true,
         scope_load_error:'',
+        scope_request_key:requestKey,
         removedStaleTeamIds:selection.stale_team_ids || [],
         form:{
           ...current.form,
@@ -549,6 +576,76 @@ export default function AdminUsersPage() {
         scope_load_error:scopeError.message || '当前排班组织目录读取失败',
       }) : current)
     })
+  }
+
+  const retryScopeDirectory = async () => {
+    const modal = accountModal
+    if (!modal || !['create', 'edit'].includes(modal.mode) || modal.scope_loading) return
+    const createMode = modal.mode === 'create'
+    const targetAuthUserId = String(modal.form?.auth_user_id || '')
+    const includeSelection = !createMode && !modal.scope_directory_loaded
+    const requestedTeamIds = modal.form?.team_ids || []
+    const employeeQuery = String(modal.form?.scope_employee_search || '').trim()
+    setAccountModal(current => current ? ({ ...current, scope_loading:true, scope_load_error:'' }) : current)
+    try {
+      const result = await fetchRecoveryScopeDirectory({
+        targetAuthUserId,
+        teamIds:requestedTeamIds,
+        employeeQuery,
+        includeSelection,
+        createMode,
+      })
+      const nextTeams = result?.teams || []
+      const nextPositions = result?.positions || []
+      const nextEmployees = result?.employees || []
+      const selection = result?.selection || {}
+      const validTeamIds = new Set(nextTeams.map(team => team.id))
+      const validPositionIds = new Set(nextPositions.map(position => position.id))
+      const validEmployeeIds = new Set(nextEmployees.map(employee => employee.id))
+      const teamIds = includeSelection
+        ? (selection.team_ids || []).filter(id => validTeamIds.has(id))
+        : requestedTeamIds
+      const positionIds = includeSelection
+        ? (selection.position_ids || []).filter(id => validPositionIds.has(id))
+        : modal.form?.position_ids || []
+      const employeeIds = includeSelection
+        ? (selection.employee_ids || []).filter(id => validEmployeeIds.has(id))
+        : modal.form?.employee_ids || []
+      const requestKey = recoveryScopeRequestKey({ targetAuthUserId, teamIds, employeeQuery, createMode })
+      setData(current => current ? ({
+        ...current,
+        teams:nextTeams,
+        positions:includeSelection ? nextPositions : mergeRowsById(current.positions, nextPositions),
+        employees:mergeRowsById(current.employees, nextEmployees),
+        recovery_scope_directory_truncated:result?.truncated || {},
+      }) : current)
+      setAccountModal(current => {
+        const sameModal = createMode
+          ? current?.mode === 'create'
+          : current?.form?.auth_user_id === targetAuthUserId
+        if (!sameModal) return current
+        return {
+          ...current,
+          scope_loading:false,
+          scope_directory_loaded:true,
+          scope_load_error:'',
+          scope_request_key:requestKey,
+          removedStaleTeamIds:includeSelection ? selection.stale_team_ids || [] : current.removedStaleTeamIds,
+          form:{ ...current.form, team_ids:teamIds, position_ids:positionIds, employee_ids:employeeIds },
+        }
+      })
+    } catch (scopeError) {
+      setAccountModal(current => {
+        const sameModal = createMode
+          ? current?.mode === 'create'
+          : current?.form?.auth_user_id === targetAuthUserId
+        return sameModal ? ({
+          ...current,
+          scope_loading:false,
+          scope_load_error:scopeError.message || '当前排班组织目录读取失败',
+        }) : current
+      })
+    }
   }
 
   const validateAccountScopeDraft = (form) => {
@@ -1419,7 +1516,7 @@ export default function AdminUsersPage() {
               {accountModal.form.data_scope === 'assigned_teams' && (!recoveryAccountMode || data?.recovery_scope_editor) && (
                 <div className="scope-panel">
                   {accountModal.scope_loading && <div className="scope-current-team-note"><strong>正在读取</strong><span>正在加载当前排班标准团队、岗位和员工候选。</span></div>}
-                  {accountModal.scope_load_error && <div className="scope-current-team-note warning"><strong>读取失败</strong><span>{accountModal.scope_load_error}。请关闭后重新打开编辑窗口再试。</span></div>}
+                  {accountModal.scope_load_error && <div className="scope-current-team-note warning"><strong>读取失败</strong><span>{accountModal.scope_load_error}。当前登录与已填写内容均已保留。</span><button type="button" onClick={retryScopeDirectory} disabled={accountModal.scope_loading}>重新读取</button></div>}
                   {(data?.recovery_scope_directory_truncated?.teams || data?.recovery_scope_directory_truncated?.positions || data?.recovery_scope_directory_truncated?.employees) && <div className="scope-current-team-note warning"><strong>候选已限量</strong><span>团队最多 100 个、岗位最多 200 个、员工每次最多 100 人；员工可继续按 ID 或姓名搜索，服务端保存仍会核对完整当前排班目录。</span></div>}
                   <div className="scope-current-team-note">
                     <strong>范围计算规则</strong>
