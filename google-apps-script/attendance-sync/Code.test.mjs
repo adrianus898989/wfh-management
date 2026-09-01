@@ -281,6 +281,7 @@ test('generic reconciliation does not grant the reviewed delete override', () =>
       };
       reconcileAttendanceSheets();
       runAttendanceReconciliation();
+      validateHomePhSeptember2026AttendanceSnapshot();
       runReviewedHomePhSeptember2026Reconciliation();
       return captured;
     } finally {
@@ -300,6 +301,13 @@ test('generic reconciliation does not grant the reviewed delete override', () =>
       sourceKeys: calls[1].sourceKeys,
       force: true,
       triggerKind: 'manual',
+      dirtyOnly: false,
+      reviewedLargeDelete: false,
+    },
+    {
+      sourceKeys: ['home_ph_annual_2026_09'],
+      force: true,
+      triggerKind: 'daily_reconcile',
       dirtyOnly: false,
       reviewedLargeDelete: false,
     },

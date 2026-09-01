@@ -500,6 +500,19 @@ function runReviewedHomePhSeptember2026Reconciliation() {
 }
 
 /**
+ * Re-reads only Home-PH September without any delete authorization. This
+ * records fresh server-side diagnostics when the reviewed snapshot changed,
+ * while the database guard continues to block every removal.
+ */
+function validateHomePhSeptember2026AttendanceSnapshot() {
+  const source = ATTENDANCE_SYNC_ANNUAL_SOURCES.filter(function (candidate) {
+    return candidate.sourceKey === 'home_ph_annual_2026_09';
+  });
+  if (source.length !== 1) throw new Error('Attendance validation source is not uniquely configured.');
+  syncAttendanceSourcesInternal_(source, true, 'daily_reconcile', false, false);
+}
+
+/**
  * One-time authorization entrypoint. It creates five source-bound onEdit
  * triggers, a one-minute dirty-month flusher, and one daily full validation.
  */
