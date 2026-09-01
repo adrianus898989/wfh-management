@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Pagination } from '../components/DataPageControls'
 import { useAppToast } from '../components/AppToastProvider'
@@ -22,7 +22,6 @@ import ManagementRiskPanel from '../components/ManagementRiskPanel'
 import { withAbortTimeout } from '../lib/abortableRequest'
 import { employeeProfileMetricSeed, mergeEmployeeDetailRefresh, withEmployeeDetailTimeout } from '../lib/employeeDrawerState'
 import { filterEmployeeErrorHistory, filterEmployeeExamHistory } from '../lib/employeeRecordFilters'
-import { EMPLOYEE_FILTER_PREVIEW_VALUE, employeeFilterPreviewEnabled } from '../lib/employeeVisualPreview'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -459,8 +458,6 @@ export default function AdminEmployeesPage(){
   const adminAccess=useAdminAccess()
   const {locale}=useAdminI18n()
   const {notify}=useAppToast()
-  const location=useLocation()
-  const visualPreviewEnabled=employeeFilterPreviewEnabled(location)
   const employeeAccessKey=useMemo(()=>JSON.stringify([
     adminAccess.authUserId||'',Boolean(adminAccess.founder),adminAccess.roleCode||'',
     adminAccess.employeeId||'',adminAccess.dataScope||'',adminAccess.teamId||'',
@@ -1990,7 +1987,7 @@ export default function AdminEmployeesPage(){
   // surface its own current error if that request also fails.
   useEffect(()=>{ setError('') },[visibleTab])
 
-  return <div className="content-page employee-page pro-employee-page" data-employee-design-preview={visualPreviewEnabled?EMPLOYEE_FILTER_PREVIEW_VALUE:undefined}>
+  return <div className="content-page employee-page pro-employee-page">
     <div className="module-title-row">
       <div>
         <div className="module-kicker">{sectionKicker}</div>
