@@ -79,6 +79,13 @@ test('dashboard UI accepts bounded aggregates without fabricating missing lifecy
   assert.match(page, /e\?\.team_name \|\| e\?\.teams\?\.name/)
 })
 
+test('dashboard current employee KPI excludes resignation history', () => {
+  const kpis = between(page, '<div className="kpi-grid kpi-grid-pro dashboard-kpi-grid">', '</div>')
+  assert.match(kpis, /label=\{adminT\('当前在职员工'\)\}[\s\S]*value=\{loading \? '—' : view\.active\}/)
+  assert.match(kpis, /只计算当前在职员工，不包含历史离职档案/)
+  assert.doesNotMatch(kpis, /value=\{loading \? '—' : view\.total\}/)
+})
+
 test('dashboard refresh is visible-only, low-frequency and coalesced', () => {
   assert.match(page, /DASHBOARD_REFRESH_MS = 5 \* 60 \* 1000/)
   assert.match(page, /if \(dashboardFlightRef\.current\) return dashboardFlightRef\.current/)

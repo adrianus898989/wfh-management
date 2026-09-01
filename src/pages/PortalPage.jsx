@@ -201,10 +201,9 @@ export const AdminHome = () => {
 
       {!loading && !data ? <DashboardLoadUnavailable /> : !loading && !view.canViewEmployees ? <DashboardAccessLimited summary={view.accountSummary} access={data.dashboard_access} /> : <>
       <div className="kpi-grid kpi-grid-pro dashboard-kpi-grid">
-        <Kpi label={adminT('全部员工')} value={loading ? '—' : view.total} hint={adminT('当前员工主档')} icon="总" />
-        <Kpi label={adminT('在职员工')} value={loading ? '—' : view.active} hint={adminLocale === 'en'
-          ? `${view.inactive} not active: ${view.inactiveBreakdown.resigned} resigned, ${view.inactiveBreakdown.disabled} disabled, ${view.inactiveBreakdown.unverified} status to verify`
-          : `非在职 ${view.inactive}：离职 ${view.inactiveBreakdown.resigned} · 停用 ${view.inactiveBreakdown.disabled} · 状态待核 ${view.inactiveBreakdown.unverified}`}
+        <Kpi label={adminT('当前在职员工')} value={loading ? '—' : view.active} hint={adminLocale === 'en'
+          ? 'Current active employees; resignation history is excluded'
+          : '只计算当前在职员工，不包含历史离职档案'}
           icon="人" tone="green" />
         <Kpi label={adminT('团队总数')} value={loading ? '—' : view.teamCount} hint={adminT('按当前管理范围统计')} icon="组" tone="violet" />
         <Kpi label={adminT('近 30 天入职')} value={loading || view.hires30 == null ? '—' : view.hires30} hint={adminT('生命周期账本（已去重）')} icon="入" tone="green" />
