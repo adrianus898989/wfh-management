@@ -1569,7 +1569,8 @@ export default function AdminEmployeesPage(){
 
   const openArchiveTenureDetail=async(bucket,label)=>{
     if(!pageMountedRef.current)return
-    setAnalysisDetail({title:`${label} · 在职员工`,event_type:'active',dimension:'',value:'',date_from:'',date_to:'',rows:[],total:0})
+    const detailTitle=bucket==='prepare'?`${label} · 待入职员工`:`${label} · 在职员工`
+    setAnalysisDetail({title:detailTitle,event_type:'active',dimension:'',value:'',date_from:'',date_to:'',rows:[],total:0})
     setAnalysisDetailLoading(true)
     try{
       const d=new Date()
@@ -1578,7 +1579,7 @@ export default function AdminEmployeesPage(){
       if(!pageMountedRef.current)return
       if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'入职时长人员读取失败'}))
       const uniqueRows=dedupeAnalysisRows(data.rows||[])
-      setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title:`${label} · 在职员工`}))
+      setAnalysisDetail(v=>({...v,...data,rows:uniqueRows,total:uniqueRows.length,title:detailTitle}))
     }catch(e){
       if(!pageMountedRef.current)return
       const message=employeeRequestError(e,'入职时长人员读取失败，请重试。')
@@ -2032,10 +2033,10 @@ export default function AdminEmployeesPage(){
 
       <div className="module-summary-grid employee-summary-grid employee-kpi-grid archive-kpi-strip">
         <MetricSummary label="在职员工" value={archiveStats.kpis?.active??archiveStats.active??analytics.kpis?.active??meta.active} hint={`员工档案 ${archiveStats.kpis?.total_profiles??archiveStats.total??analytics.kpis?.total_profiles??meta.total??0}`} onClick={()=>openAnalysisDetail({title:'当前在职员工',event_type:'active',filters:{}})}/>
-        <MetricSummary label="今日入职" value={archiveStats.kpis?.today_join??analytics.kpis?.today_join??'—'} compare={analytics.kpis?.today_join_delta} compareLabel="较昨日" onClick={()=>openAnalysisDetail({title:'今日入职人员',event_type:'join',date_from:archiveStats.as_of||analytics.as_of,date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
-        <MetricSummary label="今日离职" value={archiveStats.kpis?.today_resign??analytics.kpis?.today_resign??'—'} compare={analytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse onClick={()=>openAnalysisDetail({title:'今日离职人员',event_type:'resign',date_from:archiveStats.as_of||analytics.as_of,date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
-        <MetricSummary label="近7天入职" value={archiveStats.kpis?.join_7d??analytics.kpis?.join_7d??'—'} compare={analytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare onClick={()=>openAnalysisDetail({title:'近7天入职人员',event_type:'join',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-6),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
-        <MetricSummary label="近7天离职" value={archiveStats.kpis?.resign_7d??analytics.kpis?.resign_7d??'—'} compare={analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-6),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="今日入职" value={archiveStats.kpis?.today_join??analytics.kpis?.today_join??'—'} compare={archiveStats.kpis?.today_join_delta??analytics.kpis?.today_join_delta} compareLabel="较昨日" onClick={()=>openAnalysisDetail({title:'今日入职人员',event_type:'join',date_from:archiveStats.as_of||analytics.as_of,date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="今日离职" value={archiveStats.kpis?.today_resign??analytics.kpis?.today_resign??'—'} compare={archiveStats.kpis?.today_resign_delta??analytics.kpis?.today_resign_delta} compareLabel="较昨日" inverse onClick={()=>openAnalysisDetail({title:'今日离职人员',event_type:'resign',date_from:archiveStats.as_of||analytics.as_of,date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="近7天入职" value={archiveStats.kpis?.join_7d??analytics.kpis?.join_7d??'—'} compare={archiveStats.kpis?.join_7d_delta_pct??analytics.kpis?.join_7d_delta_pct} compareLabel="较前7天" percentCompare onClick={()=>openAnalysisDetail({title:'近7天入职人员',event_type:'join',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-6),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
+        <MetricSummary label="近7天离职" value={archiveStats.kpis?.resign_7d??analytics.kpis?.resign_7d??'—'} compare={archiveStats.kpis?.resign_7d_delta_pct??analytics.kpis?.resign_7d_delta_pct} compareLabel="较前7天" percentCompare inverse onClick={()=>openAnalysisDetail({title:'近7天离职人员',event_type:'resign',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-6),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
         <MetricSummary label="近30天净增" value={archiveStats.kpis?.net_30d??analytics.kpis?.net_30d??'—'} hint={`入 ${archiveStats.kpis?.join_30d??analytics.kpis?.join_30d??'—'} / 离 ${archiveStats.kpis?.resign_30d??analytics.kpis?.resign_30d??'—'}`} onClick={()=>openAnalysisDetail({title:'近30天人员流动',event_type:'all',date_from:isoAdd(archiveStats.as_of||analytics.as_of,-29),date_to:archiveStats.as_of||analytics.as_of,filters:{}})}/>
       </div>
 

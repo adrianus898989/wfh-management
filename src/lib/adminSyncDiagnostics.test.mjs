@@ -19,6 +19,63 @@ test('diagnostic presentation explains exact mismatch evidence',()=>{
   assert.equal(adminSyncDiagnosticSourceRows(row),'居家名单行 214 · 排班行 472')
 })
 
+test('diagnostic presentation names a current employee who is waiting for schedule assignment',()=>{
+  assert.equal(
+    adminSyncDiagnosticLabel('home_only_missing_schedule'),
+    '员工主表已有，等待排班分配',
+  )
+  assert.equal(
+    adminSyncDiagnosticLabel('home_only_missing_schedule','en'),
+    'Employee exists in the master roster and is awaiting schedule assignment',
+  )
+  assert.deepEqual(
+    adminSyncDiagnosticEvidence({details:{reason:'active_home_employee_not_yet_scheduled'}}),
+    ['员工主表已有，当前排班尚未分配'],
+  )
+})
+
+test('schedule identity review separates the category from its exact reason',()=>{
+  assert.equal(
+    adminSyncDiagnosticLabel('schedule_only_missing_onsite_marker'),
+    '排班身份或现场标记需核对',
+  )
+  assert.deepEqual(
+    adminSyncDiagnosticEvidence({details:{reason:'canonical_name_mismatch'}}),
+    ['同一员工 ID 在员工主表与排班中的姓名不一致'],
+  )
+  assert.deepEqual(
+    adminSyncDiagnosticEvidence({details:{reason:'missing_onsite_marker'}}),
+    ['排班中有此人，但没有现场人员确认标记'],
+  )
+})
+
+test('diagnostic presentation explains future and effective resignation mismatches',()=>{
+  assert.equal(
+    adminSyncDiagnosticLabel('pending_manual_review'),
+    '员工状态或名单需人工复核',
+  )
+  assert.equal(
+    adminSyncDiagnosticLabel('pending_manual_review','en'),
+    'Employee status or roster needs manual review',
+  )
+  assert.deepEqual(
+    adminSyncDiagnosticEvidence({details:{reason:'future_resignation_removed_from_schedule_early'}}),
+    ['离职日期尚未生效，但已提前从排班移除'],
+  )
+  assert.deepEqual(
+    adminSyncDiagnosticEvidence({details:{reason:'future_resignation_removed_from_schedule_early'}},'en'),
+    ['The resignation date is not yet effective, but the employee was removed from the schedule early'],
+  )
+  assert.deepEqual(
+    adminSyncDiagnosticEvidence({details:{reason:'home_source_resigned_profile_still_active'}}),
+    ['离职日期已生效/缺失，但员工档案仍在职'],
+  )
+  assert.deepEqual(
+    adminSyncDiagnosticEvidence({details:{reason:'home_source_resigned_profile_still_active'}},'en'),
+    ['The resignation date is effective or missing, but the employee profile is still active'],
+  )
+})
+
 test('source diagnostics include bounded aggregate evidence',()=>{
   const evidence=adminSyncDiagnosticEvidence({details:{row_count:604,unmatched_count:4,ambiguous_count:1}})
   assert.deepEqual(evidence,['604 行中有 4 行未匹配','1 行匹配到多名员工'])

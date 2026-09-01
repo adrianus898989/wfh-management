@@ -79,10 +79,16 @@ test('dashboard UI accepts bounded aggregates without fabricating missing lifecy
   assert.match(page, /e\?\.team_name \|\| e\?\.teams\?\.name/)
 })
 
-test('dashboard current employee KPI excludes resignation history', () => {
+test('dashboard current employee fallback excludes future hires without relabeling them inactive', () => {
+  const fallback = between(page, 'const today = dashboardToday()', 'const accountSummary =')
+  assert.match(fallback, /const hireDate = dateOnly\(employee\?\.hire_date\)[\s\S]*isActive\(employee\) && \(!hireDate \|\| hireDate <= today\)/)
+  assert.match(fallback, /const inactiveRows = employees\.filter\(e => !isActive\(e\)\)/)
+  assert.doesNotMatch(page, /employees\.length - active\.length/)
+  assert.match(page, /inactive: hasServerSummary \? Number\(serverSummary\.inactive \|\| 0\) : inactiveRows\.length/)
+
   const kpis = between(page, '<div className="kpi-grid kpi-grid-pro dashboard-kpi-grid">', '</div>')
   assert.match(kpis, /label=\{adminT\('当前在职员工'\)\}[\s\S]*value=\{loading \? '—' : view\.active\}/)
-  assert.match(kpis, /只计算当前在职员工，不包含历史离职档案/)
+  assert.match(kpis, /按今日生效口径统计，不包含未来入职与历史离职档案/)
   assert.doesNotMatch(kpis, /value=\{loading \? '—' : view\.total\}/)
 })
 

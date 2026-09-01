@@ -124,7 +124,11 @@ export const AdminHome = () => {
     const serverSummary = data?.summary || null
     const serverDistributions = data?.distributions || null
     const hasServerSummary = Boolean(serverSummary)
-    const active = employees.filter(isActive)
+    const today = dashboardToday()
+    const active = employees.filter(employee => {
+      const hireDate = dateOnly(employee?.hire_date)
+      return isActive(employee) && (!hireDate || hireDate <= today)
+    })
     const inactiveRows = employees.filter(e => !isActive(e))
     const inactiveBreakdown = inactiveRows.reduce((summary, employee) => {
       const status = text(employee?.status).toLowerCase()
@@ -135,7 +139,6 @@ export const AdminHome = () => {
     }, { resigned:0, disabled:0, unverified:0 })
     const accountSummary = data?.account_summary || null
     const accounts = accountSummary?.can_view_staff_accounts ? accountSummary : null
-    const today = dashboardToday()
     const thirtyDaysAgo = dashboardAddDays(today, -29)
     const hires30 = employees.filter(e => dateOnly(e.hire_date) >= thirtyDaysAgo && dateOnly(e.hire_date) <= today)
     const resignations30 = employees.filter(e => dateOnly(e.resign_date) >= thirtyDaysAgo && dateOnly(e.resign_date) <= today)
@@ -159,7 +162,7 @@ export const AdminHome = () => {
     return {
       total: hasServerSummary ? Number(serverSummary.total || 0) : employees.length,
       active: hasServerSummary ? Number(serverSummary.active || 0) : active.length,
-      inactive: hasServerSummary ? Number(serverSummary.inactive || 0) : Math.max(0, employees.length - active.length),
+      inactive: hasServerSummary ? Number(serverSummary.inactive || 0) : inactiveRows.length,
       inactiveBreakdown: hasServerSummary ? {
         resigned:Number(serverSummary?.inactive_breakdown?.resigned || 0),
         disabled:Number(serverSummary?.inactive_breakdown?.disabled || 0),
@@ -202,8 +205,8 @@ export const AdminHome = () => {
       {!loading && !data ? <DashboardLoadUnavailable /> : !loading && !view.canViewEmployees ? <DashboardAccessLimited summary={view.accountSummary} access={data.dashboard_access} /> : <>
       <div className="kpi-grid kpi-grid-pro dashboard-kpi-grid">
         <Kpi label={adminT('当前在职员工')} value={loading ? '—' : view.active} hint={adminLocale === 'en'
-          ? 'Current active employees; resignation history is excluded'
-          : '只计算当前在职员工，不包含历史离职档案'}
+          ? 'Effective today; future hires and resignation history are excluded'
+          : '按今日生效口径统计，不包含未来入职与历史离职档案'}
           icon="人" tone="green" />
         <Kpi label={adminT('团队总数')} value={loading ? '—' : view.teamCount} hint={adminT('按当前管理范围统计')} icon="组" tone="violet" />
         <Kpi label={adminT('近 30 天入职')} value={loading || view.hires30 == null ? '—' : view.hires30} hint={adminT('生命周期账本（已去重）')} icon="入" tone="green" />

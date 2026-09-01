@@ -827,6 +827,20 @@ function hireTenureBucket(hireDate:any,today:string){
   if(days<=60)return "days_30_60";
   return "days_60_plus";
 }
+function isAnalyticsActiveStatus(status:any){
+  const value=text(status).toLowerCase();
+  return value==="active"||value==="probation";
+}
+function isAnalyticsEffectiveActiveEmployee(employee:any,today:string){
+  if(!isAnalyticsActiveStatus(employee?.status))return false;
+  const hireDate=text(employee?.hire_date).slice(0,10);
+  if(!hireDate)return true;
+  return /^\d{4}-\d{2}-\d{2}$/.test(hireDate)&&hireDate<=today;
+}
+function isAnalyticsFutureHireEmployee(employee:any,today:string){
+  const hireDate=text(employee?.hire_date).slice(0,10);
+  return isAnalyticsActiveStatus(employee?.status)&&/^\d{4}-\d{2}-\d{2}$/.test(hireDate)&&hireDate>today;
+}
 
 async function buildEmployeeMeta(service:any,caller:any,scope:any){
   let teamQuery=service.from("teams").select("id,name,country,status").order("name");
@@ -1222,7 +1236,7 @@ Deno.serve(async (req) => {
         }
         return true;
       };
-      const employees=allEmployees.filter(employeeMatches),activeRows=employees.filter((x:any)=>x.status==="active");
+      const employees=allEmployees.filter(employeeMatches),activeRows=employees.filter((x:any)=>isAnalyticsEffectiveActiveEmployee(x,today));
       const [rawEvents,rawAllResigns]=await Promise.all([
         fetchRecentLifecycleEvents(service,scope,allEmployees,fetchStart),
         fetchAllResignEvents(service,scope,allEmployees),
@@ -1375,8 +1389,11 @@ Deno.serve(async (req) => {
       if(eventType==="active"){
         const result:any[]=[];
         const tenureBucket=text(filter.tenure_bucket);
+        const futureHireDetails=tenureBucket==="prepare";
         for(const emp of employees){
-          if(text(emp.status)!=="active")continue;
+          if(futureHireDetails){
+            if(!isAnalyticsFutureHireEmployee(emp,today))continue;
+          }else if(!isAnalyticsEffectiveActiveEmployee(emp,today))continue;
           const dims={
             team:text(emp.teams?.name)||"未分类",
             position:text(emp.positions?.name)||"未分类",

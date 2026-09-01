@@ -2,6 +2,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   loadEffectiveEmployeeScope,
 } from "../_shared/employeeScope.ts";
+import {
+  canonicalizeConfirmedPresentEmployeeNos,
+  confirmedEmployeeIdentityKey,
+  prepareConfirmedResignationItems,
+  resolveConfirmedResignationItems,
+  uniqueConfirmedEmployeeNos,
+} from "./confirmedIdentity.js";
 
 const corsHeaders={
   "Access-Control-Allow-Origin":"*",
@@ -11,6 +18,7 @@ const corsHeaders={
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...corsHeaders,"Content-Type":"application/json; charset=utf-8"}});
 const text=(v:unknown)=>String(v??"").trim();
 const ratio=(n:number,d:number)=>d>0?Number((n*100/d).toFixed(2)):0;
+const deltaPct=(current:number,previous:number)=>previous===0?(current===0?0:100):Number((((current-previous)/previous)*100).toFixed(1));
 const upper=(v:unknown)=>text(v).toUpperCase();
 const isIgnoredEmployeeNo=(v:unknown)=>{const n=upper(v);return !n||n==="SYSTEM"||n==="ADMIN"};
 const isTestEmployeeNo=(v:unknown)=>upper(v).startsWith("TEST");
@@ -56,6 +64,22 @@ async function callerAndScope(req:Request,service:any){
   return await loadEffectiveEmployeeScope(service,userId,access,roleCode);
 }
 function groupsOf<T>(items:T[],size=150){const groups:T[][]=[];for(let offset=0;offset<items.length;offset+=size)groups.push(items.slice(offset,offset+size));return groups;}
+async function resolveConfirmedEmployeeIdentityBatch(service:any,employeeNos:unknown[]){
+  const requested=uniqueConfirmedEmployeeNos(employeeNos);
+  const rows:any[]=[];
+  for(const group of groupsOf(requested,500)){
+    const {data,error}=await service.rpc("resolve_employee_identity_batch",{p_employee_nos:group});
+    if(error||!Array.isArray(data)) throw new Error("confirmed_employee_identity_resolution_failed");
+    rows.push(...data);
+  }
+  const requestedKeys=new Set(requested.map(confirmedEmployeeIdentityKey));
+  const returnedKeys=new Set(rows.map((row:any)=>text(row?.raw_identity_key)).filter(Boolean));
+  if(rows.length!==requested.length||returnedKeys.size!==requestedKeys.size
+    || [...requestedKeys].some(key=>!returnedKeys.has(key))){
+    throw new Error("confirmed_employee_identity_resolution_failed");
+  }
+  return rows;
+}
 async function loadReferenceRows(service:any,table:string,selection:string,ids:string[]){
   const rows:any[]=[];
   for(const group of groupsOf([...new Set(ids.filter(Boolean))])){
@@ -146,6 +170,23 @@ function tenureKey(hire:unknown,today:string){
   if(days<=1095)return "years_2_3";
   return "years_3_plus";
 }
+function isActiveEmploymentStatus(status:unknown){
+  const value=text(status).toLowerCase();
+  return value==="active"||value==="probation";
+}
+function isEffectiveActiveEmployee(employee:any,today:string){
+  if(!isActiveEmploymentStatus(employee?.status)) return false;
+  const hireDate=text(employee?.hire_date).slice(0,10);
+  if(!hireDate) return true;
+  return /^\d{4}-\d{2}-\d{2}$/.test(hireDate)&&hireDate<=today;
+}
+function isFutureHireEmployee(employee:any,today:string){
+  const hireDate=text(employee?.hire_date).slice(0,10);
+  return isActiveEmploymentStatus(employee?.status)&&/^\d{4}-\d{2}-\d{2}$/.test(hireDate)&&hireDate>today;
+}
+function isTenureEmployee(employee:any,today:string){
+  return isEffectiveActiveEmployee(employee,today)||isFutureHireEmployee(employee,today);
+}
 
 async function lifecycleRows(service:any,start:string){
   const rows:any[]=[];let offset=0;const batch=1000;
@@ -178,15 +219,23 @@ function lifecycleKpis(events:any[],eligibleNos:Set<string>,today:string){
     return people.size;
   };
   const yesterday=isoAdd(today,-1);
-  const from7=isoAdd(today,-6), from30=isoAdd(today,-29);
+  const from7=isoAdd(today,-6),previous7From=isoAdd(today,-13),previous7To=isoAdd(today,-7),from30=isoAdd(today,-29);
+  const todayJoin=count("join",today,today),yesterdayJoin=count("join",yesterday,yesterday);
+  const todayResign=count("resign",today,today),yesterdayResign=count("resign",yesterday,yesterday);
+  const join7=count("join",from7,today),previousJoin7=count("join",previous7From,previous7To);
+  const resign7=count("resign",from7,today),previousResign7=count("resign",previous7From,previous7To);
   const join30=count("join",from30,today),resign30=count("resign",from30,today);
   return {
-    today_join:count("join",today,today),
-    today_resign:count("resign",today,today),
-    yesterday_join:count("join",yesterday,yesterday),
-    yesterday_resign:count("resign",yesterday,yesterday),
-    join_7d:count("join",from7,today),
-    resign_7d:count("resign",from7,today),
+    today_join:todayJoin,
+    today_resign:todayResign,
+    yesterday_join:yesterdayJoin,
+    yesterday_resign:yesterdayResign,
+    today_join_delta:todayJoin-yesterdayJoin,
+    today_resign_delta:todayResign-yesterdayResign,
+    join_7d:join7,
+    resign_7d:resign7,
+    join_7d_delta_pct:deltaPct(join7,previousJoin7),
+    resign_7d_delta_pct:deltaPct(resign7,previousResign7),
     join_30d:join30,
     resign_30d:resign30,
     net_30d:join30-resign30,
@@ -242,9 +291,26 @@ async function reconcileSheetPresence(service:any,body:any){
   const mode=text(body.mode)==="test"?"test":"production";
   if(!["在职名单 Current Staff List","现场转居家"].includes(sheetName)) return json({error:"unsupported presence sheet"},400);
 
-  const present=new Set((Array.isArray(body.present_ids)?body.present_ids:[])
+  const rawPresent=(Array.isArray(body.present_ids)?body.present_ids:[])
     .map(upper)
-    .filter((n:string)=>Boolean(n)&&n!=="SYSTEM"&&n!=="ADMIN"&&(mode==="test"?n.startsWith("TEST"):!n.startsWith("TEST"))));
+    .filter((n:string)=>Boolean(n)&&n!=="SYSTEM"&&n!=="ADMIN"&&(mode==="test"?n.startsWith("TEST"):!n.startsWith("TEST")));
+  let present=new Set<string>(rawPresent);
+  if(mode==="production"){
+    const identityRows=await resolveConfirmedEmployeeIdentityBatch(service,rawPresent);
+    const canonicalPresence=canonicalizeConfirmedPresentEmployeeNos(rawPresent,identityRows);
+    if(canonicalPresence.conflicts.length){
+      return json({
+        ok:false,
+        error:"confirmed_employee_identity_conflict",
+        retryable:true,
+        conflicts:canonicalPresence.conflicts.map((conflict:any)=>({
+          employee_no:upper(conflict.rawEmployeeNo),
+          reason:text(conflict.reason),
+        })),
+      },409);
+    }
+    present=canonicalPresence.presentEmployeeNos;
+  }
   // Safety: never mass-suspend a production sheet if the scan unexpectedly came back tiny/empty.
   if(mode==="production"&&present.size<100) return json({ok:true,skipped:"production_presence_list_too_small",present:present.size});
   if(mode==="test"&&present.size===0&&body.confirm_empty!==true) return json({error:"empty TEST presence list requires confirm_empty=true"},400);
@@ -357,6 +423,7 @@ async function syncResignEvents(service:any,body:any){
 
   const items=raw.map((x:any)=>({
     employee_no:upper(x.employee_no),
+    employee_name:text(x.employee_name),
     resign_date:text(x.resign_date).slice(0,10),
     reason:text(x.reason),
     source_sheet:text(x.source_sheet),
@@ -365,16 +432,62 @@ async function syncResignEvents(service:any,body:any){
 
   if(!items.length) return json({ok:true,processed:0,inserted:0,updated:0,employee_updates:0,missing_employee:0,skipped_voided:0});
 
-  const nos=Array.from(new Set(items.map((x:any)=>x.employee_no)));
+  const identityRows=await resolveConfirmedEmployeeIdentityBatch(
+    service,items.map((item:any)=>item.employee_no),
+  );
+  const identity=resolveConfirmedResignationItems(items,identityRows);
+  if(identity.conflicts.length){
+    return json({
+      ok:false,
+      error:"confirmed_employee_alias_name_conflict",
+      retryable:true,
+      conflicts:identity.conflicts.map((conflict:any)=>({
+        employee_no:upper(conflict.item?.employee_no),
+        source_sheet:text(conflict.item?.source_sheet),
+        row_number:Number(conflict.item?.row_number||0),
+        reason:text(conflict.reason),
+      })),
+    },409);
+  }
+
+  if(identity.missing.length){
+    return json({
+      ok:false,
+      error:"employee_identity_not_ready",
+      retryable:true,
+      missing:identity.missing.map((missing:any)=>({
+        employee_no:upper(missing.item?.employee_no),
+        source_sheet:text(missing.item?.source_sheet),
+        row_number:Number(missing.item?.row_number||0),
+        reason:text(missing.reason),
+      })),
+    },409);
+  }
+
+  const preparedIdentity=prepareConfirmedResignationItems(identity.resolved);
+  if(preparedIdentity.conflicts.length){
+    return json({
+      ok:false,
+      error:"conflicting_resignation_dates",
+      retryable:true,
+      conflicts:preparedIdentity.conflicts,
+    },409);
+  }
+  const resolvedItems=preparedIdentity.items;
+
+  const employeeIds=Array.from(new Set(resolvedItems.map((item:any)=>item.employeeId)));
   const employees:any[]=[];
-  for(let i=0;i<nos.length;i+=200){
+  for(let i=0;i<employeeIds.length;i+=200){
     const {data,error}=await service.from("employees")
       .select("id,employee_no,full_name,status,resign_date")
-      .in("employee_no",nos.slice(i,i+200));
+      .in("id",employeeIds.slice(i,i+200));
     if(error) throw error;
     employees.push(...(data||[]));
   }
-  const empByNo=new Map(employees.map((x:any)=>[upper(x.employee_no),x]));
+  const empById=new Map(employees.map((x:any)=>[text(x.id),x]));
+  if(resolvedItems.some((item:any)=>!empById.has(item.employeeId))){
+    throw new Error("confirmed_employee_identity_resolution_failed");
+  }
   const ids=employees.map((x:any)=>x.id).filter(Boolean);
 
   const existing:any[]=[];
@@ -389,21 +502,21 @@ async function syncResignEvents(service:any,body:any){
 
   const existingByKey=new Map<string,any[]>();
   for(const ev of existing){
-    const key=`${upper(ev.employee_no)}|${text(ev.effective_date).slice(0,10)}`;
+    const key=`${text(ev.employee_id)}|${text(ev.effective_date).slice(0,10)}`;
     if(!existingByKey.has(key)) existingByKey.set(key,[]);
     existingByKey.get(key)!.push(ev);
   }
 
-  const toInsert:any[]=[];
+  const pendingInsertByKey=new Map<string,any>();
   const toUpdate:any[]=[];
-  const employeeUpdates:any[]=[];
+  const employeeUpdates=new Map<string,any>();
   let missingEmployee=0,skippedVoided=0;
 
-  for(const item of items){
-    const emp=empByNo.get(item.employee_no);
-    if(!emp){missingEmployee++;continue;}
+  for(const resolvedItem of resolvedItems){
+    const item=resolvedItem.item;
+    const emp=empById.get(resolvedItem.employeeId);
 
-    const key=`${item.employee_no}|${item.resign_date}`;
+    const key=`${emp.id}|${item.resign_date}`;
     const same=existingByKey.get(key)||[];
     const active=same.find((x:any)=>text(x.note)!=="__VOIDED__");
     const voided=same.find((x:any)=>text(x.note)==="__VOIDED__");
@@ -414,7 +527,7 @@ async function syncResignEvents(service:any,body:any){
     }
 
     if(text(emp.status)!=="resigned"||text(emp.resign_date).slice(0,10)!==item.resign_date){
-      employeeUpdates.push({id:emp.id,resign_date:item.resign_date});
+      employeeUpdates.set(emp.id,{id:emp.id,resign_date:item.resign_date});
     }
 
     if(active){
@@ -423,13 +536,28 @@ async function syncResignEvents(service:any,body:any){
         reason:item.reason||text(active.reason)||null,
         source_sheet:item.source_sheet||null,
         source_row:item.row_number||null,
-        snapshot:{...(active.snapshot||{}),auto_reconciled:true,source_row:item.row_number||null},
+        snapshot:{
+          ...(active.snapshot||{}),
+          auto_reconciled:true,
+          source_row:item.row_number||null,
+          source_employee_no:resolvedItem.sourceEmployeeNo,
+          source_employee_name:item.employee_name||null,
+          canonical_employee_no:emp.employee_no,
+          confirmed_employee_alias:resolvedItem.isConfirmedAlias,
+        },
       });
     }else{
-      toInsert.push({
+      const pending=pendingInsertByKey.get(key);
+      if(pending){
+        pending.reason=item.reason||pending.reason;
+        pending.source_sheet=item.source_sheet||pending.source_sheet;
+        pending.source_row=item.row_number||pending.source_row;
+        continue;
+      }
+      pendingInsertByKey.set(key,{
         employee_id:emp.id,
-        employee_no:item.employee_no,
-        full_name:text(emp.full_name)||item.employee_no,
+        employee_no:emp.employee_no,
+        full_name:text(emp.full_name)||emp.employee_no,
         event_type:"resign",
         effective_date:item.resign_date,
         reason:item.reason||null,
@@ -437,8 +565,15 @@ async function syncResignEvents(service:any,body:any){
         source:"google_sheet_live",
         source_sheet:item.source_sheet||null,
         source_row:item.row_number||null,
-        source_key:`sheet:auto_resign:${item.employee_no}:${item.resign_date}`,
-        snapshot:{auto_reconciled:true,source_row:item.row_number||null},
+        source_key:`sheet:auto_resign:${emp.id}:${item.resign_date}`,
+        snapshot:{
+          auto_reconciled:true,
+          source_row:item.row_number||null,
+          source_employee_no:resolvedItem.sourceEmployeeNo,
+          source_employee_name:item.employee_name||null,
+          canonical_employee_no:emp.employee_no,
+          confirmed_employee_alias:resolvedItem.isConfirmedAlias,
+        },
       });
     }
   }
@@ -447,7 +582,7 @@ async function syncResignEvents(service:any,body:any){
     for(let i=0;i<arr.length;i+=limit) await Promise.all(arr.slice(i,i+limit).map(fn));
   };
 
-  await runConcurrent(employeeUpdates,20,async(x:any)=>{
+  await runConcurrent([...employeeUpdates.values()],20,async(x:any)=>{
     const {error}=await service.from("employees")
       .update({status:"resigned",resign_date:x.resign_date,updated_at:new Date().toISOString()})
       .eq("id",x.id);
@@ -460,6 +595,7 @@ async function syncResignEvents(service:any,body:any){
     if(error) throw error;
   });
 
+  const toInsert=[...pendingInsertByKey.values()];
   if(toInsert.length){
     const {error}=await service.from("employee_lifecycle_events").insert(toInsert);
     if(error) throw error;
@@ -470,8 +606,9 @@ async function syncResignEvents(service:any,body:any){
     processed:items.length,
     inserted:toInsert.length,
     updated:toUpdate.length,
-    employee_updates:employeeUpdates.length,
+    employee_updates:employeeUpdates.size,
     missing_employee:missingEmployee,
+    confirmed_aliases:resolvedItems.filter((item:any)=>item.isConfirmedAlias).length,
     skipped_voided:skippedVoided,
   });
 }
@@ -484,9 +621,23 @@ async function reconcileProductionPresence(service:any,body:any){
   // Formal Google is the authoritative HR presence list.
   // TEST-prefixed IDs are allowed in the FORMAL workbook for controlled workflow testing,
   // so presence reconciliation includes them. They remain excluded from KPI analytics.
-  const present=new Set((Array.isArray(body.present_ids)?body.present_ids:[])
+  const rawPresent=(Array.isArray(body.present_ids)?body.present_ids:[])
     .map(upper)
-    .filter((n:string)=>Boolean(n)&&n!=="SYSTEM"&&n!=="ADMIN"));
+    .filter((n:string)=>Boolean(n)&&n!=="SYSTEM"&&n!=="ADMIN");
+  const identityRows=await resolveConfirmedEmployeeIdentityBatch(service,rawPresent);
+  const canonicalPresence=canonicalizeConfirmedPresentEmployeeNos(rawPresent,identityRows);
+  if(canonicalPresence.conflicts.length){
+    return json({
+      ok:false,
+      error:"confirmed_employee_identity_conflict",
+      retryable:true,
+      conflicts:canonicalPresence.conflicts.map((conflict:any)=>({
+        employee_no:upper(conflict.rawEmployeeNo),
+        reason:text(conflict.reason),
+      })),
+    },409);
+  }
+  const present=canonicalPresence.presentEmployeeNos;
 
   if(present.size<500){
     // A tiny/partial Google read must never turn into a destructive reconcile or a failed trigger.
@@ -861,8 +1012,22 @@ async function reconcileBankPresence(service:any,body:any){
   const expected=Deno.env.get("STAFF_SHEET_SYNC_SECRET")||"";
   if(!expected||text(body.secret)!==expected) return json({error:"invalid sync secret"},401);
 
-  const presentNos=new Set((Array.isArray(body.present_employee_nos)?body.present_employee_nos:[])
-    .map(upper).filter((x:string)=>Boolean(x)&&x!=="SYSTEM"&&x!=="ADMIN"));
+  const rawPresentNos=(Array.isArray(body.present_employee_nos)?body.present_employee_nos:[])
+    .map(upper).filter((x:string)=>Boolean(x)&&x!=="SYSTEM"&&x!=="ADMIN");
+  const identityRows=await resolveConfirmedEmployeeIdentityBatch(service,rawPresentNos);
+  const canonicalPresence=canonicalizeConfirmedPresentEmployeeNos(rawPresentNos,identityRows);
+  if(canonicalPresence.conflicts.length){
+    return json({
+      ok:false,
+      error:"confirmed_employee_identity_conflict",
+      retryable:true,
+      conflicts:canonicalPresence.conflicts.map((conflict:any)=>({
+        employee_no:upper(conflict.rawEmployeeNo),
+        reason:text(conflict.reason),
+      })),
+    },409);
+  }
+  const presentNos=canonicalPresence.presentEmployeeNos;
   const presentNames=new Set((Array.isArray(body.present_names)?body.present_names:[])
     .map((x:any)=>text(x).replace(/\s+/g," ").toLowerCase()).filter(Boolean));
 
@@ -955,7 +1120,7 @@ Deno.serve(async(req)=>{
       const includeTest=body.include_test===true;
       const all=await allEmployees(service,organization,includeTest);
       const rows=all
-        .filter((x:any)=>x.status==="active"&&tenureKey(x.hire_date,today)===bucket)
+        .filter((x:any)=>isTenureEmployee(x,today)&&tenureKey(x.hire_date,today)===bucket)
         .map((x:any)=>({
           id:`tenure:${text(x.id)}`,
           employee_id:x.id,
@@ -980,7 +1145,10 @@ Deno.serve(async(req)=>{
       });
     }
 
-    const all=await allEmployees(service,organization),active=all.filter((x:any)=>x.status==="active");
+    const all=await allEmployees(service,organization);
+    const active=all.filter((x:any)=>isEffectiveActiveEmployee(x,today));
+    const futureHires=all.filter((x:any)=>isFutureHireEmployee(x,today));
+    const tenureEmployees=[...active,...futureHires];
     const positions=new Map<string,number>(),countries=new Map<string,number>(),platforms=new Map<string,number>(),teams=new Map<string,number>(),shifts=new Map<string,number>();
     const tenureCounts:any={
       prepare:0,within_7:0,days_8_14:0,days_15_30:0,days_31_60:0,
@@ -992,6 +1160,8 @@ Deno.serve(async(req)=>{
       const inc=(m:Map<string,number>,v:unknown,fallback:string)=>{const k=text(v)||fallback;m.set(k,(m.get(k)||0)+1)};
       inc(positions,r.positions?.name,"未设置岗位");inc(countries,r.country||r.nationality,"未分类");inc(teams,r.teams?.name,"未匹配团队");inc(shifts,r.shift_name,"未设置班次");
       const ps=splitPlatforms(r.platform_scope);if(ps.length)ps.forEach(p=>inc(platforms,p,"未设置盘口"));else inc(platforms,"未设置盘口","未设置盘口");
+    }
+    for(const r of tenureEmployees){
       const tk=tenureKey(r.hire_date,today);tenureCounts[tk]=(tenureCounts[tk]||0)+1;
     }
     const tenureDefs=[
@@ -1011,10 +1181,17 @@ Deno.serve(async(req)=>{
     const events=await lifecycleRows(service,isoAdd(today,-60));
     const eventKpis=lifecycleKpis(events,eligibleNos,today);
     return json({
-      as_of:today,total:all.length,active:active.length,latest_updated_at:latest,
-      kpis:{active:active.length,total_profiles:all.filter((x:any)=>x.status!=="suspended").length,...eventKpis},
-      tenure:tenureDefs.map(([key,name])=>({key,name,count:tenureCounts[key]||0,share:ratio(tenureCounts[key]||0,active.length)})),
+      as_of:today,total:all.length,active:active.length,future_hires:futureHires.length,latest_updated_at:latest,
+      kpis:{active:active.length,future_hires:futureHires.length,total_profiles:all.filter((x:any)=>x.status!=="suspended").length,...eventKpis},
+      tenure:tenureDefs.map(([key,name])=>({key,name,count:tenureCounts[key]||0,share:ratio(tenureCounts[key]||0,tenureEmployees.length)})),
       positions:breakdown(positions,active.length),countries:breakdown(countries,active.length),platforms:breakdown(platforms,active.length),teams:breakdown(teams,active.length),shifts:breakdown(shifts,active.length),
     });
-  }catch(e){console.error(e);return json({error:e instanceof Error?e.message:String(e)},400)}
+  }catch(e){
+    console.error(e);
+    const message=e instanceof Error?e.message:String(e);
+    if(message==="confirmed_employee_identity_resolution_failed"){
+      return json({error:message,retryable:true},503);
+    }
+    return json({error:message},400);
+  }
 });
