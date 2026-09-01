@@ -295,6 +295,158 @@ begin
 end;
 $$;
 
+-- A future resignation date must not remove a current employee early.  The
+-- same semantic snapshot must still be reprocessed once on the effective day,
+-- while an unrelated manually-resigned employee remains untouched.
+insert into public.employees (
+  employee_no, full_name, status, source_type, source_sheet,
+  official_id_pending, profile_status, resign_date, resign_reason
+) values (
+  'WD-SYNC-MANUAL-RESIGNED', '__EMPLOYEE_MASTER_MANUAL_RESIGNED__',
+  'resigned', 'backend_manual', 'backend', false, 'manual_resigned', null,
+  'User-confirmed resignation without a supplied effective date.'
+);
+
+do $$
+declare
+  v_payload jsonb;
+  v_result jsonb;
+begin
+  v_payload := jsonb_build_object(
+    'request_id', '00000000-0000-4000-8000-000000000107',
+    'trigger_kind', 'change', 'captured_at', '2099-09-01T01:00:00Z',
+    'parser_version', 'employee-master-dual-source-v1',
+    'snapshot_hash', repeat('9', 64), 'parse_warning_count', 0,
+    'sources', jsonb_build_object(
+      'home_roster', jsonb_build_object(
+        'source_key', 'home_employee_roster_current',
+        'spreadsheet_id', '1Diz8hArjv_rx-3cUvGl-etcFsiCYfQqrNfCcTgTJrz8',
+        'sheet_gid', '970844334', 'tab_name', '在职名单 Current Staff List',
+        'snapshot_hash', repeat('8', 64), 'read_row_count', 3,
+        'roster_row_count', 1
+      ),
+      'schedule_roster', jsonb_build_object(
+        'source_key', 'home_schedule_roster_current',
+        'spreadsheet_id', '1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA',
+        'sheet_gid', '1457335551', 'tab_name', '填表',
+        'snapshot_hash', repeat('7', 64), 'read_row_count', 4,
+        'roster_row_count', 3
+      )
+    ),
+    'home_rows', jsonb_build_array(jsonb_build_object(
+      'source_row', 3, 'employee_id', 'WD-SYNC-FUTURE-RESIGN',
+      'name', '__EMPLOYEE_MASTER_FUTURE_RESIGN__',
+      'name_key', 'employeemasterfutureresign',
+      'team', 'TEST TEAM HOME', 'platform', 'HOME PLATFORM',
+      'position', 'HOME POSITION', 'shift', 'DAY SHIFT',
+      'country', '菲律宾', 'hire_date', '2099-08-01',
+      'resign_date', '2099-09-09', 'work_tg', '',
+      'backend_accounts', '辞职',
+      'resign_reason', 'Scheduled future resignation',
+      'explicitly_resigned', true, 'resignation_signal', 'date'
+    )),
+    'schedule_rows', jsonb_build_array(
+      jsonb_build_object(
+        'source_row', 2, 'employee_id', 'WD-SYNC-FUTURE-RESIGN',
+        'name', '__EMPLOYEE_MASTER_FUTURE_RESIGN__',
+        'name_key', 'employeemasterfutureresign',
+        'responsible', '', 'onsite_trainer', '', 'online_leader', '',
+        'online_trainer', '', 'group', 'TEST GROUP',
+        'team', 'TEST TEAM SCHEDULE', 'shift', 'DAY SHIFT',
+        'country', '菲律宾', 'position', 'TEST POSITION',
+        'platform', 'TEST PLATFORM', 'work_content', '',
+        'onsite_marker', false
+      ),
+      jsonb_build_object(
+        'source_row', 3, 'employee_id', 'WD-SYNC-FUTURE-AUX-1',
+        'name', '__EMPLOYEE_MASTER_FUTURE_AUX_1__',
+        'name_key', 'employeemasterfutureaux1', 'onsite_marker', true
+      ),
+      jsonb_build_object(
+        'source_row', 4, 'employee_id', 'WD-SYNC-FUTURE-AUX-2',
+        'name', '__EMPLOYEE_MASTER_FUTURE_AUX_2__',
+        'name_key', 'employeemasterfutureaux2', 'onsite_marker', true
+      )
+    )
+  );
+
+  v_result := public.ingest_employee_master_snapshot(v_payload);
+  if not coalesce((v_result->>'ok')::boolean, false)
+     or v_result->>'status' = 'unchanged' then
+    raise exception 'future resignation initial sync failed: %', v_result;
+  end if;
+  if not exists (
+    select 1 from public.employees employee
+    where employee.employee_no = 'WD-SYNC-FUTURE-RESIGN'
+      and employee.status = 'active'
+      and employee.resign_date is null
+  ) then
+    raise exception 'future resignation removed the employee before its date';
+  end if;
+  if exists (
+    select 1 from public.employee_lifecycle_events event
+    where event.employee_no = 'WD-SYNC-FUTURE-RESIGN'
+      and event.event_type = 'resign'
+  ) then
+    raise exception 'future resignation wrote an early lifecycle event';
+  end if;
+
+  v_payload := jsonb_set(v_payload, '{request_id}',
+    to_jsonb('00000000-0000-4000-8000-000000000108'::text));
+  v_payload := jsonb_set(v_payload, '{captured_at}',
+    to_jsonb('2099-09-02T01:00:00Z'::text));
+  v_result := public.ingest_employee_master_snapshot(v_payload);
+  if v_result->>'status' <> 'unchanged' then
+    raise exception 'aligned future resignation was not zero-write: %', v_result;
+  end if;
+
+  v_payload := jsonb_set(v_payload, '{request_id}',
+    to_jsonb('00000000-0000-4000-8000-000000000109'::text));
+  v_payload := jsonb_set(v_payload, '{captured_at}',
+    to_jsonb('2099-09-09T01:00:00Z'::text));
+  v_result := public.ingest_employee_master_snapshot(v_payload);
+  if not coalesce((v_result->>'ok')::boolean, false)
+     or v_result->>'status' = 'unchanged' then
+    raise exception 'effective-day same-hash reconciliation did not run: %',
+      v_result;
+  end if;
+  if not exists (
+    select 1 from public.employees employee
+    where employee.employee_no = 'WD-SYNC-FUTURE-RESIGN'
+      and employee.status = 'resigned'
+      and employee.resign_date = date '2099-09-09'
+  ) then
+    raise exception 'future resignation was not applied on its effective day';
+  end if;
+  if not exists (
+    select 1 from public.employee_lifecycle_events event
+    where event.employee_no = 'WD-SYNC-FUTURE-RESIGN'
+      and event.event_type = 'resign'
+      and event.effective_date = date '2099-09-09'
+  ) then
+    raise exception 'effective resignation lifecycle event is missing';
+  end if;
+  if not exists (
+    select 1 from public.employees employee
+    where employee.employee_no = 'WD-SYNC-MANUAL-RESIGNED'
+      and employee.status = 'resigned'
+      and employee.resign_date is null
+  ) then
+    raise exception 'unrelated manual resignation was modified';
+  end if;
+
+  v_payload := jsonb_set(v_payload, '{request_id}',
+    to_jsonb('00000000-0000-4000-8000-000000000110'::text));
+  v_payload := jsonb_set(v_payload, '{captured_at}',
+    to_jsonb('2099-09-10T01:00:00Z'::text));
+  v_result := public.ingest_employee_master_snapshot(v_payload);
+  if v_result->>'status' <> 'unchanged' then
+    raise exception 'aligned effective resignation was not zero-write: %',
+      v_result;
+  end if;
+end;
+$$;
+
 do $$
 declare
   v_payload jsonb;
@@ -307,7 +459,7 @@ begin
 
   v_payload := jsonb_build_object(
     'request_id', '00000000-0000-4000-8000-000000000105',
-    'trigger_kind', 'change', 'captured_at', '2099-08-25T05:00:00Z',
+    'trigger_kind', 'change', 'captured_at', '2099-09-11T01:00:00Z',
     'parser_version', 'employee-master-dual-source-v1',
     'snapshot_hash', repeat('b', 64), 'parse_warning_count', 0,
     'sources', jsonb_build_object(
@@ -376,7 +528,7 @@ declare
 begin
   v_result := public.ingest_employee_master_snapshot(jsonb_build_object(
     'request_id', '00000000-0000-4000-8000-000000000106',
-    'trigger_kind', 'change', 'captured_at', '2099-08-25T06:00:00Z',
+    'trigger_kind', 'change', 'captured_at', '2099-09-12T01:00:00Z',
     'parser_version', 'employee-master-dual-source-v1',
     'snapshot_hash', repeat('e', 64), 'parse_warning_count', 0,
     'sources', jsonb_build_object(
