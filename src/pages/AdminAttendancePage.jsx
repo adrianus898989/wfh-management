@@ -6,6 +6,7 @@ import { useAppToast } from '../components/AppToastProvider'
 import { attendanceAmount, attendanceCurrencySummary, attendanceKindLabel, attendanceSourceGroupLabel } from '../components/AttendanceRecords'
 import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
+import { withMonthlyAttendanceLockRetry } from '../lib/adminAttendanceLockRetry'
 import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { businessMonthIso, businessTodayIso, businessTodayRange } from '../lib/adminQueryDefaults'
@@ -784,9 +785,11 @@ function AttendanceMatrixOverview({overview,month}){
 }
 
 async function fetchAttendanceMonth(month,filters={}){
-  const {data,error}=await supabase.rpc('admin_attendance_monthly_page',{p_filters:{month,...filters}})
-  if(error)throw error
-  return data||{rows:[],options:{}}
+  return withMonthlyAttendanceLockRetry(async()=>{
+    const {data,error}=await supabase.rpc('admin_attendance_monthly_page',{p_filters:{month,...filters}})
+    if(error)throw error
+    return data||{rows:[],options:{}}
+  })
 }
 
 function AttendanceMatrixPane(){
