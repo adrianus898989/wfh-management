@@ -59,7 +59,7 @@ test('the preview gate has no browser persistence mechanism', () => {
 test('preview CSS is page-scoped and cannot restyle the application shell', () => {
   const source = fs.readFileSync(new URL('../styles-employee-v27.css', import.meta.url), 'utf8')
   const start = source.indexOf('/* Employee filter preview V1')
-  const end = source.indexOf('.activation-code-mask', start)
+  const end = source.indexOf('/* Employee filter preview V1 end */', start)
   assert.notEqual(start, -1)
   assert.notEqual(end, -1)
   const previewCss = source.slice(start, end)
