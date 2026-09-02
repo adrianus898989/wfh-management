@@ -27,7 +27,8 @@ test('recovery create exposes the same bounded scope selector and sends its comp
 
   assert.match(page, /createMode = accountModal\?\.mode === 'create'/)
   assert.match(page, /createMode,/)
-  assert.match(page, /scopeDirectoryError = recoveryAccountMode && canManageScope/)
+  assert.match(page, /recoveryAccountMode && canManageScope && form\.data_scope === 'assigned_teams'/)
+  assert.match(page, /fetchRecoveryScopeDirectory\(\{[\s\S]+includeSelection:false[\s\S]+createMode/)
   assert.match(page, /team_ids:form\.team_ids[\s\S]+position_ids:form\.position_ids[\s\S]+employee_ids:form\.employee_ids/)
 
   assert.match(migration, /create or replace function public\.admin_recovery_new_backend_scope_directory/)

@@ -285,16 +285,57 @@ export default function AdminUsersPage() {
           createMode,
         })
         if (cancelled) return
+        const nextTeams = result?.teams || []
+        const nextPositions = result?.positions || []
+        const nextEmployees = result?.employees || []
+        const validTeamIds = new Set(nextTeams.map(team => team.id))
+        const validPositionIds = new Set(nextPositions.map(position => position.id))
+        const validEmployeeIds = new Set(nextEmployees.map(employee => employee.id))
+        const teamsComplete = result?.truncated?.teams !== true
+        const positionsComplete = result?.truncated?.positions !== true
+        const employeesComplete = result?.truncated?.employees !== true && employeeQuery === ''
         setData(current => current ? ({
           ...current,
-          teams:result?.teams || [],
-          positions:mergeRowsById(current.positions, result?.positions),
-          employees:mergeRowsById(current.employees, result?.employees),
+          teams:nextTeams,
+          positions:mergeRowsById(current.positions, nextPositions),
+          employees:mergeRowsById(current.employees, nextEmployees),
           recovery_scope_directory_truncated:result?.truncated || {},
         }) : current)
-        setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
-          ? ({ ...current, scope_loading:false, scope_load_error:'', scope_request_key:requestKey })
-          : current)
+        setAccountModal(current => {
+          const sameModal = createMode
+            ? current?.mode === 'create'
+            : current?.form?.auth_user_id === targetAuthUserId
+          if (!sameModal) return current
+          const currentRequestKey = recoveryScopeRequestKey({
+            targetAuthUserId,
+            teamIds:current?.form?.team_ids || [],
+            employeeQuery:current?.form?.scope_employee_search || '',
+            createMode,
+          })
+          if (currentRequestKey !== requestKey) return current
+          return {
+            ...current,
+            scope_loading:false,
+            scope_load_error:'',
+            scope_request_key:requestKey,
+            form:{
+              ...current.form,
+              // A bounded/search-filtered directory is not proof that an
+              // omitted selection is stale. Preserve it and let the database
+              // hard boundary reject invalid IDs instead of silently
+              // broadening an assigned scope.
+              team_ids:teamsComplete
+                ? (current.form.team_ids || []).filter(id => validTeamIds.has(id))
+                : current.form.team_ids || [],
+              position_ids:positionsComplete
+                ? (current.form.position_ids || []).filter(id => validPositionIds.has(id))
+                : current.form.position_ids || [],
+              employee_ids:employeesComplete
+                ? (current.form.employee_ids || []).filter(id => validEmployeeIds.has(id))
+                : current.form.employee_ids || [],
+            },
+          }
+        })
       } catch (scopeError) {
         if (!cancelled) setAccountModal(current => (createMode ? current?.mode === 'create' : current?.form?.auth_user_id === targetAuthUserId)
           ? ({ ...current, scope_loading:false, scope_load_error:scopeError.message || '当前排班组织目录读取失败' })
@@ -338,6 +379,8 @@ export default function AdminUsersPage() {
   const recoveryAccountActions = new Set(data?.supported_account_actions || [])
   const recoveryAccountFilters = new Set(data?.supported_account_filters || [])
   const recoveryCan = action => Boolean(recoveryAccountMode && recoveryAccountActions.has(action))
+  const recoveryStaffAccountActions = new Set(data?.supported_staff_account_actions || [])
+  const recoveryStaffCan = action => Boolean(recoveryStaffAccountMode && recoveryStaffAccountActions.has(action))
   const recoveryRoleMode = Boolean(data?.recovery_role_mode)
   const recoveryRolePermissionsWritable = Boolean(
     recoveryRoleMode && callerFounder && data?.role_permissions_writable !== false
@@ -371,7 +414,8 @@ export default function AdminUsersPage() {
   const canManageScope = callerCan('scope.manage')
   const canCreateStaff = !recoveryStaffAccountMode && callerCan('user.account.create')
   const canToggleStaff = !recoveryStaffAccountMode && callerCan('user.account.disable')
-  const canDeleteStaff = !recoveryStaffAccountMode && callerCan('user.account.delete')
+  const canDeleteStaff = (!recoveryStaffAccountMode && callerCan('user.account.delete')) ||
+    recoveryStaffCan('delete_staff_account')
   const canResetStaffPassword = !recoveryStaffAccountMode && callerCan('user.password.reset')
   const backend = data?.backend_accounts || []
   const staff = data?.employee_accounts || []
@@ -569,9 +613,18 @@ export default function AdminUsersPage() {
       const validTeamIds = new Set(nextTeams.map(team => team.id))
       const validPositionIds = new Set(nextPositions.map(position => position.id))
       const validEmployeeIds = new Set(nextEmployees.map(employee => employee.id))
-      const teamIds = (selection.team_ids || []).filter(id => validTeamIds.has(id))
-      const positionIds = (selection.position_ids || []).filter(id => validPositionIds.has(id))
-      const employeeIds = (selection.employee_ids || []).filter(id => validEmployeeIds.has(id))
+      const teamsComplete = result?.truncated?.teams !== true
+      const positionsComplete = result?.truncated?.positions !== true
+      const employeesComplete = result?.truncated?.employees !== true
+      const staleTeamIds = new Set(selection.stale_team_ids || [])
+      const teamIds = (selection.team_ids || [])
+        .filter(id => !staleTeamIds.has(id) && (!teamsComplete || validTeamIds.has(id)))
+      const positionIds = positionsComplete
+        ? (selection.position_ids || []).filter(id => validPositionIds.has(id))
+        : selection.position_ids || []
+      const employeeIds = employeesComplete
+        ? (selection.employee_ids || []).filter(id => validEmployeeIds.has(id))
+        : selection.employee_ids || []
       const requestKey = recoveryScopeRequestKey({
         targetAuthUserId:a.auth_user_id,
         teamIds,
@@ -633,15 +686,29 @@ export default function AdminUsersPage() {
       const validTeamIds = new Set(nextTeams.map(team => team.id))
       const validPositionIds = new Set(nextPositions.map(position => position.id))
       const validEmployeeIds = new Set(nextEmployees.map(employee => employee.id))
+      const teamsComplete = result?.truncated?.teams !== true
+      const positionsComplete = result?.truncated?.positions !== true
+      const employeesComplete = result?.truncated?.employees !== true && employeeQuery === ''
+      const staleTeamIds = new Set(selection.stale_team_ids || [])
       const teamIds = includeSelection
-        ? (selection.team_ids || []).filter(id => validTeamIds.has(id))
-        : requestedTeamIds
+        ? (selection.team_ids || []).filter(id => !staleTeamIds.has(id) && (!teamsComplete || validTeamIds.has(id)))
+        : teamsComplete
+          ? requestedTeamIds.filter(id => validTeamIds.has(id))
+          : requestedTeamIds
       const positionIds = includeSelection
-        ? (selection.position_ids || []).filter(id => validPositionIds.has(id))
-        : modal.form?.position_ids || []
+        ? positionsComplete
+          ? (selection.position_ids || []).filter(id => validPositionIds.has(id))
+          : selection.position_ids || []
+        : positionsComplete
+          ? (modal.form?.position_ids || []).filter(id => validPositionIds.has(id))
+          : modal.form?.position_ids || []
       const employeeIds = includeSelection
-        ? (selection.employee_ids || []).filter(id => validEmployeeIds.has(id))
-        : modal.form?.employee_ids || []
+        ? employeesComplete
+          ? (selection.employee_ids || []).filter(id => validEmployeeIds.has(id))
+          : selection.employee_ids || []
+        : employeesComplete
+          ? (modal.form?.employee_ids || []).filter(id => validEmployeeIds.has(id))
+          : modal.form?.employee_ids || []
       const requestKey = recoveryScopeRequestKey({ targetAuthUserId, teamIds, employeeQuery, createMode })
       setData(current => current ? ({
         ...current,
@@ -737,26 +804,85 @@ export default function AdminUsersPage() {
   }
 
   const saveAccount = async () => {
-    const { mode, form } = accountModal
-    const accounts = mode === 'create'
-      ? recoveryAccountMode ? [form] : accountModal.batch.length ? accountModal.batch : [form]
-      : []
-    const validationError = mode === 'create' && accounts.length === 1 && !accountModal.batch.length
-      ? validateAccountDraft(form)
-      : mode === 'edit'
-        ? validateAccountScopeDraft(form)
-        : ''
-    const scopeDirectoryError = recoveryAccountMode && canManageScope && form.data_scope === 'assigned_teams'
-      ? accountModal.scope_loading
-        ? '当前排班组织目录仍在读取，请稍候。'
-        : accountModal.scope_load_error || (!accountModal.scope_directory_loaded ? '当前排班组织目录尚未安全加载，请重试。' : '')
-      : ''
-    if (validationError || scopeDirectoryError) {
-      setAccountModal(x => ({ ...x, error: validationError || scopeDirectoryError, saving: false }))
-      return
-    }
+    const { mode } = accountModal
+    let form = { ...accountModal.form }
     setAccountModal(x => ({ ...x, error: '', saving: true }))
     try {
+      if (recoveryAccountMode && canManageScope && form.data_scope === 'assigned_teams') {
+        const createMode = mode === 'create'
+        const targetAuthUserId = String(form.auth_user_id || '')
+        const result = await fetchRecoveryScopeDirectory({
+          targetAuthUserId,
+          teamIds:form.team_ids || [],
+          employeeQuery:'',
+          includeSelection:false,
+          createMode,
+        })
+        const nextTeams = result?.teams || []
+        const nextPositions = result?.positions || []
+        const nextEmployees = result?.employees || []
+        const validTeamIds = new Set(nextTeams.map(team => team.id))
+        const validPositionIds = new Set(nextPositions.map(position => position.id))
+        const validEmployeeIds = new Set(nextEmployees.map(employee => employee.id))
+        const teamsComplete = result?.truncated?.teams !== true
+        const positionsComplete = result?.truncated?.positions !== true
+        const employeesComplete = result?.truncated?.employees !== true
+        const submittedTeamIds = form.team_ids || []
+        const nextTeamIds = teamsComplete
+          ? submittedTeamIds.filter(id => validTeamIds.has(id))
+          : submittedTeamIds
+        if (teamsComplete && nextTeamIds.length !== submittedTeamIds.length) {
+          throw new Error('已选团队已不在当前排班组织目录，请重新选择。')
+        }
+        form = {
+          ...form,
+          team_ids:nextTeamIds,
+          // Always derive position filters from the fresh response. This also
+          // removes legacy UUIDs that were no longer visible but remained in
+          // an older in-memory form after an asynchronous directory refresh.
+          position_ids:positionsComplete
+            ? (form.position_ids || []).filter(id => validPositionIds.has(id))
+            : form.position_ids || [],
+          employee_ids:employeesComplete
+            ? (form.employee_ids || []).filter(id => validEmployeeIds.has(id))
+            : form.employee_ids || [],
+        }
+        const requestKey = recoveryScopeRequestKey({
+          targetAuthUserId,
+          teamIds:form.team_ids,
+          employeeQuery:'',
+          createMode,
+        })
+        setData(current => current ? ({
+          ...current,
+          teams:nextTeams,
+          positions:nextPositions,
+          employees:mergeRowsById(current.employees, nextEmployees),
+          recovery_scope_directory_truncated:result?.truncated || {},
+        }) : current)
+        setAccountModal(current => current ? ({
+          ...current,
+          scope_loading:false,
+          scope_directory_loaded:true,
+          scope_load_error:'',
+          scope_request_key:requestKey,
+          form:{ ...current.form, ...form },
+        }) : current)
+      }
+
+      const accounts = mode === 'create'
+        ? recoveryAccountMode ? [form] : accountModal.batch.length ? accountModal.batch : [form]
+        : []
+      const validationError = mode === 'create' && accounts.length === 1 && !accountModal.batch.length
+        ? validateAccountDraft(form)
+        : mode === 'edit'
+          ? validateAccountScopeDraft(form)
+          : ''
+      if (validationError) {
+        setAccountModal(x => ({ ...x, form:{ ...x.form, ...form }, error:validationError, saving:false }))
+        return
+      }
+
       if (mode === 'create') {
         if (recoveryAccountMode) {
           await call({
@@ -1036,21 +1162,42 @@ export default function AdminUsersPage() {
 
   const deleteAccount = async (a, accountKind) => {
     if (!a?.auth_user_id || deletingAccountId) return
-    if (!window.confirm('只删除登录账号，员工资料会保留。确认继续？')) return
+    const recoveryStaffDelete = accountKind === 'staff' && recoveryStaffAccountMode
+    if (recoveryStaffDelete) {
+      const employeeNo = String(a?.employee?.employee_no || '').trim()
+      if (!employeeNo) {
+        setError('该账号缺少员工ID，已停止删除，请刷新列表后重试。')
+        return
+      }
+      const typed = window.prompt(`只删除员工登录账号，员工资料会保留。\n请输入员工ID ${employeeNo} 确认：`)
+      if (String(typed || '').trim().toUpperCase() !== employeeNo.toUpperCase()) return
+    } else if (!window.confirm('只删除登录账号，员工资料会保留。确认继续？')) return
     setDeletingAccountId(a.auth_user_id)
     setError('')
     try {
-      await call({ action: 'delete_account', auth_user_id: a.auth_user_id })
+      await call(recoveryStaffDelete ? {
+        action:'delete_staff_account',
+        auth_user_id:a.auth_user_id,
+        expected_employee_no:String(a?.employee?.employee_no || '').trim(),
+        expected_login_email:String(a?.login_email || '').trim().toLowerCase(),
+      } : { action:'delete_account', auth_user_id:a.auth_user_id })
       setData(current => current ? ({
         ...current,
         backend_accounts: (current.backend_accounts || []).filter(account => account.auth_user_id !== a.auth_user_id),
         employee_accounts: (current.employee_accounts || []).filter(account => account.auth_user_id !== a.auth_user_id),
+        staff_account_pagination:recoveryStaffDelete && current.staff_account_pagination ? {
+          ...current.staff_account_pagination,
+          total:Math.max(0, Number(current.staff_account_pagination.total || 0) - 1),
+        } : current.staff_account_pagination,
       }) : current)
       const reason=accountKind === 'staff' ? '员工登录账号已删除，员工档案已保留。' : '后台账号已删除，员工档案已保留。'
       notify(writeSuccessToast({
         module:accountKind==='staff'?'员工账号':'后台账号',operation:'删除登录账号',reason,
         dedupeKey:`accounts:delete:${a.auth_user_id}:success`,
       }))
+      if (recoveryStaffDelete) {
+        await refreshRecoveryStaffAccountPage(accessSearchQuery, staffAccountPage, staffAccountPageSize)
+      }
     } catch (e) {
       setError(e.message)
       notify(writeFailureToast({
@@ -1183,7 +1330,7 @@ export default function AdminUsersPage() {
     ? employees.filter(emp => `${emp.employee_no} ${emp.full_name}`.toLowerCase().includes(accountEmployeeQuery)).slice(0, 8)
     : []
   const scopeCanEdit = (accountModal?.mode !== 'edit' || canManageScope) &&
-    !accountModal?.scope_loading && !accountModal?.scope_load_error
+    !accountModal?.scope_loading && !accountModal?.scope_load_error && !accountModal?.saving
   const scopeTeamIds = accountModal?.form?.team_ids || []
   const scopePositionIds = accountModal?.form?.position_ids || []
   const scopeEmployeeIds = accountModal?.form?.employee_ids || []
@@ -1430,7 +1577,7 @@ export default function AdminUsersPage() {
               </div>
               {recoveryStaffAccountMode && <>
                 <div className="recovery-account-note">
-                  <span><strong>稳定恢复模式</strong>：员工前端账号已恢复受权限分页查看与搜索；新增、改密、停用和删除暂时保持关闭，避免恢复期间产生不确定的账号状态。</span>
+                  <span><strong>稳定恢复模式</strong>：员工前端账号支持受权限分页查看、搜索，以及逐个删除登录账号；新增、改密和停用仍保持关闭。删除只移除登录身份，员工档案会保留，重新注册需生成新的激活码。</span>
                 </div>
                 <Pagination
                   page={staffAccountPage}

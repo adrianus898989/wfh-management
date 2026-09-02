@@ -65,6 +65,46 @@ test('database recovery editor validates the hard team boundary and stays servic
   assert.match(update, /grant execute on function public\.admin_recovery_update_backend_account_v2[\s\S]+to service_role/)
 })
 
+test('assigned-scope hotfix stages validated replacement filters before the preserved authority', async () => {
+  const migration = await read('../../supabase/migrations/20260902121315_fix_recovery_assigned_scope_save_order.sql')
+  const original = await read('../../supabase/migrations/20260830163000_recovery_backend_assigned_scope_editor.sql')
+  const wrapperStart = migration.indexOf('create or replace function public.admin_recovery_update_backend_account_v2')
+  const wrapper = migration.slice(wrapperStart)
+  const stageStart = wrapper.indexOf('v_staged_scope := public.admin_save_account_scope_filters(')
+  const authorityStart = wrapper.indexOf('v_saved := scope_private.admin_recovery_update_backend_account_v2_ordering_base(')
+
+  assert.ok(wrapperStart > 0)
+  assert.ok(stageStart > 0 && authorityStart > stageStart)
+  assert.match(migration, /alter function public\.admin_recovery_update_backend_account_v2[\s\S]+set schema scope_private/)
+  assert.match(migration, /rename to admin_recovery_update_backend_account_v2_ordering_base/)
+  assert.match(migration, /revoke all on function scope_private\.admin_recovery_update_backend_account_v2_ordering_base[\s\S]+from public, anon, authenticated, service_role/)
+  assert.match(wrapper, /p_data_scope = 'assigned_teams'[\s\S]+v_current_scope = 'assigned_teams'/)
+  assert.match(wrapper, /v_filters_changed := v_current_team_ids is distinct from v_team_ids[\s\S]+v_current_position_ids is distinct from v_position_ids[\s\S]+v_current_employee_ids is distinct from v_employee_ids/)
+  assert.doesNotMatch(wrapper, /insert into public\.user_scope_(?:team|position|employee)_filters/)
+  assert.doesNotMatch(wrapper, /delete from public\.user_scope_(?:team|position|employee)_filters/)
+  assert.match(wrapper, /delete from public\.app_session_leases[\s\S]+delete from auth\.sessions/)
+  assert.match(wrapper, /insert into public\.audit_logs[\s\S]+backend_account_scope_update/)
+  assert.match(wrapper, /revoke all on function public\.admin_recovery_update_backend_account_v2[\s\S]+from public, anon, authenticated, service_role/)
+  assert.match(wrapper, /grant execute on function public\.admin_recovery_update_backend_account_v2[\s\S]+to service_role/)
+
+  // The moved function is the unchanged v2 hard boundary: it still validates
+  // every current-roster filter before invoking the legacy role authority.
+  assert.match(original, /team_filter_not_in_current_roster/)
+  assert.match(original, /position_filter_not_in_selected_current_team/)
+  assert.match(original, /employee_filter_not_in_selected_current_team/)
+  assert.match(original, /public\.admin_recovery_update_backend_account\(/)
+})
+
+test('Founder compatibility grant unlocks only recovery account edit and scope management', async () => {
+  const migration = await read('../../supabase/migrations/20260902120307_fix_founder_recovery_scope_permissions.sql')
+
+  assert.match(migration, /role\.code = 'founder'/)
+  assert.match(migration, /permission\.code in \('account\.edit', 'scope\.manage'\)/)
+  assert.match(migration, /on conflict \(role_id, permission_id\) do nothing/)
+  assert.doesNotMatch(migration, /permission\.code\s*=\s*'\*'/)
+  assert.match(migration, /founder_recovery_permission_install_incomplete/)
+})
+
 test('recovery account modal loads and searches scope candidates on demand', async () => {
   const page = await read('../pages/AdminUsersPage.jsx')
   const selection = await read('./adminAccountScopeSelection.js')
@@ -82,9 +122,45 @@ test('recovery account modal loads and searches scope candidates on demand', asy
   assert.match(page, /recoveryScopeRequestKey/)
   assert.match(page, /accountModal\?\.scope_request_key === requestKey/)
   assert.match(page, /scope_request_key:requestKey/)
+  assert.match(page, /currentRequestKey !== requestKey/)
+  assert.match(page, /const positionsComplete = result\?\.truncated\?\.positions !== true/)
+  assert.match(page, /position_ids:positionsComplete[\s\S]+validPositionIds\.has\(id\)[\s\S]+current\.form\.position_ids \|\| \[\]/)
+  assert.match(page, /const employeesComplete = result\?\.truncated\?\.employees !== true && employeeQuery === ''/)
   assert.match(page, /const retryScopeDirectory = async \(\) =>/)
   assert.match(page, />重新读取<\/button>/)
   assert.doesNotMatch(page, /请关闭后重新打开编辑窗口再试/)
   assert.match(selection, /position\?\.team_ids/)
   assert.match(selection, /some\(teamId => selectedTeamIds\.has\(teamId\)\)/)
+})
+
+test('bounded scope directories never silently drop selections outside a truncated or searched page', async () => {
+  const page = await read('../pages/AdminUsersPage.jsx')
+  const openStart = page.indexOf('const openEdit = (a) =>')
+  const retryStart = page.indexOf('const retryScopeDirectory = async () =>', openStart)
+  const saveStart = page.indexOf('const saveAccount = async () =>', retryStart)
+  const open = page.slice(openStart, retryStart)
+  const retry = page.slice(retryStart, saveStart)
+
+  assert.ok(openStart > 0 && retryStart > openStart && saveStart > retryStart)
+  assert.match(open, /const positionsComplete = result\?\.truncated\?\.positions !== true/)
+  assert.match(open, /positionIds = positionsComplete[\s\S]+validPositionIds\.has\(id\)[\s\S]+selection\.position_ids \|\| \[\]/)
+  assert.match(open, /staleTeamIds[\s\S]+!staleTeamIds\.has\(id\)/)
+  assert.match(retry, /const employeesComplete = result\?\.truncated\?\.employees !== true && employeeQuery === ''/)
+  assert.match(retry, /employeeIds = includeSelection[\s\S]+employeesComplete[\s\S]+modal\.form\?\.employee_ids \|\| \[\]/)
+})
+
+test('recovery assigned-scope save refreshes and atomically prunes hidden stale filters', async () => {
+  const page = await read('../pages/AdminUsersPage.jsx')
+  const saveStart = page.indexOf('const saveAccount = async () =>')
+  const nextFunction = page.indexOf('const refreshRecoveryAccountPage', saveStart)
+  const save = page.slice(saveStart, nextFunction)
+
+  assert.ok(saveStart > 0 && nextFunction > saveStart)
+  assert.match(save, /fetchRecoveryScopeDirectory\(\{[\s\S]+includeSelection:false/)
+  assert.match(save, /const validPositionIds = new Set\(nextPositions\.map\(position => position\.id\)\)/)
+  assert.match(save, /const positionsComplete = result\?\.truncated\?\.positions !== true/)
+  assert.match(save, /position_ids:positionsComplete[\s\S]+validPositionIds\.has\(id\)[\s\S]+form\.position_ids \|\| \[\]/)
+  assert.match(save, /employee_ids:employeesComplete[\s\S]+validEmployeeIds\.has\(id\)[\s\S]+form\.employee_ids \|\| \[\]/)
+  assert.match(save, /scope_request_key:requestKey/)
+  assert.match(save, /await call\(recoveryAccountMode \? \{[\s\S]+position_ids:form\.position_ids/)
 })

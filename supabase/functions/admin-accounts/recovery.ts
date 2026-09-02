@@ -40,6 +40,7 @@ const RECOVERY_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
   reset_mfa:'backend_account.mfa_reset',
   update_backend:'account.edit',
 }
+const RECOVERY_STAFF_ACCOUNT_ACTIONS = ['delete_staff_account']
 
 function cors(origin: string | null) {
   return {
@@ -166,7 +167,8 @@ Deno.serve(async (req: Request) => {
     // through to the former full-directory bootstrap implementation.
     if (![
       'access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions',
-      'scope_directory', 'account_list', 'staff_account_list', 'create_backend', ...RECOVERY_ACCOUNT_ACTIONS,
+      'scope_directory', 'account_list', 'staff_account_list', 'create_backend',
+      ...RECOVERY_ACCOUNT_ACTIONS, ...RECOVERY_STAFF_ACCOUNT_ACTIONS,
     ].includes(action)) {
       return json(req, {
         ok: false,
@@ -297,6 +299,7 @@ Deno.serve(async (req: Request) => {
     if (roleError || overrideError) return retryable(req, '后台账号权限暂时读取失败，请重试')
 
     const permissions = new Set<string>()
+    const deniedPermissions = new Set<string>()
     const permissionIds = new Set<string>()
     for (const row of roleRows || []) {
       const permission = Array.isArray(row.permissions) ? row.permissions[0] : row.permissions
@@ -308,14 +311,21 @@ Deno.serve(async (req: Request) => {
       if (!permission?.code) continue
       if (row.allowed) {
         permissions.add(permission.code)
+        deniedPermissions.delete(permission.code)
         if (row.permission_id) permissionIds.add(row.permission_id)
       } else {
         permissions.delete(permission.code)
+        deniedPermissions.add(permission.code)
         if (row.permission_id) permissionIds.delete(row.permission_id)
       }
     }
     const isFounder = callerRole?.code === 'founder'
-    const can = (code: string) => isFounder || permissions.has('*') || permissions.has(code)
+    const can = (code: string) => isFounder || (
+      !deniedPermissions.has(code) && (
+        permissions.has(code) ||
+        (!deniedPermissions.has('*') && permissions.has('*'))
+      )
+    )
     const delegatedRecoveryAccounts = isFounder || caller.data_scope === 'all'
     const supportedRecoveryAccountActions = delegatedRecoveryAccounts
       ? RECOVERY_ACCOUNT_ACTIONS.filter(accountAction => can(RECOVERY_ACCOUNT_ACTION_PERMISSION[accountAction]))
@@ -857,7 +867,325 @@ Deno.serve(async (req: Request) => {
           page_size:Number(pageData.page_size || pageSize),
           total:Number(pageData.total || 0),
         },
+        supported_staff_account_actions:can('staff_account.view') && can('user.account.delete')
+          ? [...RECOVERY_STAFF_ACCOUNT_ACTIONS]
+          : [],
         supported_staff_account_page_sizes:[...ACCOUNT_PAGE_SIZE_OPTIONS],
+      })
+    }
+
+    if (action === 'delete_staff_account') {
+      if (!can('staff_account.view') || !can('user.account.delete')) {
+        return json(req, {
+          ok:false,
+          error:'无删除员工前端账号权限',
+          code:'permission_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+
+      const allowedFields = new Set([
+        'action', 'auth_user_id', 'expected_login_email', 'expected_employee_no',
+      ])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, {
+          ok:false,
+          error:'员工账号删除请求包含不受支持的字段',
+          code:'invalid_input_field',
+          retryable:false,
+          preserve_session:true,
+        }, 400)
+      }
+
+      const targetAuthUserId = clean(body?.auth_user_id)
+      const expectedLoginEmail = clean(body?.expected_login_email).toLowerCase()
+      const expectedEmployeeNo = clean(body?.expected_employee_no)
+      if (!uuidLike(targetAuthUserId)) {
+        return json(req, { ok:false, error:'账号标识不正确', code:'invalid_account_id' }, 400)
+      }
+      if (targetAuthUserId === userData.user.id) {
+        return json(req, {
+          ok:false,
+          error:'当前登录账号不能删除自身',
+          code:'current_account_protected',
+          retryable:false,
+          preserve_session:true,
+        }, 400)
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(expectedLoginEmail) || expectedLoginEmail.length > 320) {
+        return json(req, { ok:false, error:'登录邮箱不正确', code:'invalid_staff_account_email' }, 400)
+      }
+      if (!expectedEmployeeNo || expectedEmployeeNo.length > 80) {
+        return json(req, { ok:false, error:'员工ID不正确', code:'invalid_employee_no' }, 400)
+      }
+
+      try {
+        await recheckRecoveryMutationGate()
+      } catch (gateError) {
+        if (/session_not_current/i.test(clean((gateError as any)?.message || (gateError as any)?.code))) {
+          return json(req, {
+            ok:false,
+            error:'当前浏览器会话已失效或账号已在其他设备登录',
+            code:'session_not_current',
+            retryable:false,
+            preserve_session:false,
+          }, 401)
+        }
+        return retryable(req, '员工账号删除前置验证暂时繁忙，请稍后重试')
+      }
+
+      const { data:prepared, error:prepareError } = await bounded(
+        admin.rpc('admin_recovery_prepare_staff_account_delete_v1', {
+          p_actor_user_id:userData.user.id,
+          p_target_user_id:targetAuthUserId,
+          p_expected_login_email:expectedLoginEmail,
+          p_expected_employee_no:expectedEmployeeNo,
+        }),
+        'RECOVERY_STAFF_ACCOUNT_DELETE_PREPARE',
+      )
+      if (prepareError || !prepared) {
+        const message = clean(prepareError?.message)
+        const code = clean(prepareError?.code).toUpperCase()
+        if (code === '42501' || /permission|scope_denied|access_denied/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'该员工账号不在你可删除的授权范围内',
+            code:'permission_or_scope_denied',
+            retryable:false,
+            preserve_session:true,
+          }, 403)
+        }
+        if (code === 'P0002' || /pure_staff_account_not_found/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'员工前端账号不存在，或目标并非纯员工账号',
+            code:'staff_account_not_found',
+            retryable:false,
+            preserve_session:true,
+          }, 404)
+        }
+        if (/staff_account_identity_changed/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'员工ID或登录邮箱已变化，请刷新列表后重新确认',
+            code:'staff_account_identity_changed',
+            retryable:false,
+            preserve_session:true,
+          }, 409)
+        }
+        if (/staff_account_owns_storage_objects/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'该员工账号仍拥有已上传文件，为避免遗留无主文件，暂不能直接删除',
+            code:'staff_account_owns_storage_objects',
+            retryable:false,
+            preserve_session:true,
+          }, 409)
+        }
+        if (code === '22023' || /invalid_recovery_staff_delete/i.test(message)) {
+          return json(req, { ok:false, error:'员工账号删除参数不正确', code:'invalid_staff_account_delete' }, 400)
+        }
+        return retryable(req, '员工账号删除授权暂时无法确认，请稍后重试')
+      }
+
+      const operationId = clean(prepared.operation_id)
+      const preparedTargetId = clean(prepared.target_auth_user_id)
+      const preparedLoginEmail = clean(prepared.login_email).toLowerCase()
+      const preparedEmployeeNo = clean(prepared.employee_no)
+      const reconcileOnly = prepared.reconcile_only === true
+      if (!uuidLike(operationId) || preparedTargetId !== targetAuthUserId ||
+          preparedLoginEmail !== expectedLoginEmail || preparedEmployeeNo !== expectedEmployeeNo) {
+        return json(req, {
+          ok:false,
+          error:'员工账号删除预检结果不一致，操作已停止',
+          code:'staff_account_delete_preflight_mismatch',
+          retryable:false,
+          preserve_session:true,
+        }, 409)
+      }
+
+      if (!reconcileOnly) {
+        let authTarget:any
+        try {
+          authTarget = await bounded(
+            admin.auth.admin.getUserById(targetAuthUserId),
+            'RECOVERY_STAFF_ACCOUNT_DELETE_AUTH_READ',
+          )
+        } catch {
+          return retryable(req, '员工登录身份暂时无法核对，请稍后重试')
+        }
+        const authUser = authTarget?.data?.user
+        if (authTarget?.error || !authUser) {
+          const status = backendStatus(authTarget?.error)
+          return json(req, {
+            ok:false,
+            error:status === 404 ? '员工登录身份不存在，请刷新列表' : '员工登录身份暂时无法核对',
+            code:status === 404 ? 'auth_identity_not_found' : 'auth_identity_check_failed',
+            retryable:status !== 404,
+            preserve_session:true,
+          }, status === 404 ? 404 : 503, status === 404 ? '' : '30')
+        }
+        if (clean(authUser.id) !== targetAuthUserId || clean(authUser.email).toLowerCase() !== expectedLoginEmail) {
+          return json(req, {
+            ok:false,
+            error:'Auth 登录身份与页面员工账号不一致，操作已停止',
+            code:'auth_identity_mismatch',
+            retryable:false,
+            preserve_session:true,
+          }, 409)
+        }
+
+        try {
+          await recheckRecoveryMutationGate()
+        } catch (gateError) {
+          if (/session_not_current/i.test(clean((gateError as any)?.message || (gateError as any)?.code))) {
+            return json(req, {
+              ok:false,
+              error:'当前浏览器会话已失效或账号已在其他设备登录',
+              code:'session_not_current',
+              retryable:false,
+              preserve_session:false,
+            }, 401)
+          }
+          return retryable(req, '删除前会话验证暂时繁忙，请稍后重试')
+        }
+
+        const { data:reprepared, error:reprepareError } = await bounded(
+          admin.rpc('admin_recovery_prepare_staff_account_delete_v1', {
+            p_actor_user_id:userData.user.id,
+            p_target_user_id:targetAuthUserId,
+            p_expected_login_email:expectedLoginEmail,
+            p_expected_employee_no:expectedEmployeeNo,
+          }),
+          'RECOVERY_STAFF_ACCOUNT_DELETE_REPREPARE',
+        )
+        if (reprepareError || !reprepared) {
+          const message = clean(reprepareError?.message)
+          const code = clean(reprepareError?.code).toUpperCase()
+          return json(req, {
+            ok:false,
+            error:code === '42501' || /permission|scope_denied|access_denied/i.test(message)
+              ? '删除前授权或管理范围已经变化，操作已停止'
+              : /staff_account_owns_storage_objects/i.test(message)
+                ? '该员工账号新增了已上传文件，操作已停止'
+                : '删除前账号状态已经变化，请刷新后重新确认',
+            code:code === '42501' || /permission|scope_denied|access_denied/i.test(message)
+              ? 'permission_or_scope_changed'
+              : /staff_account_owns_storage_objects/i.test(message)
+                ? 'staff_account_owns_storage_objects'
+                : 'staff_account_changed_before_delete',
+            retryable:false,
+            preserve_session:true,
+          }, code === '42501' ? 403 : 409)
+        }
+        if (clean(reprepared.operation_id) !== operationId ||
+            clean(reprepared.target_auth_user_id) !== targetAuthUserId ||
+            clean(reprepared.login_email).toLowerCase() !== expectedLoginEmail ||
+            clean(reprepared.employee_no) !== expectedEmployeeNo ||
+            reprepared.reconcile_only === true) {
+          return json(req, {
+            ok:false,
+            error:'删除前二次预检结果不一致，操作已停止',
+            code:'staff_account_delete_repreflight_mismatch',
+            retryable:false,
+            preserve_session:true,
+          }, 409)
+        }
+
+        let mutationIssue:any = null
+        try {
+          // Supabase's second argument is shouldSoftDelete.  false is the
+          // required hard delete so this employee can register again later.
+          const deleteResult:any = await boundedAuthMutation(
+            admin.auth.admin.deleteUser(targetAuthUserId, false),
+            'RECOVERY_STAFF_ACCOUNT_DELETE',
+          )
+          mutationIssue = deleteResult?.error || null
+        } catch (mutationError) {
+          mutationIssue = mutationError
+        }
+
+        let reconciliation:any
+        try {
+          reconciliation = await bounded(
+            admin.auth.admin.getUserById(targetAuthUserId),
+            'RECOVERY_STAFF_ACCOUNT_DELETE_RECONCILE',
+          )
+        } catch {
+          return json(req, {
+            ok:false,
+            error:'删除请求已提交，但结果暂时无法确认；请使用相同员工ID和邮箱重试',
+            code:'staff_account_delete_outcome_unknown',
+            operation_id:operationId,
+            outcome_unknown:true,
+            retryable:true,
+            preserve_session:true,
+          }, 503, '15')
+        }
+
+        const reconciliationStatus = backendStatus(reconciliation?.error)
+        const identityAbsent = reconciliationStatus === 404 ||
+          (!reconciliation?.error && !reconciliation?.data?.user)
+        if (!identityAbsent) {
+          const remainingUser = reconciliation?.data?.user
+          if (remainingUser && (
+            clean(remainingUser.id) !== targetAuthUserId ||
+            clean(remainingUser.email).toLowerCase() !== expectedLoginEmail
+          )) {
+            return json(req, {
+              ok:false,
+              error:'删除结果核对时发现登录身份已变化，操作已停止',
+              code:'auth_identity_changed_during_delete',
+              retryable:false,
+              preserve_session:true,
+            }, 409)
+          }
+          return json(req, {
+            ok:false,
+            error:mutationIssue
+              ? '员工账号尚未删除，请稍后使用相同资料重试'
+              : '删除后登录身份仍存在，请稍后重试',
+            code:'staff_account_delete_not_applied',
+            operation_id:operationId,
+            retryable:true,
+            preserve_session:true,
+          }, 503, '15')
+        }
+      }
+
+      const { data:finalized, error:finalizeError } = await bounded(
+        admin.rpc('admin_recovery_finalize_staff_account_delete_v1', {
+          p_actor_user_id:userData.user.id,
+          p_operation_id:operationId,
+          p_target_user_id:targetAuthUserId,
+          p_expected_login_email:expectedLoginEmail,
+          p_expected_employee_no:expectedEmployeeNo,
+        }),
+        'RECOVERY_STAFF_ACCOUNT_DELETE_FINALIZE',
+      )
+      if (finalizeError || !finalized) {
+        return json(req, {
+          ok:false,
+          error:'员工登录身份已删除，但审计确认暂未完成；请使用相同员工ID和邮箱重试一次',
+          code:'staff_account_delete_finalize_pending',
+          operation_id:operationId,
+          outcome_unknown:false,
+          retryable:true,
+          preserve_session:true,
+        }, 503, '15')
+      }
+
+      return json(req, {
+        ok:true,
+        deleted:{
+          auth_user_id:targetAuthUserId,
+          employee_id:clean(finalized.target_employee_id) || clean(prepared.target_employee_id),
+          login_email:expectedLoginEmail,
+          employee_no:expectedEmployeeNo,
+          employee_profile_retained:true,
+        },
+        operation_id:operationId,
       })
     }
 
