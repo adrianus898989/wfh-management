@@ -120,6 +120,8 @@ export default function AdminUsersPage() {
   const [mutatingAccountId, setMutatingAccountId] = useState('')
   const [accountPage, setAccountPage] = useState(1)
   const [accountPageSize, setAccountPageSize] = useState(20)
+  const [staffAccountPage, setStaffAccountPage] = useState(1)
+  const [staffAccountPageSize, setStaffAccountPageSize] = useState(20)
 
   const call = async (body) => {
     const { data, error } = await supabase.functions.invoke('admin-accounts', { body })
@@ -156,6 +158,16 @@ export default function AdminUsersPage() {
     status:String(search?.status || 'all'),
     ...extra,
   })
+  const fetchRecoveryStaffAccounts = (search, page = 1, pageSize = staffAccountPageSize) => call({
+    action:'staff_account_list',
+    page,
+    page_size:pageSize,
+    search:{
+      email:String(search?.account || ''),
+      employee:String(search?.employee || ''),
+      context:String(search?.context || ''),
+    },
+  })
   const fetchRecoveryRoles = () => call({ action:'role_list' })
   const fetchRecoveryScopeDirectory = ({
     targetAuthUserId,
@@ -188,20 +200,31 @@ export default function AdminUsersPage() {
         bootstrapPermissions.has('*') ||
         bootstrapPermissions.has('role.view')
       )
-      if (bootstrap?.degraded && (mayReadRecoveryAccounts || mayReadRecoveryRoles)) {
-        const [boundedAccounts, boundedRoles] = await Promise.all([
+      const mayReadRecoveryStaffAccounts = Boolean(
+        bootstrap?.caller?.is_founder ||
+        bootstrapPermissions.has('*') ||
+        bootstrapPermissions.has('staff_account.view')
+      )
+      if (bootstrap?.degraded && (mayReadRecoveryAccounts || mayReadRecoveryStaffAccounts || mayReadRecoveryRoles)) {
+        const [boundedAccounts, boundedStaffAccounts, boundedRoles] = await Promise.all([
           mayReadRecoveryAccounts ? fetchRecoveryAccounts(blankAccessSearch(), 1, accountPageSize) : null,
+          mayReadRecoveryStaffAccounts ? fetchRecoveryStaffAccounts(blankAccessSearch(), 1, staffAccountPageSize) : null,
           mayReadRecoveryRoles ? fetchRecoveryRoles() : null,
         ])
         if (boundedAccounts) {
           setAccountPage(Number(boundedAccounts?.account_pagination?.page || 1))
           setAccountPageSize(Number(boundedAccounts?.account_pagination?.page_size || accountPageSize))
         }
+        if (boundedStaffAccounts) {
+          setStaffAccountPage(Number(boundedStaffAccounts?.staff_account_pagination?.page || 1))
+          setStaffAccountPageSize(Number(boundedStaffAccounts?.staff_account_pagination?.page_size || staffAccountPageSize))
+        }
         setData({
           ...bootstrap,
           ...(boundedAccounts || {}),
+          ...(boundedStaffAccounts || {}),
           ...(boundedRoles || {}),
-          caller:{ ...bootstrap.caller, ...boundedAccounts?.caller, ...boundedRoles?.caller },
+          caller:{ ...bootstrap.caller, ...boundedAccounts?.caller, ...boundedStaffAccounts?.caller, ...boundedRoles?.caller },
         })
       } else {
         setData(bootstrap)
@@ -295,7 +318,7 @@ export default function AdminUsersPage() {
   ])
 
   const setTab = next => {
-    if (data?.degraded && next === 'staff') return
+    if (data?.degraded && next === 'staff' && !data?.recovery_staff_account_mode) return
     if (data?.degraded && next === 'backend' && !data?.recovery_account_mode) return
     if (data?.degraded && next === 'roles' && !data?.recovery_role_mode) return
     if ((!sharedAccess.loading || data) && !tabAllowed(next)) return
@@ -311,6 +334,7 @@ export default function AdminUsersPage() {
   const callerPermissions = new Set(data?.caller?.permissions || [])
   const callerCan = code => Boolean(callerFounder || sharedAccess.hasPermission(code) || callerPermissions.has('*') || callerPermissions.has(code))
   const recoveryAccountMode = Boolean(data?.recovery_account_mode)
+  const recoveryStaffAccountMode = Boolean(data?.recovery_staff_account_mode)
   const recoveryAccountActions = new Set(data?.supported_account_actions || [])
   const recoveryAccountFilters = new Set(data?.supported_account_filters || [])
   const recoveryCan = action => Boolean(recoveryAccountMode && recoveryAccountActions.has(action))
@@ -333,6 +357,7 @@ export default function AdminUsersPage() {
     : USER_TABS.filter(key => tabAllowed(key) && (
       !data?.degraded ||
       (key === 'backend' && recoveryAccountMode) ||
+      (key === 'staff' && recoveryStaffAccountMode) ||
       (key === 'roles' && recoveryRoleMode)
     ))
   const canCreateBackend = callerCan('account.create')
@@ -342,12 +367,12 @@ export default function AdminUsersPage() {
   const canResetBackendPassword = (!recoveryAccountMode && callerCan('account.reset_password')) || recoveryCan('reset_password')
   const canToggleOtp = (!recoveryAccountMode && callerCan('account.otp_toggle')) || recoveryCan('toggle_otp')
   const canResetBackendMfa = (!recoveryAccountMode && callerCan('backend_account.mfa_reset')) || recoveryCan('reset_mfa')
-  const canResetStaffMfa = callerCan('staff_account.mfa_reset')
+  const canResetStaffMfa = !recoveryStaffAccountMode && callerCan('staff_account.mfa_reset')
   const canManageScope = callerCan('scope.manage')
-  const canCreateStaff = callerCan('user.account.create')
-  const canToggleStaff = callerCan('user.account.disable')
-  const canDeleteStaff = callerCan('user.account.delete')
-  const canResetStaffPassword = callerCan('user.password.reset')
+  const canCreateStaff = !recoveryStaffAccountMode && callerCan('user.account.create')
+  const canToggleStaff = !recoveryStaffAccountMode && callerCan('user.account.disable')
+  const canDeleteStaff = !recoveryStaffAccountMode && callerCan('user.account.delete')
+  const canResetStaffPassword = !recoveryStaffAccountMode && callerCan('user.password.reset')
   const backend = data?.backend_accounts || []
   const staff = data?.employee_accounts || []
   const employees = data?.employees || []
@@ -422,6 +447,12 @@ export default function AdminUsersPage() {
     ? data.supported_account_page_sizes.filter(size => [20,30,50,100,200].includes(Number(size))).map(Number)
     : [20]
   const accountPageCount = Math.max(1, Math.ceil(accountTotal / accountPageSize))
+  const staffAccountPagination = data?.staff_account_pagination || {}
+  const staffAccountTotal = Number(staffAccountPagination.total || 0)
+  const supportedStaffAccountPageSizes = Array.isArray(data?.supported_staff_account_page_sizes) && data.supported_staff_account_page_sizes.length
+    ? data.supported_staff_account_page_sizes.filter(size => [20,30,50,100,200].includes(Number(size))).map(Number)
+    : [20]
+  const staffAccountPageCount = Math.max(1, Math.ceil(staffAccountTotal / staffAccountPageSize))
   const visibleTab = visibleTabs.includes(tab) ? tab : ''
   const pageChrome = adminLocalPageTabs('/admin/users', visibleTabs, visibleTab)
   const sectionTitle = pageChrome.active.sectionLabel || '后台账号使用情况'
@@ -832,14 +863,41 @@ export default function AdminUsersPage() {
     }
   }
 
+  const refreshRecoveryStaffAccountPage = async (search, page, pageSize = staffAccountPageSize) => {
+    setLoading(true)
+    setError('')
+    try {
+      let boundedAccounts = await fetchRecoveryStaffAccounts(search, page, pageSize)
+      const requestedPage = Number(boundedAccounts?.staff_account_pagination?.page || page || 1)
+      const returnedPageSize = Number(boundedAccounts?.staff_account_pagination?.page_size || pageSize || 20)
+      const total = Number(boundedAccounts?.staff_account_pagination?.total || 0)
+      const lastPage = Math.max(1, Math.ceil(total / returnedPageSize))
+      if (requestedPage > lastPage) boundedAccounts = await fetchRecoveryStaffAccounts(search, lastPage, returnedPageSize)
+      setStaffAccountPage(Number(boundedAccounts?.staff_account_pagination?.page || lastPage))
+      setStaffAccountPageSize(Number(boundedAccounts?.staff_account_pagination?.page_size || returnedPageSize))
+      setData(current => current ? ({
+        ...current,
+        ...boundedAccounts,
+        caller:{ ...current.caller, ...boundedAccounts.caller },
+      }) : boundedAccounts)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const refreshAccountSnapshot = () => recoveryAccountMode && visibleTab === 'backend'
     ? refreshRecoveryAccountPage(accessSearchQuery, accountPage, accountPageSize)
+    : recoveryStaffAccountMode && visibleTab === 'staff'
+      ? refreshRecoveryStaffAccountPage(accessSearchQuery, staffAccountPage, staffAccountPageSize)
     : load()
 
   const applyAccessSearch = () => {
     const next = { ...accessSearchDraft }
     setAccessSearchQuery(next)
     if (recoveryAccountMode && visibleTab === 'backend') refreshRecoveryAccountPage(next, 1)
+    if (recoveryStaffAccountMode && visibleTab === 'staff') refreshRecoveryStaffAccountPage(next, 1)
   }
 
   const resetAccessSearch = () => {
@@ -847,6 +905,7 @@ export default function AdminUsersPage() {
     setAccessSearchDraft(empty)
     setAccessSearchQuery(empty)
     if (recoveryAccountMode && visibleTab === 'backend') refreshRecoveryAccountPage(empty, 1)
+    if (recoveryStaffAccountMode && visibleTab === 'staff') refreshRecoveryStaffAccountPage(empty, 1)
   }
 
   const saveStaffAccount = async () => {
@@ -1344,7 +1403,8 @@ export default function AdminUsersPage() {
           )}
 
           {visibleTab === 'staff' && (
-            <div className="data-card table-scroll">
+            <div className="data-card recovery-account-card">
+              <div className="table-scroll">
               {staff.length === 0 ? <div className="empty-state">{adminT('暂无员工账号')}</div> :
               <table className="data-table">
                 <thead><tr><th>{adminT('登录邮箱')}</th><th>{adminT('员工ID')}</th><th>{adminT('姓名')}</th><th>{adminT('团队')}</th><th>{adminT('岗位')}</th><th>{adminT('状态')}</th><th>{adminT('激活时间')}</th><th>{adminT('操作')}</th></tr></thead>
@@ -1367,6 +1427,22 @@ export default function AdminUsersPage() {
                   </div></td>
                 </tr>})}</tbody>
               </table>}
+              </div>
+              {recoveryStaffAccountMode && <>
+                <div className="recovery-account-note">
+                  <span><strong>稳定恢复模式</strong>：员工前端账号已恢复受权限分页查看与搜索；新增、改密、停用和删除暂时保持关闭，避免恢复期间产生不确定的账号状态。</span>
+                </div>
+                <Pagination
+                  page={staffAccountPage}
+                  pages={staffAccountPageCount}
+                  total={staffAccountTotal}
+                  pageSize={staffAccountPageSize}
+                  pageSizeOptions={supportedStaffAccountPageSizes}
+                  loading={loading}
+                  onPage={nextPage => refreshRecoveryStaffAccountPage(accessSearchQuery, nextPage, staffAccountPageSize)}
+                  onPageSize={nextPageSize => refreshRecoveryStaffAccountPage(accessSearchQuery, 1, nextPageSize)}
+                />
+              </>}
             </div>
           )}
 

@@ -166,7 +166,7 @@ Deno.serve(async (req: Request) => {
     // through to the former full-directory bootstrap implementation.
     if (![
       'access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions',
-      'scope_directory', 'account_list', 'create_backend', ...RECOVERY_ACCOUNT_ACTIONS,
+      'scope_directory', 'account_list', 'staff_account_list', 'create_backend', ...RECOVERY_ACCOUNT_ACTIONS,
     ].includes(action)) {
       return json(req, {
         ok: false,
@@ -777,6 +777,87 @@ Deno.serve(async (req: Request) => {
         ok:true,
         recovery_scope_editor:true,
         ...directory,
+      })
+    }
+
+    if (action === 'staff_account_list') {
+      if (!can('staff_account.view')) {
+        return json(req, {
+          ok:false,
+          error:'无员工前端账号查看权限',
+          code:'permission_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+      const rawSearch = body?.search == null ? {} : body.search
+      if (!rawSearch || typeof rawSearch !== 'object' || Array.isArray(rawSearch)) {
+        return json(req, { ok:false, error:'搜索条件格式不正确', code:'invalid_search' }, 400)
+      }
+      const allowedSearchFields = new Set(['email', 'employee', 'context'])
+      if (Object.keys(rawSearch).some(key => !allowedSearchFields.has(key))) {
+        return json(req, { ok:false, error:'搜索字段不受支持', code:'invalid_search_field' }, 400)
+      }
+      const search = {
+        email:clean(rawSearch.email),
+        employee:clean(rawSearch.employee),
+        context:clean(rawSearch.context),
+      }
+      if (Object.values(search).some(value => value.length > 64)) {
+        return json(req, { ok:false, error:'搜索内容过长', code:'search_query_too_long' }, 400)
+      }
+      const requestedPage = Number(body?.page || 1)
+      const page = Number.isInteger(requestedPage) ? Math.min(Math.max(requestedPage, 1), 100000) : 1
+      const pageSize = Number(body?.page_size ?? DEFAULT_ACCOUNT_PAGE_SIZE)
+      if (!Number.isInteger(pageSize) || !ACCOUNT_PAGE_SIZE_OPTIONS.has(pageSize)) {
+        return json(req, { ok:false, error:'每页条数不受支持', code:'invalid_account_page_size' }, 400)
+      }
+
+      const { data:pageData, error:pageError } = await bounded(
+        userClient.rpc('admin_staff_accounts_page_v1', {
+          p_email_query:search.email,
+          p_employee_query:search.employee,
+          p_context_query:search.context,
+          p_page:page,
+          p_page_size:pageSize,
+        }),
+        'STAFF_ACCOUNT_PAGE',
+      )
+      if (pageError || !pageData) {
+        const message = clean(pageError?.message)
+        const code = clean(pageError?.code).toUpperCase()
+        if (code === '42501' || /permission|session|access_denied/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'无员工前端账号查看权限',
+            code:'permission_denied',
+            retryable:false,
+            preserve_session:true,
+          }, 403)
+        }
+        if (code === '22023' || /invalid|query_too_long|page_size/i.test(message)) {
+          return json(req, { ok:false, error:'员工前端账号筛选参数不正确', code:'invalid_staff_account_query' }, 400)
+        }
+        return retryable(req, '员工前端账号列表暂时读取失败，请重试')
+      }
+
+      return json(req, {
+        ok:true,
+        degraded:true,
+        recovery_staff_account_mode:true,
+        caller:{
+          auth_user_id:userData.user.id,
+          role_code:callerRole?.code || null,
+          is_founder:isFounder,
+          permissions:isFounder ? ['*'] : [...permissions],
+        },
+        employee_accounts:Array.isArray(pageData.rows) ? pageData.rows.slice(0, pageSize) : [],
+        staff_account_pagination:{
+          page:Number(pageData.page || page),
+          page_size:Number(pageData.page_size || pageSize),
+          total:Number(pageData.total || 0),
+        },
+        supported_staff_account_page_sizes:[...ACCOUNT_PAGE_SIZE_OPTIONS],
       })
     }
 

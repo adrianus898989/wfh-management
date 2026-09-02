@@ -13,7 +13,7 @@ const read = relative => readFile(new URL(relative, import.meta.url), 'utf8')
 
 test('recovery account edge keeps bootstrap read-only and opens only explicitly bounded recovery operations', async () => {
   const source = await read('../../supabase/functions/admin-accounts/recovery.ts')
-  assert.match(source, /'account_list', 'create_backend', \.\.\.RECOVERY_ACCOUNT_ACTIONS/)
+  assert.match(source, /'account_list', 'staff_account_list', 'create_backend', \.\.\.RECOVERY_ACCOUNT_ACTIONS/)
   assert.match(source, /const RECOVERY_ACCOUNT_ACTIONS = \[[\s\S]+toggle_active[\s\S]+toggle_otp[\s\S]+reset_password[\s\S]+reset_mfa/)
   assert.match(source, /bootstrap[\s\S]+read-only alias of `access`/)
   assert.match(source, /temporarily_paused_for_database_recovery/)
@@ -75,7 +75,7 @@ test('online presence recovery separates bounded counts from an authorised detai
   assert.match(source, /if \(!can\('account\.online_presence\.view'\)\)/)
   assert.match(source, /userClient\.rpc\('admin_online_presence_counts_allowed'\)/)
   const presenceStart = source.indexOf("if (action === 'online_presence')")
-  const listStart = source.indexOf("if (action === 'account_list')", presenceStart)
+  const listStart = source.indexOf("if (action === 'staff_account_list')", presenceStart)
   const presenceSource = source.slice(presenceStart, listStart)
   const rowsStart = presenceSource.indexOf('if (includeRows)')
   const permissionStart = presenceSource.indexOf("if (!can('account.online_presence.view'))", rowsStart)
@@ -338,7 +338,7 @@ test('bounded account migration fails quickly and checks every dependency', asyn
 
 test('account UI detects recovery mode without restoring the full bootstrap', async () => {
   const page = await read('../pages/AdminUsersPage.jsx')
-  assert.match(page, /bootstrap\?\.degraded && \(mayReadRecoveryAccounts \|\| mayReadRecoveryRoles\)/)
+  assert.match(page, /bootstrap\?\.degraded && \(mayReadRecoveryAccounts \|\| mayReadRecoveryStaffAccounts \|\| mayReadRecoveryRoles\)/)
   assert.match(page, /action:'account_list'/)
   assert.match(page, /recovery_account_mode/)
   assert.match(page, /account_pagination/)
@@ -346,6 +346,34 @@ test('account UI detects recovery mode without restoring the full bootstrap', as
   assert.match(page, /if \(recoveryAccountMode\)[\s\S]+action:'create_backend'/)
   assert.match(page, /accountModal\.mode === 'create' && !recoveryAccountMode/)
   assert.match(page, /employee_lookup_only:true/)
+})
+
+test('recovery staff account tab uses an authenticated bounded page and stays read-only', async () => {
+  const edge = await read('../../supabase/functions/admin-accounts/recovery.ts')
+  const page = await read('../pages/AdminUsersPage.jsx')
+  const migration = await read('../../supabase/migrations/20260902111024_restore_bounded_recovery_staff_accounts.sql')
+  const staffStart = edge.indexOf("if (action === 'staff_account_list')")
+  const backendStart = edge.indexOf("if (action === 'account_list')", staffStart)
+  const staffSource = edge.slice(staffStart, backendStart)
+
+  assert.match(staffSource, /can\('staff_account\.view'\)/)
+  assert.match(staffSource, /userClient\.rpc\('admin_staff_accounts_page_v1'/)
+  assert.doesNotMatch(staffSource, /auth\.admin|\.insert\(|\.update\(|\.delete\(/)
+  assert.match(staffSource, /recovery_staff_account_mode:true/)
+  assert.match(page, /fetchRecoveryStaffAccounts/)
+  assert.match(page, /key === 'staff' && recoveryStaffAccountMode/)
+  assert.match(page, /!recoveryStaffAccountMode && callerCan\('user\.account\.create'\)/)
+  assert.match(page, /!recoveryStaffAccountMode && callerCan\('staff_account\.mfa_reset'\)/)
+  assert.match(page, /员工前端账号已恢复受权限分页查看与搜索/)
+  assert.match(page, /onPage=\{nextPage => refreshRecoveryStaffAccountPage/)
+
+  assert.match(migration, /session_private\.current_app_session_is_valid\('admin'\)/)
+  assert.match(migration, /public\.has_permission\('staff_account\.view'\)/)
+  assert.match(migration, /public\.user_scope_employees/)
+  assert.match(migration, /set statement_timeout = '3500ms'/)
+  assert.match(migration, /limit v_page_size/)
+  assert.match(migration, /revoke all on function public\.admin_staff_accounts_page_v1/)
+  assert.match(migration, /grant execute on function public\.admin_staff_accounts_page_v1[\s\S]+to authenticated/)
 })
 
 test('recovery account controls are exact-permission, capability-gated and page-stable', async () => {
