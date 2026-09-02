@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useAppToast } from './AppToastProvider'
 import { useAdminI18n } from '../lib/adminI18n'
 import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
+import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
 import { supabase } from '../lib/supabase'
 import '../payment-change-workflow.css'
 
@@ -237,40 +238,81 @@ export function StaffPaymentChangeWorkspace({ locale = 'en', onChanged }) {
   </section>
 }
 
-export function AdminPayoutChangeWorkspace({ mode = 'pending', canReview = false }) {
+const adminPayoutFilters = mode => ({
+  status: mode === 'pending' ? 'pending' : '',
+  employeeNo: '',
+  employeeName: '',
+  team: '',
+  position: '',
+  reason: '',
+})
+const normalizedAdminPayoutFilters = filters => ({
+  status: clean(filters.status),
+  employeeNo: clean(filters.employeeNo),
+  employeeName: clean(filters.employeeName),
+  team: clean(filters.team),
+  position: clean(filters.position),
+  reason: clean(filters.reason),
+})
+const sameAdminPayoutFilters = (left, right) => Object.keys(left).every(key => left[key] === right[key])
+
+export function AdminPayoutChangeWorkspace({ mode = 'pending', canReview = false, canDelete = false }) {
   const { locale, t: adminT } = useAdminI18n()
   const { notify } = useAppToast()
   const adminCopy = locale === 'en' ? COPY.en : COPY.zh
-  const [filters, setFilters] = useState({ status: mode === 'pending' ? 'pending' : '', search: '' })
-  const [appliedSearch, setAppliedSearch] = useState('')
+  const [filters, setFilters] = useState(() => adminPayoutFilters(mode))
+  const [appliedFilters, setAppliedFilters] = useState(() => adminPayoutFilters(mode))
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [state, setState] = useState({ loading: true, error: '', data: { rows: [], total: 0, pages: 1 } })
   const [detail, setDetail] = useState(null)
   const [review, setReview] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteReason, setDeleteReason] = useState('')
+  const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [deleteError, setDeleteError] = useState('')
+  const [deleting, setDeleting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+  const loadRequestRef = useRef(0)
 
   const load = async () => {
+    const requestId = ++loadRequestRef.current
     setState(current => ({ ...current, loading: true, error: '' }))
-    const status = mode === 'pending' ? 'pending' : filters.status
-    const { data, error } = await supabase.rpc('admin_payout_change_requests', { p_status: status || null, p_search: appliedSearch || null, p_page: page, p_page_size: pageSize })
+    const status = mode === 'pending' ? 'pending' : appliedFilters.status
+    const { data, error } = await supabase.rpc('admin_payout_change_requests_v2', {
+      p_status: status || null,
+      p_employee_no: appliedFilters.employeeNo || null,
+      p_employee_name: appliedFilters.employeeName || null,
+      p_team: appliedFilters.team || null,
+      p_position: appliedFilters.position || null,
+      p_reason: appliedFilters.reason || null,
+      p_page: page,
+      p_page_size: pageSize,
+    })
+    if (requestId !== loadRequestRef.current) return
     setState(error ? { loading: false, error: adminT(requestError(error)), data: { rows: [], total: 0, pages: 1 } } : { loading: false, error: '', data: data || { rows: [], total: 0, pages: 1 } })
   }
-  useEffect(() => { setPage(1); setFilters(current => ({ ...current, status: mode === 'pending' ? 'pending' : '' })) }, [mode])
-  useEffect(() => { load() }, [mode, filters.status, appliedSearch, page, pageSize])
+  useEffect(() => {
+    const next = adminPayoutFilters(mode)
+    setPage(1)
+    setFilters(next)
+    setAppliedFilters(next)
+  }, [mode])
+  useEffect(() => { load() }, [mode, appliedFilters.status, appliedFilters.employeeNo, appliedFilters.employeeName, appliedFilters.team, appliedFilters.position, appliedFilters.reason, page, pageSize])
 
   const submitSearch = event => {
     event.preventDefault()
-    const nextSearch = clean(filters.search)
-    if (page === 1 && nextSearch === appliedSearch) load()
-    else { setPage(1); setAppliedSearch(nextSearch) }
+    const next = normalizedAdminPayoutFilters(filters)
+    if (page === 1 && sameAdminPayoutFilters(next, appliedFilters)) load()
+    else { setPage(1); setAppliedFilters(next) }
   }
   const resetFilters = () => {
-    const nextStatus = mode === 'pending' ? 'pending' : ''
-    const alreadyReset = page === 1 && appliedSearch === '' && filters.search === '' && filters.status === nextStatus
-    setFilters({ status: nextStatus, search: '' })
-    setAppliedSearch('')
+    const next = adminPayoutFilters(mode)
+    const normalizedCurrent = normalizedAdminPayoutFilters(filters)
+    const alreadyReset = page === 1 && sameAdminPayoutFilters(appliedFilters, next) && sameAdminPayoutFilters(normalizedCurrent, next)
+    setFilters(next)
+    setAppliedFilters(next)
     setPage(1)
     if (alreadyReset) load()
   }
@@ -295,21 +337,108 @@ export function AdminPayoutChangeWorkspace({ mode = 'pending', canReview = false
       }))
     }finally{setSaving(false)}
   }
+  const openDelete = row => {
+    setDeleteTarget(row)
+    setDeleteReason('')
+    setDeleteConfirmation('')
+    setDeleteError('')
+  }
+  const closeDelete = () => {
+    if (deleting) return
+    setDeleteTarget(null)
+    setDeleteReason('')
+    setDeleteConfirmation('')
+    setDeleteError('')
+  }
+  const requiredDeleteConfirmation = deleteTarget ? `DELETE ${clean(deleteTarget.employee_no)}` : ''
+  const deleteReady = clean(deleteReason).length >= 5
+    && clean(deleteReason).length <= 500
+    && deleteConfirmation === requiredDeleteConfirmation
+  const deleteRequest = async () => {
+    if (!canDelete || !deleteTarget?.id || !deleteReady) return
+    const requestId = deleteTarget.id
+    const employeeNo = clean(deleteTarget.employee_no)
+    setDeleting(true)
+    setDeleteError('')
+    setMessage('')
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-payout-change', {
+        body: {
+          action: 'delete_request',
+          request_id: requestId,
+          reason: clean(deleteReason),
+          confirmation: deleteConfirmation,
+        },
+      })
+      if (error || data?.error) {
+        throw new Error(await edgeFunctionErrorMessage({ data, error, fallback: adminT('申请记录删除失败，请稍后重试。') }))
+      }
+      const deletedFiles = Number(data?.proof_files_deleted || 0)
+      const success = data?.already_deleted
+        ? adminT('该申请记录已删除，列表已刷新。')
+        : `${employeeNo} · ${adminT('申请记录已永久删除')} · ${deletedFiles} ${adminT('个证明文件已清除')}`
+      setMessage(success)
+      notify(writeSuccessToast({
+        module: '工资统计',
+        operation: '删除收款资料修改记录',
+        reason: success,
+        dedupeKey: `payment-change:delete:${requestId}:success`,
+      }))
+      setDetail(null)
+      setDeleteTarget(null)
+      setDeleteReason('')
+      setDeleteConfirmation('')
+      setDeleteError('')
+      if (rows.length === 1 && page > 1) setPage(value => Math.max(1, value - 1))
+      else await load()
+    } catch (error) {
+      const reason = adminT(requestError(error))
+      setDeleteError(reason)
+      notify(writeFailureToast({
+        module: '工资统计',
+        operation: '删除收款资料修改记录',
+        error,
+        reason,
+        dedupeKey: `payment-change:delete:${requestId}:error`,
+        refresh: load,
+      }))
+    } finally {
+      setDeleting(false)
+    }
+  }
   const rows = state.data?.rows || []
   const pages = Math.max(1, Number(state.data?.pages || 1))
   return <section className="admin-payment-change">
     <header className="admin-payment-change-head"><div><small>PAYMENT CHANGE REVIEW</small><h2>{adminT(mode === 'pending' ? '收款资料待审核' : '修改工资信息记录')}</h2><p>{adminT(state.data?.auto_apply_enabled ? '自动修改已启用；批准后系统会写入实际收款资料。' : '自动修改：关闭。批准只记录审核结果，由助理人工修改实际资料。')}</p></div><strong>{locale === 'en' ? `${Number(state.data?.total || 0).toLocaleString()} records` : `${Number(state.data?.total || 0).toLocaleString()} 条`}</strong></header>
-    <form className="admin-payment-change-filters" onSubmit={submitSearch}><label className="admin-payment-change-search"><span>{adminT('综合搜索')}</span><input value={filters.search} onChange={event => setFilters({ ...filters, search: event.target.value })} placeholder={adminT('员工ID、姓名、团队、岗位或修改原因')} /></label>{mode !== 'pending' && <label><span>{adminT('状态')}</span><select value={filters.status} onChange={event => { setPage(1); setFilters({ ...filters, status: event.target.value }) }}><option value="">{adminT('全部状态')}</option><option value="approved">{adminT('已通过')}</option><option value="rejected">{adminT('已驳回')}</option><option value="pending">{adminT('待审核')}</option><option value="cancelled">{adminT('已取消')}</option></select></label>}<button className="primary" type="submit">{adminT('查询')}</button><button type="button" onClick={resetFilters}>{adminT('重置')}</button></form>
+    <form className="admin-payment-change-filters" onSubmit={submitSearch}>
+      <div className="admin-payment-change-filter-fields">
+        <label><span>{adminT('员工ID')}</span><input value={filters.employeeNo} onChange={event => setFilters({ ...filters, employeeNo: event.target.value })} placeholder={adminT('输入员工ID')} /></label>
+        <label><span>{adminT('姓名')}</span><input value={filters.employeeName} onChange={event => setFilters({ ...filters, employeeName: event.target.value })} placeholder={adminT('输入姓名')} /></label>
+        <label><span>{adminT('团队')}</span><input value={filters.team} onChange={event => setFilters({ ...filters, team: event.target.value })} placeholder={adminT('输入团队')} /></label>
+        <label><span>{adminT('岗位')}</span><input value={filters.position} onChange={event => setFilters({ ...filters, position: event.target.value })} placeholder={adminT('输入岗位')} /></label>
+        <label><span>{adminT('修改原因')}</span><input value={filters.reason} onChange={event => setFilters({ ...filters, reason: event.target.value })} placeholder={adminT('输入修改原因')} /></label>
+        {mode !== 'pending' && <label><span>{adminT('状态')}</span><select value={filters.status} onChange={event => setFilters({ ...filters, status: event.target.value })}><option value="">{adminT('全部状态')}</option><option value="approved">{adminT('已通过')}</option><option value="rejected">{adminT('已驳回')}</option><option value="pending">{adminT('待审核')}</option><option value="cancelled">{adminT('已取消')}</option></select></label>}
+      </div>
+      <div className="admin-payment-change-filter-actions"><button className="primary" type="submit" disabled={state.loading}>{adminT(state.loading ? '查询中…' : '查询')}</button><button type="button" onClick={resetFilters} disabled={state.loading}>{adminT('重置')}</button></div>
+    </form>
     {state.error && <div className="payment-change-alert error">{state.error}<button type="button" onClick={load}>{adminT('重试')}</button></div>}
     {message && <div className="payment-change-alert success">{message}</div>}
-    <div className="admin-payment-change-table"><table><thead><tr><th>{adminT('入职日期')}</th><th>{adminT('员工ID')}</th><th>{adminT('姓名')}</th><th>{adminT('申请时间')}</th><th>{adminT('员工类型 / 国家')}</th><th>{adminT('团队 / 岗位')}</th><th>{adminT('修改项目')}</th><th>{adminT('原因')}</th><th>{adminT('审核结果')}</th><th>{adminT('审核操作人')}</th><th>{adminT('审核时间')}</th><th>{adminT('资料处理状态')}</th><th>{adminT('资料操作人')}</th><th>{adminT('资料处理时间')}</th><th>{adminT('操作')}</th></tr></thead><tbody>{state.loading ? <tr><td colSpan="15"><div className="payment-change-empty">{adminT('正在读取申请…')}</div></td></tr> : rows.length ? rows.map(row => <tr key={row.id}><td><b>{row.employee_hire_date || '—'}</b></td><td><b>{row.employee_no || '—'}</b></td><td><b>{row.employee_name || '—'}</b></td><td>{dateTime(row.created_at, locale)}</td><td><b>{row.employment_type || '—'}</b><span>{row.country || '—'} · {row.employee_status || '—'}</span></td><td><b>{row.team_name || '—'}</b><span>{row.position_name || '—'}</span></td><td>{adminT(row.payment_kind === 'bank_wallet' ? '银行卡 / 钱包' : 'USDT 地址')}</td><td className="admin-payment-change-reason"><span title={row.reason}>{row.reason}</span></td><td><i className={`payment-change-status ${row.status}`}>{statusLabel(row.status, adminCopy)}</i></td><td>{row.reviewed_at ? row.reviewed_by || adminT('后台账号') : '—'}</td><td>{row.reviewed_at ? dateTime(row.reviewed_at, locale) : '—'}</td><td><i className={`payment-change-fulfillment-pill ${fulfillmentTone(row.fulfillment_status)}`}>{adminT(fulfillmentLabel(row.fulfillment_status, adminCopy))}</i></td><td>{row.fulfilled_at ? row.fulfilled_by || adminT('系统 / 外部同步') : '—'}</td><td>{row.fulfilled_at ? dateTime(row.fulfilled_at, locale) : '—'}</td><td><div className="admin-payment-change-actions"><button type="button" onClick={() => setDetail(row)}>{adminT('详情')}</button>{row.status === 'pending' && canReview && <button className="primary" type="button" onClick={() => { setMessage(''); setReview({ ...row, decision: 'approved', note: '' }) }}>{adminT('审核')}</button>}</div></td></tr>) : <tr><td colSpan="15"><div className="payment-change-empty">{adminT('暂无符合条件的申请。')}</div></td></tr>}</tbody></table></div>
+    <div className="admin-payment-change-table"><table><thead><tr><th>{adminT('员工')}</th><th>{adminT('组织 / 类型')}</th><th>{adminT('申请内容')}</th><th>{adminT('审核')}</th><th>{adminT('资料处理')}</th><th>{adminT('操作')}</th></tr></thead><tbody>{state.loading ? <tr><td colSpan="6"><div className="payment-change-empty">{adminT('正在读取申请…')}</div></td></tr> : rows.length ? rows.map(row => <tr key={row.id}>
+      <td className="admin-payment-change-stack admin-payment-change-employee"><b>{row.employee_no || '—'}</b><strong>{row.employee_name || '—'}</strong><span>{adminT('入职日期')} · {row.employee_hire_date || '—'}</span></td>
+      <td className="admin-payment-change-stack"><b>{row.team_name || '—'} · {row.position_name || '—'}</b><span>{row.employment_type || '—'} · {row.country || '—'} · {row.employee_status || '—'}</span></td>
+      <td className="admin-payment-change-stack admin-payment-change-application"><b>{adminT(row.payment_kind === 'bank_wallet' ? '银行卡 / 钱包' : 'USDT 地址')}</b><span>{dateTime(row.created_at, locale)}</span><p title={row.reason}>{row.reason || '—'}</p></td>
+      <td className="admin-payment-change-stack"><i className={`payment-change-status ${row.status}`}>{statusLabel(row.status, adminCopy)}</i><span>{row.reviewed_at ? row.reviewed_by || adminT('后台账号') : adminT('尚未审核')}</span><span>{row.reviewed_at ? dateTime(row.reviewed_at, locale) : '—'}</span></td>
+      <td className="admin-payment-change-stack"><i className={`payment-change-fulfillment-pill ${fulfillmentTone(row.fulfillment_status)}`}>{adminT(fulfillmentLabel(row.fulfillment_status, adminCopy))}</i><span>{row.fulfilled_at ? row.fulfilled_by || adminT('系统 / 外部同步') : '—'}</span><span>{row.fulfilled_at ? dateTime(row.fulfilled_at, locale) : '—'}</span></td>
+      <td><div className="admin-payment-change-actions"><button type="button" onClick={() => setDetail(row)}>{adminT('详情')}</button>{row.status === 'pending' && canReview && <button className="primary" type="button" onClick={() => { setMessage(''); setReview({ ...row, decision: 'approved', note: '' }) }}>{adminT('审核')}</button>}{mode !== 'pending' && canDelete && <button className="danger" type="button" onClick={() => openDelete(row)}>{adminT('删除')}</button>}</div></td>
+    </tr>) : <tr><td colSpan="6"><div className="payment-change-empty">{adminT('暂无符合条件的申请。')}</div></td></tr>}</tbody></table></div>
     <footer className="admin-payment-change-pager"><label>{adminT('每页')}<select value={pageSize} onChange={event => { setPage(1); setPageSize(Number(event.target.value)) }}><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label><span>{locale === 'en' ? `Page ${page} / ${pages}` : `第 ${page} / ${pages} 页`}</span><button disabled={page <= 1 || state.loading} onClick={() => setPage(value => Math.max(1, value - 1))}>{adminT('上一页')}</button><button disabled={page >= pages || state.loading} onClick={() => setPage(value => value + 1)}>{adminT('下一页')}</button></footer>
-    {detail && <PaymentChangeDetail request={detail} canReview={canReview} onClose={() => setDetail(null)} onReview={() => { setMessage(''); setReview({ ...detail, decision: 'approved', note: '' }); setDetail(null) }} />}
+    {detail && <PaymentChangeDetail request={detail} canReview={canReview} canDelete={mode !== 'pending' && canDelete} onClose={() => setDetail(null)} onReview={() => { setMessage(''); setReview({ ...detail, decision: 'approved', note: '' }); setDetail(null) }} onDelete={() => { openDelete(detail); setDetail(null) }} />}
     {review && <div className="payment-change-modal-backdrop" role="presentation" onMouseDown={() => !saving && setReview(null)}><section className="payment-change-modal review" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><header><div><small>REVIEW REQUEST</small><h2>{adminT('审核')} · {review.employee_no}</h2></div><button disabled={saving} onClick={() => setReview(null)}>×</button></header><div className="payment-change-manual-warning"><b>{adminT('自动修改：关闭')}</b><span>{adminT('批准只记录审核通过，不会自动修改银行卡、钱包账号或 USDT 地址。')}</span></div><div className="payment-change-review-summary"><PaymentFacts kind={review.payment_kind} value={review.new_data} /><p>{review.reason}</p></div><label>{adminT('审核备注')}<textarea rows={4} maxLength={1000} value={review.note} onChange={event => setReview({ ...review, note: event.target.value })} placeholder={adminT('批准可选填；驳回时必须填写明确原因，员工会看到此内容。')} /></label>{message && <div className="payment-change-alert error">{message}</div>}<footer><button disabled={saving} onClick={() => setReview(null)}>{adminT('取消')}</button><button className="danger" disabled={saving || clean(review.note).length === 0} onClick={() => decide('rejected', review.note)}>{adminT('驳回')}</button><button className="primary" disabled={saving} onClick={() => decide('approved', review.note)}>{adminT(saving ? '处理中…' : '审核通过')}</button></footer></section></div>}
+    {deleteTarget && <div className="payment-change-modal-backdrop" role="presentation" onMouseDown={closeDelete}><section className="payment-change-modal delete" role="dialog" aria-modal="true" aria-labelledby="payment-change-delete-title" onMouseDown={event => event.stopPropagation()}><header><div><small>DELETE PAYMENT CHANGE RECORD</small><h2 id="payment-change-delete-title">{adminT('永久删除申请记录')}</h2></div><button type="button" disabled={deleting} onClick={closeDelete}>×</button></header><div className="payment-change-delete-summary"><strong>{adminT('此操作不可恢复')}</strong><span>{adminT('申请记录及关联的身份证明、收款资料截图会永久删除；审计记录会保留，员工档案、排班和工资资料不会受到影响。')}</span><dl><dt>{adminT('员工')}</dt><dd>{deleteTarget.employee_no} · {deleteTarget.employee_name}</dd><dt>{adminT('申请时间')}</dt><dd>{dateTime(deleteTarget.created_at, locale)}</dd></dl></div><label><span>{adminT('删除原因')}</span><textarea rows={3} minLength={5} maxLength={500} value={deleteReason} onChange={event => setDeleteReason(event.target.value)} placeholder={adminT('请填写删除原因（5–500 字）')} /></label><label><span>{adminT('请输入下方确认文字')}</span><code>{requiredDeleteConfirmation}</code><input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" spellCheck="false" placeholder={requiredDeleteConfirmation} /></label>{deleteError && <div className="payment-change-alert error">{deleteError}</div>}<footer><button type="button" disabled={deleting} onClick={closeDelete}>{adminT('取消')}</button><button type="button" className="danger" disabled={deleting || !deleteReady} onClick={deleteRequest}>{adminT(deleting ? '删除中…' : '永久删除')}</button></footer></section></div>}
   </section>
 }
 
-function PaymentChangeDetail({ request, canReview, onClose, onReview }) {
+function PaymentChangeDetail({ request, canReview, canDelete, onClose, onReview, onDelete }) {
   const { locale, t: adminT } = useAdminI18n()
   const adminCopy = locale === 'en' ? COPY.en : COPY.zh
   const [proofs, setProofs] = useState([])
@@ -344,5 +473,5 @@ function PaymentChangeDetail({ request, canReview, onClose, onReview }) {
   return <div className="payment-change-modal-backdrop" role="presentation" onMouseDown={onClose}><section className="payment-change-modal detail" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><header><div><small>PAYMENT CHANGE DETAIL</small><h2>{request.employee_no} · {request.employee_name}</h2></div><button onClick={onClose}>×</button></header><div className="payment-change-detail-grid"><div><span>{adminT('入职日期')}</span><strong>{request.employee_hire_date || '—'}</strong></div><div><span>{adminT('员工ID')}</span><strong>{request.employee_no || '—'}</strong></div><div><span>{adminT('姓名')}</span><strong>{request.employee_name || '—'}</strong></div><div><span>{adminT('员工类型 / 国家')}</span><strong>{request.employment_type || '—'}</strong><small>{request.country || '—'} · {request.employee_status || '—'}</small></div><div><span>{adminT('团队 / 岗位')}</span><strong>{request.team_name || '—'}</strong><small>{request.position_name || '—'}</small></div><div><span>{adminT('申请时间')}</span><strong>{dateTime(request.created_at, locale)}</strong></div><div><span>{adminT('审核结果')}</span><i className={`payment-change-status ${request.status}`}>{statusLabel(request.status, adminCopy)}</i></div><div><span>{adminT('审核操作人')}</span><strong>{request.reviewed_at ? request.reviewed_by || adminT('后台账号') : '—'}</strong></div><div><span>{adminT('审核时间')}</span><strong>{request.reviewed_at ? dateTime(request.reviewed_at, locale) : '—'}</strong></div><div><span>{adminT('资料处理状态')}</span><i className={`payment-change-fulfillment-pill ${fulfillmentTone(request.fulfillment_status)}`}>{adminT(fulfillmentLabel(request.fulfillment_status, adminCopy))}</i></div><div><span>{adminT('资料操作人')}</span><strong>{request.fulfilled_at ? request.fulfilled_by || adminT('系统 / 外部同步') : '—'}</strong></div><div><span>{adminT('资料处理时间')}</span><strong>{request.fulfilled_at ? dateTime(request.fulfilled_at, locale) : '—'}</strong></div></div><div className="payment-change-compare"><div><small>{adminT('旧资料')}</small><PaymentFacts kind={request.payment_kind} value={request.old_data} /></div><span>→</span><div><small>{adminT('新资料')}</small><PaymentFacts kind={request.payment_kind} value={request.new_data} /></div></div><div className="payment-change-detail-reason"><small>{adminT('修改原因')}</small><p>{request.reason}</p></div>{request.review_note && <div className="payment-change-reject-note"><b>{adminT('审核备注')}</b><span>{request.review_note}</span></div>}<div className="payment-change-proof-gallery">{proofs.map(proof => {
     const isPdf = clean(proof.path).toLowerCase().endsWith('.pdf')
     return <article key={proof.key}><header><b>{proof.label}</b><span>{proof.url ? adminT('点击放大') : '—'}</span></header>{proof.loading ? <div className="payment-change-proof-loading">{adminT('正在安全读取文件…')}</div> : proof.error ? <div className="payment-change-proof-error"><span>{proof.error}</span>{clean(proof.path) && <button type="button" onClick={() => retryProof(proof)}>{adminT('重试')}</button>}</div> : isPdf ? <button type="button" className="payment-change-proof-pdf" onClick={() => setPreview(proof)}><b>PDF</b><span>{adminT('点击放大查看证明文件')}</span></button> : <button type="button" className="payment-change-proof-thumbnail" onClick={() => setPreview(proof)}><img src={proof.url} alt={proof.label} /></button>}</article>
-  })}</div>{preview && <div className="payment-change-proof-lightbox" role="presentation" onMouseDown={() => setPreview(null)}><section role="dialog" aria-modal="true" aria-label={preview.label} onMouseDown={event => event.stopPropagation()}><header><b>{preview.label}</b><button type="button" aria-label={adminT('关闭预览')} onClick={() => setPreview(null)}>×</button></header>{previewIsPdf ? <iframe title={preview.label} src={preview.url} /> : <img src={preview.url} alt={preview.label} />}</section></div>}<footer><button onClick={onClose}>{locale === 'en' ? 'Close' : '关闭'}</button>{request.status === 'pending' && canReview && <button className="primary" onClick={onReview}>{adminT('开始审核')}</button>}</footer></section></div>
+  })}</div>{preview && <div className="payment-change-proof-lightbox" role="presentation" onMouseDown={() => setPreview(null)}><section role="dialog" aria-modal="true" aria-label={preview.label} onMouseDown={event => event.stopPropagation()}><header><b>{preview.label}</b><button type="button" aria-label={adminT('关闭预览')} onClick={() => setPreview(null)}>×</button></header>{previewIsPdf ? <iframe title={preview.label} src={preview.url} /> : <img src={preview.url} alt={preview.label} />}</section></div>}<footer>{canDelete && <button className="danger" onClick={onDelete}>{adminT('删除')}</button>}<button onClick={onClose}>{locale === 'en' ? 'Close' : '关闭'}</button>{request.status === 'pending' && canReview && <button className="primary" onClick={onReview}>{adminT('开始审核')}</button>}</footer></section></div>
 }

@@ -21,6 +21,7 @@ import { supabase } from '../lib/supabase'
 
 const PAYOUT_CHANGE_VIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW
 const PAYOUT_CHANGE_REVIEW=PERMISSIONS.PAYROLL_CHANGE_HISTORY_REVIEW
+const PAYOUT_CHANGE_DELETE=PERMISSIONS.PAYROLL_CHANGE_HISTORY_DELETE
 const PAYMENT_CHANGE_TABS=new Set(['收款资料审核','申请记录'])
 const TABS = ['工资导入','待发布','已发布','导入记录','收款资料审核','申请记录']
 const PAYROLL_SUMMARY_ONLY_BATCH_ID=0
@@ -492,7 +493,7 @@ export default function AdminPayrollPage(){
     {!canMutateWholePayroll&&hasWholePayrollAction&&<div className="payroll-alert">当前账号为有限员工范围；可查看范围内工资，但导入、删除、审核和发布整批工资仅限“全部数据”范围账号。</div>}
     <AdminModuleNav />
 
-    {access.loading?<div className="payroll-empty-small">{adminT('正在读取页面权限…')}</div>:!tab?<div className="payroll-alert error">{adminT('当前账号没有工资中心页面权限。')}</div>:PAYMENT_CHANGE_TABS.has(tab)?<AdminPayoutChangeWorkspace mode={tab==='收款资料审核'?'pending':'history'} canReview={access.hasPermission(PAYOUT_CHANGE_REVIEW)}/>:tab==='工资导入'?uploadWorkspace:tab==='导入记录'?<>
+    {access.loading?<div className="payroll-empty-small">{adminT('正在读取页面权限…')}</div>:!tab?<div className="payroll-alert error">{adminT('当前账号没有工资中心页面权限。')}</div>:PAYMENT_CHANGE_TABS.has(tab)?<AdminPayoutChangeWorkspace mode={tab==='收款资料审核'?'pending':'history'} canReview={access.hasPermission(PAYOUT_CHANGE_REVIEW)} canDelete={access.hasPermission(PAYOUT_CHANGE_DELETE)}/>:tab==='工资导入'?uploadWorkspace:tab==='导入记录'?<>
       {uploadWorkspace}
       <PayrollImportHistory
         batches={batches}

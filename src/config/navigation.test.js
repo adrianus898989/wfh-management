@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import { ADMIN_TAB_SLUGS, adminLocalPageTabs, adminNavigation, adminPagePresentation, adminRouteAccess, adminSectionItems, adminTabSlug, canonicalAdminTab, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from './navigation.js'
+import {ADMIN_NAV_ICONS} from './adminNavIcons.js'
 import {ADMIN_PAGE_DESCRIPTIONS} from './pageDescriptions.js'
 
 const visibleItems = adminNavigation.flatMap(entry => entry.children || [entry])
@@ -12,6 +13,8 @@ const activityLogSource=readFileSync(new URL('../pages/AdminActivityLogPage.jsx'
 const manualStyles=readFileSync(new URL('../styles-admin-manual.css',import.meta.url),'utf8')
 const topbarSource=readFileSync(new URL('../components/AdminTopbar.jsx',import.meta.url),'utf8')
 const pageDescriptionSource=readFileSync(new URL('./pageDescriptions.js',import.meta.url),'utf8')
+const appLayoutSource=readFileSync(new URL('../components/AppLayout.jsx',import.meta.url),'utf8')
+const adminNavIconSource=readFileSync(new URL('../components/AdminNavIcon.jsx',import.meta.url),'utf8')
 
 test('admin sidebar uses the requested top-level order and names', () => {
   assert.deepEqual(adminNavigation.map(entry => entry.label), [
@@ -34,6 +37,17 @@ test('admin sidebar uses the requested top-level order and names', () => {
     '待发布工资表', '已发布工资表', '导入记录', '修改工资信息记录',
   ])
   assert.equal(visibleItems.filter(entry => entry.label === '排班表').length, 1)
+})
+
+test('admin sidebar uses a complete decorative line-svg icon registry', () => {
+  assert.deepEqual(Object.keys(ADMIN_NAV_ICONS), adminNavigation.map(entry => entry.id))
+  for (const [id,drawing] of Object.entries(ADMIN_NAV_ICONS)) {
+    assert.ok(drawing.length >= 2, `${id} should have a recognizable multi-stroke drawing`)
+    drawing.forEach(part => assert.ok(['path','circle','rect'].includes(part.element), `${id} uses an SVG shape`))
+  }
+  assert.match(appLayoutSource, /<AdminNavIcon name=\{item\.id\} \/>/)
+  assert.match(adminNavIconSource, /aria-hidden="true"/)
+  assert.match(adminNavIconSource, /focusable="false"/)
 })
 
 test('new menu names keep pointing at canonical existing tabs', () => {

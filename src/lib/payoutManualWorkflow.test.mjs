@@ -126,9 +126,18 @@ test('latest admin payout list returns hire date without requester portal identi
   assert.match(privacySql, /grant execute on function public\.admin_payout_change_requests[\s\S]+to authenticated/i)
 })
 
-test('admin payout UI separates employee, application, review and fulfillment fields', () => {
-  assert.match(workflowComponent, /<th>\{adminT\('入职日期'\)\}<\/th><th>\{adminT\('员工ID'\)\}<\/th><th>\{adminT\('姓名'\)\}<\/th>/)
-  assert.match(workflowComponent, /员工ID、姓名、团队、岗位或修改原因/)
+test('admin payout UI provides compact field-specific filters and grouped records', () => {
+  for (const filter of ['p_employee_no','p_employee_name','p_team','p_position','p_reason']) {
+    assert.match(workflowComponent, new RegExp(`${filter}: appliedFilters\\.`))
+  }
+  for (const field of ['employeeNo','employeeName','team','position','reason']) {
+    assert.match(workflowComponent, new RegExp(`filters\\.${field}`))
+  }
+  for (const heading of ['员工','组织 / 类型','申请内容','审核','资料处理','操作']) {
+    assert.ok(workflowComponent.includes(`<th>{adminT('${heading}')}</th>`), `missing grouped payout heading ${heading}`)
+  }
+  assert.match(workflowComponent, /colSpan="6"/)
+  assert.doesNotMatch(workflowComponent, /员工ID、姓名、团队、岗位或修改原因/)
   assert.doesNotMatch(workflowComponent, /申请账号|requested_by|申请人 \/ 时间/)
   for (const label of ['申请时间','审核结果','审核操作人','审核时间','资料处理状态','资料操作人','资料处理时间']) {
     assert.ok(workflowComponent.includes(`adminT('${label}')`), `missing separated payout field ${label}`)
@@ -138,4 +147,17 @@ test('admin payout UI separates employee, application, review and fulfillment fi
   assert.match(workflowComponent, /createSignedUrl\(proof\.path, 120\)/)
   assert.match(workflowComponent, /payment-change-proof-thumbnail/)
   assert.match(workflowComponent, /payment-change-proof-lightbox/)
+})
+
+test('admin payout delete is permission gated and requires a reason plus canonical confirmation', () => {
+  assert.match(workflowComponent, /canDelete = false/)
+  assert.match(workflowComponent, /mode !== 'pending' && canDelete && <button className="danger"/)
+  assert.match(workflowComponent, /supabase\.functions\.invoke\('admin-payout-change'/)
+  assert.match(workflowComponent, /action: 'delete_request'/)
+  assert.match(workflowComponent, /reason: clean\(deleteReason\)/)
+  assert.match(workflowComponent, /confirmation: deleteConfirmation/)
+  assert.match(workflowComponent, /`DELETE \$\{clean\(deleteTarget\.employee_no\)\}`/)
+  assert.match(workflowComponent, /clean\(deleteReason\)\.length >= 5/)
+  assert.match(workflowComponent, /writeSuccessToast/)
+  assert.match(workflowComponent, /writeFailureToast/)
 })

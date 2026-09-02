@@ -57,6 +57,7 @@ test('latest menu pages expose their supported granular operations', () => {
   )
   assert.ok(codes('修改工资信息记录').has(PERMISSIONS.PAYROLL_CHANGE_HISTORY_VIEW))
   assert.ok(codes('修改工资信息记录').has(PERMISSIONS.PAYROLL_CHANGE_HISTORY_REVIEW))
+  assert.ok(codes('修改工资信息记录').has(PERMISSIONS.PAYROLL_CHANGE_HISTORY_DELETE))
   assert.deepEqual([...codes('后台操作日志')],[PERMISSIONS.ACCOUNT_ACTIVITY_LOG_VIEW])
 })
 

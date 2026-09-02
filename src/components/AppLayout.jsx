@@ -6,6 +6,7 @@ import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 import { adminNavigation, adminRouteAccess, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from '../config/navigation'
 import { AdminAccessProvider } from '../lib/adminAccess'
 import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import AdminNavIcon from './AdminNavIcon'
 import AdminTopbar from './AdminTopbar'
 
 const navKey = item => item.id || item.to
@@ -148,14 +149,14 @@ export default function AppLayout({ mode, children }) {
 
             if(!item.children) return (
               <Link key={key} to={item.to} className={adminTargetMatches(item.to,location.pathname,location.search)?'active nav-parent':'nav-parent'}>
-                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-icon" aria-hidden="true"><AdminNavIcon name={item.id} /></span>
                 <span className="nav-parent-label">{adminT(item.label)}</span>
               </Link>
             )
 
             return <div className={`nav-group ${pathGroup===key?'active-group':''}`} key={key}>
               <button type="button" className={`nav-parent nav-parent-button ${pathGroup===key?'active':''}`} aria-expanded={expanded} onClick={()=>clickParent(item)}>
-                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-icon" aria-hidden="true"><AdminNavIcon name={item.id} /></span>
                 <span className="nav-parent-label">{adminT(item.label)}</span>
                 <span className="nav-chevron">{expanded?'⌄':'›'}</span>
               </button>

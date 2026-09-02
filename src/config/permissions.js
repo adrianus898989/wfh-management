@@ -169,6 +169,7 @@ export const PERMISSIONS = {
   PAYROLL_IMPORT_HISTORY_DELETE: 'payroll.import_history.delete',
   PAYROLL_CHANGE_HISTORY_VIEW: 'payroll.change_history.view',
   PAYROLL_CHANGE_HISTORY_REVIEW: 'payroll.change_history.review',
+  PAYROLL_CHANGE_HISTORY_DELETE: 'payroll.change_history.delete',
 
   // 账号权限
   USER_VIEW: 'user.view',
