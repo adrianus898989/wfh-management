@@ -3,6 +3,7 @@ import {
   AdminRequestIpError,
   enforceAdminRequestIp,
 } from '../_shared/adminRequestIp.ts'
+import { jwtSessionId } from '../_shared/adminIp.ts'
 import {
   buildRecoveryProvisioningFingerprint,
   recoveryIdentityDisposition,
@@ -40,6 +41,7 @@ const RECOVERY_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
   reset_mfa:'backend_account.mfa_reset',
   update_backend:'account.edit',
 }
+const RECOVERY_ACTIVATION_ACTIONS = ['generate_activation_code']
 const RECOVERY_STAFF_ACCOUNT_ACTIONS = ['delete_staff_account']
 
 function cors(origin: string | null) {
@@ -63,9 +65,19 @@ function json(req: Request, body: unknown, status = 200, retryAfter = '') {
 }
 
 const clean = (value: unknown) => String(value ?? '').trim()
+const normalizeEmployeeNo = (value: unknown) => clean(value)
+  .normalize('NFKC')
+  .replace(/[\u200B\u200C\u200D\u2060\uFEFF\s]+/gu, '')
+  .toUpperCase()
 const uuidLike = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 const passwordOk = (value: string) => value.length >= 10 &&
   /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value) && /[^A-Za-z0-9]/.test(value)
+
+async function sha256(value: string) {
+  const data = new TextEncoder().encode(value)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash)).map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 function boundedUuidArray(value: unknown, limit: number): string[] | null {
   if (!Array.isArray(value)) return null
@@ -168,7 +180,7 @@ Deno.serve(async (req: Request) => {
     if (![
       'access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions',
       'scope_directory', 'account_list', 'staff_account_list', 'create_backend',
-      ...RECOVERY_ACCOUNT_ACTIONS, ...RECOVERY_STAFF_ACCOUNT_ACTIONS,
+      ...RECOVERY_ACCOUNT_ACTIONS, ...RECOVERY_ACTIVATION_ACTIONS, ...RECOVERY_STAFF_ACCOUNT_ACTIONS,
     ].includes(action)) {
       return json(req, {
         ok: false,
@@ -422,6 +434,122 @@ Deno.serve(async (req: Request) => {
         })
       })()
       return assignableRolesPromise
+    }
+
+    if (action === 'generate_activation_code') {
+      if (!can('user.activation.generate')) {
+        return json(req, {
+          ok:false,
+          error:'无生成激活码权限',
+          code:'permission_denied',
+          retryable:false,
+          preserve_session:true,
+        }, 403)
+      }
+
+      const allowedFields = new Set(['action', 'employee_no', 'valid_hours'])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, {
+          ok:false,
+          error:'激活码请求包含不受支持的字段',
+          code:'invalid_input_field',
+          retryable:false,
+          preserve_session:true,
+        }, 400)
+      }
+
+      const employeeNo = clean(body?.employee_no)
+      const normalizedEmployeeNo = normalizeEmployeeNo(employeeNo)
+      if (!employeeNo || employeeNo.length > 80 || !normalizedEmployeeNo) {
+        return json(req, { ok:false, error:'员工ID不正确', code:'invalid_employee_no' }, 400)
+      }
+      const requestedHours = Number(body?.valid_hours)
+      const validHours = Number.isFinite(requestedHours)
+        ? Math.max(1, Math.min(Math.floor(requestedHours), 168))
+        : 72
+      const activationCode = `${crypto.randomUUID().replaceAll('-', '').slice(0, 6)}-${crypto.randomUUID().replaceAll('-', '').slice(0, 6)}`.toUpperCase()
+      const expiresAt = new Date(Date.now() + validHours * 3_600_000).toISOString()
+
+      try {
+        await recheckRecoveryMutationGate()
+      } catch (gateError) {
+        if (/session_not_current/i.test(clean((gateError as any)?.message || (gateError as any)?.code))) {
+          return json(req, {
+            ok:false,
+            error:'当前浏览器会话已失效或账号已在其他设备登录',
+            code:'session_not_current',
+            retryable:false,
+            preserve_session:false,
+          }, 401)
+        }
+        return retryable(req, '生成激活码前置验证暂时繁忙，请稍后重试')
+      }
+
+      const { data:generated, error:generateError } = await bounded(
+        admin.rpc('admin_recovery_generate_activation_code_v2', {
+          p_actor_user_id:userData.user.id,
+          p_actor_session_id:jwtSessionId(authorization),
+          p_employee_no:normalizedEmployeeNo,
+          p_code_hash:await sha256(activationCode),
+          p_code_hint:activationCode.slice(-4),
+          p_expires_at:expiresAt,
+        }),
+        'RECOVERY_ACTIVATION_CODE_GENERATE',
+      )
+      if (generateError || !generated) {
+        const message = clean(generateError?.message)
+        const code = clean(generateError?.code).toUpperCase()
+        if (/session_not_current/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'当前浏览器会话已失效或账号已在其他设备登录',
+            code:'session_not_current',
+            retryable:false,
+            preserve_session:false,
+          }, 401)
+        }
+        if (code === '42501' || /permission_denied|employee_scope_denied|backend_access_denied/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'该员工不在你可生成激活码的授权范围内',
+            code:'permission_or_scope_denied',
+            retryable:false,
+            preserve_session:true,
+          }, 403)
+        }
+        if (code === 'P0002' || /employee_not_found_or_inactive/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'找不到可管理的在职员工，或该员工已经离职',
+            code:'employee_not_found_or_inactive',
+            retryable:false,
+            preserve_session:true,
+          }, 404)
+        }
+        if (code === '23505' || /staff_account_already_exists/i.test(message)) {
+          return json(req, {
+            ok:false,
+            error:'该员工已经开通过前端账号，不能重复生成激活码',
+            code:'staff_account_already_exists',
+            retryable:false,
+            preserve_session:true,
+          }, 409)
+        }
+        if (code === '22023' || /invalid_activation_code_request/i.test(message)) {
+          return json(req, { ok:false, error:'激活码参数不正确', code:'invalid_activation_code_request' }, 400)
+        }
+        return retryable(req, '激活码生成暂时繁忙，请稍后重试')
+      }
+
+      return json(req, {
+        ok:true,
+        degraded:true,
+        recovery_activation_mode:true,
+        employee_no:clean(generated.employee_no),
+        employee_name:clean(generated.employee_name),
+        activation_code:activationCode,
+        expires_at:clean(generated.expires_at || expiresAt),
+      })
     }
 
     if (action === 'online_presence') {
