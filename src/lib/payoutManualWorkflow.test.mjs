@@ -12,6 +12,8 @@ const privacyMigrationUrl = new URL('../../supabase/migrations/20260828010000_pa
 const privacySql = await readFile(privacyMigrationUrl, 'utf8')
 const workflowComponentUrl = new URL('../components/PaymentChangeWorkflow.jsx', import.meta.url)
 const workflowComponent = await readFile(workflowComponentUrl, 'utf8')
+const workflowCssUrl = new URL('../payment-change-workflow.css', import.meta.url)
+const workflowCss = await readFile(workflowCssUrl, 'utf8')
 
 const functionBody = name => {
   const start = sql.indexOf(`create or replace function ${name}`)
@@ -147,6 +149,11 @@ test('admin payout UI provides compact field-specific filters and grouped record
   assert.match(workflowComponent, /createSignedUrl\(proof\.path, 120\)/)
   assert.match(workflowComponent, /payment-change-proof-thumbnail/)
   assert.match(workflowComponent, /payment-change-proof-lightbox/)
+})
+
+test('admin payout history preserves native table cells for aligned columns', () => {
+  assert.doesNotMatch(workflowCss, /\.admin-payment-change-stack\s*\{[^}]*display\s*:\s*(?:grid|flex)/i)
+  assert.match(workflowCss, /\.admin-payment-change-stack>b,[^}]*\.admin-payment-change-stack>span\{display:block\}/i)
 })
 
 test('admin payout delete is permission gated and requires a reason plus canonical confirmation', () => {
