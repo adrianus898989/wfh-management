@@ -39,10 +39,16 @@ const EMPLOYEE_MASTER_SCHEDULE_HEADERS = Object.freeze([
 ]);
 
 const EMPLOYEE_MASTER_ON_EDIT_HANDLER = 'employeeMasterOnEdit';
+const EMPLOYEE_MASTER_ON_CHANGE_HANDLER = 'employeeMasterOnChange';
 const EMPLOYEE_MASTER_FLUSH_HANDLER = 'flushPendingEmployeeMasterSync';
 const EMPLOYEE_MASTER_RECONCILE_HANDLER = 'reconcileEmployeeMaster';
+const EMPLOYEE_MASTER_ROW_STRUCTURE_CHANGE_TYPES = Object.freeze([
+  'INSERT_ROW',
+  'REMOVE_ROW',
+]);
 const EMPLOYEE_MASTER_MANAGED_HANDLERS = Object.freeze([
   EMPLOYEE_MASTER_ON_EDIT_HANDLER,
+  EMPLOYEE_MASTER_ON_CHANGE_HANDLER,
   EMPLOYEE_MASTER_FLUSH_HANDLER,
   EMPLOYEE_MASTER_RECONCILE_HANDLER,
   // This project replaces the old schedule-only writer.
@@ -81,6 +87,28 @@ function employeeMasterOnEdit(event) {
   // Home M:P (pay/performance) is validated in the raw A:P snapshot but is
   // outside employee-master ownership, so those edits must not make HTTP calls.
   if (event.range.getColumn() > source.syncColumnCount) return;
+  markEmployeeMasterDirty_();
+}
+
+/**
+ * 两张来源表的可安装 onChange。整行插入/删除不会触发 onEdit，因此这里只
+ * 捕获这两类结构变化并写 dirty token。ChangeEvent 不提供可靠的 range，故按
+ * 固定 spreadsheet ID 绑定；其他标签页的行结构变化最多触发一次 hash 读取，
+ * 内容未变时不会请求 Supabase。
+ */
+function employeeMasterOnChange(event) {
+  if (!event || !event.source) return;
+  const sourceId = String(event.source.getId() || '');
+  if (
+    sourceId !== EMPLOYEE_MASTER_HOME_SOURCE.spreadsheetId &&
+    sourceId !== EMPLOYEE_MASTER_SCHEDULE_SOURCE.spreadsheetId
+  ) return;
+  const changeType = String(event.changeType || '').trim().toUpperCase();
+  if (EMPLOYEE_MASTER_ROW_STRUCTURE_CHANGE_TYPES.indexOf(changeType) === -1) return;
+  markEmployeeMasterDirty_();
+}
+
+function markEmployeeMasterDirty_() {
   PropertiesService.getScriptProperties().setProperty(
     EMPLOYEE_MASTER_DIRTY_PROPERTY,
     JSON.stringify({ token: Utilities.getUuid(), dirty_at: Date.now() })
@@ -137,6 +165,14 @@ function installEmployeeMasterSync() {
     .forSpreadsheet(EMPLOYEE_MASTER_SCHEDULE_SOURCE.spreadsheetId)
     .onEdit()
     .create();
+  ScriptApp.newTrigger(EMPLOYEE_MASTER_ON_CHANGE_HANDLER)
+    .forSpreadsheet(EMPLOYEE_MASTER_HOME_SOURCE.spreadsheetId)
+    .onChange()
+    .create();
+  ScriptApp.newTrigger(EMPLOYEE_MASTER_ON_CHANGE_HANDLER)
+    .forSpreadsheet(EMPLOYEE_MASTER_SCHEDULE_SOURCE.spreadsheetId)
+    .onChange()
+    .create();
   ScriptApp.newTrigger(EMPLOYEE_MASTER_FLUSH_HANDLER)
     .timeBased()
     .everyMinutes(1)
@@ -172,6 +208,64 @@ function installMissingEmployeeMasterFlushTrigger() {
     .timeBased()
     .everyMinutes(1)
     .create();
+}
+
+/**
+ * 生产环境只缺行结构监听时使用。先完整核验所有同名触发器，再为缺少的固定
+ * 来源表补一个 onChange；不会删除或重建 onEdit、flusher 或 reconcile。
+ * 任一同名触发器重复、事件类型错误或绑定到其他来源时 fail closed。
+ */
+function installMissingEmployeeMasterChangeTriggers() {
+  const config = employeeMasterSyncConfig_();
+  if (!config.url || !config.token) {
+    throw new Error('请先设置员工主档同步 URL 与 token。');
+  }
+  const expectedSourceIds = [
+    EMPLOYEE_MASTER_HOME_SOURCE.spreadsheetId,
+    EMPLOYEE_MASTER_SCHEDULE_SOURCE.spreadsheetId,
+  ];
+  const countsBySourceId = {};
+  expectedSourceIds.forEach(function (sourceId) {
+    countsBySourceId[sourceId] = 0;
+  });
+  const existing = ScriptApp.getProjectTriggers().filter(function (trigger) {
+    return trigger.getHandlerFunction() === EMPLOYEE_MASTER_ON_CHANGE_HANDLER;
+  });
+
+  // Complete validation happens before create(), so a bad existing set cannot
+  // be made harder to repair by a partially added trigger.
+  existing.forEach(function (trigger) {
+    if (
+      trigger.getEventType() !== ScriptApp.EventType.ON_CHANGE ||
+      trigger.getTriggerSource() !== ScriptApp.TriggerSource.SPREADSHEETS
+    ) {
+      throw new Error(
+        '检测到事件类型或来源错误的 employeeMasterOnChange；未创建任何触发器。'
+      );
+    }
+    const sourceId = String(trigger.getTriggerSourceId() || '');
+    if (expectedSourceIds.indexOf(sourceId) === -1) {
+      throw new Error(
+        '检测到绑定错误来源的 employeeMasterOnChange；未创建任何触发器。'
+      );
+    }
+    countsBySourceId[sourceId] += 1;
+  });
+  expectedSourceIds.forEach(function (sourceId) {
+    if (countsBySourceId[sourceId] > 1) {
+      throw new Error(
+        '检测到重复的 employeeMasterOnChange；未创建任何触发器。'
+      );
+    }
+  });
+
+  expectedSourceIds.forEach(function (sourceId) {
+    if (countsBySourceId[sourceId] === 1) return;
+    ScriptApp.newTrigger(EMPLOYEE_MASTER_ON_CHANGE_HANDLER)
+      .forSpreadsheet(sourceId)
+      .onChange()
+      .create();
+  });
 }
 
 function removeEmployeeMasterSyncTriggers() {

@@ -21,20 +21,29 @@
    - 优先级固定为员工主档、排班、考勤；任一被选中的来源 URL 必须与正式地址完全一致，最终请求地址始终固定为正式 `employee-master-sync`，不会由任意 URL 拼接。原始 token 仍不写入代码或日志。
 4. 运行 `installEmployeeMasterSync` 并授权。
 
-安装过程会先完成一次全量只读校验，再建立两张表的 onEdit、一个每分钟 dirty
-刷新器和一个十分钟兜底对账触发器，然后尝试首次入库。onEdit 本身只写 dirty
-token，不读取整表；刷新器在最后一次编辑至少 45 秒后合并读取两份原子快照。
+安装过程会先完成一次全量只读校验，再为两张表各建立一个 onEdit 和一个
+onChange，并建立一个每分钟 dirty 刷新器和一个十分钟兜底对账触发器，然后
+尝试首次入库。onEdit 负责单元格编辑，onChange 只负责整行插入/删除；两者都只
+写 dirty token，不读取整表。刷新器在最后一次变更至少 45 秒后合并读取两份
+原子快照。
 若当前存在重复 ID，同一错误 hash 会被阻断，不会重复请求；六小时后周期任务会
 有限重试，修正表格后也会自动继续。
 401/403/429 和服务端错误不会永久阻断同一 hash。内容没变时不会调用 Supabase；
 每六小时最多强制一次完整对账。
 
-若生产触发器清单里两个 `employeeMasterOnEdit` 与
+若生产触发器清单里两个 `employeeMasterOnEdit`、两个
+`employeeMasterOnChange` 与
 `reconcileEmployeeMaster` 都正常、唯独缺少
 `flushPendingEmployeeMasterSync`，不要运行完整安装器。只运行一次
 `installMissingEmployeeMasterFlushTrigger`：它只补一个每分钟 flusher，重复运行不
 会新增副本，也不会删除或重建现有触发器。代码复制到 Apps Script 但未运行此
 函数时，Google 不会自动创建触发器。
+
+若现有自动同步只缺整行插入/删除监听，运行一次
+`installMissingEmployeeMasterChangeTriggers`。它只审计并补齐两张固定来源表各一个
+`employeeMasterOnChange`，不会删除或重建 onEdit、flusher、reconcile。正确的现有
+触发器会原样保留；若发现同名触发器重复、事件类型错误或绑定到其他 Spreadsheet，
+函数会在创建任何新触发器前报错，需先人工核对。
 
 ## 安全规则
 

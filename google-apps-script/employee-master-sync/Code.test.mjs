@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('./Code.gs', import.meta.url), 'utf8');
 const scriptProperties = {};
+let uuidSequence = 0;
 const context = vm.createContext({
   console,
   PropertiesService: {
@@ -15,7 +16,19 @@ const context = vm.createContext({
             ? scriptProperties[key]
             : null;
         },
+        setProperty(key, value) {
+          scriptProperties[key] = String(value);
+        },
+        deleteProperty(key) {
+          delete scriptProperties[key];
+        },
       };
+    },
+  },
+  Utilities: {
+    getUuid() {
+      uuidSequence += 1;
+      return `test-uuid-${uuidSequence}`;
     },
   },
 });
@@ -29,6 +42,90 @@ const setScriptProperties = (values) => {
   Object.keys(scriptProperties).forEach((key) => delete scriptProperties[key]);
   Object.assign(scriptProperties, values);
 };
+
+const existingTrigger = ({
+  handler = 'employeeMasterOnChange',
+  eventType = 'ON_CHANGE',
+  triggerSource = 'SPREADSHEETS',
+  sourceId = '',
+} = {}) => ({
+  getHandlerFunction: () => handler,
+  getEventType: () => eventType,
+  getTriggerSource: () => triggerSource,
+  getTriggerSourceId: () => sourceId,
+});
+
+const createScriptAppHarness = (seedTriggers = []) => {
+  const projectTriggers = [...seedTriggers];
+  const created = [];
+  const deleted = [];
+  const scriptApp = {
+    EventType: {
+      ON_CHANGE: 'ON_CHANGE',
+      ON_EDIT: 'ON_EDIT',
+    },
+    TriggerSource: {
+      CLOCK: 'CLOCK',
+      SPREADSHEETS: 'SPREADSHEETS',
+    },
+    getProjectTriggers() {
+      return [...projectTriggers];
+    },
+    deleteTrigger(trigger) {
+      deleted.push(trigger);
+      const index = projectTriggers.indexOf(trigger);
+      if (index !== -1) projectTriggers.splice(index, 1);
+    },
+    newTrigger(handler) {
+      const record = { handler };
+      const builder = {
+        forSpreadsheet(spreadsheetId) {
+          record.spreadsheetId = spreadsheetId;
+          record.triggerSource = 'SPREADSHEETS';
+          return builder;
+        },
+        onEdit() {
+          record.event = 'onEdit';
+          record.eventType = 'ON_EDIT';
+          return builder;
+        },
+        onChange() {
+          record.event = 'onChange';
+          record.eventType = 'ON_CHANGE';
+          return builder;
+        },
+        timeBased() {
+          record.event = 'timeBased';
+          record.triggerSource = 'CLOCK';
+          return builder;
+        },
+        everyMinutes(minutes) {
+          record.minutes = minutes;
+          return builder;
+        },
+        create() {
+          created.push({ ...record });
+          const trigger = existingTrigger({
+            handler: record.handler,
+            eventType: record.eventType,
+            triggerSource: record.triggerSource,
+            sourceId: record.spreadsheetId,
+          });
+          projectTriggers.push(trigger);
+          return trigger;
+        },
+      };
+      return builder;
+    },
+  };
+  return { scriptApp, created, deleted, projectTriggers };
+};
+
+const setValidEmployeeMasterConfig = () => setScriptProperties({
+  EMPLOYEE_MASTER_SYNC_URL:
+    'https://ibvntgtydsavdiyqekrq.supabase.co/functions/v1/employee-master-sync',
+  EMPLOYEE_MASTER_SYNC_TOKEN: 'employee-master-token-placeholder',
+});
 
 test('explicit employee-master config has priority over schedule and attendance', () => {
   setScriptProperties({
@@ -189,6 +286,42 @@ test('dirty state supports timestamped tokens and legacy markers', () => {
   });
 });
 
+test('onChange marks only source-bound row insertions and removals dirty', () => {
+  setScriptProperties({});
+  vm.runInContext(`employeeMasterOnChange({
+    source: { getId: function () { return 'untrusted-spreadsheet'; } },
+    changeType: 'INSERT_ROW'
+  })`, context);
+  assert.equal(scriptProperties.EMPLOYEE_MASTER_DIRTY_dual_source_v1, undefined);
+
+  vm.runInContext(`employeeMasterOnChange({
+    source: { getId: function () { return EMPLOYEE_MASTER_HOME_SOURCE.spreadsheetId; } },
+    changeType: 'INSERT_ROW'
+  })`, context);
+  const afterHomeInsert = JSON.parse(scriptProperties.EMPLOYEE_MASTER_DIRTY_dual_source_v1);
+  assert.match(afterHomeInsert.token, /^test-uuid-/);
+  assert.ok(Number.isFinite(afterHomeInsert.dirty_at));
+
+  for (const changeType of ['EDIT', 'FORMAT', 'INSERT_COLUMN', 'REMOVE_COLUMN', 'OTHER']) {
+    vm.runInContext(`employeeMasterOnChange({
+      source: { getId: function () { return EMPLOYEE_MASTER_HOME_SOURCE.spreadsheetId; } },
+      changeType: ${JSON.stringify(changeType)}
+    })`, context);
+    assert.equal(
+      scriptProperties.EMPLOYEE_MASTER_DIRTY_dual_source_v1,
+      JSON.stringify(afterHomeInsert),
+    );
+  }
+
+  vm.runInContext(`employeeMasterOnChange({
+    source: { getId: function () { return EMPLOYEE_MASTER_SCHEDULE_SOURCE.spreadsheetId; } },
+    changeType: 'REMOVE_ROW'
+  })`, context);
+  const afterScheduleRemove = JSON.parse(scriptProperties.EMPLOYEE_MASTER_DIRTY_dual_source_v1);
+  assert.notEqual(afterScheduleRemove.token, afterHomeInsert.token);
+  assert.ok(afterScheduleRemove.dirty_at >= afterHomeInsert.dirty_at);
+});
+
 test('installer creates the missing minute flusher and exposes a non-destructive repair helper', () => {
   assert.match(source, /const EMPLOYEE_MASTER_FLUSH_HANDLER = 'flushPendingEmployeeMasterSync'/);
   assert.match(source, /function flushPendingEmployeeMasterSync\(\)/);
@@ -203,6 +336,92 @@ test('installer creates the missing minute flusher and exposes a non-destructive
   assert.match(repairBody, /existing\.length === 1/);
   assert.doesNotMatch(repairBody, /removeEmployeeMasterSyncTriggers/);
   assert.doesNotMatch(repairBody, /deleteTrigger/);
+});
+
+test('change-trigger repair creates only the two missing source-bound triggers', () => {
+  const harness = createScriptAppHarness();
+  context.ScriptApp = harness.scriptApp;
+  setValidEmployeeMasterConfig();
+
+  vm.runInContext('installMissingEmployeeMasterChangeTriggers()', context);
+  assert.deepEqual(harness.created, [
+    {
+      handler: 'employeeMasterOnChange',
+      spreadsheetId: '1Diz8hArjv_rx-3cUvGl-etcFsiCYfQqrNfCcTgTJrz8',
+      triggerSource: 'SPREADSHEETS',
+      event: 'onChange',
+      eventType: 'ON_CHANGE',
+    },
+    {
+      handler: 'employeeMasterOnChange',
+      spreadsheetId: '1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA',
+      triggerSource: 'SPREADSHEETS',
+      event: 'onChange',
+      eventType: 'ON_CHANGE',
+    },
+  ]);
+  assert.equal(harness.deleted.length, 0);
+
+  vm.runInContext('installMissingEmployeeMasterChangeTriggers()', context);
+  assert.equal(harness.created.length, 2, 'a second repair must not duplicate correct triggers');
+  assert.equal(harness.deleted.length, 0);
+});
+
+test('change-trigger repair preserves a correct trigger and creates only its missing peer', () => {
+  const homeSourceId = '1Diz8hArjv_rx-3cUvGl-etcFsiCYfQqrNfCcTgTJrz8';
+  const harness = createScriptAppHarness([
+    existingTrigger({ sourceId: homeSourceId }),
+    existingTrigger({ handler: 'unrelatedHandler', sourceId: 'unrelated-spreadsheet' }),
+  ]);
+  context.ScriptApp = harness.scriptApp;
+  setValidEmployeeMasterConfig();
+
+  vm.runInContext('installMissingEmployeeMasterChangeTriggers()', context);
+  assert.deepEqual(harness.created, [{
+    handler: 'employeeMasterOnChange',
+    spreadsheetId: '1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA',
+    triggerSource: 'SPREADSHEETS',
+    event: 'onChange',
+    eventType: 'ON_CHANGE',
+  }]);
+  assert.equal(harness.deleted.length, 0);
+});
+
+test('change-trigger repair fails closed on duplicates or wrong bindings', () => {
+  const homeSourceId = '1Diz8hArjv_rx-3cUvGl-etcFsiCYfQqrNfCcTgTJrz8';
+  const invalidSets = [
+    {
+      triggers: [
+        existingTrigger({ sourceId: homeSourceId }),
+        existingTrigger({ sourceId: homeSourceId }),
+      ],
+      error: /重复/,
+    },
+    {
+      triggers: [existingTrigger({ sourceId: 'wrong-spreadsheet' })],
+      error: /绑定错误来源/,
+    },
+    {
+      triggers: [existingTrigger({ sourceId: homeSourceId, eventType: 'ON_EDIT' })],
+      error: /事件类型或来源错误/,
+    },
+    {
+      triggers: [existingTrigger({ sourceId: homeSourceId, triggerSource: 'CLOCK' })],
+      error: /事件类型或来源错误/,
+    },
+  ];
+
+  invalidSets.forEach(({ triggers, error }) => {
+    const harness = createScriptAppHarness(triggers);
+    context.ScriptApp = harness.scriptApp;
+    setValidEmployeeMasterConfig();
+    assert.throws(
+      () => vm.runInContext('installMissingEmployeeMasterChangeTriggers()', context),
+      error,
+    );
+    assert.equal(harness.created.length, 0);
+    assert.equal(harness.deleted.length, 0);
+  });
 });
 
 test('a registered deterministic block does not cause minute-by-minute full-table reads', () => {
@@ -222,4 +441,36 @@ test('home onEdit ownership stops at column L while raw validation remains A:P',
     synced: EMPLOYEE_MASTER_HOME_SOURCE.syncColumnCount
   })`);
   assert.deepEqual(columns, { raw: 16, synced: 12 });
+});
+
+test('installer creates exactly two source-bound onChange triggers', () => {
+  const harness = createScriptAppHarness();
+  context.ScriptApp = harness.scriptApp;
+  setValidEmployeeMasterConfig();
+  vm.runInContext(`
+    readEmployeeMasterSnapshot_ = function () { return {}; };
+    syncEmployeeMasterInternal_ = function () { return true; };
+    installEmployeeMasterSync();
+  `, context);
+
+  const onChangeTriggers = harness.created.filter((trigger) => trigger.event === 'onChange');
+  assert.deepEqual(onChangeTriggers, [
+    {
+      handler: 'employeeMasterOnChange',
+      spreadsheetId: '1Diz8hArjv_rx-3cUvGl-etcFsiCYfQqrNfCcTgTJrz8',
+      triggerSource: 'SPREADSHEETS',
+      event: 'onChange',
+      eventType: 'ON_CHANGE',
+    },
+    {
+      handler: 'employeeMasterOnChange',
+      spreadsheetId: '1e38ZBHG0B0nxODaooPhgreG67A2RLxLxrpP8Sas_vZA',
+      triggerSource: 'SPREADSHEETS',
+      event: 'onChange',
+      eventType: 'ON_CHANGE',
+    },
+  ]);
+  assert.equal(harness.created.filter((trigger) => trigger.event === 'onEdit').length, 2);
+  assert.equal(harness.created.filter((trigger) => trigger.event === 'timeBased').length, 2);
+  assert.ok(evaluateJson('EMPLOYEE_MASTER_MANAGED_HANDLERS').includes('employeeMasterOnChange'));
 });
