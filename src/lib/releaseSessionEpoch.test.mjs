@@ -22,6 +22,7 @@ const staffLogin = await read('src/pages/StaffLoginPage.jsx')
 const workflow = await read('.github/workflows/deploy-pages.yml')
 const packageJson = await read('package.json')
 const manifestWriter = await read('scripts/write-release-manifest.mjs')
+const githubRedirectBuilder = await read('scripts/build-github-redirect.mjs')
 
 const functionBody = signature => {
   const start = migration.indexOf(signature)
@@ -82,15 +83,16 @@ test('deployment advance is idempotent, service-role-only and immediately remove
   assert.match(migration, /grant execute on function public\.app_release_advance\(text\)[\s\S]{0,50}to service_role/)
 })
 
-test('Pages always publishes a unique browser release and optionally applies the database hardening hook', () => {
-  const deploy = workflow.indexOf('uses: actions/deploy-pages@v4')
-  const advance = workflow.indexOf('rpc/app_release_advance')
-  assert.ok(deploy >= 0 && advance > deploy)
-  assert.match(workflow, /VITE_APP_RELEASE_ID: \$\{\{ github\.sha \}\}:\$\{\{ github\.run_id \}\}:\$\{\{ github\.run_attempt \}\}/)
-  assert.match(workflow, /SUPABASE_SERVICE_ROLE_KEY: \$\{\{ secrets\.SUPABASE_SERVICE_ROLE_KEY \}\}/)
-  assert.match(workflow, /if \[ -z "\$SUPABASE_SERVICE_ROLE_KEY" \]; then[\s\S]+exit 0[\s\S]+rpc\/app_release_advance/)
-  assert.match(workflow, /APP_RELEASE_ID: \$\{\{ github\.sha \}\}:\$\{\{ github\.run_id \}\}:\$\{\{ github\.run_attempt \}\}/)
-  assert.doesNotMatch(workflow.slice(0, workflow.indexOf('jobs:')), /SUPABASE_SERVICE_ROLE_KEY/)
+test('legacy GitHub Pages publishes only a Cloudflare redirect and cannot rotate live app sessions', () => {
+  assert.match(workflow, /uses: actions\/deploy-pages@v4/)
+  assert.match(workflow, /npm run build:github-redirect/)
+  assert.doesNotMatch(workflow, /npm run build(?:\s|$)/)
+  assert.doesNotMatch(workflow, /VITE_SUPABASE|SUPABASE_SERVICE_ROLE_KEY|app_release_advance|APP_RELEASE_ID/)
+  assert.match(packageJson, /"build:github-redirect": "node scripts\/build-github-redirect\.mjs"/)
+  assert.match(githubRedirectBuilder, /await rm\(outputDirectory, \{ recursive: true, force: true \}\)/)
+  assert.match(githubRedirectBuilder, /wfh-workspaceexpert\.pages\.dev/)
+  assert.match(githubRedirectBuilder, /wfh-teamportal\.pages\.dev/)
+  assert.doesNotMatch(githubRedirectBuilder, /release\.json|VITE_SUPABASE|src\/main/)
   assert.match(packageJson, /vite build && node scripts\/write-release-manifest\.mjs/)
   assert.match(manifestWriter, /resolve\(outputDirectory, 'release\.json'\)/)
   assert.match(manifestWriter, /JSON\.stringify\(\{ releaseId \}\)/)

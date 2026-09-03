@@ -1,3 +1,18 @@
 <!doctype html><html><head><meta charset="UTF-8"><script>
-(function(){var base='%BASE_URL%';var p=location.pathname+location.search+location.hash;sessionStorage.setItem('spa_redirect',p);location.replace(base+'?__spa_reload='+Date.now())})()
+(function(){
+  var base='%BASE_URL%';
+  if(location.hostname==='adrianus898989.github.io'){
+    var basePrefix=base.replace(/\/$/,'');
+    var legacyPath=location.pathname;
+    if(basePrefix&&(legacyPath===basePrefix||legacyPath.indexOf(basePrefix+'/')===0))legacyPath=legacyPath.slice(basePrefix.length)||'/';
+    var isAdmin=/^\/(?:workspace|admin)(?:\/|$)/.test(legacyPath);
+    var target=isAdmin?'https://wfh-workspaceexpert.pages.dev':'https://wfh-teamportal.pages.dev';
+    legacyPath=legacyPath.replace(/^\/admin(?=\/|$)/,'/workspace').replace(/^\/staff(?=\/|$)/,'/portal');
+    location.replace(target+legacyPath+location.search+location.hash);
+    return;
+  }
+  var p=location.pathname+location.search+location.hash;
+  sessionStorage.setItem('spa_redirect',p);
+  location.replace(base+'?__spa_reload='+Date.now())
+})()
 </script></head><body></body></html>

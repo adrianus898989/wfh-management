@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import { readFile, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { build } from 'vite'
 
 const gitCommit = () => {
@@ -28,3 +30,17 @@ process.env.VITE_APP_RELEASE_ID = String(
 
 await build()
 await import('./write-release-manifest.mjs')
+
+// Dashboard Direct Upload does not compile a /functions directory, but it does
+// deploy a top-level _worker.js. Keep the edge gate source reviewed in-tree and
+// stamp the immutable portal boundary into each build so a request can never
+// select admin/staff scope through URL or body input.
+const workerTemplate = await readFile(
+  resolve(process.cwd(), 'cloudflare/edge-gate-worker.js'),
+  'utf8',
+)
+await writeFile(
+  resolve(process.cwd(), 'dist/_worker.js'),
+  workerTemplate.replaceAll('__WFH_PORTAL_MODE__', portalMode),
+  'utf8',
+)

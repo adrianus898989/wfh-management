@@ -1,6 +1,16 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>居家员工管理系统</title><script>
 (function(){
   var appBase='%BASE_URL%';
+  if(location.hostname==='adrianus898989.github.io'){
+    var basePrefix=appBase.replace(/\/$/,'');
+    var legacyPath=location.pathname;
+    if(basePrefix&&(legacyPath===basePrefix||legacyPath.indexOf(basePrefix+'/')===0))legacyPath=legacyPath.slice(basePrefix.length)||'/';
+    var isAdmin=/^\/(?:workspace|admin)(?:\/|$)/.test(legacyPath);
+    var target=isAdmin?'https://wfh-workspaceexpert.pages.dev':'https://wfh-teamportal.pages.dev';
+    legacyPath=legacyPath.replace(/^\/admin(?=\/|$)/,'/workspace').replace(/^\/staff(?=\/|$)/,'/portal');
+    location.replace(target+legacyPath+location.search+location.hash);
+    return;
+  }
   var redirect=sessionStorage.getItem('spa_redirect');
   if(redirect){sessionStorage.removeItem('spa_redirect');history.replaceState(null,'',redirect)}
   var recoveryKey='wfh_asset_recovery_at';

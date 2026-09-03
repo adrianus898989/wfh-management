@@ -58,21 +58,39 @@ test('host configs keep GitHub fallback but let Cloudflare use native SPA routin
   )
 })
 
-test('GitHub and Cloudflare builds preserve release traceability and real static assets', async () => {
-  const [workflow, packageJson, cloudflareBuild, headers] = await Promise.all([
+test('legacy GitHub entry URLs forward to the matching protected Cloudflare host', async () => {
+  const [index, fallback] = await Promise.all([
+    read('index.html'),
+    read('404.html'),
+  ])
+
+  for (const source of [index, fallback]) {
+    assert.match(source, /location\.hostname==='adrianus898989\.github\.io'/)
+    assert.match(source, /https:\/\/wfh-workspaceexpert\.pages\.dev/)
+    assert.match(source, /https:\/\/wfh-teamportal\.pages\.dev/)
+    assert.match(source, /location\.replace\(target\+legacyPath\+location\.search\+location\.hash\)/)
+    assert.match(source, /replace\(\/\^\\\/admin/)
+    assert.match(source, /replace\(\/\^\\\/staff/)
+  }
+})
+
+test('GitHub is redirect-only while Cloudflare builds preserve release traceability and real static assets', async () => {
+  const [workflow, packageJson, cloudflareBuild, githubRedirectBuild, headers] = await Promise.all([
     read('.github/workflows/deploy-pages.yml'),
     read('package.json'),
     read('scripts/build-cloudflare.mjs'),
+    read('scripts/build-github-redirect.mjs'),
     read('public/_headers'),
   ])
 
-  // GitHub retains the current deployment-generation rule; Cloudflare uses
-  // the same immutable commit SHA supplied by its Git integration.
-  assert.match(workflow, /VITE_APP_DEPLOY_TARGET: github-pages/)
-  assert.match(workflow, /VITE_APP_BASE_PATH: \/wfh-management\//)
-  assert.match(workflow, /VITE_APP_RELEASE_ID: \$\{\{ github\.sha \}\}:\$\{\{ github\.run_id \}\}:\$\{\{ github\.run_attempt \}\}/)
-  assert.match(workflow, /APP_RELEASE_ID: \$\{\{ github\.sha \}\}:\$\{\{ github\.run_id \}\}:\$\{\{ github\.run_attempt \}\}/)
-  assert.doesNotMatch(workflow, /cp 404\.html dist\/404\.html/)
+  // GitHub keeps only a legacy redirect shell. The actual application and
+  // its immutable assets live behind the two Cloudflare IP gates.
+  assert.match(workflow, /npm run build:github-redirect/)
+  assert.doesNotMatch(workflow, /VITE_APP_DEPLOY_TARGET|VITE_SUPABASE|app_release_advance/)
+  assert.match(githubRedirectBuild, /await rm\(outputDirectory/)
+  assert.match(githubRedirectBuild, /writeFile\(resolve\(outputDirectory, 'index\.html'\)/)
+  assert.match(githubRedirectBuild, /writeFile\(resolve\(outputDirectory, '404\.html'\)/)
+  assert.doesNotMatch(githubRedirectBuild, /release\.json|assets/)
   assert.match(packageJson, /"build:cloudflare": "node scripts\/build-cloudflare\.mjs"/)
   assert.match(cloudflareBuild, /process\.env\.CF_PAGES_COMMIT_SHA/)
   assert.match(cloudflareBuild, /process\.env\.VITE_APP_DEPLOY_TARGET = 'cloudflare-pages'/)
