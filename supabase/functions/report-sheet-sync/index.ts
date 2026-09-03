@@ -15,17 +15,15 @@ import { normalizeEmployeeErrors } from "./errorNormalization.ts";
 // Vault; only its SHA-256 digest is committed here.
 const CRON_TOKEN_HASH = '988aa6dfb0151861cb16ed2e197ee137cff51cd2625e6c85c24cf04696f08a56'
 
-// The private roster/account sheets are pushed by their source-bound Apps
-// Script. This scheduled function must never fetch a public proxy or write
-// those snapshots, otherwise an older cached response can replace fresh data.
-const ERROR_SOURCES = [
+// Only the public efficiency error sheet is fetched here. The private finance
+// QA sheet is pushed by its source-bound Apps Script and remains in the
+// persisted error rows read by loadAllSyncedErrors below. Never fetch that
+// private sheet through OpenSheet: it both fails once sharing is restricted
+// and can replace a newer authenticated push with an older public response.
+const PUBLIC_ERROR_SOURCES = [
   {
     name: '效率表/员工错误',
     url: 'https://opensheet.elk.sh/1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM/员工错误',
-  },
-  {
-    name: '财务质检错误记录/财务质检错误记录',
-    url: 'https://opensheet.elk.sh/125rN-PXjjWMe4SnYjruGlQ_NdZUb5hI7dXUUBjqe7bY/财务质检错误记录',
   },
 ] as const
 const EFF_ID = '1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM'
@@ -908,13 +906,13 @@ Deno.serve(async (request) => {
     const renewLease = () => renewReportSyncLease(service, lease!)
 
     const rawErrorResults = await Promise.allSettled(
-      ERROR_SOURCES.map((source) => fetchJson(source.url)),
+      PUBLIC_ERROR_SOURCES.map((source) => fetchJson(source.url)),
     )
 
     // Treat a successful-but-empty response as unavailable. A private sheet,
     // upstream proxy issue, or malformed publication can otherwise look like
     // an intentional clear and erase the last known-good Supabase mirror.
-    const errorSources = ERROR_SOURCES.flatMap((source, index) => {
+    const errorSources = PUBLIC_ERROR_SOURCES.flatMap((source, index) => {
       const result = rawErrorResults[index]
       if (result.status !== 'fulfilled' || result.value.length === 0) return []
       const rows = normalizeErrors(result.value, source.name)
@@ -926,7 +924,7 @@ Deno.serve(async (request) => {
       }]
     })
     const availableErrorSourceNames = new Set(errorSources.map((source) => source.name))
-    const errorSourceFailures = ERROR_SOURCES.flatMap((source, index) => {
+    const errorSourceFailures = PUBLIC_ERROR_SOURCES.flatMap((source, index) => {
       const result = rawErrorResults[index]
       if (availableErrorSourceNames.has(source.name)) return []
       return [{

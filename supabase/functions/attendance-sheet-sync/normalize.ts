@@ -57,7 +57,9 @@ const LEGACY_SOURCES: readonly LegacySourceConfig[] = [
     sheetGid: "2111783822",
     tabName: "休假填表",
     sourceGroup: "home",
-    maxRows: 3000,
+    // Must match the source-bound Apps Script guard. The live Home August
+    // sheet now contains the full 3,600+ employee roster.
+    maxRows: 5000,
     allowedDateFrom: "2026-08-01",
     allowedDateToExclusive: "2026-10-01",
   },

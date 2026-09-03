@@ -19,6 +19,7 @@ import {
 import '../styles-reconciliation.css'
 
 const REQUEST_TIMEOUT_MS = 8000
+const RECONCILIATION_REFRESH_MS = 5 * 60 * 1000
 const FRESHNESS_STALE_AFTER_MS = 36 * 60 * 60 * 1000
 const PAGE_SIZE_OPTIONS = [20, 30, 50]
 const text = value => String(value ?? '').trim()
@@ -174,7 +175,9 @@ export default function AdminReconciliationPage() {
   const requestRefs = useRef(Object.fromEntries(PERSONNEL_RECONCILIATION_VIEWS.map(({ key }) => [key, 0])))
   const controllerRefs = useRef({})
   const metadataRequestRef = useRef(0)
-  const successfulViewsRef = useRef(new Set())
+  const loadRef = useRef(null)
+  const refreshContextRef = useRef({ view:'headcount', page:1, size:30, search:'' })
+  const lastCompletedAtRef = useRef({})
 
   const load = async ({
     view = activeView,
@@ -208,11 +211,11 @@ export default function AdminReconciliationPage() {
       if (!result.rows.length && result.total > 0 && result.page < page) {
         return load({ view, page:result.page, size, search })
       }
-      successfulViewsRef.current.add(view)
       setViews(current => ({
         ...current,
         [view]:{ ...result, loading:false, error:'' },
       }))
+      lastCompletedAtRef.current[view] = Date.now()
       if (metadataRequestId === metadataRequestRef.current) {
         setSummary(result.summary)
         setFreshness(result.freshness)
@@ -236,6 +239,14 @@ export default function AdminReconciliationPage() {
     }
   }
 
+  loadRef.current = load
+  refreshContextRef.current = {
+    view:activeView,
+    page:views[activeView]?.page || 1,
+    size:pageSize,
+    search:appliedSearch,
+  }
+
   useEffect(() => {
     void load({ view:'headcount', page:1, size:pageSize, search:'' })
     return () => {
@@ -251,6 +262,23 @@ export default function AdminReconciliationPage() {
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 60 * 1000)
     return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const refreshVisibleView = () => {
+      if (document.visibilityState !== 'visible') return
+      const context = refreshContextRef.current
+      if (controllerRefs.current[context.view]) return
+      const lastCompletedAt = lastCompletedAtRef.current[context.view] || 0
+      if (Date.now() - lastCompletedAt < RECONCILIATION_REFRESH_MS) return
+      void loadRef.current?.(context)
+    }
+    const refreshTimer = window.setInterval(refreshVisibleView, RECONCILIATION_REFRESH_MS)
+    document.addEventListener('visibilitychange', refreshVisibleView)
+    return () => {
+      window.clearInterval(refreshTimer)
+      document.removeEventListener('visibilitychange', refreshVisibleView)
+    }
   }, [])
 
   const current = views[activeView]
@@ -299,9 +327,12 @@ export default function AdminReconciliationPage() {
       }))
     }
     setActiveView(view)
-    if (!successfulViewsRef.current.has(view)) {
-      void load({ view, page:1, size:pageSize, search:appliedSearch })
-    }
+    void load({
+      view,
+      page:1,
+      size:pageSize,
+      search:appliedSearch,
+    })
   }
   const query = () => {
     const search = personnelReconciliationSearch(draftSearch)
@@ -330,7 +361,7 @@ export default function AdminReconciliationPage() {
 
     <section className={`recon-freshness ${freshnessIsStale ? 'is-stale' : ''}`} aria-live="polite">
       <div><i aria-hidden="true"/><strong>{freshnessIsStale ? '对账数据可能已过期' : '最近一次对账'}</strong><span>{formatTime(lastRefresh)}{ageLabel ? ` · ${ageLabel}` : ''}</span></div>
-      <div><span>Google《居家员工名单》 {formatCount(freshness?.home_rows)} 行</span><span>员工同步排班 {formatCount(freshness?.schedule_rows)} 行</span><span>汇总表快照 {formatCount(freshness?.report_rows)} 行 · {formatTime(reportRefresh)}{reportAgeLabel ? ` · ${reportAgeLabel}` : ''}</span>{freshness?.run_id&&<span>批次 {freshness.run_id}</span>}</div>
+      <div><span>Google《居家员工名单》 {formatCount(freshness?.home_rows)} 行</span><span>员工同步排班 {formatCount(freshness?.schedule_rows)} 行</span><span>汇总表快照 {formatCount(freshness?.report_rows)} 行 · {formatTime(reportRefresh)}{reportAgeLabel ? ` · ${reportAgeLabel}` : ''}</span>{freshness?.run_id&&<span>批次 {freshness.run_id}</span>}<span>页面每 5 分钟自动读取</span></div>
     </section>
 
     <section className="recon-summary-grid" aria-label="人数统计口径">

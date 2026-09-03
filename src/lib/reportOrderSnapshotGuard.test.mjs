@@ -39,3 +39,10 @@ test('report Edge validates each source before the first destructive chunk RPC',
   assert.match(edge, /select\('source_sheet,chunk_index,content_hash,row_count'\)/)
   assert.match(edge, /baselineRows\.set\(sourceSheet, previousRows \+ Math\.max/)
 })
+
+test('private finance errors are consumed from the authenticated push, never a public proxy', () => {
+  assert.match(edge, /const PUBLIC_ERROR_SOURCES = \[/)
+  assert.match(edge, /name: '效率表\/员工错误'/)
+  assert.doesNotMatch(edge, /opensheet\.elk\.sh\/125rN-PXjjWMe4SnYjruGlQ_NdZUb5hI7dXUUBjqe7bY/)
+  assert.match(edge, /const errors = await loadAllSyncedErrors\(service\)/)
+})

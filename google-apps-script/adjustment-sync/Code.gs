@@ -923,6 +923,35 @@ function retryAdjustmentInbound_() {
     });
 }
 
+/**
+ * Operator recovery for queue entries whose source-slot identity was repaired
+ * and independently verified against the live Google sheets. This deliberately
+ * ignores transient errors and entries that have not exhausted all retries.
+ */
+function clearTerminalAdjustmentInboundRetries() {
+  const properties = PropertiesService.getScriptProperties();
+  const queued = properties.getProperties();
+  let removed = 0;
+  Object.keys(queued).forEach(function (key) {
+    if (key.indexOf(ADJUSTMENT_QUEUE_PREFIX) !== 0) return;
+    let stored;
+    try {
+      stored = JSON.parse(queued[key]);
+    } catch (_error) {
+      return;
+    }
+    if (Number(stored && stored.attempt || 0) < 8 ||
+        String(stored && stored.last_error || '')
+          .indexOf('google_source_slot_identity_conflict') < 0) return;
+    properties.deleteProperty(key);
+    removed += 1;
+  });
+  console.log(JSON.stringify({
+    status: 'terminal_adjustment_retries_cleared', removed: removed,
+  }));
+  return removed;
+}
+
 function scheduleAdjustmentInboundRetry_(properties, propertyKey, payload, previousState, error) {
   const previousAttempt = Number(previousState && previousState.attempt || 0);
   const attempt = Math.min(Math.max(previousAttempt, 0) + 1, 8);

@@ -17,7 +17,9 @@ const ATTENDANCE_SYNC_LEGACY_SOURCES = Object.freeze([
     spreadsheetId: '10H-0oYe-D6v3xRu9vGxatizi4P11J8WYk20s3_XPus8',
     sheetGid: 2111783822,
     tabName: '休假填表',
-    maxRows: 3000,
+    // The live Home August sheet now follows the full 3,600+ employee roster.
+    // Keep a bounded guard, but leave enough headroom for normal roster growth.
+    maxRows: 5000,
     maxColumns: 14,
   }),
   Object.freeze({

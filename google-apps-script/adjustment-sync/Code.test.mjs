@@ -458,3 +458,37 @@ test('backs off a durable inbound retry instead of calling Supabase every minute
   assert.ok(stored.retry_at >= context.testBefore + 3_500_000);
   assert.equal(stored.payload.request_id, 'r1');
 });
+
+test('operator cleanup removes only exhausted source-slot identity conflicts', () => {
+  const values = {
+    'ADJUSTMENT_INBOUND_terminal': JSON.stringify({
+      attempt: 8,
+      last_error: 'sync_http_400:google_source_slot_identity_conflict',
+    }),
+    'ADJUSTMENT_INBOUND_transient': JSON.stringify({
+      attempt: 8,
+      last_error: 'sync_http_503:temporary_unavailable',
+    }),
+    'ADJUSTMENT_INBOUND_retrying': JSON.stringify({
+      attempt: 7,
+      last_error: 'sync_http_400:google_source_slot_identity_conflict',
+    }),
+    ATTENDANCE_SYNC_TOKEN: 'untouched',
+  };
+  context.PropertiesService = {
+    getScriptProperties() {
+      return {
+        getProperties() { return { ...values }; },
+        deleteProperty(key) { delete values[key]; },
+      };
+    },
+  };
+
+  const removed = vm.runInContext('clearTerminalAdjustmentInboundRetries()', context);
+  assert.equal(removed, 1);
+  assert.deepEqual(Object.keys(values).sort(), [
+    'ADJUSTMENT_INBOUND_retrying',
+    'ADJUSTMENT_INBOUND_transient',
+    'ATTENDANCE_SYNC_TOKEN',
+  ]);
+});

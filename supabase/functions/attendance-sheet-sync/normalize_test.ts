@@ -22,6 +22,11 @@ const headers = [
   ["姓名", "原因", "日期", "备注", "", "姓名", "原因", "日期", "备注", "", "姓名", "金额", "日期", "备注"],
 ];
 
+Deno.test("legacy Home August allowlist matches the 5,000-row bounded reader", () => {
+  const home = ALLOWED_SOURCES.find((item) => item.sourceKey === "home_2026_08");
+  assert(home?.maxRows === 5000, "Home August capacity drifted from Apps Script");
+});
+
 Deno.test("normalizes signed adjustments, blank amounts, and resignation mirrors", async () => {
   const values = [
     ...headers,

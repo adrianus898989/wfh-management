@@ -8,6 +8,16 @@ const context = vm.createContext({ console });
 vm.runInContext(source, context, { filename: 'Code.gs' });
 const json = expression => JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, context));
 
+test('legacy Home August capacity covers the current full roster with a bounded guard', () => {
+  const legacy = json(`ATTENDANCE_SYNC_LEGACY_SOURCES.map(function (item) {
+    return [item.sourceKey, item.maxRows];
+  })`);
+  assert.deepEqual(legacy, [
+    ['home_2026_08', 5000],
+    ['onsite_2026_08', 1000],
+  ]);
+});
+
 test('annual sources use the exact live Sep-Dec leave and adjustment blocks', () => {
   const workbooks = json(`ATTENDANCE_SYNC_ANNUAL_WORKBOOKS.map(function (item) {
     return {
