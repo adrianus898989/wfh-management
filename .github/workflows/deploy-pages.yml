@@ -17,6 +17,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      LEGACY_REDIRECT_RELEASE_ID: ${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:redirect-only
 
     steps:
       - uses: actions/checkout@v4

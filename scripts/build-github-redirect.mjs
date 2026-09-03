@@ -2,6 +2,10 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const outputDirectory = resolve(process.cwd(), 'dist')
+const releaseId = String(process.env.LEGACY_REDIRECT_RELEASE_ID || '').trim()
+if (!releaseId || releaseId.length > 200) {
+  throw new Error('LEGACY_REDIRECT_RELEASE_ID must contain 1-200 characters')
+}
 
 // GitHub Pages is now only a legacy address. Never publish the application,
 // source maps, release manifest, or API configuration there: every usable
@@ -47,5 +51,12 @@ await mkdir(outputDirectory, { recursive: true })
 await Promise.all([
   writeFile(resolve(outputDirectory, 'index.html'), redirectDocument, 'utf8'),
   writeFile(resolve(outputDirectory, '404.html'), redirectDocument, 'utf8'),
+  // Existing GitHub-hosted tabs poll this file. A new redirect-only release
+  // signs them out locally before their next navigation reaches Cloudflare;
+  // it deliberately does not rotate the shared database release epoch.
+  writeFile(
+    resolve(outputDirectory, 'release.json'),
+    `${JSON.stringify({ releaseId })}\n`,
+    'utf8',
+  ),
 ])
-
