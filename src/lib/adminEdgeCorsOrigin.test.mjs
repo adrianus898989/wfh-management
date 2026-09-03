@@ -9,17 +9,18 @@ import {
 } from '../../supabase/functions/_shared/corsOrigin.ts'
 
 const LEGACY_ORIGIN = 'https://adrianus898989.github.io'
-const CLOUDFLARE_ORIGIN = 'https://wfh-workspace.pages.dev'
+const ADMIN_CLOUDFLARE_ORIGIN = 'https://wfh-workspaceexpert.pages.dev'
+const STAFF_CLOUDFLARE_ORIGIN = 'https://wfh-teamportal.pages.dev'
 const source = relativePath => readFile(new URL(relativePath, import.meta.url), 'utf8')
 
 test('legacy GitHub Pages and configured exact HTTPS origins are allowed', () => {
   const origins = allowedAppOrigins(
-    ` ${CLOUDFLARE_ORIGIN}, https://portal.example.com/ ,${CLOUDFLARE_ORIGIN}`,
+    ` ${ADMIN_CLOUDFLARE_ORIGIN}, ${STAFF_CLOUDFLARE_ORIGIN}/ ,${ADMIN_CLOUDFLARE_ORIGIN}`,
   )
   assert.deepEqual([...origins], [
     LEGACY_ORIGIN,
-    CLOUDFLARE_ORIGIN,
-    'https://portal.example.com',
+    ADMIN_CLOUDFLARE_ORIGIN,
+    STAFF_CLOUDFLARE_ORIGIN,
   ])
 })
 
@@ -45,13 +46,14 @@ test('wildcards, paths, credentials, non-HTTPS and local origins are rejected', 
 test('an allowed browser origin receives only its own exact ACAO value', () => {
   const request = new Request('https://edge.example.test', {
     method: 'POST',
-    headers: { Origin: CLOUDFLARE_ORIGIN },
+    headers: { Origin: ADMIN_CLOUDFLARE_ORIGIN },
   })
-  assert.equal(isRequestOriginAllowed(request, CLOUDFLARE_ORIGIN), true)
-  assert.equal(corsGate(request, {}, CLOUDFLARE_ORIGIN), null)
+  const configuredOrigins = `${ADMIN_CLOUDFLARE_ORIGIN},${STAFF_CLOUDFLARE_ORIGIN}`
+  assert.equal(isRequestOriginAllowed(request, configuredOrigins), true)
+  assert.equal(corsGate(request, {}, configuredOrigins), null)
 
-  const headers = corsHeaders(request, {}, CLOUDFLARE_ORIGIN)
-  assert.equal(headers['Access-Control-Allow-Origin'], CLOUDFLARE_ORIGIN)
+  const headers = corsHeaders(request, {}, configuredOrigins)
+  assert.equal(headers['Access-Control-Allow-Origin'], ADMIN_CLOUDFLARE_ORIGIN)
   assert.equal(headers.Vary, 'Origin')
 })
 
@@ -60,7 +62,7 @@ test('an unknown browser origin fails closed before request handling', async () 
     method: 'POST',
     headers: { Origin: 'https://untrusted.pages.dev' },
   })
-  const response = corsGate(request, {}, CLOUDFLARE_ORIGIN)
+  const response = corsGate(request, {}, `${ADMIN_CLOUDFLARE_ORIGIN},${STAFF_CLOUDFLARE_ORIGIN}`)
   assert.equal(response?.status, 403)
   assert.equal(response?.headers.get('vary'), 'Origin')
   assert.equal(response?.headers.has('access-control-allow-origin'), false)
@@ -70,22 +72,23 @@ test('an unknown browser origin fails closed before request handling', async () 
 test('allowed OPTIONS is answered without entering function business logic', () => {
   const request = new Request('https://edge.example.test', {
     method: 'OPTIONS',
-    headers: { Origin: CLOUDFLARE_ORIGIN },
+    headers: { Origin: STAFF_CLOUDFLARE_ORIGIN },
   })
-  const response = corsGate(request, { maxAgeSeconds: 600 }, CLOUDFLARE_ORIGIN)
+  const configuredOrigins = `${ADMIN_CLOUDFLARE_ORIGIN},${STAFF_CLOUDFLARE_ORIGIN}`
+  const response = corsGate(request, { maxAgeSeconds: 600 }, configuredOrigins)
   assert.equal(response?.status, 204)
-  assert.equal(response?.headers.get('access-control-allow-origin'), CLOUDFLARE_ORIGIN)
+  assert.equal(response?.headers.get('access-control-allow-origin'), STAFF_CLOUDFLARE_ORIGIN)
   assert.equal(response?.headers.get('access-control-max-age'), '600')
 })
 
 test('origin-less server calls keep their existing auth and method semantics', () => {
   const post = new Request('https://edge.example.test', { method: 'POST' })
-  assert.equal(isRequestOriginAllowed(post, CLOUDFLARE_ORIGIN), true)
-  assert.equal(corsGate(post, {}, CLOUDFLARE_ORIGIN), null)
-  assert.equal('Access-Control-Allow-Origin' in corsHeaders(post, {}, CLOUDFLARE_ORIGIN), false)
+  assert.equal(isRequestOriginAllowed(post, ADMIN_CLOUDFLARE_ORIGIN), true)
+  assert.equal(corsGate(post, {}, ADMIN_CLOUDFLARE_ORIGIN), null)
+  assert.equal('Access-Control-Allow-Origin' in corsHeaders(post, {}, ADMIN_CLOUDFLARE_ORIGIN), false)
 
   const options = new Request('https://edge.example.test', { method: 'OPTIONS' })
-  const response = corsGate(options, {}, CLOUDFLARE_ORIGIN)
+  const response = corsGate(options, {}, ADMIN_CLOUDFLARE_ORIGIN)
   assert.equal(response?.status, 204)
   assert.equal(response?.headers.has('access-control-allow-origin'), false)
 })

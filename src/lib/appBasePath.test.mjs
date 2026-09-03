@@ -2,15 +2,23 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   APP_BASE_URL,
+  APP_PORTAL_MODE,
   APP_ROUTER_BASENAME,
+  appPortalModeAllowed,
   appPathFromBrowserPath,
   appPathnameForBase,
+  defaultAppPortalMode,
+  effectiveAppPortalMode,
+  effectivePortalModeFromAppPath,
+  effectivePortalModeFromBrowserPath,
   internalPortalPath,
   normalizeAppBaseUrl,
+  normalizeAppPortalMode,
   portalAuthStorageKey,
   portalModeFromAppPath,
   portalModeFromBrowserPath,
   publicPortalTarget,
+  shouldLoadAdminEnhancers,
 } from './appBasePath.js'
 
 test('app base normalization is stable for root and GitHub Pages paths', () => {
@@ -18,6 +26,49 @@ test('app base normalization is stable for root and GitHub Pages paths', () => {
   assert.equal(normalizeAppBaseUrl('/wfh-management/'), '/wfh-management/')
   assert.equal(normalizeAppBaseUrl('wfh-management'), '/wfh-management/')
   assert.equal(normalizeAppBaseUrl('//wfh-management///'), '/wfh-management/')
+})
+
+test('split-host portal mode is strict and defaults to the combined fallback build', () => {
+  assert.equal(normalizeAppPortalMode('admin'), 'admin')
+  assert.equal(normalizeAppPortalMode(' STAFF '), 'staff')
+  assert.equal(normalizeAppPortalMode('unexpected'), 'both')
+  assert.equal(APP_PORTAL_MODE, 'both')
+  assert.equal(defaultAppPortalMode(), 'staff')
+  assert.equal(appPortalModeAllowed('admin'), true)
+  assert.equal(appPortalModeAllowed('staff'), true)
+  assert.equal(appPortalModeAllowed('unexpected'), false)
+})
+
+test('split-host builds force cross-portal and unknown paths into their own namespace', () => {
+  for (const path of ['/portal/login', '/staff/exams', '/', '/unknown']) {
+    assert.equal(effectivePortalModeFromAppPath(path, 'admin'), 'admin', path)
+  }
+  for (const path of ['/workspace/login', '/admin/users', '/', '/unknown']) {
+    assert.equal(effectivePortalModeFromAppPath(path, 'staff'), 'staff', path)
+  }
+
+  assert.equal(effectiveAppPortalMode('staff', 'admin'), 'admin')
+  assert.equal(effectiveAppPortalMode('admin', 'staff'), 'staff')
+  assert.equal(effectiveAppPortalMode('admin', 'both'), 'admin')
+  assert.equal(effectiveAppPortalMode('staff', 'both'), 'staff')
+  assert.equal(
+    portalAuthStorageKey(effectivePortalModeFromBrowserPath('/portal/login', '/', 'admin')),
+    'wfh-admin-auth-token',
+  )
+  assert.equal(
+    portalAuthStorageKey(effectivePortalModeFromBrowserPath('/workspace/login', '/', 'staff')),
+    'wfh-staff-auth-token',
+  )
+  assert.equal(
+    effectivePortalModeFromBrowserPath('/wfh-management/admin', '/wfh-management/', 'staff'),
+    'staff',
+  )
+  assert.equal(shouldLoadAdminEnhancers('/workspace/login', '/', 'staff'), false)
+  assert.equal(shouldLoadAdminEnhancers('/admin/users', '/', 'staff'), false)
+  assert.equal(shouldLoadAdminEnhancers('/portal/login', '/', 'admin'), true)
+  assert.equal(shouldLoadAdminEnhancers('/', '/', 'admin'), true)
+  assert.equal(shouldLoadAdminEnhancers('/workspace/login', '/', 'both'), true)
+  assert.equal(shouldLoadAdminEnhancers('/portal/login', '/', 'both'), false)
 })
 
 test('friendly and legacy portal prefixes map to strict internal modes at exact boundaries', () => {

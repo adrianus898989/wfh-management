@@ -31,7 +31,10 @@ import {
   runCoalescedAppSessionWake,
 } from './lib/appSessionHeartbeatPressure'
 import {
+  appPortalModeAllowed,
   appPathname,
+  defaultAppPortalMode,
+  effectivePortalModeFromAppPath,
   portalModeFromAppPath,
   publicPortalTarget,
 } from './lib/appBasePath'
@@ -129,7 +132,7 @@ const AUTH_CHECK_DEBOUNCE_MS = 2000
 
 function ReleaseSessionBoundary({ children }) {
   const location = useLocation()
-  const portal = portalModeFromAppPath(location.pathname) || 'staff'
+  const portal = effectivePortalModeFromAppPath(location.pathname)
   const [ready, setReady] = useState(false)
   const terminating = useRef(false)
 
@@ -598,10 +601,15 @@ function LegacyPortalRedirect() {
 function AppRoutes() {
   const location = useLocation()
   const { t } = useStaffLocale()
+  const requestedPortal = portalModeFromAppPath(location.pathname)
+  const defaultPortal = defaultAppPortalMode()
+  if (requestedPortal && !appPortalModeAllowed(requestedPortal)) {
+    return <Navigate to={publicPortalTarget(defaultPortal, 'login')} replace />
+  }
   if (publicPortalTarget(location.pathname) !== location.pathname) return <LegacyPortalRedirect />
-  if (!configured) return <div className="center-screen">{portalModeFromAppPath(location.pathname)==='staff'?t('auth.unavailable','暂时无法连接'):'暂时无法连接'}</div>
+  if (!configured) return <div className="center-screen">{(requestedPortal || defaultPortal)==='staff'?t('auth.unavailable','暂时无法连接'):'暂时无法连接'}</div>
   return <Routes>
-    <Route path="/" element={<Navigate to={publicPortalTarget('staff','login')} replace />} />
+    <Route path="/" element={<Navigate to={publicPortalTarget(defaultPortal,'login')} replace />} />
     <Route path="/admin/*" element={<LegacyPortalRedirect />} />
     <Route path="/staff/*" element={<LegacyPortalRedirect />} />
     <Route path="/workspace/login" element={<AdminLoginPage />} />
@@ -635,7 +643,7 @@ function AppRoutes() {
       <Route path="requests" element={<ComingSoon title={t('nav.requests','我的申请')} />} />
       <Route path="*" element={<Navigate to={publicPortalTarget('staff')} replace />} />
     </Route>
-    <Route path="*" element={<Navigate to={publicPortalTarget('staff','login')} replace />} />
+    <Route path="*" element={<Navigate to={publicPortalTarget(defaultPortal,'login')} replace />} />
   </Routes>
 }
 

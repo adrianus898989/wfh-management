@@ -8,6 +8,9 @@ const read = path => readFile(new URL(path, root), 'utf8')
 test('router exposes only friendly portal pages and one-hop legacy replacements', async () => {
   const app = await read('src/App.jsx')
 
+  assert.match(app, /requestedPortal && !appPortalModeAllowed\(requestedPortal\)/)
+  assert.match(app, /publicPortalTarget\(defaultPortal, 'login'\)/)
+  assert.match(app, /const portal = effectivePortalModeFromAppPath\(location\.pathname\)/)
   assert.match(app, /<Route path="\/workspace\/login"/)
   assert.match(app, /<Route path="\/portal\/login"/)
   assert.match(app, /<Route path="\/portal\/register"/)
@@ -38,7 +41,7 @@ test('unknown child routes never cross the fixed Supabase portal storage boundar
 test('startup session namespace is selected centrally before Supabase client creation', async () => {
   const supabase = await read('src/lib/supabase.js')
 
-  assert.match(supabase, /portalModeFromBrowserPath\(browserPath,import\.meta\.env\.BASE_URL\|\|'\/'\)\|\|'staff'/)
+  assert.match(supabase, /effectivePortalModeFromBrowserPath\(browserPath,import\.meta\.env\.BASE_URL\|\|'\/'\)/)
   assert.match(supabase, /const AUTH_STORAGE_KEY=portalAuthStorageKey\(portal\)/)
   assert.match(supabase, /storageKey:AUTH_STORAGE_KEY/)
   assert.match(supabase, /body:\{action,portal:normalizedPortal\}/)
@@ -72,7 +75,7 @@ test('path-sensitive admin compatibility layers normalize friendly paths with th
     read('src/lib/adminI18n.jsx'),
   ])
 
-  assert.match(sources[0], /portalModeFromBrowserPath\(window\.location\.pathname\) === 'admin'/)
+  assert.match(sources[0], /shouldLoadAdminEnhancers\(window\.location\.pathname\)/)
   for (const source of sources.slice(1, 4)) assert.match(source, /appPathFromBrowserPath/)
   assert.match(sources[4], /portalModeFromBrowserPath\(window\.location\.pathname\) === 'admin'/)
 })

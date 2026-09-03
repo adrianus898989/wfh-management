@@ -9,7 +9,9 @@
 - Cloudflare Pages output directory：`dist`
 - Cloudflare Pages 使用根路径 `/`，构建不会输出顶层 `404.html`，由 Pages 原生提供 SPA 深层链接回退
 - Cloudflare Pages 生产分支：`main`；构建环境需配置 `VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY` 和 `NODE_VERSION=24`
-- 创建 Cloudflare Pages 项目后，必须把精确 origin（例如 `https://wfh-workspace.pages.dev`，不含路径或通配符）加入 Supabase Edge Functions secret `APP_ALLOWED_ORIGINS`
+- 管理端站点设置 `VITE_APP_PORTAL_MODE=admin`；员工端站点设置 `VITE_APP_PORTAL_MODE=staff`。访问另一端路径会被送回当前站点自己的登录页。
+- 当前免费 Cloudflare Pages 管理端：`https://wfh-workspaceexpert.pages.dev`；员工端：`https://wfh-teamportal.pages.dev`
+- 必须把两个精确 origin（不含路径或通配符）加入 Supabase Edge Functions secret `APP_ALLOWED_ORIGINS`
 - 后台账号不能自行注册
 - 普通员工仍使用激活码注册并绑定 Employee ID
 - 下一步：后台创建账号 / 重置密码 / 停用 / 删除 / 权限勾选

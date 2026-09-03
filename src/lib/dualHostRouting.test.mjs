@@ -77,6 +77,9 @@ test('GitHub and Cloudflare builds preserve release traceability and real static
   assert.match(cloudflareBuild, /process\.env\.CF_PAGES_COMMIT_SHA/)
   assert.match(cloudflareBuild, /process\.env\.VITE_APP_DEPLOY_TARGET = 'cloudflare-pages'/)
   assert.match(cloudflareBuild, /process\.env\.VITE_APP_BASE_PATH = '\/'/)
+  assert.match(cloudflareBuild, /\['admin', 'staff'\]\.includes\(portalMode\)/)
+  assert.match(cloudflareBuild, /Cloudflare builds require VITE_APP_PORTAL_MODE=admin or staff/)
+  assert.doesNotMatch(cloudflareBuild, /VITE_APP_PORTAL_MODE \|\| 'both'/)
   for (const route of ['/', '/workspace', '/workspace/*', '/portal', '/portal/*', '/admin', '/admin/*', '/staff', '/staff/*']) {
     assert.match(headers, new RegExp(`(?:^|\\n)${route.replaceAll('*', '\\*')}\\n\\s+Cache-Control: no-cache, no-store, must-revalidate`))
   }

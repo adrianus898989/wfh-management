@@ -9,6 +9,38 @@ const injectedBaseUrl = typeof import.meta.env?.BASE_URL === 'string'
   ? import.meta.env.BASE_URL
   : '/'
 
+const injectedPortalMode = typeof import.meta.env?.VITE_APP_PORTAL_MODE === 'string'
+  ? import.meta.env.VITE_APP_PORTAL_MODE
+  : 'both'
+
+export const normalizeAppPortalMode = value => {
+  const mode = String(value || '').trim().toLowerCase()
+  return mode === 'admin' || mode === 'staff' ? mode : 'both'
+}
+
+export const APP_PORTAL_MODE = normalizeAppPortalMode(injectedPortalMode)
+export const defaultAppPortalMode = (buildMode = APP_PORTAL_MODE) => (
+  normalizeAppPortalMode(buildMode) === 'admin' ? 'admin' : 'staff'
+)
+export const appPortalModeAllowed = (mode, buildMode = APP_PORTAL_MODE) => {
+  const requestedMode = mode === 'admin' || mode === 'staff' ? mode : null
+  const normalizedBuildMode = normalizeAppPortalMode(buildMode)
+  return Boolean(requestedMode) && (
+    normalizedBuildMode === 'both' || normalizedBuildMode === requestedMode
+  )
+}
+
+/**
+ * Resolve the only portal namespace this browser runtime may use. A split-host
+ * build must never let a pasted URL from the other portal select its auth
+ * storage before React redirects back to the local login page.
+ */
+export const effectiveAppPortalMode = (requestedMode, buildMode = APP_PORTAL_MODE) => (
+  requestedMode && appPortalModeAllowed(requestedMode, buildMode)
+    ? requestedMode
+    : defaultAppPortalMode(buildMode)
+)
+
 export const APP_BASE_URL = normalizeAppBaseUrl(injectedBaseUrl)
 export const APP_ROUTER_BASENAME = APP_BASE_URL === '/'
   ? '/'
@@ -61,6 +93,21 @@ export const appPathFromBrowserPath = (pathname, baseUrl = APP_BASE_URL) => {
 
 export const portalModeFromBrowserPath = (pathname, baseUrl = APP_BASE_URL) =>
   portalModeFromAppPath(appPathFromBrowserPath(pathname, baseUrl))
+
+export const effectivePortalModeFromAppPath = (value, buildMode = APP_PORTAL_MODE) =>
+  effectiveAppPortalMode(portalModeFromAppPath(value), buildMode)
+
+export const effectivePortalModeFromBrowserPath = (
+  pathname,
+  baseUrl = APP_BASE_URL,
+  buildMode = APP_PORTAL_MODE,
+) => effectiveAppPortalMode(portalModeFromBrowserPath(pathname, baseUrl), buildMode)
+
+export const shouldLoadAdminEnhancers = (
+  pathname,
+  baseUrl = APP_BASE_URL,
+  buildMode = APP_PORTAL_MODE,
+) => effectivePortalModeFromBrowserPath(pathname, baseUrl, buildMode) === 'admin'
 
 const replacePortalPrefix = (value, prefixes) => {
   const path = String(value || '')

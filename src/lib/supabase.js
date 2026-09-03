@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { classifySessionFailure } from './sessionFailure.js'
 import { readFunctionResponsePayload } from './functionErrors.js'
 import { runCoalescedAppHeartbeat } from './appSessionHeartbeatPressure.js'
-import { portalAuthStorageKey, portalModeFromBrowserPath } from './appBasePath.js'
+import { effectivePortalModeFromBrowserPath, portalAuthStorageKey } from './appBasePath.js'
 const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
@@ -16,9 +16,9 @@ export const SESSION_SETUP_TIMEOUT_MS=25*1000
 export const SESSION_LOCAL_SIGNOUT_TIMEOUT_MS=4*1000
 const browserPath=typeof window==='undefined'?'':window.location.pathname
 // Public route names must never leak into Edge/body security semantics. The
-// classifier accepts both friendly and one-hop legacy aliases, then collapses
-// them to the strict internal admin|staff mode before the client is created.
-const portal=portalModeFromBrowserPath(browserPath,import.meta.env.BASE_URL||'/')||'staff'
+// classifier accepts both friendly and one-hop legacy aliases, then clamps a
+// pasted cross-host URL to this build's portal before the client is created.
+const portal=effectivePortalModeFromBrowserPath(browserPath,import.meta.env.BASE_URL||'/')
 const AUTH_STORAGE_KEY=portalAuthStorageKey(portal)
 const SESSION_ACTIVITY_KEY=`wfh_${portal}_session_last_activity`
 const SESSION_NOTICE_KEY=`wfh_${portal}_session_notice`
