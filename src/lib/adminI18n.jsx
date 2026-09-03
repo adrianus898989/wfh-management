@@ -37,6 +37,7 @@ const english = {
   '人员分析表': 'People analytics',
   '离职记录表': 'Resignation records',
   '档案变更记录': 'Record change log',
+  '人员对账表': 'Personnel reconciliation',
   '在职离职操作日志': 'Employment status operation log',
   '奖金扣款录入日志': 'Bonus / deduction entry log',
   '出勤录入日志': 'Attendance entry log',

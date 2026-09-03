@@ -80,6 +80,7 @@ const StaffPayrollPage = lazyRoute(() => import('./pages/StaffPayrollPage'))
 const AdminPlanningPage = lazyAdminRoute(() => import('./pages/AdminPlanningPage'))
 const AdminManualPage = lazyAdminRoute(() => import('./pages/AdminManualPage'))
 const AdminActivityLogPage = lazyAdminRoute(() => import('./pages/AdminActivityLogPage'))
+const AdminReconciliationPage = lazyAdminRoute(() => import('./pages/AdminReconciliationPage'))
 const AdminHome = lazyAdminRoute(() => import('./pages/PortalPage'), 'AdminHome')
 const StaffHome = lazyRoute(() => import('./pages/PortalPage'), 'StaffHome')
 const ComingSoon = lazyRoute(() => import('./pages/PortalPage'), 'ComingSoon')
@@ -88,6 +89,7 @@ const ADMIN_ROUTE_PAGES = [
   AdminHome, AdminEmployeesPage, AdminAttendancePage, AdminReportsPage,
   AdminDailyWorkPage, AdminTrainingPage, AdminPayrollPage, AdminUsersPage,
   AdminIpAllowlistPage, AdminPlanningPage, AdminActivityLogPage, AdminManualPage,
+  AdminReconciliationPage,
 ]
 
 function AdminRouteChunkWarmup() {
@@ -604,6 +606,7 @@ function AppRoutes() {
       <Route path="work-execution" element={<AdminPlanningPage section="work-execution" />} />
       <Route path="account-usage" element={<AdminPlanningPage section="account-usage" />} />
       <Route path="activity-log" element={<AdminActivityLogPage />} />
+      <Route path="reconciliation" element={<AdminReconciliationPage />} />
       <Route path="manual" element={<AdminManualPage />} />
     </Route>
     <Route path="/staff" element={<PortalShell mode="staff" />}>

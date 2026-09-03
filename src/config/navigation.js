@@ -85,6 +85,7 @@ const item = (label, to, access = {}) => ({ label, to, ...access })
 const ACCESS = {
   dashboard: adminPageAccess('home'),
   employee: adminPageAccess('employee_directory'),
+  reconciliation: adminPageAccess('personnel_reconciliation'),
   employeeAnalytics: adminPageAccess('people_analysis'),
   resignations: adminPageAccess('resignations'),
   audit: adminPageAccess('change_history'),
@@ -133,6 +134,7 @@ export const adminNavigation = [
   {
     id:'workforce', label:'员工排班管理统计', icon:'员', children:[
       item('员工档案查询表', '/admin/employees', ACCESS.employee),
+      item('人员对账表', '/admin/reconciliation', ACCESS.reconciliation),
       item('人员分析表', tab('/admin/employees', '人员分析'), ACCESS.employeeAnalytics),
       item('离职记录表', tab('/admin/employees', '离职记录'), ACCESS.resignations),
       item('档案变更记录', tab('/admin/employees', '操作日志'), ACCESS.audit),
@@ -203,6 +205,7 @@ export const adminRouteAccess = [
   route(tab('/admin/employees', '离职记录'), ACCESS.resignations, 'workforce'),
   route(tab('/admin/employees', '入离职记录'), ACCESS.resignations, 'workforce'),
   route(tab('/admin/employees', '操作日志'), ACCESS.audit, 'workforce'),
+  route('/admin/reconciliation', ACCESS.reconciliation, 'workforce'),
 
   route('/admin/reports', ACCESS.report, 'workforce'),
   route(tab('/admin/reports', '总汇'), ACCESS.report, 'workforce'),

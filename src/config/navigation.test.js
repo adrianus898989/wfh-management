@@ -10,6 +10,7 @@ const group = id => adminNavigation.find(entry => entry.id === id)
 const appSource=readFileSync(new URL('../App.jsx',import.meta.url),'utf8')
 const manualSource=readFileSync(new URL('../pages/AdminManualPage.jsx',import.meta.url),'utf8')
 const activityLogSource=readFileSync(new URL('../pages/AdminActivityLogPage.jsx',import.meta.url),'utf8')
+const reconciliationSource=readFileSync(new URL('../pages/AdminReconciliationPage.jsx',import.meta.url),'utf8')
 const manualStyles=readFileSync(new URL('../styles-admin-manual.css',import.meta.url),'utf8')
 const topbarSource=readFileSync(new URL('../components/AdminTopbar.jsx',import.meta.url),'utf8')
 const pageDescriptionSource=readFileSync(new URL('./pageDescriptions.js',import.meta.url),'utf8')
@@ -27,8 +28,8 @@ test('admin sidebar uses the requested top-level order and names', () => {
     '后台账号使用情况',
   ])
   assert.deepEqual(group('workforce').children.map(entry => entry.label), [
-    '员工档案查询表', '人员分析表', '离职记录表', '档案变更记录',
-    '汇总表', '人员分布总表', '站点人数报表', '排班表',
+    '员工档案查询表', '人员对账表', '人员分析表', '离职记录表',
+    '档案变更记录', '汇总表', '人员分布总表', '站点人数报表', '排班表',
   ])
   assert.deepEqual(group('account_usage').children[0], {
     label:'公司提供资产', to:'/admin/account-usage', pagePermission:'assets', permissions:['asset.view'],
@@ -197,6 +198,19 @@ test('centralized backend activity log sits between roles and the manual with an
   assert.deepEqual(route?.permissions,['account.activity_log.view'])
   assert.match(appSource,/path="activity-log"[\s\S]{0,180}<AdminActivityLogPage/)
   assert.match(activityLogSource,/admin_activity_log_search/)
+})
+
+test('personnel reconciliation has a dedicated guarded page and permission',()=>{
+  const item=group('workforce').children.find(entry=>entry.label==='人员对账表')
+  assert.deepEqual(item,{
+    label:'人员对账表',to:'/admin/reconciliation',pagePermission:'personnel_reconciliation',permissions:['employee.reconciliation.view'],
+  })
+  const route=requestedAdminRoute('/admin/reconciliation','')
+  assert.equal(route?.groupId,'workforce')
+  assert.deepEqual(route?.permissions,['employee.reconciliation.view'])
+  assert.equal(requestedAdminRoute('/admin/reconciliation','?tab=anything'),null)
+  assert.match(appSource,/path="reconciliation"[\s\S]{0,180}<AdminReconciliationPage/)
+  assert.match(reconciliationSource,/admin_personnel_reconciliation/)
 })
 
 test('manual dynamically documents every navigation page without embedding recovery credentials', () => {

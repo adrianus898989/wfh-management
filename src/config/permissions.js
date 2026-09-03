@@ -39,6 +39,7 @@ export const PERMISSIONS = {
   // 员工资料
   EMPLOYEE_VIEW: 'employee.view',
   EMPLOYEE_DIRECTORY_VIEW: 'employee.directory.view',
+  EMPLOYEE_RECONCILIATION_VIEW: 'employee.reconciliation.view',
   EMPLOYEE_DIRECTORY_EXPORT: 'employee.directory.export',
   EMPLOYEE_DIRECTORY_RESIGN: 'employee.directory.resign',
   EMPLOYEE_DIRECTORY_REACTIVATE: 'employee.directory.reactivate',
@@ -402,6 +403,7 @@ export const PERMISSION_GROUPS = [
     title: '员工与团队',
     items: [
       [PERMISSIONS.EMPLOYEE_VIEW, '查看员工'],
+      [PERMISSIONS.EMPLOYEE_RECONCILIATION_VIEW, '查看人员对账'],
       [PERMISSIONS.EMPLOYEE_ANALYTICS_VIEW, '查看人员分析'],
       [PERMISSIONS.EMPLOYEE_MANAGEMENT_RISK_VIEW, '查看管理风险分析'],
       [PERMISSIONS.EMPLOYEE_CREATE, '新增员工'],
