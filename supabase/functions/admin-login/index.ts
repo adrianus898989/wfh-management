@@ -26,6 +26,7 @@ const loginMessages: Record<string, string> = {
   EMAIL_NOT_FOUND: '邮箱不存在',
   STAFF_ACCOUNT_NOT_FOUND: '账号不存在',
   PASSWORD_INCORRECT: '密码错误',
+  ACCOUNT_LOCKED: '账号因密码错误次数达到安全阈值已锁定，请联系管理员解锁',
   ACCOUNT_UNAVAILABLE: '账号不可用，请联系管理员',
   TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后重试',
   LOGIN_SERVICE_UNAVAILABLE: '登录服务暂不可用，请稍后重试',
@@ -37,10 +38,36 @@ const loginMessages: Record<string, string> = {
   CLIENT_IP_UNAVAILABLE: '服务端无法读取当前IP，请联系管理员检查可信代理配置',
 }
 
-function loginError(req: Request, code: string, status: number) {
+async function readPasswordLockState(admin: any, userId: string) {
+  const { data, error } = await admin.rpc('login_password_attempt_status', {
+    p_user_id: userId,
+  })
+  if (error) throw error
+  return data || { login_locked: false, failed_attempts: 0 }
+}
+
+async function registerPasswordFailure(admin: any, userId: string, portal: 'admin' | 'staff') {
+  const { data, error } = await admin.rpc('login_password_failure_register', {
+    p_user_id: userId,
+    p_portal: portal,
+  })
+  if (error) throw error
+  return data || { login_locked: false, failed_attempts: 0 }
+}
+
+async function clearPasswordFailuresAfterSuccess(admin: any, userId: string) {
+  const { data, error } = await admin.rpc('login_password_success_clear', {
+    p_user_id: userId,
+  })
+  if (error) throw error
+  return data || { login_locked: false, failed_attempts: 0 }
+}
+
+function loginError(req: Request, code: string, status: number, details: Record<string, unknown> = {}) {
   return json(req, {
     error: loginMessages[code] || '登录失败，请稍后重试',
     code,
+    ...details,
   }, status, { 'X-Login-Error-Code': code })
 }
 
@@ -287,6 +314,16 @@ Deno.serve(async (req) => {
       return loginError(req, mode === 'staff' ? 'STAFF_ACCOUNT_NOT_FOUND' : 'ACCOUNT_UNAVAILABLE', 403)
     }
 
+    try {
+      const lockState = await readPasswordLockState(admin, access.auth_user_id)
+      if (lockState?.login_locked) return loginError(req, 'ACCOUNT_LOCKED', 423, {
+        lock_threshold: Number(lockState?.lock_threshold || 5),
+      })
+    } catch (lockError) {
+      console.error('ADMIN_LOGIN_LOCK_PRECHECK_ERROR', safeErrorMeta(lockError))
+      return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
+    }
+
     const authClient = createClient(supabaseUrl, publishableKey, {
       global: { fetch: timedFetch(40000) },
       auth: {
@@ -308,7 +345,18 @@ Deno.serve(async (req) => {
         // an unknown Auth email and a wrong password. At this point the email
         // has already matched our controlled access directory, so expose only
         // the intended PASSWORD_INCORRECT business result.
-        return loginError(req, 'PASSWORD_INCORRECT', 401)
+        try {
+          const lockState = await registerPasswordFailure(admin, access.auth_user_id, mode)
+          return loginError(
+            req,
+            lockState?.login_locked ? 'ACCOUNT_LOCKED' : 'PASSWORD_INCORRECT',
+            lockState?.login_locked ? 423 : 401,
+            lockState?.login_locked ? { lock_threshold: Number(lockState?.lock_threshold || 5) } : {},
+          )
+        } catch (lockError) {
+          console.error('ADMIN_LOGIN_LOCK_FAILURE_ERROR', safeErrorMeta(lockError))
+          return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
+        }
       }
 
       if (isRateLimited(authError)) return loginError(req, 'TOO_MANY_ATTEMPTS', 429)
@@ -328,6 +376,23 @@ Deno.serve(async (req) => {
       console.error('ADMIN_LOGIN_ID_MISMATCH')
       await discardCandidateSession(authClient)
       return loginError(req, mode === 'staff' ? 'STAFF_ACCOUNT_NOT_FOUND' : 'ACCOUNT_UNAVAILABLE', 403)
+    }
+
+    try {
+      // A concurrent fifth failure may have locked the account after the first
+      // precheck.  Never let that successful candidate clear an active lock or
+      // receive tokens; only an authorized administrator may unlock it.
+      const lockState = await clearPasswordFailuresAfterSuccess(admin, authData.user.id)
+      if (lockState?.login_locked) {
+        await discardCandidateSession(authClient)
+        return loginError(req, 'ACCOUNT_LOCKED', 423, {
+          lock_threshold: Number(lockState?.lock_threshold || 5),
+        })
+      }
+    } catch (lockError) {
+      console.error('ADMIN_LOGIN_LOCK_SUCCESS_ERROR', safeErrorMeta(lockError))
+      await discardCandidateSession(authClient)
+      return loginError(req, 'LOGIN_SERVICE_UNAVAILABLE', 503)
     }
 
     const sessionId = jwtSessionId(authData.session.access_token)
@@ -386,6 +451,16 @@ Deno.serve(async (req) => {
         await discardCandidateSession(authClient)
         if (lease?.reason === 'active_elsewhere') {
           return loginError(req, 'ACTIVE_SESSION_EXISTS', 409)
+        }
+        if (lease?.reason === 'account_locked') {
+          let lockThreshold = 5
+          try {
+            const lockState = await readPasswordLockState(admin, authData.user.id)
+            lockThreshold = Number(lockState?.lock_threshold || 5)
+          } catch (lockError) {
+            console.error('ADMIN_LOGIN_LOCK_CLAIM_READ_ERROR', safeErrorMeta(lockError))
+          }
+          return loginError(req, 'ACCOUNT_LOCKED', 423, { lock_threshold:lockThreshold })
         }
         if (mode === 'staff' && lease?.reason === 'staff_account_not_found') {
           return loginError(req, 'STAFF_ACCOUNT_NOT_FOUND', 403)

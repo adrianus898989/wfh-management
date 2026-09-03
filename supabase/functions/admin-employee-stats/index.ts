@@ -46,6 +46,13 @@ function isoAdd(date:string,days:number){
   d.setUTCDate(d.getUTCDate()+days);
   return d.toISOString().slice(0,10);
 }
+const MANILA_DATE_FORMATTER=new Intl.DateTimeFormat("en-CA",{
+  timeZone:"Asia/Manila",year:"numeric",month:"2-digit",day:"2-digit",
+});
+function manilaToday(now=new Date()){
+  const parts=Object.fromEntries(MANILA_DATE_FORMATTER.formatToParts(now).map(part=>[part.type,part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 
 async function callerAndScope(req:Request,service:any){
   const token=(req.headers.get("Authorization")||"").replace(/^Bearer\s+/i,"").trim();
@@ -1113,7 +1120,9 @@ Deno.serve(async(req)=>{
 
     const scope=await callerAndScope(req,service);
     const organization=await loadCurrentRosterOrganization(service,scope);
-    const today=/^\d{4}-\d{2}-\d{2}$/.test(text(body.today))?text(body.today):new Date().toISOString().slice(0,10);
+    // Headcount boundaries are owned by the service and always use the same
+    // Manila business date as the dashboard and personnel reconciliation RPC.
+    const today=manilaToday();
 
     if(text(body.action)==="tenure_details"){
       const bucket=text(body.bucket);

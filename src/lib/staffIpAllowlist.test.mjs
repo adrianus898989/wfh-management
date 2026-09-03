@@ -49,8 +49,8 @@ test('staff preflight sends an enum portal and keeps the public response minimal
 })
 
 test('staff login and activation forms are not mounted before Edge preflight', () => {
-  assert.match(app, /path="\/staff\/login"[\s\S]{0,160}?<StaffIpPreflightGate><StaffLoginPage/)
-  assert.match(app, /path="\/staff\/register"[\s\S]{0,180}?<StaffIpPreflightGate><StaffRegisterPage/)
+  assert.match(app, /path="\/portal\/login"[\s\S]{0,160}?<StaffIpPreflightGate><StaffLoginPage/)
+  assert.match(app, /path="\/portal\/register"[\s\S]{0,180}?<StaffIpPreflightGate><StaffRegisterPage/)
   assert.match(gate, /if \(preflight\.status === 'allowed'\) return children/)
   assert.match(gate, /requestPortalIpPreflight\(configured \? supabase : null, 'staff'/)
   assert.match(gate, /当前网络未获准访问员工前端/)

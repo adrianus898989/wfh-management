@@ -8,7 +8,12 @@ const migrationPath = new URL(
   'supabase/migrations/20260903054439_personnel_reconciliation_page.sql',
   `file://${root}/`,
 )
+const effectiveHireDateMigrationPath = new URL(
+  'supabase/migrations/20260903065625_personnel_reconciliation_effective_hire_date.sql',
+  `file://${root}/`,
+)
 const sql = fs.readFileSync(migrationPath, 'utf8')
+const effectiveHireDateSql = fs.readFileSync(effectiveHireDateMigrationPath, 'utf8')
 const matches = pattern => [...sql.matchAll(pattern)].length
 
 test('personnel reconciliation is a fail-closed, founder-seeded sensitive permission', () => {
@@ -65,6 +70,18 @@ test('all visible count sets, accepted onsite exclusions and review issues stay 
   assert.match(sql, /report_alias_duplicate_collapsed/)
   assert.doesNotMatch(sql, /WD001787|CS001455|WD001809|ZJ00169|PH526083101|336225/)
   assert.doesNotMatch(sql, /'payload'\s*,/)
+})
+
+test('today headcount excludes future hires while retaining actionable resigned-source drift', () => {
+  const summaryBranch = effectiveHireDateSql.match(/headcount_issue_keys as materialized \([\s\S]*?\n  \)\n  select pg_catalog\.jsonb_build_object/)?.[0] || ''
+  const rowBranch = effectiveHireDateSql.match(/membership_differences as materialized \([\s\S]*?alias_duplicate_rows as materialized/)?.[0] || ''
+  const aliasBranch = effectiveHireDateSql.match(/alias_duplicate_rows as materialized \([\s\S]*?combined_differences as materialized/)?.[0] || ''
+
+  assert.match(summaryBranch, /employee\.hire_date is not null[\s\S]*?employee\.hire_date > v_today/)
+  assert.match(rowBranch, /and not \([\s\S]*?employee\.hire_date is not null[\s\S]*?employee\.hire_date > v_today[\s\S]*?\)/)
+  assert.match(aliasBranch, /employee\.hire_date is not null[\s\S]*?employee\.hire_date > v_today/)
+  assert.match(effectiveHireDateSql, /entry\.item->>'explicitly_resigned'[\s\S]*?not in \('true', '1', 'yes'\)/)
+  assert.match(effectiveHireDateSql, /resigned_in_directory_report/)
 })
 
 test('PostgREST schema reload is part of the atomic migration', () => {

@@ -33,6 +33,7 @@ const RECOVERY_ACCOUNT_ACTIONS = [
   'reset_password',
   'reset_mfa',
   'update_backend',
+  'unlock_login',
 ]
 const RECOVERY_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
   toggle_active:'account.disable',
@@ -40,9 +41,18 @@ const RECOVERY_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
   reset_password:'account.reset_password',
   reset_mfa:'backend_account.mfa_reset',
   update_backend:'account.edit',
+  unlock_login:'backend_account.unlock',
+}
+const RECOVERY_POLICY_ACTIONS = ['update_login_lockout_policy']
+const RECOVERY_POLICY_ACTION_PERMISSION: Record<string, string> = {
+  update_login_lockout_policy:'backend_account.lockout_policy_manage',
 }
 const RECOVERY_ACTIVATION_ACTIONS = ['generate_activation_code']
-const RECOVERY_STAFF_ACCOUNT_ACTIONS = ['delete_staff_account']
+const RECOVERY_STAFF_ACCOUNT_ACTIONS = ['delete_staff_account', 'unlock_staff_login']
+const RECOVERY_STAFF_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
+  delete_staff_account:'user.account.delete',
+  unlock_staff_login:'staff_account.unlock',
+}
 
 function json(req: Request, body: unknown, status = 200, retryAfter = '') {
   const headers: Record<string, string> = {
@@ -172,7 +182,7 @@ Deno.serve(async (req: Request) => {
     if (![
       'access', 'bootstrap', 'dashboard', 'online_presence', 'role_list', 'save_role_permissions',
       'scope_directory', 'account_list', 'staff_account_list', 'create_backend',
-      ...RECOVERY_ACCOUNT_ACTIONS, ...RECOVERY_ACTIVATION_ACTIONS, ...RECOVERY_STAFF_ACCOUNT_ACTIONS,
+      ...RECOVERY_ACCOUNT_ACTIONS, ...RECOVERY_POLICY_ACTIONS, ...RECOVERY_ACTIVATION_ACTIONS, ...RECOVERY_STAFF_ACCOUNT_ACTIONS,
     ].includes(action)) {
       return json(req, {
         ok: false,
@@ -331,9 +341,44 @@ Deno.serve(async (req: Request) => {
       )
     )
     const delegatedRecoveryAccounts = isFounder || caller.data_scope === 'all'
-    const supportedRecoveryAccountActions = delegatedRecoveryAccounts
-      ? RECOVERY_ACCOUNT_ACTIONS.filter(accountAction => can(RECOVERY_ACCOUNT_ACTION_PERMISSION[accountAction]))
-      : []
+    const supportedRecoveryAccountActions = [
+      ...(delegatedRecoveryAccounts
+        ? RECOVERY_ACCOUNT_ACTIONS.filter(accountAction => can(RECOVERY_ACCOUNT_ACTION_PERMISSION[accountAction]))
+        : RECOVERY_ACCOUNT_ACTIONS.filter(accountAction =>
+            accountAction === 'unlock_login'
+            && can(RECOVERY_ACCOUNT_ACTION_PERMISSION[accountAction])
+          )),
+      ...RECOVERY_POLICY_ACTIONS.filter(policyAction => can(RECOVERY_POLICY_ACTION_PERMISSION[policyAction])),
+    ]
+
+    const decoratePasswordLockStates = async (rows: any[]) => {
+      const ids = [...new Set((rows || []).map(row => clean(row?.auth_user_id)).filter(Boolean))]
+      if (!ids.length) return rows || []
+      const { data:states, error } = await bounded(
+        admin.rpc('login_password_lock_states', { p_user_ids:ids }),
+        'LOGIN_PASSWORD_LOCK_STATES',
+      )
+      if (error) throw error
+      const items = Array.isArray(states) ? states : Array.isArray(states?.rows) ? states.rows : []
+      const byId = new Map(items.map((state:any) => [clean(state?.auth_user_id), state]))
+      return (rows || []).map(row => ({
+        ...row,
+        login_locked:false,
+        failed_attempts:0,
+        locked_at:null,
+        last_failure_portal:null,
+        ...(byId.get(clean(row?.auth_user_id)) || {}),
+      }))
+    }
+
+    const loadLoginPasswordPolicy = async () => {
+      const { data:policy, error } = await bounded(
+        admin.rpc('login_password_lockout_policy_get'),
+        'LOGIN_PASSWORD_LOCKOUT_POLICY',
+      )
+      if (error) throw error
+      return policy || { lock_threshold:5 }
+    }
 
     const recheckRecoveryMutationGate = async () => {
       await enforceAdminRequestIp(req, admin, userData.user.id, authorization)
@@ -426,6 +471,42 @@ Deno.serve(async (req: Request) => {
         })
       })()
       return assignableRolesPromise
+    }
+
+    if (action === 'update_login_lockout_policy') {
+      if (!can('backend_account.lockout_policy_manage')) {
+        return json(req, { ok:false, error:'无密码锁定阈值设置权限', code:'permission_denied' }, 403)
+      }
+      const allowedFields = new Set(['action', 'lock_threshold', 'reason'])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, { ok:false, error:'阈值设置请求包含不受支持的字段', code:'invalid_input_field' }, 400)
+      }
+      const threshold = Number(body?.lock_threshold)
+      if (!Number.isInteger(threshold) || threshold < 3 || threshold > 99) {
+        return json(req, { ok:false, error:'密码错误锁定阈值必须是 3–99 的整数', code:'invalid_lock_threshold' }, 400)
+      }
+      try {
+        await recheckRecoveryMutationGate()
+      } catch {
+        return retryable(req, '阈值保存前置验证暂时繁忙，请稍后重试')
+      }
+      const { data:policy, error } = await bounded(
+        admin.rpc('login_password_lockout_policy_set', {
+          p_actor_user_id:userData.user.id,
+          p_lock_threshold:threshold,
+          p_reason:clean(body?.reason || '后台调整密码错误锁定阈值').slice(0, 200),
+        }),
+        'LOGIN_PASSWORD_LOCKOUT_POLICY_UPDATE',
+      )
+      if (error) {
+        const denied = clean(error.code) === '42501' || /permission/i.test(clean(error.message))
+        return json(req, {
+          ok:false,
+          error:denied ? '无密码锁定阈值设置权限' : '密码锁定阈值保存失败',
+          code:denied ? 'permission_denied' : 'lock_threshold_save_failed',
+        }, denied ? 403 : 400)
+      }
+      return json(req, { ok:true, login_password_policy:policy })
     }
 
     if (action === 'generate_activation_code') {
@@ -971,6 +1052,15 @@ Deno.serve(async (req: Request) => {
         return retryable(req, '员工前端账号列表暂时读取失败，请重试')
       }
 
+      let employeeAccounts:any[]
+      try {
+        employeeAccounts = await decoratePasswordLockStates(
+          Array.isArray(pageData.rows) ? pageData.rows.slice(0, pageSize) : [],
+        )
+      } catch {
+        return retryable(req, '员工账号锁定状态暂时读取失败，请重试')
+      }
+
       return json(req, {
         ok:true,
         degraded:true,
@@ -981,17 +1071,53 @@ Deno.serve(async (req: Request) => {
           is_founder:isFounder,
           permissions:isFounder ? ['*'] : [...permissions],
         },
-        employee_accounts:Array.isArray(pageData.rows) ? pageData.rows.slice(0, pageSize) : [],
+        employee_accounts:employeeAccounts,
         staff_account_pagination:{
           page:Number(pageData.page || page),
           page_size:Number(pageData.page_size || pageSize),
           total:Number(pageData.total || 0),
         },
-        supported_staff_account_actions:can('staff_account.view') && can('user.account.delete')
-          ? [...RECOVERY_STAFF_ACCOUNT_ACTIONS]
+        supported_staff_account_actions:can('staff_account.view')
+          ? RECOVERY_STAFF_ACCOUNT_ACTIONS.filter(accountAction => can(RECOVERY_STAFF_ACCOUNT_ACTION_PERMISSION[accountAction]))
           : [],
         supported_staff_account_page_sizes:[...ACCOUNT_PAGE_SIZE_OPTIONS],
       })
+    }
+
+    if (action === 'unlock_staff_login') {
+      if (!can('staff_account.view') || !can('staff_account.unlock')) {
+        return json(req, { ok:false, error:'无解锁员工前端账号权限', code:'permission_denied' }, 403)
+      }
+      const allowedFields = new Set(['action', 'auth_user_id', 'reason'])
+      if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
+        return json(req, { ok:false, error:'员工账号解锁请求包含不受支持的字段', code:'invalid_input_field' }, 400)
+      }
+      const targetAuthUserId = clean(body?.auth_user_id)
+      if (!uuidLike(targetAuthUserId)) {
+        return json(req, { ok:false, error:'账号标识不正确', code:'invalid_account_id' }, 400)
+      }
+      try {
+        await recheckRecoveryMutationGate()
+      } catch {
+        return retryable(req, '员工账号解锁前置验证暂时繁忙，请稍后重试')
+      }
+      const { data:saved, error } = await bounded(
+        admin.rpc('login_password_lock_clear', {
+          p_target_user_id:targetAuthUserId,
+          p_actor_user_id:userData.user.id,
+          p_reason:clean(body?.reason || '后台人工解锁').slice(0, 200),
+        }),
+        'STAFF_LOGIN_UNLOCK',
+      )
+      if (error) {
+        const denied = clean(error.code) === '42501' || /permission|scope/i.test(clean(error.message))
+        return json(req, {
+          ok:false,
+          error:denied ? '该账号不在你可解锁的权限或数据范围内' : '员工账号解锁失败',
+          code:denied ? 'permission_or_scope_denied' : 'unlock_failed',
+        }, denied ? 403 : 400)
+      }
+      return json(req, { ok:true, saved })
     }
 
     if (action === 'delete_staff_account') {
@@ -1405,6 +1531,16 @@ Deno.serve(async (req: Request) => {
       if (recoveryCreateScopeEditor && !supportedDataScopes.includes('assigned_teams')) {
         supportedDataScopes.push('assigned_teams')
       }
+      let backendAccounts:any[]
+      let loginPasswordPolicy:any
+      try {
+        ;[backendAccounts, loginPasswordPolicy] = await Promise.all([
+          decoratePasswordLockStates(Array.isArray(pageData.rows) ? pageData.rows.slice(0, pageSize) : []),
+          loadLoginPasswordPolicy(),
+        ])
+      } catch {
+        return retryable(req, '后台账号锁定状态暂时读取失败，请重试')
+      }
       return json(req, {
         ok:true,
         degraded:true,
@@ -1420,7 +1556,8 @@ Deno.serve(async (req: Request) => {
           is_founder:isFounder,
           permissions:isFounder ? ['*'] : [...permissions],
         },
-        backend_accounts:Array.isArray(pageData.rows) ? pageData.rows.slice(0, pageSize) : [],
+        backend_accounts:backendAccounts,
+        login_password_policy:loginPasswordPolicy,
         account_pagination:{
           page:Number(pageData.page || page),
           page_size:Number(pageData.page_size || pageSize),
@@ -1447,7 +1584,7 @@ Deno.serve(async (req: Request) => {
           preserve_session:true,
         }, 403)
       }
-      if (!delegatedRecoveryAccounts) {
+      if (!delegatedRecoveryAccounts && action !== 'unlock_login') {
         return json(req, {
           ok:false,
           error:'当前账号的数据范围暂不支持此项账号恢复操作',
@@ -1468,7 +1605,9 @@ Deno.serve(async (req: Request) => {
                   'action', 'auth_user_id', 'employee_id', 'role_id', 'data_scope',
                   'team_ids', 'position_ids', 'employee_ids',
                 ])
-              : new Set(['action', 'auth_user_id'])
+              : action === 'unlock_login'
+                ? new Set(['action', 'auth_user_id', 'reason'])
+                : new Set(['action', 'auth_user_id'])
       if (Object.keys(body || {}).some(key => !allowedFields.has(key))) {
         return json(req, { ok:false, error:'账号恢复请求包含不受支持的字段', code:'invalid_input_field' }, 400)
       }
@@ -1477,7 +1616,7 @@ Deno.serve(async (req: Request) => {
       if (!uuidLike(targetAuthUserId)) {
         return json(req, { ok:false, error:'账号标识不正确', code:'invalid_account_id' }, 400)
       }
-      if (targetAuthUserId === userData.user.id) {
+      if (targetAuthUserId === userData.user.id && !(action === 'unlock_login' && isFounder)) {
         return json(req, { ok:false, error:'当前登录账号不能在这里修改自身状态或凭据', code:'current_account_protected' }, 400)
       }
 
@@ -1494,6 +1633,27 @@ Deno.serve(async (req: Request) => {
           }, 401)
         }
         return retryable(req, '账号恢复前置验证暂时繁忙，请稍后重试')
+      }
+
+
+      if (action === 'unlock_login') {
+        const { data:saved, error } = await bounded(
+          admin.rpc('login_password_lock_clear', {
+            p_target_user_id:targetAuthUserId,
+            p_actor_user_id:userData.user.id,
+            p_reason:clean(body?.reason || '后台人工解锁').slice(0, 200),
+          }),
+          'BACKEND_LOGIN_UNLOCK',
+        )
+        if (error) {
+          const denied = clean(error.code) === '42501' || /permission|scope/i.test(clean(error.message))
+          return json(req, {
+            ok:false,
+            error:denied ? '该账号不在你可解锁的权限或数据范围内' : '后台账号解锁失败',
+            code:denied ? 'permission_or_scope_denied' : 'unlock_failed',
+          }, denied ? 403 : 400)
+        }
+        return json(req, { ok:true, saved })
       }
 
       let actionAllowed = false

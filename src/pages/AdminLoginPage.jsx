@@ -26,6 +26,7 @@ const LOGIN_ERROR_MESSAGES = {
   PASSWORD_REQUIRED: '请输入密码',
   USERNAME_NOT_FOUND: '账号不存在',
   PASSWORD_INCORRECT: '密码错误',
+  ACCOUNT_LOCKED: '账号因密码错误次数达到安全阈值已锁定，请联系管理员解锁',
   ACCOUNT_UNAVAILABLE: '账号不可用，请联系管理员',
   TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后重试',
   LOGIN_SERVICE_UNAVAILABLE: '登录服务暂不可用，请稍后重试',
@@ -36,8 +37,9 @@ const LOGIN_ERROR_MESSAGES = {
   CLIENT_IP_UNAVAILABLE: '服务端无法读取当前IP，请联系管理员检查可信代理配置',
 }
 
-const loginErrorMessage = response => LOGIN_ERROR_MESSAGES[response?.code]
-  || '登录失败，请稍后重试'
+const loginErrorMessage = response => response?.code === 'ACCOUNT_LOCKED'
+  ? `账号因连续输错密码达到 ${Number(response?.lock_threshold || 5)} 次已锁定，请联系管理员解锁`
+  : LOGIN_ERROR_MESSAGES[response?.code] || '登录失败，请稍后重试'
 
 export default function AdminLoginPage() {
   const { t: adminT } = useAdminI18n()
@@ -52,6 +54,8 @@ export default function AdminLoginPage() {
         ? '系统已更新，请重新登录'
       : notice === 'ip_not_allowed'
         ? '当前会话已结束：当前IP不在后台登录白名单中'
+      : notice === 'account_locked'
+        ? '账号因连续输错密码达到安全阈值已锁定，请联系管理员解锁'
       : notice === 'session_ended'
         ? '登录会话已失效，请重新登录'
         : ''

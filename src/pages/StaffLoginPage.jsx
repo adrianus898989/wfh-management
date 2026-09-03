@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   configured,
@@ -27,6 +27,7 @@ export default function StaffLoginPage() {
   const [error, setError] = useState('')
   const [sessionNotice, setSessionNotice] = useState(() => consumeAppSessionNotice('staff'))
   const [loading, setLoading] = useState(false)
+  const submitInFlight = useRef(false)
   const navigate = useNavigate()
   const { t, resetLocale } = useStaffLocale()
   const loginErrorMessage = response => ({
@@ -37,6 +38,8 @@ export default function StaffLoginPage() {
     ACCOUNT_NOT_FOUND: t('auth.accountNotFound','Account does not exist'),
     STAFF_ACCOUNT_NOT_FOUND: t('auth.accountNotFound','Account does not exist'),
     PASSWORD_INCORRECT: t('auth.passwordIncorrect','Incorrect password'),
+    ACCOUNT_LOCKED: t('auth.accountLocked','This account is locked after {count} incorrect password attempts. Contact an administrator to unlock it.')
+      .replace('{count}', String(Number(response?.lock_threshold || 5))),
     ACCOUNT_UNAVAILABLE: t('auth.accountNotFound','Account does not exist'),
     TOO_MANY_ATTEMPTS: t('auth.tooManyAttempts','Too many attempts. Please try again later.'),
     LOGIN_SERVICE_UNAVAILABLE: t('auth.loginUnavailable','Sign in is temporarily unavailable'),
@@ -49,10 +52,15 @@ export default function StaffLoginPage() {
 
   const submit = async (e) => {
     e.preventDefault()
+    if (submitInFlight.current) return
+    submitInFlight.current = true
     setError('')
     setSessionNotice('')
 
-    if (!configured) return setError(t('auth.loginUnavailable','暂时无法登录'))
+    if (!configured) {
+      submitInFlight.current = false
+      return setError(t('auth.loginUnavailable','暂时无法登录'))
+    }
 
     setLoading(true)
 
@@ -91,6 +99,7 @@ export default function StaffLoginPage() {
         ? t('auth.loginTimeout','Sign in timed out. Please try again.')
         : t('auth.loginUnavailable','Sign in is temporarily unavailable'))
     } finally {
+      submitInFlight.current = false
       setLoading(false)
     }
   }
@@ -152,6 +161,8 @@ export default function StaffLoginPage() {
                 ? t('auth.accountNotFound','Account does not exist')
               : sessionNotice === 'ip_not_allowed'
                 ? t('auth.networkNotAllowed','This network is not allowed to access the staff portal. Please contact an administrator.')
+              : sessionNotice === 'account_locked'
+                ? t('auth.accountLockedWithoutCount','This account is locked after too many incorrect password attempts. Contact an administrator to unlock it.')
               : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.')
           )}</div>}
 

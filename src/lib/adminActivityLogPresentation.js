@@ -38,6 +38,8 @@ const ACTION_LABELS=Object.freeze({
   admin_ip_allowlist_set_enforced:'切换 IP 白名单',backend_account_create:'新增后台账号',
   backend_account_update:'编辑后台账号',backend_account_scope_correction:'修正账号范围',
   password_reset:'重置密码',role_permissions_update:'编辑角色权限',staff_account_create:'新增员工账号',
+  login_account_locked:'密码错误锁定账号',login_account_unlock:'人工解锁登录账号',
+  login_lockout_policy_update:'调整密码错误锁定阈值',
   admin_login:'后台登录',staff_login:'员工端登录',delete_incident:'删除停电 / 断网记录',
   delete_current_session:'删除考试记录',archive:'归档删除',create:'新增',review:'复核',
   reject_payout_change:'驳回收款资料修改',submit_payout_change:'提交收款资料修改',

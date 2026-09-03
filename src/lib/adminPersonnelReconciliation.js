@@ -41,13 +41,17 @@ const HEADCOUNT_REASON_LABELS = Object.freeze({
   resigned_still_scheduled:'员工已离职，但排班仍存在',
   home_resigned_but_still_scheduled:'居家名单已离职，但排班仍存在',
   missing_current_roster_assignment:'缺少当前排班团队或岗位',
+  active_home_employee_not_yet_scheduled:'员工主表在职，当前排班尚未分配',
+  missing_from_both_complete_sources:'后台主档仍为在职，但两份当前来源未确认到同一人（系统未自动改状态）',
+  future_resignation_removed_from_schedule_early:'离职日期尚未生效，但已提前从当前排班移除',
+  home_source_resigned_profile_still_active:'居家名单已标离职，但后台主档仍为在职',
 })
 
 const ISSUE_LABELS = Object.freeze({
   cross_source_name_mismatch:'两份员工来源姓名不一致',
   home_only_missing_schedule:'员工主表已有，等待排班分配',
   home_resigned_but_still_scheduled:'居家名单已离职，但排班仍存在',
-  pending_manual_review:'员工状态或名单需人工复核',
+  pending_manual_review:'来源状态待确认（不直接计入人数误差）',
   schedule_only_missing_onsite_marker:'排班身份或现场标记需核对',
   schedule_duplicate_employee_id_quarantined:'排班内员工 ID 重复，已隔离',
   temporary_and_official_records_both_exist:'临时 ID 与正式 ID 记录同时存在',

@@ -25,9 +25,13 @@ test('lightweight employee overview returns yesterday and previous-seven-day com
 
 test('employee archive cards prefer lightweight overview comparisons without requesting analytics', () => {
   const loadOverview = between(page, 'const loadArchiveStats=async', 'const loadPeopleAnalytics=async')
+  const loadTenureDetail = between(page, 'const openArchiveTenureDetail=async', 'const submitResignEdit=async')
   const cards = between(page, '<div className="module-summary-grid employee-summary-grid employee-kpi-grid archive-kpi-strip">', '</div>')
 
-  assert.match(loadOverview, /functions\.invoke\('admin-employee-stats',\{body:\{action:'overview',today\}\}\)/)
+  assert.match(loadOverview, /functions\.invoke\('admin-employee-stats',\{body:\{action:'overview'\}\}\)/)
+  assert.doesNotMatch(loadOverview, /\btoday\b/)
+  assert.match(loadTenureDetail, /functions\.invoke\('admin-employee-stats',\{body:\{action:'tenure_details',bucket,include_test:true\}\}\)/)
+  assert.doesNotMatch(loadTenureDetail, /\btoday\b/)
   assert.doesNotMatch(loadOverview, /action:'analytics'/)
   assert.match(cards, /compare=\{archiveStats\.kpis\?\.today_join_delta\?\?analytics\.kpis\?\.today_join_delta\}/)
   assert.match(cards, /compare=\{archiveStats\.kpis\?\.today_resign_delta\?\?analytics\.kpis\?\.today_resign_delta\}/)

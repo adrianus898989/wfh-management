@@ -272,6 +272,7 @@ function Protected({ children, mode }) {
       'staff_account_not_found',
       'staff_account_missing',
       'ip_not_allowed',
+      'account_locked',
       'release_updated',
     ].includes(reason)
     const terminalBootstrapReason = reason => [
@@ -323,6 +324,8 @@ function Protected({ children, mode }) {
               ? 'account_not_found'
             : reason==='ip_not_allowed'
               ? 'ip_not_allowed'
+            : reason==='account_locked'
+              ? 'account_locked'
             : reason==='active_elsewhere'||reason==='not_owner'
               ? 'active_elsewhere'
               : 'session_ended',

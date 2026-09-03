@@ -13,8 +13,9 @@ const read = relative => readFile(new URL(relative, import.meta.url), 'utf8')
 
 test('recovery account edge keeps bootstrap read-only and opens only explicitly bounded recovery operations', async () => {
   const source = await read('../../supabase/functions/admin-accounts/recovery.ts')
-  assert.match(source, /'account_list', 'staff_account_list', 'create_backend',[\s\S]+\.\.\.RECOVERY_ACCOUNT_ACTIONS, \.\.\.RECOVERY_ACTIVATION_ACTIONS, \.\.\.RECOVERY_STAFF_ACCOUNT_ACTIONS/)
-  assert.match(source, /const RECOVERY_ACCOUNT_ACTIONS = \[[\s\S]+toggle_active[\s\S]+toggle_otp[\s\S]+reset_password[\s\S]+reset_mfa/)
+  assert.match(source, /'account_list', 'staff_account_list', 'create_backend',[\s\S]+\.\.\.RECOVERY_ACCOUNT_ACTIONS, \.\.\.RECOVERY_POLICY_ACTIONS, \.\.\.RECOVERY_ACTIVATION_ACTIONS, \.\.\.RECOVERY_STAFF_ACCOUNT_ACTIONS/)
+  assert.match(source, /const RECOVERY_ACCOUNT_ACTIONS = \[[\s\S]+toggle_active[\s\S]+toggle_otp[\s\S]+reset_password[\s\S]+reset_mfa[\s\S]+unlock_login/)
+  assert.match(source, /const RECOVERY_POLICY_ACTIONS = \['update_login_lockout_policy'\][\s\S]+update_login_lockout_policy:'backend_account\.lockout_policy_manage'/)
   assert.match(source, /bootstrap[\s\S]+read-only alias of `access`/)
   assert.match(source, /temporarily_paused_for_database_recovery/)
   assert.match(source, /preserve_session:\s*true/)
@@ -396,8 +397,9 @@ test('recovery staff deletion is exact, staff-only, fail-closed and outcome-reco
   const backendStart = edge.indexOf("if (action === 'account_list')", deleteStart)
   const deletion = edge.slice(deleteStart, backendStart)
 
-  assert.match(edge, /const RECOVERY_STAFF_ACCOUNT_ACTIONS = \['delete_staff_account'\]/)
-  assert.match(edge, /supported_staff_account_actions:can\('staff_account\.view'\) && can\('user\.account\.delete'\)/)
+  assert.match(edge, /const RECOVERY_STAFF_ACCOUNT_ACTIONS = \['delete_staff_account', 'unlock_staff_login'\]/)
+  assert.match(edge, /const RECOVERY_STAFF_ACCOUNT_ACTION_PERMISSION:[\s\S]+delete_staff_account:'user\.account\.delete',[\s\S]+unlock_staff_login:'staff_account\.unlock'/)
+  assert.match(edge, /supported_staff_account_actions:can\('staff_account\.view'\)[\s\S]{0,220}?RECOVERY_STAFF_ACCOUNT_ACTIONS\.filter\(accountAction => can\(RECOVERY_STAFF_ACCOUNT_ACTION_PERMISSION\[accountAction\]\)\)/)
   assert.match(deletion, /new Set\(\[[\s\S]+'expected_login_email'[\s\S]+'expected_employee_no'/)
   assert.match(deletion, /admin_recovery_prepare_staff_account_delete_v1/)
   assert.match(deletion, /admin\.auth\.admin\.getUserById\(targetAuthUserId\)/)
@@ -459,7 +461,7 @@ test('recovery activation-code generation is one-employee, atomic, scoped and pl
   const action = edge.slice(actionStart, nextAction)
 
   assert.match(edge, /const RECOVERY_ACTIVATION_ACTIONS = \['generate_activation_code'\]/)
-  assert.match(edge, /\.\.\.RECOVERY_ACCOUNT_ACTIONS, \.\.\.RECOVERY_ACTIVATION_ACTIONS, \.\.\.RECOVERY_STAFF_ACCOUNT_ACTIONS/)
+  assert.match(edge, /\.\.\.RECOVERY_ACCOUNT_ACTIONS, \.\.\.RECOVERY_POLICY_ACTIONS, \.\.\.RECOVERY_ACTIVATION_ACTIONS, \.\.\.RECOVERY_STAFF_ACCOUNT_ACTIONS/)
   assert.match(action, /can\('user\.activation\.generate'\)/)
   assert.match(action, /new Set\(\['action', 'employee_no', 'valid_hours'\]\)/)
   assert.match(action, /await recheckRecoveryMutationGate\(\)/)

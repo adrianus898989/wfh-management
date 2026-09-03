@@ -177,15 +177,23 @@ Deno.serve(async (req) => {
     }
 
     const callerEffectivePermissions = new Set(rolePerms)
+    const callerDeniedPermissions = new Set<string>()
     overrideMap.forEach((allowed, code) => {
-      if (allowed) callerEffectivePermissions.add(code)
-      else callerEffectivePermissions.delete(code)
+      if (allowed) {
+        callerEffectivePermissions.add(code)
+        callerDeniedPermissions.delete(code)
+      } else {
+        callerEffectivePermissions.delete(code)
+        callerDeniedPermissions.add(code)
+      }
     })
 
-    const can = (code: string) => {
-      if (isFounder) return true
-      return callerEffectivePermissions.has('*') || callerEffectivePermissions.has(code)
-    }
+    const can = (code: string) => isFounder || (
+      !callerDeniedPermissions.has(code) && (
+        callerEffectivePermissions.has(code) ||
+        (!callerDeniedPermissions.has('*') && callerEffectivePermissions.has('*'))
+      )
+    )
 
     const audit = async (action: string, reason: string) => {
       await admin.from('audit_logs').insert({
@@ -195,6 +203,34 @@ Deno.serve(async (req) => {
         action,
         reason,
       })
+    }
+
+    const decoratePasswordLockStates = async (rows: any[]) => {
+      const ids = [...new Set((rows || []).map(row => cleanString(row?.auth_user_id)).filter(Boolean))]
+      if (!ids.length) return rows || []
+      const items: any[] = []
+      for (let offset = 0; offset < ids.length; offset += 200) {
+        const { data:states, error } = await admin.rpc('login_password_lock_states', {
+          p_user_ids:ids.slice(offset, offset + 200),
+        })
+        if (error) throw error
+        items.push(...(Array.isArray(states) ? states : Array.isArray(states?.rows) ? states.rows : []))
+      }
+      const byId = new Map(items.map((state: any) => [cleanString(state?.auth_user_id), state]))
+      return (rows || []).map(row => ({
+        ...row,
+        login_locked:false,
+        failed_attempts:0,
+        locked_at:null,
+        last_failure_portal:null,
+        ...(byId.get(cleanString(row?.auth_user_id)) || {}),
+      }))
+    }
+
+    const loadLoginPasswordPolicy = async () => {
+      const { data:policy, error } = await admin.rpc('login_password_lockout_policy_get')
+      if (error) throw error
+      return policy || { lock_threshold:5 }
     }
 
     const body = await req.json()
@@ -1012,11 +1048,23 @@ Deno.serve(async (req) => {
           : null,
       })
 
-      const backendAccounts = (mayViewBackendAccounts ? manageableAccounts : [])
+      let manageableAccountsWithLocks: any[]
+      let loginPasswordPolicy: any = null
+      try {
+        ;[manageableAccountsWithLocks, loginPasswordPolicy] = await Promise.all([
+          decoratePasswordLockStates(manageableAccounts),
+          mayViewBackendAccounts ? loadLoginPasswordPolicy() : Promise.resolve(null),
+        ])
+      } catch (lockStateError) {
+        console.error('account lock state bootstrap failed', lockStateError)
+        return json(req, { error:'账号锁定状态暂时读取失败，请重试' }, 503)
+      }
+
+      const backendAccounts = (mayViewBackendAccounts ? manageableAccountsWithLocks : [])
         .filter((x: any) => x.backend_enabled)
         .map(decorate)
 
-      const employeeAccounts = (mayViewStaffAccounts ? manageableAccounts : [])
+      const employeeAccounts = (mayViewStaffAccounts ? manageableAccountsWithLocks : [])
         .filter((x: any) => x.employee_portal_enabled)
         .map(decorate)
       const manageableAccountIds = new Set(
@@ -1063,6 +1111,7 @@ Deno.serve(async (req) => {
         employees: employees.map(decorateScopeEmployee),
         backend_accounts: backendAccounts,
         employee_accounts: employeeAccounts,
+        login_password_policy:loginPasswordPolicy,
         roles,
         permissions: mayManageRoles ? permissionRes.data || [] : [],
         role_permissions: mayManageRoles ? rpRes.data || [] : [],
@@ -1614,6 +1663,61 @@ Deno.serve(async (req) => {
 
       await audit('account_active_toggle', `active=${active} ${target}`)
       return json(req, { ok: true, saved: { auth_user_id: target, active } })
+    }
+
+    if (action === 'unlock_login' || action === 'unlock_staff_login') {
+      const target = cleanString(body.auth_user_id)
+      const reason = cleanString(body.reason || '后台人工解锁').slice(0, 200)
+      if (!target) return json(req, { error:'账号标识不正确' }, 400)
+
+      let current: any
+      if (target === authenticatedUser.id && isFounder && action === 'unlock_login') {
+        current = { ...activeCaller, targetRole:callerRole }
+      } else {
+        try {
+          current = await getTargetAccount(target)
+        } catch (error) {
+          return json(req, { error:error instanceof Error ? error.message : '无账号操作权限' }, 403)
+        }
+      }
+      const backendTarget = Boolean(current.backend_enabled)
+      const expectedBackendTarget = action === 'unlock_login'
+      if (backendTarget !== expectedBackendTarget || (!backendTarget && !current.employee_portal_enabled)) {
+        return json(req, { error:'账号类型与解锁入口不一致' }, 400)
+      }
+      const requiredPermission = backendTarget ? 'backend_account.unlock' : 'staff_account.unlock'
+      if (!can(requiredPermission)) return json(req, { error:'无解锁该类账号的权限' }, 403)
+
+      const { data:saved, error } = await admin.rpc('login_password_lock_clear', {
+        p_target_user_id:target,
+        p_actor_user_id:authenticatedUser.id,
+        p_reason:reason || '后台人工解锁',
+      })
+      if (error) {
+        const status = cleanString(error.code) === '42501' ? 403 : 400
+        return json(req, { error:status === 403 ? '该账号不在你可解锁的权限或数据范围内' : error.message }, status)
+      }
+      return json(req, { ok:true, saved })
+    }
+
+    if (action === 'update_login_lockout_policy') {
+      if (!can('backend_account.lockout_policy_manage')) {
+        return json(req, { error:'无密码锁定阈值设置权限' }, 403)
+      }
+      const threshold = Number(body.lock_threshold)
+      if (!Number.isInteger(threshold) || threshold < 3 || threshold > 99) {
+        return json(req, { error:'密码错误锁定阈值必须是 3–99 的整数' }, 400)
+      }
+      const { data:policy, error } = await admin.rpc('login_password_lockout_policy_set', {
+        p_actor_user_id:authenticatedUser.id,
+        p_lock_threshold:threshold,
+        p_reason:cleanString(body.reason || '后台调整密码错误锁定阈值').slice(0, 200),
+      })
+      if (error) {
+        const status = cleanString(error.code) === '42501' ? 403 : 400
+        return json(req, { error:status === 403 ? '无密码锁定阈值设置权限' : error.message }, status)
+      }
+      return json(req, { ok:true, login_password_policy:policy })
     }
 
     if (action === 'reset_password') {

@@ -86,6 +86,9 @@ test('people statistics separate future hires from effective active headcount an
   assert.match(source, /const active=all\.filter\(\(x:any\)=>isEffectiveActiveEmployee\(x,today\)\)/)
   assert.match(source, /const futureHires=all\.filter\(\(x:any\)=>isFutureHireEmployee\(x,today\)\)/)
   assert.match(source, /future_hires:futureHires\.length/)
+  assert.match(source, /timeZone:["']Asia\/Manila["']/)
+  assert.match(source, /const today=manilaToday\(\)/)
+  assert.doesNotMatch(source, /body\.today/)
 
   const tenureDetails = source.slice(
     source.indexOf('if(text(body.action)==="tenure_details")'),

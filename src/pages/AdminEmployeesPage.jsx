@@ -708,9 +708,7 @@ export default function AdminEmployeesPage(){
     if(!pageMountedRef.current)return false
     if(!silent) setArchiveStats(v=>({...v,loading:true}))
     try{
-      const d=new Date()
-      const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'overview',today}})
+      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'overview'}})
       if(!pageMountedRef.current)return false
       if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'员工结构统计读取失败'}))
       setArchiveStats({...data,loading:false,error:'',refreshed_at:new Date().toISOString()})
@@ -1573,9 +1571,7 @@ export default function AdminEmployeesPage(){
     setAnalysisDetail({title:detailTitle,event_type:'active',dimension:'',value:'',date_from:'',date_to:'',rows:[],total:0})
     setAnalysisDetailLoading(true)
     try{
-      const d=new Date()
-      const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'tenure_details',bucket,today,include_test:true}})
+      const {data,error}=await supabase.functions.invoke('admin-employee-stats',{body:{action:'tenure_details',bucket,include_test:true}})
       if(!pageMountedRef.current)return
       if(error||data?.error) throw new Error(await edgeFunctionErrorMessage({data,error,fallback:'入职时长人员读取失败'}))
       const uniqueRows=dedupeAnalysisRows(data.rows||[])

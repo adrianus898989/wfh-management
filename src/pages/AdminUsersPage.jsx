@@ -80,6 +80,8 @@ const actionLabels = {
   change: '变更',
   reactivate: '恢复在职',
   reset_password: '重置密码',
+  unlock: '解锁',
+  lockout_policy_manage: '设置锁定阈值',
   otp_toggle: 'OTP开关',
   mfa_reset: '重置OTP',
   resign: '办理离职',
@@ -122,6 +124,7 @@ export default function AdminUsersPage() {
   const [accountPageSize, setAccountPageSize] = useState(20)
   const [staffAccountPage, setStaffAccountPage] = useState(1)
   const [staffAccountPageSize, setStaffAccountPageSize] = useState(20)
+  const [lockThresholdDraft, setLockThresholdDraft] = useState('5')
 
   const call = async (body) => {
     const { data, error } = await supabase.functions.invoke('admin-accounts', { body })
@@ -237,6 +240,12 @@ export default function AdminUsersPage() {
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    const threshold = Number(data?.login_password_policy?.lock_threshold)
+    if (Number.isInteger(threshold) && threshold >= 3 && threshold <= 99) {
+      setLockThresholdDraft(String(threshold))
+    }
+  }, [data?.login_password_policy?.lock_threshold])
   useEffect(() => {
     setTabState(USER_TABS.includes(requestedTab) ? requestedTab : 'backend')
   }, [requestedTab])
@@ -410,12 +419,16 @@ export default function AdminUsersPage() {
   const canResetBackendPassword = (!recoveryAccountMode && callerCan('account.reset_password')) || recoveryCan('reset_password')
   const canToggleOtp = (!recoveryAccountMode && callerCan('account.otp_toggle')) || recoveryCan('toggle_otp')
   const canResetBackendMfa = (!recoveryAccountMode && callerCan('backend_account.mfa_reset')) || recoveryCan('reset_mfa')
+  const canUnlockBackend = (!recoveryAccountMode && callerCan('backend_account.unlock')) || recoveryCan('unlock_login')
+  const canManageLockoutPolicy = (!recoveryAccountMode && callerCan('backend_account.lockout_policy_manage')) || recoveryCan('update_login_lockout_policy')
   const canResetStaffMfa = !recoveryStaffAccountMode && callerCan('staff_account.mfa_reset')
   const canManageScope = callerCan('scope.manage')
   const canCreateStaff = !recoveryStaffAccountMode && callerCan('user.account.create')
   const canToggleStaff = !recoveryStaffAccountMode && callerCan('user.account.disable')
   const canDeleteStaff = (!recoveryStaffAccountMode && callerCan('user.account.delete')) ||
     recoveryStaffCan('delete_staff_account')
+  const canUnlockStaff = (!recoveryStaffAccountMode && callerCan('staff_account.unlock')) ||
+    recoveryStaffCan('unlock_staff_login')
   const canResetStaffPassword = !recoveryStaffAccountMode && callerCan('user.password.reset')
   const backend = data?.backend_accounts || []
   const staff = data?.employee_accounts || []
@@ -1139,6 +1152,77 @@ export default function AdminUsersPage() {
     finally { setMutatingAccountId('') }
   }
 
+  const unlockLogin = async (a, accountKind) => {
+    if (!a?.auth_user_id || !a.login_locked || mutatingAccountId) return
+    const label = a.login_username || a.login_email || a.employee?.employee_no || '该账号'
+    if (!window.confirm(`确定解锁 ${label}？解锁后可立即重新尝试登录。`)) return
+    setMutatingAccountId(a.auth_user_id)
+    setError('')
+    try {
+      const result = await call({
+        action:accountKind === 'staff' ? 'unlock_staff_login' : 'unlock_login',
+        auth_user_id:a.auth_user_id,
+        reason:'后台人工解锁',
+      })
+      const controls = accountControlPatch(result?.saved, {
+        login_locked:false,
+        failed_attempts:0,
+        locked_at:null,
+        last_failure_portal:null,
+      })
+      setData(current => patchAccountRows(current, a.auth_user_id, controls))
+      notify(writeSuccessToast({
+        module:accountKind === 'staff' ? '员工账号' : '后台账号',
+        operation:'解锁登录账号',
+        reason:`${label} 已解锁。`,
+        dedupeKey:`accounts:unlock:${a.auth_user_id}:success`,
+      }))
+    } catch (e) {
+      setError(e.message)
+      notify(writeFailureToast({
+        module:accountKind === 'staff' ? '员工账号' : '后台账号',
+        operation:'解锁登录账号',
+        error:e,
+        reason:`解锁失败：${e.message}`,
+        dedupeKey:`accounts:unlock:${a.auth_user_id}:error`,
+        refresh:refreshAccountSnapshot,
+      }))
+    } finally {
+      setMutatingAccountId('')
+    }
+  }
+
+  const saveLockThreshold = async () => {
+    const threshold = Number(lockThresholdDraft)
+    if (!Number.isInteger(threshold) || threshold < 3 || threshold > 99) {
+      setError('密码错误锁定阈值必须是 3–99 的整数。')
+      return
+    }
+    setError('')
+    try {
+      const result = await call({
+        action:'update_login_lockout_policy',
+        lock_threshold:threshold,
+        reason:'后台调整密码错误锁定阈值',
+      })
+      const policy = result?.login_password_policy || { lock_threshold:threshold }
+      setData(current => current ? ({ ...current, login_password_policy:policy }) : current)
+      setLockThresholdDraft(String(policy.lock_threshold || threshold))
+      notify(writeSuccessToast({
+        module:'后台账号',
+        operation:'设置密码锁定阈值',
+        reason:`连续密码错误达到 ${policy.lock_threshold || threshold} 次后锁定。`,
+        dedupeKey:'accounts:lock-policy:success',
+      }))
+    } catch (e) {
+      setError(e.message)
+      notify(writeFailureToast({
+        module:'后台账号',operation:'设置密码锁定阈值',error:e,
+        reason:`保存失败：${e.message}`,dedupeKey:'accounts:lock-policy:error',
+      }))
+    }
+  }
+
   const resetMfa = async (a) => {
     if (!window.confirm('确认重置该账号的 Google OTP？')) return
     if (!a?.auth_user_id || mutatingAccountId) return
@@ -1467,6 +1551,12 @@ export default function AdminUsersPage() {
 
       {error && <div className="page-error">{error}</div>}
 
+      {visibleTab === 'backend' && <div className="login-lock-policy-bar">
+        <div><strong>{adminT('登录密码安全')}</strong><span>{adminT('前台与后台共用：连续输错达到阈值即锁定，须由授权人员人工解锁。')}</span></div>
+        <label><span>{adminT('错误锁定阈值')}</span><input type="number" min="3" max="99" step="1" value={lockThresholdDraft} onChange={e => setLockThresholdDraft(e.target.value)} disabled={!canManageLockoutPolicy} /><em>{adminT('次')}</em></label>
+        {canManageLockoutPolicy && <button className="secondary-action" onClick={saveLockThreshold}>{adminT('保存阈值')}</button>}
+      </div>}
+
       {visibleTab && visibleTab !== 'roles' && <div className="access-searchbar">
         <label><span>{adminT(visibleTab === 'backend' ? '用户名' : '登录邮箱')}</span><input value={accessSearchDraft.account}
           onChange={e => setAccessSearchDraft(current => ({ ...current, account:e.target.value }))}
@@ -1517,7 +1607,9 @@ export default function AdminUsersPage() {
                           ? <button disabled={mutating} className={`switch-button ${a.otp_required ? 'on' : ''}`} onClick={() => toggleOtp(a)}><i/><span>{a.otp_required ? '开' : '关'}</span></button>
                           : <span className={`status-chip ${a.otp_required ? '' : 'off'}`}>{adminT(a.otp_required ? '开启' : '关闭')}</span>}
                       </td>
-                      <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span></td>
+                      <td>{a.login_locked
+                        ? <span className="status-chip locked" title={a.locked_at ? accountDateTime(a.locked_at) : ''}>{adminT('已锁定')} · {Number(a.failed_attempts || data?.login_password_policy?.lock_threshold || 0)}次</span>
+                        : <span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span>}</td>
                       <td><strong>{a.account_created_by_label || adminT('系统 / 历史导入')}</strong></td>
                       <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                       <td><div className="access-grid-actions">
@@ -1525,6 +1617,7 @@ export default function AdminUsersPage() {
                         {!founder && canResetBackendPassword && <button disabled={deleting || mutating} onClick={() => resetPassword(a)}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
                         {!founder && canResetBackendMfa && <button disabled={deleting || mutating} onClick={() => resetMfa(a)}>{adminT(mutating ? '处理中…' : '重置OTP')}</button>}
                         {!founder && canToggleBackend && <button disabled={deleting || mutating} onClick={() => toggleActive(a)}>{adminT(mutating ? '处理中…' : a.active ? '停用' : '启用')}</button>}
+                        {a.login_locked && canUnlockBackend && <button disabled={deleting || mutating} onClick={() => unlockLogin(a, 'backend')}>{adminT(mutating ? '处理中…' : '解锁')}</button>}
                         {!founder && canDeleteBackend && <button disabled={deleting || mutating} className="danger" onClick={() => deleteAccount(a, 'backend')}>{adminT(deleting ? '删除中…' : '删除账号')}</button>}
                       </div></td>
                     </tr>
@@ -1564,12 +1657,15 @@ export default function AdminUsersPage() {
                   <td>{a.employee?.full_name || '-'}</td>
                   <td>{a.employee?.teams?.name || '-'}</td>
                   <td>{a.employee?.positions?.name || '-'}</td>
-                  <td><span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span></td>
+                  <td>{a.login_locked
+                    ? <span className="status-chip locked" title={a.locked_at ? accountDateTime(a.locked_at) : ''}>{adminT('已锁定')} · {Number(a.failed_attempts || data?.login_password_policy?.lock_threshold || 0)}次</span>
+                    : <span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span>}</td>
                   <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                   <td><div className="access-grid-actions">
                     {canResetStaffPassword && <button disabled={deleting || mutating} onClick={() => resetPassword(a)}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
                     {canResetStaffMfa && <button disabled={deleting || mutating} onClick={() => resetMfa(a)}>{adminT(mutating ? '处理中…' : '重置OTP')}</button>}
                     {canToggleStaff && <button disabled={deleting || mutating} onClick={() => toggleActive(a)}>{adminT(mutating ? '处理中…' : a.active ? '停用' : '启用')}</button>}
+                    {a.login_locked && canUnlockStaff && <button disabled={deleting || mutating} onClick={() => unlockLogin(a, 'staff')}>{adminT(mutating ? '处理中…' : '解锁')}</button>}
                     {canDeleteStaff && <button disabled={deleting || mutating} className="danger" onClick={() => deleteAccount(a, 'staff')}>{adminT(deleting ? '删除中…' : '删除登录账号')}</button>}
                   </div></td>
                 </tr>})}</tbody>

@@ -98,7 +98,7 @@ const PERMISSION_ACTION_ORDER = [
   'view', 'create', 'generate', 'submit', 'edit', 'change', 'review',
   'manage', 'approve', 'grade', 'publish', 'export', 'delete', 'disable',
   'disable_employee', 'reactivate', 'resign', 'reset_password',
-  'otp_toggle', 'mfa_reset', 'general',
+  'unlock', 'lockout_policy_manage', 'otp_toggle', 'mfa_reset', 'general',
 ]
 
 const actionKey = code => String(code || '').split('.').at(-1) || 'other'

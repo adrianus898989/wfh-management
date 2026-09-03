@@ -323,6 +323,11 @@ export default function AdminReconciliationPage() {
 
     <AdminModuleNav/>
 
+    <section className="recon-policy-note" aria-label="人数对账规则">
+      <strong>人数误差只核对今天应计人员：</strong>
+      <span>未来入职不计入；员工离职后，只要居家名单已标离职且已从当前排班、汇总移除，就只保留后台历史档案，不再算误差；现场人员在独立页签展示。</span>
+    </section>
+
     <section className={`recon-freshness ${freshnessIsStale ? 'is-stale' : ''}`} aria-live="polite">
       <div><i aria-hidden="true"/><strong>{freshnessIsStale ? '对账数据可能已过期' : '最近一次对账'}</strong><span>{formatTime(lastRefresh)}{ageLabel ? ` · ${ageLabel}` : ''}</span></div>
       <div><span>Google《居家员工名单》 {formatCount(freshness?.home_rows)} 行</span><span>员工同步排班 {formatCount(freshness?.schedule_rows)} 行</span><span>汇总表快照 {formatCount(freshness?.report_rows)} 行 · {formatTime(reportRefresh)}{reportAgeLabel ? ` · ${reportAgeLabel}` : ''}</span>{freshness?.run_id&&<span>批次 {freshness.run_id}</span>}</div>
@@ -331,8 +336,8 @@ export default function AdminReconciliationPage() {
     <section className="recon-summary-grid" aria-label="人数统计口径">
       <SummaryCard label="后台首页当前在职" value={summary?.dashboard_effective_active} note="与首页卡片使用同一今日生效口径"/>
       <SummaryCard label="员工档案页在职" value={summary?.directory_effective_active} note="按马尼拉今日与当前组织目录"/>
-      <SummaryCard label="员工档案当前目录" value={summary?.directory_total} note="当前排班映射出的系统员工档案"/>
-      <SummaryCard label="汇总表排班人数" value={summary?.report_total} note="与汇总表相同：员工 ID 优先，空 ID 按姓名" tone="schedule"/>
+      <SummaryCard label="员工档案当前目录（来源）" value={summary?.directory_total} note="来源原始人数，可能含未来入职或待移除记录"/>
+      <SummaryCard label="汇总表排班人数（来源）" value={summary?.report_total} note="来源原始人数；不直接等于今天应计在职" tone="schedule"/>
     </section>
 
     <section className="recon-workspace">
@@ -350,7 +355,7 @@ export default function AdminReconciliationPage() {
       {current.error&&<div className="recon-error" role="alert"><span>{current.error}</span><button type="button" onClick={() => load()}>重试</button></div>}
       {current.loading&&<div className="recon-loading-note" role="status"><span className="recon-spinner" aria-hidden="true"/>正在读取最新对账结果{current.loaded ? '，当前保留显示上次结果。' : '…'}</div>}
 
-      <div className="recon-results-head"><div><h2>{currentMeta.label}</h2><p>{activeView === 'onsite' ? '已确认现场或管理范围内人员属于正常名单，不计入误差。' : activeView === 'issues' ? '按待核对事项展示；同一员工可能有多项记录。' : '仅展示当前账号管理范围内可核对的人员。'}</p></div>{current.loaded&&<strong>{formatCount(current.total)} {currentMeta.unit}</strong>}</div>
+      <div className="recon-results-head"><div><h2>{currentMeta.label}</h2><p>{activeView === 'onsite' ? '已确认现场或管理范围内人员属于正常名单，不计入误差。' : activeView === 'issues' ? '这里是来源提示，不等于人数误差；同一员工可能有多项记录。' : '仅展示今天应计人员的真实差异；未来入职不计入，已完成排班移除的离职人员只保留历史档案。'}</p></div>{current.loaded&&<strong>{formatCount(current.total)} {currentMeta.unit}</strong>}</div>
       {!current.loaded
         ? current.error
           ? null
