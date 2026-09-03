@@ -51,18 +51,18 @@ const defaultLabels={
   imageNumber:count=>`图片 ${count}`,
 }
 
-export function ExamImageGallery({urls=[],labels={},className=''}){
+export function ExamImageGallery({urls=[],labels={},className='',onRemove=null,removeLabel='删除图片'}){
   const copy={...defaultLabels,...labels}
   const [preview,setPreview]=useState(null)
   const media=useMemo(()=>normalizedImageUrls(urls),[urls])
   if(!media.length)return null
   return <>
-    <div className={`exam-media-grid ${className}`.trim()}>{media.map((url,index)=><ProgressiveExamImage key={url} url={url} number={index+1} labels={copy} onOpen={setPreview}/>)}</div>
+    <div className={`exam-media-grid ${className}`.trim()}>{media.map((url,index)=><ProgressiveExamImage key={url} url={url} number={index+1} labels={copy} onOpen={setPreview} onRemove={onRemove?()=>onRemove(url,index):null} removeLabel={removeLabel}/>)}</div>
     {preview&&<ExamImageLightbox media={preview} labels={copy} onClose={()=>setPreview(null)}/>}
   </>
 }
 
-function ProgressiveExamImage({url,number,labels,onOpen}){
+function ProgressiveExamImage({url,number,labels,onOpen,onRemove,removeLabel}){
   const sources=useMemo(()=>imageSources(url),[url])
   const [sourceIndex,setSourceIndex]=useState(0)
   const src=sources[sourceIndex]||''
@@ -70,7 +70,8 @@ function ProgressiveExamImage({url,number,labels,onOpen}){
   const title=typeof labels.imageNumber==='function'?labels.imageNumber(number):`${labels.imageNumber||'图片'} ${number}`
   const open=()=>onOpen({sources,number,title})
   return <article className="exam-media-card">
-    {src?<button type="button" className="exam-media-thumb" onClick={open} aria-label={`${title} · ${labels.imageOpen}`}><img src={src} alt={`${labels.imageAlt} ${number}`} referrerPolicy="no-referrer" onError={()=>setSourceIndex(value=>value+1)}/><span>{labels.imageOpen}</span></button>:<button type="button" className="exam-media-fallback" onClick={open}><span>{labels.imageFallback}</span><b>{labels.imageRetry}</b></button>}
+    {onRemove&&<button type="button" className="exam-media-remove" onClick={onRemove} aria-label={`${removeLabel} ${number}`} title={removeLabel}>×</button>}
+    {src?<button type="button" className="exam-media-thumb" onClick={open} aria-label={`${title} · ${labels.imageOpen}`}><img src={src} alt={`${labels.imageAlt} ${number}`} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={()=>setSourceIndex(value=>value+1)}/><span>{labels.imageOpen}</span></button>:<button type="button" className="exam-media-fallback" onClick={open}><span>{labels.imageFallback}</span><b>{labels.imageRetry}</b></button>}
     <span className="exam-media-caption">{title}</span>
   </article>
 }

@@ -4,6 +4,19 @@ import { useStaffLocale } from '../lib/staffI18n'
 import { ExamImageGallery } from '../components/ExamImageGallery'
 import { useAppToast } from '../components/AppToastProvider'
 import { writeFailureToast, writeSuccessToast } from '../lib/appMutationToast'
+import {
+  ACCEPTED_EXAM_ANSWER_IMAGE_TYPES,
+  EXAM_ANSWER_BUCKET,
+  MAX_EXAM_ANSWER_ATTACHMENTS,
+  MAX_EXAM_ANSWER_IMAGE_BYTES,
+  answerIsComplete,
+  cleanExamAttachment,
+  optimiseExamAnswerImage,
+  safeExamAttachmentFileName,
+  signExamAttachmentMap,
+  signExamAttachments,
+  storedExamAttachments,
+} from '../lib/examAnswerAttachments'
 
 const copy = {
   eyebrow: ['WFH · 学习中心', 'WFH · LEARNING CENTER', 'WFH · TRUNG TÂM HỌC TẬP', 'WFH · PUSAT BELAJAR'],
@@ -68,6 +81,7 @@ const copy = {
   showLanguages: ['查看其他语言', 'Show other languages', 'Xem ngôn ngữ khác', 'Lihat bahasa lain'],
   myAnswer: ['我的答案', 'My answer', 'Câu trả lời của tôi', 'Jawaban saya'],
   unanswered: ['（未作答）', '(No answer)', '(Chưa trả lời)', '(Belum dijawab)'],
+  imageOnlyAnswer: ['（仅提交图片）', '(Images only)', '(Chỉ gửi ảnh)', '(Hanya gambar)'],
   feedback: ['老师评语', 'Reviewer feedback', 'Nhận xét người chấm', 'Catatan penilai'],
   noFeedback: ['老师未填写评语', 'No feedback provided', 'Chưa có nhận xét', 'Tidak ada catatan'],
   noAnswerDetails: ['该场考试没有可显示的逐题明细。', 'No per-question details are available for this exam.', 'Không có chi tiết từng câu cho bài thi này.', 'Detail per soal tidak tersedia untuk ujian ini.'],
@@ -85,6 +99,25 @@ const copy = {
   difficulty: ['{points} 分 · 难度 {difficulty}', '{points} pts · Difficulty {difficulty}', '{points} điểm · Độ khó {difficulty}', '{points} poin · Kesulitan {difficulty}'],
   answerLabel: ['填写答案', 'Your answer', 'Câu trả lời', 'Jawaban Anda'],
   answerPlaceholder: ['请输入完整回答…', 'Enter your complete answer…', 'Nhập câu trả lời đầy đủ…', 'Masukkan jawaban lengkap…'],
+  answerImages: ['答案附件', 'Answer attachments', 'Ảnh đính kèm câu trả lời', 'Lampiran jawaban'],
+  addAnswerImages: ['上传图片', 'Add images', 'Tải ảnh lên', 'Unggah gambar'],
+  answerImageHint: ['每题最多 {count} 张，每张不超过 {size} MB', 'Up to {count} images per question, {size} MB each', 'Tối đa {count} ảnh mỗi câu, {size} MB mỗi ảnh', 'Maksimal {count} gambar per soal, masing-masing {size} MB'],
+  answerImageCount: ['已上传 {count}/{max}', '{count}/{max} uploaded', 'Đã tải lên {count}/{max}', 'Terunggah {count}/{max}'],
+  answerImageUploading: ['正在上传图片…', 'Uploading images…', 'Đang tải ảnh lên…', 'Mengunggah gambar…'],
+  answerImageLimit: ['每题最多上传 {count} 张图片。', 'You can upload up to {count} images per question.', 'Mỗi câu chỉ được tải tối đa {count} ảnh.', 'Maksimal {count} gambar dapat diunggah per soal.'],
+  answerImageType: ['仅支持 JPG、PNG、WebP 或 GIF 图片。', 'Only JPG, PNG, WebP, or GIF images are supported.', 'Chỉ hỗ trợ ảnh JPG, PNG, WebP hoặc GIF.', 'Hanya gambar JPG, PNG, WebP, atau GIF yang didukung.'],
+  answerImageSize: ['图片“{name}”压缩后仍超过 {size} MB。', '“{name}” is still larger than {size} MB after compression.', 'Ảnh “{name}” vẫn lớn hơn {size} MB sau khi nén.', '“{name}” masih lebih besar dari {size} MB setelah dikompresi.'],
+  answerImageUploadFailed: ['图片上传失败：{error}', 'Could not upload image: {error}', 'Không thể tải ảnh lên: {error}', 'Gagal mengunggah gambar: {error}'],
+  answerImageRestoreFailed: ['原有答题图片暂时无法恢复；文字答题仍可继续，刷新后可重试图片功能：{error}', 'Existing answer images could not be restored. Text answers remain available; refresh to retry image features: {error}', 'Tạm thời không thể khôi phục ảnh trả lời cũ. Bạn vẫn có thể trả lời bằng chữ; hãy làm mới để thử lại tính năng ảnh: {error}', 'Gambar jawaban yang ada belum dapat dipulihkan. Jawaban teks tetap dapat digunakan; muat ulang untuk mencoba fitur gambar lagi: {error}'],
+  answerImageRestoreUnavailable: ['图片功能暂时不可用，刷新页面后重试；文字答案不会覆盖原有图片。', 'Image features are temporarily unavailable. Refresh to retry; text answers will not overwrite existing images.', 'Tính năng ảnh tạm thời không khả dụng. Hãy làm mới để thử lại; câu trả lời chữ sẽ không ghi đè ảnh cũ.', 'Fitur gambar sementara tidak tersedia. Muat ulang untuk mencoba lagi; jawaban teks tidak akan menimpa gambar lama.'],
+  answerImagePreviewFailed: ['图片已保存，但预览暂时不可用：{error}', 'The image was saved, but its preview is temporarily unavailable: {error}', 'Ảnh đã được lưu nhưng tạm thời không thể xem trước: {error}', 'Gambar telah disimpan, tetapi pratinjau sementara tidak tersedia: {error}'],
+  answerImageRemove: ['删除图片', 'Remove image', 'Xóa ảnh', 'Hapus gambar'],
+  answerImageCleanup: ['清理未保存图片', 'Clean up unsaved image', 'Dọn ảnh chưa lưu', 'Bersihkan gambar yang belum tersimpan'],
+  answerImageCleanupFailed: ['未保存的图片暂时无法从存储中清理：{error}', 'An unsaved image could not be removed from storage: {error}', 'Không thể xóa ảnh chưa lưu khỏi bộ nhớ: {error}', 'Gambar yang belum tersimpan tidak dapat dihapus dari penyimpanan: {error}'],
+  answerImageRemoveFailed: ['图片已从答案移除，但存储文件清理失败：{error}', 'The image was removed from the answer, but its stored file could not be cleaned up: {error}', 'Ảnh đã được gỡ khỏi câu trả lời nhưng không thể xóa tệp lưu trữ: {error}', 'Gambar telah dihapus dari jawaban, tetapi file tersimpan gagal dibersihkan: {error}'],
+  answerImageAlt: ['答案附件图片', 'Answer attachment image', 'Ảnh đính kèm câu trả lời', 'Gambar lampiran jawaban'],
+  answerImageNumber: ['附件 {count}', 'Attachment {count}', 'Tệp đính kèm {count}', 'Lampiran {count}'],
+  answerImageUnavailable: ['附件暂时无法预览', 'Attachment preview unavailable', 'Không thể xem trước tệp đính kèm', 'Pratinjau lampiran tidak tersedia'],
   previous: ['上一题', 'Previous', 'Câu trước', 'Sebelumnya'],
   next: ['下一题', 'Next', 'Câu tiếp', 'Berikutnya'],
   submit: ['提交考试', 'Submit exam', 'Nộp bài', 'Kirim ujian'],
@@ -94,6 +127,7 @@ const copy = {
   submitConfirm: ['提交后不能再修改，确认提交？', 'You cannot edit after submission. Submit now?', 'Không thể sửa sau khi nộp. Xác nhận nộp?', 'Jawaban tidak dapat diubah setelah dikirim. Kirim sekarang?'],
   autoSubmitted: ['考试时间到，已自动提交。', 'Time is up. Your exam was submitted automatically.', 'Hết giờ. Bài thi đã được tự động nộp.', 'Waktu habis. Ujian dikirim otomatis.'],
   submitted: ['考试已提交，等待后台批改。', 'Exam submitted and awaiting review.', 'Đã nộp bài và đang chờ chấm.', 'Ujian dikirim dan menunggu penilaian.'],
+  submitFailed: ['考试提交失败：{error}', 'Could not submit the exam: {error}', 'Không thể nộp bài thi: {error}', 'Ujian gagal dikirim: {error}'],
   noQuestions: ['试卷没有可用题目，请联系管理员。', 'This exam has no available questions. Please contact an administrator.', 'Bài thi không có câu hỏi. Vui lòng liên hệ quản trị viên.', 'Ujian ini tidak memiliki soal. Hubungi administrator.'],
   imageClose: ['关闭图片', 'Close image', 'Đóng ảnh', 'Tutup gambar'],
   imageAlt: ['考试题目图片', 'Exam question image', 'Ảnh câu hỏi', 'Gambar soal'],
@@ -125,6 +159,14 @@ const cleanOptions = values => [...values.reduce((options, value) => {
   if (key && !options.has(key)) options.set(key, label)
   return options
 }, new Map()).values()].sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }))
+const answerImageAccept = ACCEPTED_EXAM_ANSWER_IMAGE_TYPES.join(',')
+const answerImageSizeMb = Math.round(MAX_EXAM_ANSWER_IMAGE_BYTES / 1024 / 1024)
+const answerImageExtension = file => ({
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+}[String(file?.type || '').toLowerCase()] || safeExamAttachmentFileName(file?.name).match(/\.[a-zA-Z0-9]{1,8}$/)?.[0]?.toLowerCase() || '')
 
 function useExamText() {
   const { locale, setLocale, t } = useStaffLocale()
@@ -148,6 +190,8 @@ export default function StaffExamPage() {
   const [session, setSession] = useState(null)
   const [resultState, setResultState] = useState(null)
   const [answers, setAnswers] = useState({})
+  const [answerAttachments, setAnswerAttachments] = useState({})
+  const [answerAttachmentsReady, setAnswerAttachmentsReady] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedPlatform, setSelectedPlatform] = useState('')
@@ -218,8 +262,34 @@ export default function StaffExamPage() {
         p_position: exam.position_name,
       })
       if (requestError) throw requestError
+      let attachmentMap = {}
+      let signedAttachments = {}
+      let attachmentsReady = true
+      const { data: restoredAttachments, error: attachmentError } = await supabase.rpc('staff_exam_answer_attachments', { p_session_id: data.id })
+      if (attachmentError) {
+        attachmentsReady = false
+        notify(writeFailureToast({
+          module:tr('title'), operation:tr('answerImages'), error:attachmentError,
+          reason:tr('answerImageRestoreFailed', { error: msg(attachmentError) }),
+          dedupeKey:`staff-exam:attachment-restore:${data.id}:error`,
+        }))
+      } else {
+        attachmentMap = restoredAttachments || {}
+        signedAttachments = attachmentMap
+      }
+      try {
+        if (attachmentsReady) signedAttachments = await signExamAttachmentMap(supabase, attachmentMap)
+      } catch (previewError) {
+        notify(writeFailureToast({
+          module:tr('title'), operation:tr('answerImages'), error:previewError,
+          reason:tr('answerImagePreviewFailed', { error: msg(previewError) }),
+          dedupeKey:`staff-exam:attachment-preview:${data.id}:error`,
+        }))
+      }
       setSession(data)
       setAnswers(data?.saved_answers || {})
+      setAnswerAttachments(signedAttachments)
+      setAnswerAttachmentsReady(attachmentsReady)
       setError('')
       notify(writeSuccessToast({
         module:tr('title'), operation,
@@ -240,13 +310,29 @@ export default function StaffExamPage() {
   const viewResult = async item => {
     const requestId = ++resultRequest.current
     setResultState({ loading: true, error: '', data: null, preview: item })
-    const { data, error: requestError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: item.id })
-    if (requestId !== resultRequest.current) return
-    if (requestError) {
-      setResultState({ loading: false, error: msg(requestError), data: null, preview: item })
-      return
+    try {
+      const { data, error: requestError } = await supabase.rpc('staff_exam_result_detail', { p_session_id: item.id })
+      if (requestError) throw requestError
+      let result = data
+      const source = item.source_system || data?.session?.source_system || 'current'
+      if (source === 'current' && Array.isArray(data?.answers)) {
+        const keys = data.answers.map((answer, index) => `${answer?.question?.id || answer?.question_id || 'answer'}:${index}`)
+        const attachmentMap = Object.fromEntries(data.answers.map((answer, index) => [keys[index], answer?.attachments || []]))
+        try {
+          const signedMap = await signExamAttachmentMap(supabase, attachmentMap)
+          result = { ...data, answers: data.answers.map((answer, index) => ({ ...answer, attachments: signedMap[keys[index]] || [] })) }
+        } catch {
+          // Keep text and stored attachment metadata visible when a preview URL
+          // cannot be issued temporarily; no private path is used as an image URL.
+          result = data
+        }
+      }
+      if (requestId !== resultRequest.current) return
+      setResultState({ loading: false, error: '', data: result, preview: item })
+    } catch (cause) {
+      if (requestId !== resultRequest.current) return
+      setResultState({ loading: false, error: msg(cause), data: null, preview: item })
     }
-    setResultState({ loading: false, error: '', data, preview: item })
   }
 
   const closeResult = () => { resultRequest.current += 1; setResultState(null) }
@@ -255,8 +341,11 @@ export default function StaffExamPage() {
     session={session}
     answers={answers}
     setAnswers={setAnswers}
-    onDone={() => { setSession(null); load() }}
-    onRefreshStatus={async () => { setSession(null); await load() }}
+    attachments={answerAttachments}
+    setAttachments={setAnswerAttachments}
+    attachmentsReady={answerAttachmentsReady}
+    onDone={() => { setSession(null); setAnswerAttachments({}); setAnswerAttachmentsReady(true); load() }}
+    onRefreshStatus={async () => { setSession(null); setAnswerAttachments({}); setAnswerAttachmentsReady(true); await load() }}
   />
 
   const attempts = Number(selectedExam?.attempts || 0)
@@ -362,7 +451,8 @@ function ExamResult({ state, onClose, onRetry }) {
         return <article key={question.id || index}><header><b>{index + 1}</b><div><strong>{preferredQuestion(question, locale)}</strong><small>{tr('questionPoints', { count: score(question.points, locale) })}</small></div><span className={`result-chip ${gradeState}`}>{item.awarded_score == null ? tr('pending') : `${score(item.awarded_score, locale)}/${score(question.points, locale)}`}</span></header>
           <QuestionTranslations question={question} locale={locale} label={tr('showLanguages')} />
           <ExamMedia urls={question.image_urls} />
-          <div className="staff-result-answer"><b>{tr('myAnswer')}</b><p>{item.answer_text || tr('unanswered')}</p></div>
+          <div className="staff-result-answer"><b>{tr('myAnswer')}</b><p>{item.answer_text || (storedExamAttachments(item.attachments).length ? tr('imageOnlyAnswer') : tr('unanswered'))}</p></div>
+          {!!storedExamAttachments(item.attachments).length && <div className="staff-result-answer-attachments exam-answer-attachment-block"><strong>{tr('answerImages')}</strong><AnswerAttachmentMedia attachments={item.attachments} /></div>}
           {item.awarded_score != null && <div className="staff-result-feedback"><b>{tr('feedback')}</b><p>{item.grader_feedback || tr('noFeedback')}</p><small>{tr('gradedAt')} · {fmt(item.graded_at || session.graded_at, locale)}</small></div>}
         </article>
         })}</div> : <div className="staff-history-empty result-empty">{tr('noAnswerDetails')}</div>}
@@ -392,56 +482,236 @@ function QuestionTranslations({ question, locale, label }) {
   return <details><summary>{label}</summary>{rows.map(([language, value]) => <p key={language}><b>{language}</b><span>{value}</span></p>)}</details>
 }
 
-function ExamRunner({ session, answers, setAnswers, onDone, onRefreshStatus }) {
+function ExamRunner({ session, answers, setAnswers, attachments, setAttachments, attachmentsReady, onDone, onRefreshStatus }) {
   const { locale, tr } = useExamText()
   const { notify } = useAppToast()
   const questions = session.question_snapshot || []
   const [index, setIndex] = useState(0)
   const [remaining, setRemaining] = useState(Math.max(0, Math.floor((new Date(session.expires_at) - Date.now()) / 1000)))
   const [saving, setSaving] = useState(false)
+  const [attachmentBusy, setAttachmentBusy] = useState(false)
+  const [submittingNow, setSubmittingNow] = useState(false)
   const [error, setError] = useState('')
   const submitting = useRef(false)
   const saveFailureNotified = useRef(false)
+  const answersRef = useRef(answers)
+  const attachmentsRef = useRef(attachments)
+  const saveQueue = useRef(Promise.resolve(true))
+  const attachmentJob = useRef(Promise.resolve(true))
+  const attachmentBusyRef = useRef(false)
   const question = questions[index]
   const answer = answers[question?.id] || ''
+  const questionAttachments = attachments[question?.id] || []
+
+  useEffect(() => { answersRef.current = answers }, [answers])
+  useEffect(() => { attachmentsRef.current = attachments }, [attachments])
 
   useEffect(() => { const timer = window.setInterval(() => setRemaining(value => Math.max(0, value - 1)), 1000); return () => window.clearInterval(timer) }, [])
   useEffect(() => { if (remaining === 0) submit(true) }, [remaining])
 
-  const save = async (targetQuestion = question, value = answer) => {
-    if (!targetQuestion) return true
-    setSaving(true)
-    try {
-      const { error: requestError } = await supabase.rpc('staff_exam_save_answer', { p_session_id: session.id, p_question_id: targetQuestion.id, p_answer: value, p_attachments: [] })
-      if (requestError) throw requestError
-      setError('')
-      return true
-    } catch (cause) {
-      const reason = tr('saveFailed', { error: msg(cause) })
-      setError(reason)
-      if (!saveFailureNotified.current) {
-        saveFailureNotified.current = true
-        notify(writeFailureToast({
-          module:tr('title'), operation:tr('saving'), error:cause, reason,
-          dedupeKey:`staff-exam:save:${session.id}:error`,
-        }))
+  const replaceQuestionAttachments = (questionId, rows) => {
+    const next = { ...attachmentsRef.current, [questionId]: rows }
+    attachmentsRef.current = next
+    setAttachments(next)
+  }
+
+  const updateAnswer = (questionId, value) => {
+    const next = { ...answersRef.current, [questionId]: value }
+    answersRef.current = next
+    setAnswers(next)
+  }
+
+  const save = async (targetQuestion = question, value, targetAttachments) => {
+    if (!targetQuestion) return Promise.resolve(true)
+    const answerValue = value ?? answersRef.current[targetQuestion.id] ?? ''
+    const attachmentValue = storedExamAttachments(targetAttachments ?? attachmentsRef.current[targetQuestion.id] ?? [])
+    const request = async () => {
+      setSaving(true)
+      try {
+        const { error: requestError } = await supabase.rpc('staff_exam_save_answer', {
+          p_session_id: session.id,
+          p_question_id: targetQuestion.id,
+          p_answer: answerValue,
+          p_attachments: attachmentsReady ? attachmentValue : null,
+        })
+        if (requestError) throw requestError
+        saveFailureNotified.current = false
+        setError('')
+        return true
+      } catch (cause) {
+        const reason = tr('saveFailed', { error: msg(cause) })
+        setError(reason)
+        if (!saveFailureNotified.current) {
+          saveFailureNotified.current = true
+          notify(writeFailureToast({
+            module:tr('title'), operation:tr('saving'), error:cause, reason,
+            dedupeKey:`staff-exam:save:${session.id}:error`,
+          }))
+        }
+        return false
+      } finally {
+        setSaving(false)
       }
-      return false
-    } finally {
-      setSaving(false)
+    }
+    const queued = saveQueue.current.catch(() => true).then(request)
+    saveQueue.current = queued
+    return await queued
+  }
+
+  const reportAttachmentFailure = (operation, cause, reason) => {
+    setError(reason)
+    notify(writeFailureToast({
+      module:tr('title'), operation, error:cause, reason,
+      dedupeKey:`staff-exam:attachment:${session.id}:${operation}:error`,
+    }))
+  }
+
+  const removeStoredPaths = async paths => {
+    if (!paths.length) return null
+    try {
+      const { error: removeError } = await supabase.storage.from(EXAM_ANSWER_BUCKET).remove(paths)
+      return removeError || null
+    } catch (cause) {
+      return cause
     }
   }
 
-  const go = async nextIndex => { await save(); setIndex(nextIndex) }
+  const runAttachmentJob = task => {
+    if (submitting.current || attachmentBusyRef.current) return attachmentJob.current
+    attachmentBusyRef.current = true
+    setAttachmentBusy(true)
+    const job = Promise.resolve().then(task).catch(() => false).finally(() => {
+      if (attachmentJob.current === job) {
+        attachmentBusyRef.current = false
+        setAttachmentBusy(false)
+      }
+    })
+    attachmentJob.current = job
+    return job
+  }
+
+  const uploadAnswerImages = async (targetQuestion, files) => {
+    const current = storedExamAttachments(attachmentsRef.current[targetQuestion.id] || [])
+    if (current.length + files.length > MAX_EXAM_ANSWER_ATTACHMENTS) {
+      setError(tr('answerImageLimit', { count: MAX_EXAM_ANSWER_ATTACHMENTS }))
+      return false
+    }
+    const prepared = []
+    for (const sourceFile of files) {
+      if (!ACCEPTED_EXAM_ANSWER_IMAGE_TYPES.includes(String(sourceFile?.type || '').toLowerCase())) {
+        setError(tr('answerImageType'))
+        return false
+      }
+      const file = await optimiseExamAnswerImage(sourceFile)
+      if (!file || !ACCEPTED_EXAM_ANSWER_IMAGE_TYPES.includes(String(file.type || '').toLowerCase())) {
+        setError(tr('answerImageType'))
+        return false
+      }
+      if (Number(file.size || 0) > MAX_EXAM_ANSWER_IMAGE_BYTES) {
+        setError(tr('answerImageSize', { name: sourceFile.name, size: answerImageSizeMb }))
+        return false
+      }
+      prepared.push({ file, sourceFile })
+    }
+
+    let next = current
+    let pendingPath = ''
+    try {
+      if (!session.auth_user_id) throw new Error('exam_answer_owner_missing')
+      for (const item of prepared) {
+        const extension = answerImageExtension(item.file)
+        const path = `${session.auth_user_id}/${session.id}/${targetQuestion.id}/${crypto.randomUUID()}${extension}`
+        const { error: uploadError } = await supabase.storage.from(EXAM_ANSWER_BUCKET).upload(path, item.file, {
+          cacheControl:'3600',
+          upsert:false,
+          contentType:item.file.type,
+        })
+        if (uploadError) throw uploadError
+        pendingPath = path
+        const attachment = cleanExamAttachment({
+          path,
+          name:safeExamAttachmentFileName(item.sourceFile.name),
+          size:item.file.size,
+          type:item.file.type,
+        })
+        if (!attachment) throw new Error('exam_answer_attachment_invalid')
+        const staged = storedExamAttachments([...next, attachment])
+        const saved = await save(targetQuestion, answersRef.current[targetQuestion.id] || '', staged)
+        if (!saved) {
+          const cleanupError = await removeStoredPaths([pendingPath])
+          pendingPath = ''
+          if (cleanupError) reportAttachmentFailure(tr('answerImageCleanup'), cleanupError, tr('answerImageCleanupFailed', { error: msg(cleanupError) }))
+          return false
+        }
+        next = staged
+        pendingPath = ''
+        replaceQuestionAttachments(targetQuestion.id, next)
+      }
+      try {
+        replaceQuestionAttachments(targetQuestion.id, await signExamAttachments(supabase, next))
+      } catch (cause) {
+        const reason = tr('answerImagePreviewFailed', { error: msg(cause) })
+        reportAttachmentFailure(tr('addAnswerImages'), cause, reason)
+      }
+      return true
+    } catch (cause) {
+      const cleanupError = await removeStoredPaths(pendingPath ? [pendingPath] : [])
+      const reason = tr('answerImageUploadFailed', { error: msg(cause) })
+      reportAttachmentFailure(tr('addAnswerImages'), cause, reason)
+      if (cleanupError) reportAttachmentFailure(tr('answerImageCleanup'), cleanupError, tr('answerImageCleanupFailed', { error: msg(cleanupError) }))
+      return false
+    }
+  }
+
+  const chooseAnswerImages = event => {
+    const files = Array.from(event.target.files || [])
+    event.target.value = ''
+    if (!question || !files.length) return
+    runAttachmentJob(() => uploadAnswerImages(question, files))
+  }
+
+  const removeAnswerImage = (urlOrPath, imageIndex) => {
+    if (!question) return
+    runAttachmentJob(async () => {
+      const current = (attachmentsRef.current[question.id] || []).map(cleanExamAttachment).filter(Boolean)
+      const targetIndex = current.findIndex(item => item.url === urlOrPath || item.path === urlOrPath)
+      const resolvedIndex = targetIndex >= 0 ? targetIndex : imageIndex
+      const target = current[resolvedIndex]
+      if (!target) return true
+      const next = current.filter((_, indexValue) => indexValue !== resolvedIndex)
+      const saved = await save(question, answersRef.current[question.id] || '', next)
+      if (!saved) return false
+      replaceQuestionAttachments(question.id, next)
+      const removeError = await removeStoredPaths([target.path])
+      if (removeError) {
+        const reason = tr('answerImageRemoveFailed', { error: msg(removeError) })
+        reportAttachmentFailure(tr('answerImageRemove'), removeError, reason)
+      }
+      return true
+    })
+  }
+
+  const go = async nextIndex => {
+    await attachmentJob.current
+    const saved = await save(question, answersRef.current[question?.id] || '', attachmentsRef.current[question?.id] || [])
+    if (saved) setIndex(nextIndex)
+  }
   const submit = async (automatic = false) => {
     if (submitting.current) return
     if (!automatic && !window.confirm(tr('submitConfirm'))) return
     submitting.current = true
+    setSubmittingNow(true)
     try {
-      const saved = await save()
-      if (!saved && !automatic) return
-      const { error: requestError } = await supabase.rpc('staff_exam_submit', { p_session_id: session.id })
+      await attachmentJob.current
+      await saveQueue.current.catch(() => false)
+      const { error: requestError } = await supabase.rpc('staff_exam_submit_with_answer', {
+        p_session_id:session.id,
+        p_question_id:question?.id,
+        p_answer:answersRef.current[question?.id] || '',
+        p_attachments:attachmentsReady ? storedExamAttachments(attachmentsRef.current[question?.id] || []) : null,
+      })
       if (requestError) throw requestError
+      setError('')
       if (automatic) window.alert(tr('autoSubmitted'))
       else notify(writeSuccessToast({
         module:tr('title'), operation:tr('submit'), reason:tr('submitted'),
@@ -449,7 +719,7 @@ function ExamRunner({ session, answers, setAnswers, onDone, onRefreshStatus }) {
       }))
       onDone()
     } catch (cause) {
-      const reason = msg(cause)
+      const reason = tr('submitFailed', { error: msg(cause) })
       setError(reason)
       if (!automatic) notify(writeFailureToast({
         module:tr('title'), operation:tr('submit'), error:cause, reason,
@@ -458,11 +728,13 @@ function ExamRunner({ session, answers, setAnswers, onDone, onRefreshStatus }) {
       }))
     } finally {
       submitting.current = false
+      setSubmittingNow(false)
     }
   }
 
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0')
   const seconds = String(remaining % 60).padStart(2, '0')
+  const answeredCount = questions.filter(item => answerIsComplete(answers[item.id], attachments[item.id])).length
   if (!question) return <div className="exam-empty">{tr('noQuestions')}</div>
   const languageRows = locale === 'zh'
     ? [['中', question.question_zh], ['EN', question.question_en], ['VI', question.question_vi]]
@@ -473,9 +745,34 @@ function ExamRunner({ session, answers, setAnswers, onDone, onRefreshStatus }) {
   return <div className="exam-runner">
     <header><div><small>{tr('onlineExam')}</small><h1>{session.title || tr('runningExam')}</h1><p>{tr('runnerSummary', { count: questions.length })}</p></div><div className={remaining < 300 ? 'timer danger' : 'timer'}><small>{tr('timeLeft')}</small><strong>{minutes}:{seconds}</strong></div></header>
     {error && <div className="exam-error runner-error">{error}</div>}
-    <div className="runner-layout"><aside><strong>{tr('progress')}</strong><div className="question-nav">{questions.map((item, questionIndex) => <button key={item.id} className={`${questionIndex === index ? 'active' : ''} ${answers[item.id]?.trim() ? 'done' : ''}`} onClick={() => go(questionIndex)}>{questionIndex + 1}</button>)}</div><p>{tr('answered', { answered: Object.values(answers).filter(value => String(value || '').trim()).length, total: questions.length })}</p></aside>
-      <main><div className="question-head"><span>{tr('questionIndex', { current: index + 1, total: questions.length })}</span><b>{tr('difficulty', { points: question.points, difficulty: question.difficulty })}</b></div><div className="runner-languages">{languageRows.filter(([, value]) => value).map(([language, value]) => <div key={language}><span>{language}</span><p>{value}</p></div>)}</div><ExamMedia urls={question.image_urls} /><label>{tr('answerLabel')}<textarea autoFocus value={answer} onChange={event => setAnswers({ ...answers, [question.id]: event.target.value })} onBlur={() => save(question, answers[question.id] || '')} placeholder={tr('answerPlaceholder')} /></label><footer><button disabled={index === 0} onClick={() => go(index - 1)}>{tr('previous')}</button><span>{saving ? tr('saving') : tr('saved')}</span>{index < questions.length - 1 ? <button className="primary" onClick={() => go(index + 1)}>{tr('next')}</button> : <button className="primary" onClick={() => submit(false)}>{tr('submit')}</button>}</footer></main>
+    <div className="runner-layout"><aside><strong>{tr('progress')}</strong><div className="question-nav">{questions.map((item, questionIndex) => <button key={item.id} disabled={attachmentBusy || submittingNow} className={`${questionIndex === index ? 'active' : ''} ${answerIsComplete(answers[item.id], attachments[item.id]) ? 'done' : ''}`} onClick={() => go(questionIndex)}>{questionIndex + 1}</button>)}</div><p>{tr('answered', { answered: answeredCount, total: questions.length })}</p></aside>
+      <main><div className="question-head"><span>{tr('questionIndex', { current: index + 1, total: questions.length })}</span><b>{tr('difficulty', { points: question.points, difficulty: question.difficulty })}</b></div><div className="runner-languages">{languageRows.filter(([, value]) => value).map(([language, value]) => <div key={language}><span>{language}</span><p>{value}</p></div>)}</div><ExamMedia urls={question.image_urls} /><label>{tr('answerLabel')}<textarea autoFocus value={answer} onChange={event => updateAnswer(question.id, event.target.value)} onBlur={() => save(question, answersRef.current[question.id] || '', attachmentsRef.current[question.id] || [])} placeholder={tr('answerPlaceholder')} /></label><div className="exam-answer-attachment-panel"><div className="exam-answer-attachment-head"><div className="exam-answer-attachment-copy"><strong>{tr('answerImages')}</strong><small>{attachmentsReady ? tr('answerImageHint', { count: MAX_EXAM_ANSWER_ATTACHMENTS, size: answerImageSizeMb }) : tr('answerImageRestoreUnavailable')}</small></div><label className={`exam-answer-upload ${!attachmentsReady || attachmentBusy || submittingNow || storedExamAttachments(questionAttachments).length >= MAX_EXAM_ANSWER_ATTACHMENTS || remaining === 0 ? 'disabled' : ''}`}><input type="file" accept={answerImageAccept} multiple disabled={!attachmentsReady || attachmentBusy || submittingNow || storedExamAttachments(questionAttachments).length >= MAX_EXAM_ANSWER_ATTACHMENTS || remaining === 0} onChange={chooseAnswerImages} /><span>＋ {tr('addAnswerImages')}</span></label></div><span className={`exam-answer-attachment-status ${attachmentsReady ? '' : 'error'}`}>{!attachmentsReady ? tr('answerImageRestoreUnavailable') : attachmentBusy ? tr('answerImageUploading') : tr('answerImageCount', { count: storedExamAttachments(questionAttachments).length, max: MAX_EXAM_ANSWER_ATTACHMENTS })}</span><AnswerAttachmentMedia attachments={questionAttachments} onRemove={attachmentsReady && !attachmentBusy && !submittingNow ? removeAnswerImage : null} /></div><footer><button disabled={index === 0 || attachmentBusy || submittingNow} onClick={() => go(index - 1)}>{tr('previous')}</button><span>{attachmentBusy ? tr('answerImageUploading') : saving || submittingNow ? tr('saving') : tr('saved')}</span>{index < questions.length - 1 ? <button className="primary" disabled={attachmentBusy || submittingNow} onClick={() => go(index + 1)}>{tr('next')}</button> : <button className="primary" disabled={attachmentBusy || submittingNow} onClick={() => submit(false)}>{tr('submit')}</button>}</footer></main>
     </div>
+  </div>
+}
+
+function AnswerAttachmentMedia({ attachments = [], onRemove = null }) {
+  const { tr } = useExamText()
+  const rows = (Array.isArray(attachments) ? attachments : []).map(cleanExamAttachment).filter(Boolean)
+  const previewRows = rows.filter(item => item.url)
+  const unavailableRows = rows.filter(item => !item.url)
+  if (!rows.length) return null
+  return <div className="exam-answer-attachment-media">
+    {!!previewRows.length && <ExamImageGallery
+      urls={previewRows.map(item => item.url)}
+      className="exam-answer-media-grid"
+      onRemove={onRemove || undefined}
+      removeLabel={tr('answerImageRemove')}
+      labels={{
+        imageAlt:tr('answerImageAlt'),
+        imageOpen:tr('imageOpen'),
+        imageClose:tr('imageClose'),
+        imageFallback:tr('answerImageUnavailable'),
+        imageRetry:tr('retry'),
+        imageNumber:count=>tr('answerImageNumber',{count}),
+      }}
+    />}
+    {!!unavailableRows.length && <div className="exam-answer-attachment-fallbacks">{unavailableRows.map((item, index) => <div className="exam-answer-attachment-fallback" key={item.path}><span>{item.name}</span>{onRemove && <button type="button" onClick={() => onRemove(item.path, previewRows.length + index)}>{tr('answerImageRemove')}</button>}</div>)}</div>}
   </div>
 }
 

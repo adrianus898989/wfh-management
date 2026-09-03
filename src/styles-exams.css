@@ -278,3 +278,38 @@
   .exam-page .exam-compact-pagination .pagination-main{justify-content:flex-start;width:100%}
   .exam-page .exam-compact-pagination .pagination-jump{display:none}
 }
+
+/* Optional employee answer images: a compact strip that does not change the
+   runner columns or make each grading row unnecessarily tall. */
+.exam-answer-attachment-panel{margin-top:10px;padding:10px;border:1px solid #d8e3f0;border-radius:11px;background:#f8fbff}
+.exam-answer-attachment-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.exam-answer-attachment-copy{display:flex;min-width:0;flex-direction:column;gap:2px;color:#294968}
+.exam-answer-attachment-copy strong{font-size:11px}
+.exam-answer-attachment-copy small{overflow:hidden;color:#73869d;font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.exam-answer-upload{position:relative;display:inline-flex;flex:0 0 auto;align-items:center;gap:6px;padding:7px 10px;border:1px solid #b9cbea;border-radius:8px;background:#fff;color:#285fd6;font-size:10px;font-weight:850;cursor:pointer}
+.exam-answer-upload:hover{border-color:#7ea4ec;background:#eef4ff}
+.exam-answer-upload.disabled{opacity:.5;cursor:not-allowed}
+.exam-answer-upload input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.exam-answer-attachment-status{display:block;margin-top:6px;color:#627991;font-size:9px}
+.exam-answer-attachment-status.error{color:#bd3939}
+.exam-answer-attachment-block{margin:9px 0 12px;padding:9px 10px;border:1px solid #dce6f1;border-radius:9px;background:#fbfcff}
+.exam-answer-attachment-block>small,.exam-answer-attachment-block>strong{display:block;margin-bottom:6px;color:#526d8c;font-size:10px}
+.exam-answer-attachment-block>.exam-answer-attachment-unavailable{margin:7px 0 0;color:#a06419;font-size:9px}
+.exam-media-grid.exam-answer-media-grid{display:flex!important;max-width:100%;gap:8px;margin:8px 0 0;overflow-x:auto;overflow-y:hidden;padding:1px 1px 5px;scrollbar-width:thin}
+.exam-answer-media-grid .exam-media-card{position:relative;flex:0 0 108px;width:108px;border-radius:9px}
+.exam-answer-media-grid .exam-media-thumb,.exam-answer-media-grid .exam-media-fallback{min-height:72px!important;height:72px}
+.exam-answer-media-grid .exam-media-thumb img{height:72px;object-fit:cover}
+.exam-answer-media-grid .exam-media-thumb span{right:4px;bottom:4px;padding:3px 5px;font-size:8px}
+.exam-answer-media-grid .exam-media-caption{overflow:hidden;padding:5px 7px;font-size:8px;text-overflow:ellipsis;white-space:nowrap}
+.exam-answer-attachment-fallbacks{display:flex;gap:7px;margin-top:7px;overflow-x:auto}
+.exam-answer-attachment-fallback{display:flex;flex:0 0 auto;max-width:210px;align-items:center;gap:7px;padding:6px 7px;border:1px dashed #c3d2e4;border-radius:8px;background:#fff;color:#687d95;font-size:9px}
+.exam-answer-attachment-fallback span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exam-answer-attachment-fallback button{flex:0 0 auto;padding:4px 6px!important;border-color:#efbaba!important;color:#bd3939!important;font-size:8px!important}
+.exam-media-remove{position:absolute;z-index:3;right:4px;top:4px;display:grid!important;width:22px!important;height:22px!important;min-width:22px!important;place-items:center;padding:0!important;border:1px solid #fff!important;border-radius:50%!important;background:#d94141!important;color:#fff!important;box-shadow:0 2px 8px #7c1e1e55;font-size:15px!important;line-height:1!important}
+.exam-media-remove:hover{background:#b92e2e!important;transform:scale(1.05)}
+@media(max-width:620px){
+  .exam-answer-attachment-head{align-items:flex-start}
+  .exam-answer-attachment-copy small{white-space:normal}
+  .exam-media-grid.exam-answer-media-grid{display:flex!important;grid-template-columns:none!important}
+  .exam-answer-media-grid .exam-media-thumb img{height:72px}
+}

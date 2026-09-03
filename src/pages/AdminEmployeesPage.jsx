@@ -8,6 +8,7 @@ import { EmployeeAdjustmentPanel, EmployeeAttendancePanel } from '../components/
 import { AdminAlertRecordsPage, EmployeeAlertHistoryPanel } from '../components/AdminAlertCenter'
 import AdminDataEntryLogs from '../components/AdminDataEntryLogs'
 import AdminModuleNav from '../components/AdminModuleNav'
+import { ExamImageGallery } from '../components/ExamImageGallery'
 import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
@@ -22,6 +23,7 @@ import ManagementRiskPanel from '../components/ManagementRiskPanel'
 import { withAbortTimeout } from '../lib/abortableRequest'
 import { employeeProfileMetricSeed, mergeEmployeeDetailRefresh, withEmployeeDetailTimeout } from '../lib/employeeDrawerState'
 import { filterEmployeeErrorHistory, filterEmployeeExamHistory } from '../lib/employeeRecordFilters'
+import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments.js'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -34,6 +36,16 @@ const EMPLOYEE_TAB_PERMISSIONS = {
 }
 
 const text = v => String(v ?? '').trim()
+const employeeExamAnswerImageLabels={
+  imageAlt:'员工答题图片',imageOpen:'点击放大',imageClose:'关闭图片',
+  imageFallback:'图片暂时无法预览',imageRetry:'重试预览',imageNumber:count=>`答题图片 ${count}`,
+}
+function EmployeeExamAnswerImageGallery({attachments}){
+  const rows=Array.isArray(attachments)?attachments:[]
+  const urls=rows.map(item=>item?.url||'').filter(Boolean)
+  if(!rows.length)return null
+  return <section className="exam-answer-attachment-block" aria-label={`员工答题图片 · ${rows.length} 张`}><strong>员工答题图片 · {rows.length} 张</strong>{!!urls.length&&<ExamImageGallery urls={urls} labels={employeeExamAnswerImageLabels} className="exam-answer-media-grid"/>}{urls.length<rows.length&&<small className="exam-answer-attachment-unavailable">{rows.length-urls.length} 张图片暂时无法预览，请稍后重试。</small>}</section>
+}
 const employeeRequestError = (error, fallback) => {
   const raw=readableErrorMessage(error)
   if(!raw||raw==='操作失败'||/^edge function returned a non-2xx status code$/i.test(raw)) return fallback
@@ -3109,9 +3121,11 @@ function EmployeeExamPanel({data,loading,error}){
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(20)
   const mountedRef=useRef(true)
+  const examDetailRequestRef=useRef(0)
+  const examDetailFlightRef=useRef(null)
   useEffect(()=>{
     mountedRef.current=true
-    return()=>{mountedRef.current=false}
+    return()=>{mountedRef.current=false;examDetailRequestRef.current+=1;examDetailFlightRef.current=null}
   },[])
   const examStatus=x=>({in_progress:'答题中',submitted:'待批改',grading:'批改中',graded:'已完成',expired:'已过期'}[x]||x||'—')
   const result=x=>x.status==='graded'?(x.passed?'通过':'未通过'):examStatus(x.status)
@@ -3138,21 +3152,38 @@ function EmployeeExamPanel({data,loading,error}){
   }
   const openExam=async row=>{
     if(!mountedRef.current)return
+    const requestKey=`${row.source_system||'current'}:${row.id}`
+    if(examDetailFlightRef.current?.key===requestKey)return examDetailFlightRef.current.promise
+    const requestToken=++examDetailRequestRef.current
+    const isCurrent=()=>mountedRef.current&&examDetailRequestRef.current===requestToken
     setExamDetail({session:row,answers:[]});setDetailLoading(true);setDetailError('')
-    const fn=row.source_system==='legacy'?'admin_employee_exam_legacy_detail':'admin_employee_exam_session_detail'
-    const {data:detail,error:e}=await supabase.rpc(fn,{p_session_id:row.id})
-    if(!mountedRef.current)return
-    if(e){
-      const message=employeeRequestError(e,'考试详情读取失败，请重试。')
-      setDetailError(message)
-      notify({
-        type:'error',module:EMPLOYEE_TOAST_MODULE,operation:'读取考试详情',reason:message,
-        dedupeKey:employeeToastDedupeKey('读取考试详情','error',row.id),
-        retry:()=>openExam(row),retryLabel:'重试',
-      })
-    }else setExamDetail(detail)
-    setDetailLoading(false)
+    const request=(async()=>{
+      try{
+        const fn=row.source_system==='legacy'?'admin_employee_exam_legacy_detail':'admin_employee_exam_session_detail'
+        const {data:detail,error:e}=await supabase.rpc(fn,{p_session_id:row.id})
+        if(e)throw e
+        const rawAnswers=Array.isArray(detail?.answers)?detail.answers:[]
+        let answers=rawAnswers
+        try{answers=await hydrateExamAnswersAttachments(supabase,rawAnswers,300)}catch{/* Attachment preview failure must not block the exam record. */}
+        if(!isCurrent())return false
+        setExamDetail(detail?{...detail,answers}:detail)
+        return true
+      }catch(error){
+        if(!isCurrent())return false
+        const message=employeeRequestError(error,'考试详情读取失败，请重试。')
+        setDetailError(message)
+        notify({
+          type:'error',module:EMPLOYEE_TOAST_MODULE,operation:'读取考试详情',reason:message,
+          dedupeKey:employeeToastDedupeKey('读取考试详情','error',row.id),
+          retry:()=>openExam(row),retryLabel:'重试',
+        })
+        return false
+      }finally{if(isCurrent())setDetailLoading(false)}
+    })()
+    examDetailFlightRef.current={key:requestKey,promise:request}
+    try{return await request}finally{if(examDetailFlightRef.current?.promise===request)examDetailFlightRef.current=null}
   }
+  const closeExamDetail=()=>{examDetailRequestRef.current+=1;examDetailFlightRef.current=null;setExamDetail(null);setDetailLoading(false);setDetailError('')}
   return <section className="detail-panel employee-exam-panel"><div className="detail-panel-head"><div><h3>考试记录</h3></div><span className="employee-exam-count">{filteredRows.length}{sourceTotal!==filteredRows.length?` / ${sourceTotal}`:''} 次</span></div>
     <EmployeeProfileHistoryFilters draft={draft} setDraft={setDraft} onApply={apply} onReset={reset} loading={loading} placeholder="搜索日期、考试、来源、系列、评分人、状态或结果"/>
     {limited&&<div className="employee-history-limit-note">当前安全读取最近 {sourceRows.length} / 共 {sourceTotal} 次；日期和搜索仅筛选这批已加载记录，不会并发读取其余记录。</div>}
@@ -3161,7 +3192,7 @@ function EmployeeExamPanel({data,loading,error}){
       {rows.length?<div className="employee-exam-table-wrap"><table className="employee-exam-table"><thead><tr><th>来源</th><th>考试</th><th>次数</th><th>开始作答</th><th>完成作答</th><th>评分完成</th><th>成绩</th><th>答题结果</th><th>评分人</th><th>结果</th><th>详情</th></tr></thead><tbody>{rows.map(x=><tr key={`${x.source_system}-${x.id}`}><td><span className={`exam-source-badge ${x.source_system==='legacy'?'legacy':'current'}`}>{x.source_label||'本系统'}</span></td><td><strong>{x.title}</strong></td><td>第 {x.attempt_no} 次</td><td>{formatDateTime(x.started_at)}</td><td>{formatDateTime(x.submitted_at)}</td><td>{formatDateTime(x.graded_at)}</td><td>{x.percentage==null?'—':`${Number(x.earned_score||0).toLocaleString()}/${Number(x.total_score||0).toLocaleString()} · ${Number(x.percentage).toFixed(1)}%`}</td><td>{answerResult(x)}</td><td>{x.grader_name||'—'}</td><td><span className={`employee-exam-result ${x.status==='graded'?(x.passed?'pass':'fail'):'pending'}`}>{result(x)}</span></td><td><button className="table-action" onClick={()=>openExam(x)}>查看详情</button></td></tr>)}</tbody></table></div>:<div className="employee-exam-empty">{sourceRows.length?'暂无符合筛选条件的考试记录':'暂无考试记录'}</div>}
       {filteredRows.length>0&&<Pagination page={resolvedPage} pages={pages} total={filteredRows.length} pageSize={pageSize} pageSizeOptions={EMPLOYEE_HISTORY_PAGE_SIZES} loading={loading} onPage={setPage} onPageSize={next=>{setPageSize(next);setPage(1)}}/>}
     </>}
-    {examDetail&&<EmployeeExamDetailModal detail={examDetail} loading={detailLoading} error={detailError} onClose={()=>setExamDetail(null)}/>}
+    {examDetail&&<EmployeeExamDetailModal detail={examDetail} loading={detailLoading} error={detailError} onClose={closeExamDetail}/>}
   </section>
 }
 
@@ -3171,7 +3202,7 @@ function EmployeeExamDetailModal({detail,loading,error,onClose}){
     <div className="modal-head"><div><span className="modal-kicker">EXAM RECORD</span><h2>{session.title||'考试详细记录'}</h2><p>{session.employee_no||''} · {session.source_label||'本系统'} · 第 {session.attempt_no||'—'} 次</p></div><button onClick={onClose}>×</button></div>
     {loading?<div className="employee-exam-empty">正在读取完整答卷...</div>:error?<div className="employee-exam-empty error">{error}</div>:<div className="employee-exam-detail-body">
       <div className="employee-exam-summary"><span><small>成绩</small><b>{session.percentage==null?'—':`${Number(session.percentage).toFixed(1)}%`}</b></span><span><small>得分</small><b>{session.earned_score==null?'—':`${session.earned_score}/${session.total_score}`}</b></span><span><small>状态</small><b>{session.status||'—'}</b></span><span><small>评分完成</small><b>{formatDateTime(session.graded_at)}</b></span></div>
-      <div className="employee-exam-answer-list">{answers.length?answers.map((a,index)=><article key={a.answer_id||a.question_id||index}><header><b>第 {a.ordinality||index+1} 题</b><span>{a.awarded_score==null?'待评分':`${a.awarded_score}/${a.points||0} 分`}</span></header><p>{a.question_zh||a.question_en||a.question_vi||'题目内容未保留'}</p><div><small>员工答案</small><strong>{a.answer_text||'未作答'}</strong></div>{a.grader_feedback&&<div><small>评分说明</small><strong>{a.grader_feedback}</strong></div>}</article>):<div className="employee-exam-empty">此记录没有可显示的逐题答卷</div>}</div>
+      <div className="employee-exam-answer-list">{answers.length?answers.map((a,index)=><article key={a.answer_id||a.question_id||index}><header><b>第 {a.ordinality||index+1} 题</b><span>{a.awarded_score==null?'待评分':`${a.awarded_score}/${a.points||0} 分`}</span></header><p>{a.question_zh||a.question_en||a.question_vi||'题目内容未保留'}</p><div><small>员工答案</small><strong>{a.answer_text||(Array.isArray(a.attachments)&&a.attachments.length?'仅提交图片':'未作答')}</strong></div><EmployeeExamAnswerImageGallery attachments={a.attachments}/>{a.grader_feedback&&<div><small>评分说明</small><strong>{a.grader_feedback}</strong></div>}</article>):<div className="employee-exam-empty">此记录没有可显示的逐题答卷</div>}</div>
     </div>}
   </div></div>
 }

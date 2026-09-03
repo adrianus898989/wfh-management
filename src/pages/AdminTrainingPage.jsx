@@ -9,6 +9,7 @@ import { useAdminAccess } from '../lib/adminAccess'
 import { EmployeeDrawer } from './AdminEmployeesPage'
 import { ExamImageGallery } from '../components/ExamImageGallery'
 import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments.js'
 import { businessTodayIso } from '../lib/adminQueryDefaults'
 import { isCurrentLiveRequest, staleSnapshotNotice } from '../lib/requestConsistency'
 
@@ -44,6 +45,16 @@ const questionRequestLabel=(filters,page,pageSize)=>`题库：搜索 ${labelValu
 const sessionRequestLabel=(tab,filters,page,pageSize)=>`${tab}：员工 ${labelValue(filters.employeeNo||filters.employeeName)}，团队 ${labelValue(filters.team)}，岗位 ${labelValue(filters.position)}，日期 ${labelValue(filters.dateFrom)} 至 ${labelValue(filters.dateTo)}，第 ${page} 页 / ${pageSize} 条`
 const fmt=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—'
 const score=v=>v==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:2})
+const examAnswerImageLabels={
+  imageAlt:'员工答题图片',imageOpen:'点击放大',imageClose:'关闭图片',
+  imageFallback:'图片暂时无法预览',imageRetry:'重试预览',imageNumber:count=>`答题图片 ${count}`,
+}
+function ExamAnswerImageGallery({attachments}){
+  const rows=Array.isArray(attachments)?attachments:[]
+  const urls=rows.map(item=>item?.url||'').filter(Boolean)
+  if(!rows.length)return null
+  return <section className="exam-answer-attachment-block" aria-label={`员工答题图片 · ${rows.length} 张`}><strong>员工答题图片 · {rows.length} 张</strong>{!!urls.length&&<ExamImageGallery urls={urls} labels={examAnswerImageLabels} className="exam-answer-media-grid"/>}{urls.length<rows.length&&<small className="exam-answer-attachment-unavailable">{rows.length-urls.length} 张图片暂时无法预览，请稍后重试。</small>}</section>
+}
 const breakdown=x=>{
   if(x.source_system==='legacy'&&!x.answer_detail_available)return x.percentage==null?'逐题明细未同步':'总成绩已保留 · 逐题明细未同步'
   const result=[`正确 ${x.correct_count||0}`]
@@ -730,29 +741,42 @@ function EmployeeExamHistory({employee,onClose,onOpen}){
 function GradeModal({session,forceReadOnly=false,permissionPage='records',onClose,onChanged,onRefreshConfirm}){
   const {notify}=useAppToast()
   const [detail,setDetail]=useState(null),[error,setError]=useState(''),[drafts,setDrafts]=useState({}),[busy,setBusy]=useState('')
+  const mountedRef=useRef(true),loadFlightRef=useRef(null)
   const sourceReadOnly=session.source_system==='legacy'||session.read_only
   const readOnly=sourceReadOnly||forceReadOnly
   const load=async(operation='读取考试答卷')=>{
+    if(!mountedRef.current)return false
+    if(loadFlightRef.current)return loadFlightRef.current
     const prefix=permissionPage==='grading'?'admin_exam_grading':'admin_exam_records'
     const rpc=sourceReadOnly?`${prefix}_legacy_detail`:`${prefix}_session_detail`
     setError('')
-    try{
-      const {data,error:e}=await supabase.rpc(rpc,{p_session_id:session.id})
-      if(e)throw e
-      setDetail(data)
-      setDrafts(Object.fromEntries((data?.answers||[]).map(a=>[a.answer_id,{score:a.awarded_score??'',feedback:a.grader_feedback||''}])))
-      return true
-    }catch(loadError){
-      const reason=message(loadError)
-      setError(reason)
-      notify({
-        type:'error',module:TRAINING_TOAST_MODULE,operation,reason,
-        dedupeKey:'training:answer-detail:read:error',retry:()=>load('重试读取考试答卷'),retryLabel:'重试',
-      })
-      return false
-    }
+    const request=(async()=>{
+      try{
+        const {data,error:e}=await supabase.rpc(rpc,{p_session_id:session.id})
+        if(e)throw e
+        const rawAnswers=Array.isArray(data?.answers)?data.answers:[]
+        let answers=rawAnswers
+        try{answers=await hydrateExamAnswersAttachments(supabase,rawAnswers,300)}catch{/* Attachment preview failure must not block review or grading. */}
+        if(!mountedRef.current)return false
+        const hydrated=data?{...data,answers}:data
+        setDetail(hydrated)
+        setDrafts(Object.fromEntries(answers.map(a=>[a.answer_id,{score:a.awarded_score??'',feedback:a.grader_feedback||''}])))
+        return true
+      }catch(loadError){
+        if(!mountedRef.current)return false
+        const reason=message(loadError)
+        setError(reason)
+        notify({
+          type:'error',module:TRAINING_TOAST_MODULE,operation,reason,
+          dedupeKey:'training:answer-detail:read:error',retry:()=>load('重试读取考试答卷'),retryLabel:'重试',
+        })
+        return false
+      }
+    })()
+    loadFlightRef.current=request
+    try{return await request}finally{if(loadFlightRef.current===request)loadFlightRef.current=null}
   }
-  useEffect(()=>{load()},[])
+  useEffect(()=>{mountedRef.current=true;load();return()=>{mountedRef.current=false}},[])
   const grade=async(a,status,score)=>{
     setBusy(a.answer_id);setError('')
     const feedback=drafts[a.answer_id]?.feedback||''
@@ -784,7 +808,7 @@ function GradeModal({session,forceReadOnly=false,permissionPage='records',onClos
         <div className="grade-summary"><span>{s.employee_no}</span><span>{s.team_name} · {s.position_name}</span><span>第 {s.attempt_no} 次</span><span>{statusText(s.status)}</span><span>{s.percentage==null?'待完成评分':`${score(s.earned_score)}/${score(s.total_score)} · ${score(s.percentage)}%`}</span></div>
         {hasDetail?<div className="grade-audit-grid"><span><small>已作答</small><b>{s.answer_detail_count||answers.length} / {s.total_question_count||s.answer_detail_count||answers.length} 题</b></span><span><small>未作答</small><b>{s.unanswered_count||0} 题</b></span><span><small>正确</small><b>{s.correct_count||0} 题</b></span><span><small>半对</small><b>{s.partial_count||0} 题</b></span><span><small>错误</small><b>{s.wrong_count||0} 题</b></span><span><small>待评分</small><b>{s.pending_count||0} 题</b></span><span><small>开始作答时间</small><b>{fmt(s.started_at)}</b></span><span><small>完成作答时间</small><b>{fmt(s.submitted_at)}</b></span><span><small>评分完成时间</small><b>{fmt(s.graded_at)}</b></span><span><small>评分人</small><b>{s.grader_name||'—'}</b></span></div>:<div className="exam-score-only-note"><b>总成绩已保留 · 逐题明细未同步</b><span>没有逐题答案，不能从总分可靠推算正确或错误题数。</span></div>}
       </>}
-      {!detail?<div className="exam-empty">读取答卷中…</div>:answers.length?answers.map((a,i)=><article className="grade-item" key={a.answer_id||a.question_id}><header><b>{i+1}</b><strong>{a.question_zh||a.question_en||a.question_vi}</strong><span className={`grade-score-pill ${a.grade_status||'pending'}`}>{a.awarded_score==null||a.grade_status==='pending'?'待评分':Number(a.points)>0?`${score(a.awarded_score)}/${score(a.points)} 分`:`旧系统得分 ${score(a.awarded_score)}`}</span></header>{(a.question_en||a.question_vi)&&<details className="grade-translations"><summary>查看英文 / 越南文题目</summary>{a.question_en&&<p><b>EN</b>{a.question_en}</p>}{a.question_vi&&<p><b>VI</b>{a.question_vi}</p>}</details>}<ExamImageGallery urls={a.image_urls}/><div className="answer-box"><small>员工答案</small><p>{a.answer_text||'未作答'}</p></div>{readOnly?<div className="legacy-answer-feedback"><small>旧系统评语</small><p>{a.grader_feedback||'无评语'}</p></div>:<><label className="grade-feedback">老师评语<textarea value={drafts[a.answer_id]?.feedback||''} onChange={e=>setDrafts({...drafts,[a.answer_id]:{...drafts[a.answer_id],feedback:e.target.value}})} placeholder="填写错误原因、正确处理方式或复训要求"/></label>{a.graded_at&&<div className="grade-item-audit">本题评分：{a.grader_name||'—'} · {fmt(a.graded_at)}</div>}<div className="grade-actions"><button className={a.grade_status==='wrong'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'wrong',0)}>错误 · 0/{score(a.points)}</button><button className={a.grade_status==='partial'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'partial',a.points/2)}>半对 · {score(a.points/2)}/{score(a.points)}</button><button className={a.grade_status==='correct'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'correct',a.points)}>正确 · {score(a.points)}/{score(a.points)}</button></div></>}</article>):hasDetail&&<div className="exam-empty compact">没有可显示的逐题答卷</div>}
+      {!detail?<div className="exam-empty">读取答卷中…</div>:answers.length?answers.map((a,i)=><article className="grade-item" key={a.answer_id||a.question_id}><header><b>{i+1}</b><strong>{a.question_zh||a.question_en||a.question_vi}</strong><span className={`grade-score-pill ${a.grade_status||'pending'}`}>{a.awarded_score==null||a.grade_status==='pending'?'待评分':Number(a.points)>0?`${score(a.awarded_score)}/${score(a.points)} 分`:`旧系统得分 ${score(a.awarded_score)}`}</span></header>{(a.question_en||a.question_vi)&&<details className="grade-translations"><summary>查看英文 / 越南文题目</summary>{a.question_en&&<p><b>EN</b>{a.question_en}</p>}{a.question_vi&&<p><b>VI</b>{a.question_vi}</p>}</details>}<ExamImageGallery urls={a.image_urls}/><div className="answer-box"><small>员工答案</small><p>{a.answer_text||(Array.isArray(a.attachments)&&a.attachments.length?'仅提交图片':'未作答')}</p><ExamAnswerImageGallery attachments={a.attachments}/></div>{readOnly?<div className="legacy-answer-feedback"><small>旧系统评语</small><p>{a.grader_feedback||'无评语'}</p></div>:<><label className="grade-feedback">老师评语<textarea value={drafts[a.answer_id]?.feedback||''} onChange={e=>setDrafts({...drafts,[a.answer_id]:{...drafts[a.answer_id],feedback:e.target.value}})} placeholder="填写错误原因、正确处理方式或复训要求"/></label>{a.graded_at&&<div className="grade-item-audit">本题评分：{a.grader_name||'—'} · {fmt(a.graded_at)}</div>}<div className="grade-actions"><button className={a.grade_status==='wrong'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'wrong',0)}>错误 · 0/{score(a.points)}</button><button className={a.grade_status==='partial'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'partial',a.points/2)}>半对 · {score(a.points/2)}/{score(a.points)}</button><button className={a.grade_status==='correct'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'correct',a.points)}>正确 · {score(a.points)}/{score(a.points)}</button></div></>}</article>):hasDetail&&<div className="exam-empty compact">没有可显示的逐题答卷</div>}
     </div>
     <footer><button className="primary" onClick={onClose}>{readOnly?'关闭':'完成并关闭'}</button></footer>
   </Modal>
