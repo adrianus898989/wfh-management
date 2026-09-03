@@ -10,6 +10,7 @@ import {
 import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 import { registerCurrentAppRelease } from '../lib/releaseSession'
+import { publicPortalTarget } from '../lib/appBasePath'
 
 function withTimeout(promise, ms = 25000) {
   let timer
@@ -84,7 +85,7 @@ export default function StaffLoginPage() {
       // self-only bootstrap RPC after navigation, so no duplicate RLS read is
       // needed here.
       resetLocale()
-      navigate('/staff', { replace: true })
+      navigate(publicPortalTarget('staff'), { replace: true })
     } catch (requestError) {
       setError(requestError?.message === 'TIMEOUT'
         ? t('auth.loginTimeout','Sign in timed out. Please try again.')
@@ -158,7 +159,7 @@ export default function StaffLoginPage() {
             {loading ? t('auth.signingIn','登录中...') : t('auth.signIn','登录')}
           </button>
           <div className="login-foot">
-            {t('auth.firstTime','首次使用？')} <Link to="/staff/register">{t('auth.activate','激活账号')}</Link>
+            {t('auth.firstTime','首次使用？')} <Link to={publicPortalTarget('staff','register')}>{t('auth.activate','激活账号')}</Link>
           </div>
         </form>
       </main>

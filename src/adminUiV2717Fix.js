@@ -1,4 +1,5 @@
 import { supabase } from './lib/supabase'
+import { appPathFromBrowserPath, appPathname, internalPortalPath, publicPortalTarget } from './lib/appBasePath'
 
 const text=v=>String(v??'').trim()
 const upper=v=>text(v).toUpperCase()
@@ -266,8 +267,7 @@ function fixErrorLoadingCount(){
 }
 
 function employeeRouteFor(id){
-  const current=window.location.pathname
-  const base=current.includes('/admin/')?current.replace(/\/admin\/[^/?#]+.*$/,'/admin/employees'):'/wfh-management/admin/employees'
+  const base=appPathname(publicPortalTarget('admin','employees'))
   return `${base}?employee_no=${encodeURIComponent(id)}`
 }
 function openEmployeeArchive(id){
@@ -309,7 +309,7 @@ function cleanEmployeeTarget(){
   window.history.replaceState(window.history.state,'',`${u.pathname}${u.search}${u.hash}`)
 }
 function openEmployeeFromQuery(){
-  if(!/\/admin\/employees\/?$/.test(window.location.pathname))return
+  if(internalPortalPath(appPathFromBrowserPath(window.location.pathname))!=='/admin/employees')return
   const urlTarget=upper(new URLSearchParams(window.location.search).get('employee_no'))
   let stored='';try{stored=upper(sessionStorage.getItem('wfh-open-employee-no'))}catch{}
   const target=urlTarget||stored

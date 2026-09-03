@@ -1,7 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.4'
 import { jwtSessionId, trustedClientIp } from '../_shared/adminIp.ts'
-
-const allowedOrigin = 'https://adrianus898989.github.io'
+import { corsGate, corsHeaders } from '../_shared/corsOrigin.ts'
 
 // Founder 是系统锁定账号，不能在后台停用或删除。这里保留固定映射，
 // 避免数据库连接繁忙时连 Founder 都无法登录；密码仍由 Supabase Auth 校验。
@@ -54,21 +53,13 @@ function safeErrorMeta(error: any) {
   }
 }
 
-function cors(origin: string | null) {
-  return {
-    'Access-Control-Allow-Origin': origin === allowedOrigin ? origin : allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Expose-Headers': 'X-Login-Error-Code',
-    'Vary': 'Origin',
-  }
-}
+const corsOptions = { exposedHeaders: 'X-Login-Error-Code' }
 
 function json(req: Request, body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
-      ...cors(req.headers.get('origin')),
+      ...corsHeaders(req, corsOptions),
       'Content-Type': 'application/json',
       'Cache-Control': 'no-store',
       ...extraHeaders,
@@ -208,9 +199,8 @@ async function releaseCandidateLease(authClient: any) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: cors(req.headers.get('origin')) })
-  }
+  const corsResponse = corsGate(req, corsOptions)
+  if (corsResponse) return corsResponse
 
   if (req.method !== 'POST') {
     return json(req, { error: '请求方式不支持', code: 'METHOD_NOT_ALLOWED' }, 405)

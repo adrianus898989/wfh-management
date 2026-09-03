@@ -121,7 +121,7 @@ test('Edge preflight is anonymous-only at the gateway but service-role-only at t
   assert.doesNotMatch(edge, /req\.url|searchParams/)
   assert.match(edge, /const DEPENDENCY_TIMEOUT_MS = 8_000/)
   assert.match(edge, /global: \{ fetch: timedFetch\(DEPENDENCY_TIMEOUT_MS\) \}/)
-  assert.match(edge, /origin && origin !== ALLOWED_ORIGIN/)
+  assert.match(edge, /const corsResponse = corsGate\(req, corsOptions\)/)
   assert.match(edge, /Cache-Control': 'no-store, private, max-age=0'/)
 })
 

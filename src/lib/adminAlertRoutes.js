@@ -1,7 +1,8 @@
 import { adminTabSlug } from '../config/navigation.js'
+import { publicPortalTarget } from './appBasePath.js'
 
 const adminTabTarget = (pathname, canonicalTab) =>
-  `${pathname}?tab=${encodeURIComponent(adminTabSlug(pathname, canonicalTab))}`
+  `${publicPortalTarget(pathname)}?tab=${encodeURIComponent(adminTabSlug(pathname, canonicalTab))}`
 
 export function adminAlertTarget(alertType) {
   return alertType === 'payout_change'

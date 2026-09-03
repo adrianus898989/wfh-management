@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { bootstrapAppSessionAccess, supabase } from '../lib/supabase'
+import { publicPortalTarget } from '../lib/appBasePath'
 
 export default function MfaPage() {
   const [loading, setLoading] = useState(true)
@@ -41,14 +42,14 @@ export default function MfaPage() {
       if (!access.otp_required) {
         setRequired(false)
         setLoading(false)
-        navigate('/admin', { replace: true })
+        navigate(publicPortalTarget('admin'), { replace: true })
         return
       }
 
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
       if (aal?.currentLevel === 'aal2') {
         setLoading(false)
-        navigate('/admin', { replace: true })
+        navigate(publicPortalTarget('admin'), { replace: true })
         return
       }
 
@@ -104,11 +105,11 @@ export default function MfaPage() {
     })
 
     if (verifyError) return setError('验证码错误')
-    navigate('/admin', { replace: true })
+    navigate(publicPortalTarget('admin'), { replace: true })
   }
 
   if (loading) return <div className="mfa-page"><div className="mfa-card">Loading...</div></div>
-  if (!required) return <Navigate to="/admin" replace />
+  if (!required) return <Navigate to={publicPortalTarget('admin')} replace />
 
   return (
     <div className="mfa-page">

@@ -1,5 +1,6 @@
 import { PERMISSIONS } from './permissions.js'
 import { adminPageAccess } from './adminPagePermissions.js'
+import { internalPortalPath, publicPortalTarget } from '../lib/appBasePath.js'
 
 const enc = value => encodeURIComponent(value)
 
@@ -66,12 +67,12 @@ const ADMIN_TAB_LABELS = Object.freeze(Object.fromEntries(Object.entries(ADMIN_T
 
 export function adminTabSlug(pathname, canonicalTab = '') {
   const value = String(canonicalTab || '').trim()
-  return ADMIN_TAB_SLUGS[pathname]?.[value] || value
+  return ADMIN_TAB_SLUGS[internalPortalPath(pathname)]?.[value] || value
 }
 
 export function canonicalAdminTab(pathname, routeValue = '') {
   const value = String(routeValue || '').trim()
-  return ADMIN_TAB_LABELS[pathname]?.[value] || value
+  return ADMIN_TAB_LABELS[internalPortalPath(pathname)]?.[value] || value
 }
 
 export function adminTabParams(pathname, canonicalTab = '') {
@@ -128,7 +129,7 @@ const ACCESS = {
 // Labels and ordering below are presentation-only. Every item still points to
 // the existing page and its canonical tab so moving the menu cannot change the
 // page's data, actions, or permission checks.
-export const adminNavigation = [
+const adminNavigationInternal = [
   { id:'home', to:'/admin', label:'首页', icon:'⌂', ...ACCESS.dashboard },
   { id:'alerts', to:tab('/admin/employees', '预警记录'), label:'预警中心', icon:'警', ...ACCESS.alerts },
   {
@@ -187,6 +188,16 @@ export const adminNavigation = [
     ],
   },
 ]
+
+const publicNavigation = navigation => navigation.map(section => ({
+  ...section,
+  ...(section.to ? { to:publicPortalTarget(section.to) } : {}),
+  ...(section.children ? {
+    children:section.children.map(item => ({ ...item, to:publicPortalTarget(item.to) })),
+  } : {}),
+}))
+
+export const adminNavigation = publicNavigation(adminNavigationInternal)
 
 const route = (to, access, groupId = '') => ({ to, groupId, ...access })
 
@@ -268,26 +279,29 @@ const DEFAULT_TABS = {
 
 export function adminTargetMatches(to, pathname, search = '') {
   const target = targetUrl(to)
-  if (target.pathname !== pathname) return false
+  const internalPathname = internalPortalPath(pathname)
+  const internalTargetPathname = internalPortalPath(target.pathname)
+  if (internalTargetPathname !== internalPathname) return false
   const requestedValue = new URLSearchParams(search).get('tab')
   const targetValue = target.searchParams.get('tab')
   const requestedTab = requestedValue === null
-    ? DEFAULT_TABS[pathname] ?? null
-    : canonicalAdminTab(pathname, requestedValue)
+    ? DEFAULT_TABS[internalPathname] ?? null
+    : canonicalAdminTab(internalPathname, requestedValue)
   const targetTab = targetValue === null
-    ? DEFAULT_TABS[target.pathname] ?? null
-    : canonicalAdminTab(target.pathname, targetValue)
+    ? DEFAULT_TABS[internalTargetPathname] ?? null
+    : canonicalAdminTab(internalTargetPathname, targetValue)
   return targetTab === requestedTab
 }
 
 export function requestedAdminRoute(pathname, search = '') {
+  const internalPathname = internalPortalPath(pathname)
   const rawRequestedTab = new URLSearchParams(search).get('tab')
-  const requestedTab = rawRequestedTab === null ? null : canonicalAdminTab(pathname, rawRequestedTab)
+  const requestedTab = rawRequestedTab === null ? null : canonicalAdminTab(internalPathname, rawRequestedTab)
   return adminRouteAccess.find(entry => {
     const target = targetUrl(entry.to)
     const rawTargetTab = target.searchParams.get('tab')
     const targetTab = rawTargetTab === null ? null : canonicalAdminTab(target.pathname, rawTargetTab)
-    return target.pathname === pathname && targetTab === requestedTab
+    return target.pathname === internalPathname && targetTab === requestedTab
   }) || null
 }
 
@@ -305,11 +319,12 @@ export function adminSectionItems(pathname, search = '') {
 // presentation bridge: it resolves a canonical page/tab to the new sidebar name
 // without changing the underlying URL or feature key.
 export function adminPagePresentation(pathname, canonicalTab = '') {
-  const search = canonicalTab ? `?tab=${enc(adminTabSlug(pathname, canonicalTab))}` : ''
-  const routeEntry = requestedAdminRoute(pathname, search)
+  const internalPathname = internalPortalPath(pathname)
+  const search = canonicalTab ? `?tab=${enc(adminTabSlug(internalPathname, canonicalTab))}` : ''
+  const routeEntry = requestedAdminRoute(internalPathname, search)
   const section = adminNavigation.find(entry => entry.id === routeEntry?.groupId)
   const candidates = section?.children || (section ? [section] : [])
-  const item = candidates.find(entry => adminTargetMatches(entry.to, pathname, search))
+  const item = candidates.find(entry => adminTargetMatches(entry.to, internalPathname, search))
   return {
     groupId: routeEntry?.groupId || '',
     sectionLabel: section?.label || '',
@@ -329,7 +344,7 @@ export function adminLocalPageTabs(pathname, canonicalTabs = [], activeTab = '')
   return { active, tabs }
 }
 
-export const staffNavigation = [
+const staffNavigationInternal = [
   { id:'profile', to:'/staff', key:'nav.profilePanel', label:'个人档案面板' },
   { id:'exams', to:'/staff/exams', key:'nav.exams', label:'我的考试' },
   {
@@ -349,6 +364,8 @@ export const staffNavigation = [
   },
 ]
 
+export const staffNavigation = publicNavigation(staffNavigationInternal)
+
 const STAFF_DEFAULT_TABS = {
   '/staff/rewards':'errors',
   '/staff/payroll':'records',
@@ -356,9 +373,11 @@ const STAFF_DEFAULT_TABS = {
 
 export function staffTargetMatches(to, pathname, search = '') {
   const target = targetUrl(to)
-  if (target.pathname !== pathname) return false
-  const requestedTab = new URLSearchParams(search).get('tab') ?? STAFF_DEFAULT_TABS[pathname] ?? null
-  const targetTab = target.searchParams.get('tab') ?? STAFF_DEFAULT_TABS[target.pathname] ?? null
+  const internalPathname = internalPortalPath(pathname)
+  const internalTargetPathname = internalPortalPath(target.pathname)
+  if (internalTargetPathname !== internalPathname) return false
+  const requestedTab = new URLSearchParams(search).get('tab') ?? STAFF_DEFAULT_TABS[internalPathname] ?? null
+  const targetTab = target.searchParams.get('tab') ?? STAFF_DEFAULT_TABS[internalTargetPathname] ?? null
   return targetTab === requestedTab
 }
 

@@ -5,6 +5,7 @@ import { useAdminI18n } from '../lib/adminI18n'
 import { AdminAlertBell } from './AdminAlertCenter'
 import { PERMISSIONS } from '../config/permissions'
 import '../styles-admin-topbar.css'
+import { publicPortalTarget } from '../lib/appBasePath'
 
 const emptyPresence = {
   loading:true,
@@ -374,7 +375,7 @@ export default function AdminTopbar({ access }) {
         </section>}
       </div>}
 
-      {canManual && <Link className="admin-topbar-help" to="/admin/manual" aria-label={locale === 'en' ? 'Backend feature manual' : '后台功能用途手册'} title={locale === 'en' ? 'Backend feature manual' : '后台功能用途手册'}><span aria-hidden="true">?</span><b>{locale === 'en' ? 'Manual' : '功能手册'}</b></Link>}
+      {canManual && <Link className="admin-topbar-help" to={publicPortalTarget('admin','manual')} aria-label={locale === 'en' ? 'Backend feature manual' : '后台功能用途手册'} title={locale === 'en' ? 'Backend feature manual' : '后台功能用途手册'}><span aria-hidden="true">?</span><b>{locale === 'en' ? 'Manual' : '功能手册'}</b></Link>}
       <div className="admin-topbar-alert"><AdminAlertBell access={access} /></div>
       <div className="admin-topbar-account" title={login}>
         <span aria-hidden="true">{accountName.slice(0,1).toUpperCase()}</span>

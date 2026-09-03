@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { classifySessionFailure } from './sessionFailure.js'
 import { readFunctionResponsePayload } from './functionErrors.js'
 import { runCoalescedAppHeartbeat } from './appSessionHeartbeatPressure.js'
+import { portalAuthStorageKey, portalModeFromBrowserPath } from './appBasePath.js'
 const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
@@ -13,13 +14,12 @@ export const APP_SESSION_HEARTBEAT_MS=2*60*1000
 export const APP_SESSION_RPC_TIMEOUT_MS=15*1000
 export const SESSION_SETUP_TIMEOUT_MS=25*1000
 export const SESSION_LOCAL_SIGNOUT_TIMEOUT_MS=4*1000
-const appBasePath=String(import.meta.env.BASE_URL||'/').replace(/\/+$/,'')
 const browserPath=typeof window==='undefined'?'':window.location.pathname
-const appPath=appBasePath&&(browserPath===appBasePath||browserPath.startsWith(`${appBasePath}/`))
-  ?browserPath.slice(appBasePath.length)||'/'
-  :browserPath
-const portal=appPath==='/admin'||appPath.startsWith('/admin/')?'admin':'staff'
-const AUTH_STORAGE_KEY=`wfh-${portal}-auth-token`
+// Public route names must never leak into Edge/body security semantics. The
+// classifier accepts both friendly and one-hop legacy aliases, then collapses
+// them to the strict internal admin|staff mode before the client is created.
+const portal=portalModeFromBrowserPath(browserPath,import.meta.env.BASE_URL||'/')||'staff'
+const AUTH_STORAGE_KEY=portalAuthStorageKey(portal)
 const SESSION_ACTIVITY_KEY=`wfh_${portal}_session_last_activity`
 const SESSION_NOTICE_KEY=`wfh_${portal}_session_notice`
 let lastActivityWrite=0

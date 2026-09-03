@@ -1,6 +1,7 @@
 import { supabase } from './lib/supabase'
 import { getAllErrorSummaryMap } from './lib/errorSummaryStore'
 import { openEmployeeErrorHistory } from './stableErrorUiEnhancer'
+import { appPathFromBrowserPath, internalPortalPath } from './lib/appBasePath'
 
 const rawInvoke=supabase.functions.invoke.bind(supabase.functions)
 const text=v=>String(v??'').trim()
@@ -18,8 +19,9 @@ let summaryCache={at:0,map:new Map()}
 let reportCache={at:0,key:'',result:null}
 let forceReportReloaded=false
 
-const isReports=()=>/\/admin\/reports\/?$/.test(window.location.pathname)
-const isEmployees=()=>/\/admin\/employees\/?$/.test(window.location.pathname)
+const internalRuntimePath=()=>internalPortalPath(appPathFromBrowserPath(window.location.pathname))
+const isReports=()=>internalRuntimePath()==='/admin/reports'
+const isEmployees=()=>internalRuntimePath()==='/admin/employees'
 
 function addStyles(){
   if(document.getElementById('wfh-admin-final-v2722-style'))return

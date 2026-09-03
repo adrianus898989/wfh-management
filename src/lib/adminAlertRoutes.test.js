@@ -15,7 +15,7 @@ test('warning links generate English tabs accepted by the admin route guard', ()
 
 test('employee links keep the warning tab visible and open the selected employee drawer', () => {
   const target = new URL(adminAlertEmployeeTarget('employee / 42'), 'https://wfh.local')
-  assert.equal(target.pathname, '/admin/employees')
+  assert.equal(target.pathname, '/workspace/employees')
   assert.equal(target.searchParams.get('tab'), 'alerts')
   assert.equal(target.searchParams.get('employee'), 'employee / 42')
 })

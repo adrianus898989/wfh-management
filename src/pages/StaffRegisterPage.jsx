@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase, configured } from '../lib/supabase'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
+import { publicPortalTarget } from '../lib/appBasePath'
 
 const tests = [
   ['register.passwordLength', '10位以上', p => p.length >= 10],
@@ -70,7 +71,7 @@ export default function StaffRegisterPage() {
             <div className="success-check">✓</div>
             <div className="login-title">{t('register.success','注册成功')}</div>
             <div className="register-result">{result.employee_id} · {result.employee_name}</div>
-            <Link className="login-submit login-link-button" to="/staff/login">{t('register.goLogin','去登录')}</Link>
+            <Link className="login-submit login-link-button" to={publicPortalTarget('staff','login')}>{t('register.goLogin','去登录')}</Link>
           </div>
         </div>
       </div>
@@ -152,7 +153,7 @@ export default function StaffRegisterPage() {
           </button>
 
           <div className="login-foot">
-            <Link to="/staff/login">{t('register.back','返回登录')}</Link>
+            <Link to={publicPortalTarget('staff','login')}>{t('register.back','返回登录')}</Link>
           </div>
         </form>
       </div>

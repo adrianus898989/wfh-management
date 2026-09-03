@@ -32,7 +32,7 @@ test('admin sidebar uses the requested top-level order and names', () => {
     '档案变更记录', '汇总表', '人员分布总表', '站点人数报表', '排班表',
   ])
   assert.deepEqual(group('account_usage').children[0], {
-    label:'公司提供资产', to:'/admin/account-usage', pagePermission:'assets', permissions:['asset.view'],
+    label:'公司提供资产', to:'/workspace/account-usage', pagePermission:'assets', permissions:['asset.view'],
   })
   assert.deepEqual(group('payroll').children.map(entry => entry.label), [
     '待发布工资表', '已发布工资表', '导入记录', '修改工资信息记录',
@@ -52,15 +52,15 @@ test('admin sidebar uses a complete decorative line-svg icon registry', () => {
 })
 
 test('new menu names keep pointing at canonical existing tabs', () => {
-  assert.equal(group('attendance_exams').children.find(entry => entry.label === '线上培训日报记录表').to, '/admin/daily?tab=training-reports')
-  assert.equal(group('attendance_exams').children.find(entry => entry.label === '奖惩表').to, '/admin/schedule?tab=adjustments')
-  assert.equal(group('account_usage').children.find(entry => entry.label === '员工前端账号').to, '/admin/users?tab=staff')
-  assert.equal(group('payroll').children.find(entry => entry.label === '修改工资信息记录').to, '/admin/payroll?tab=payment-change-history')
+  assert.equal(group('attendance_exams').children.find(entry => entry.label === '线上培训日报记录表').to, '/workspace/daily?tab=training-reports')
+  assert.equal(group('attendance_exams').children.find(entry => entry.label === '奖惩表').to, '/workspace/schedule?tab=adjustments')
+  assert.equal(group('account_usage').children.find(entry => entry.label === '员工前端账号').to, '/workspace/users?tab=staff')
+  assert.equal(group('payroll').children.find(entry => entry.label === '修改工资信息记录').to, '/workspace/payroll?tab=payment-change-history')
   const accountItems = group('account_usage').children
   const accountIndex = accountItems.findIndex(entry => entry.label === '后台账号')
   assert.deepEqual(accountItems[accountIndex + 1], {
     label:'后台登入IP白名单',
-    to:'/admin/ip-allowlist',
+    to:'/workspace/ip-allowlist',
     pagePermission:'ip_allowlist',
     permissions:['account.ip_allowlist.view'],
   })
@@ -134,7 +134,7 @@ test('employee order handling statistics is restored under attendance and keeps 
   const item = group('attendance_exams').children.find(entry => entry.label === '员工订单处理统计')
   assert.deepEqual(item, {
     label:'员工订单处理统计',
-    to:'/admin/reports?tab=statistics',
+    to:'/workspace/reports?tab=statistics',
     pagePermission:'report_statistics',
     permissions:['report.statistics.view'],
   })
@@ -152,6 +152,16 @@ test('staff navigation is organized into four modules with stable query-tab matc
   assert.equal(staffTargetMatches('/staff/rewards', '/staff/rewards', ''), true)
   assert.equal(staffTargetMatches('/staff/rewards?tab=exams', '/staff/rewards', '?tab=attendance'), false)
   assert.equal(requestedStaffGroup('/staff/payroll', '?tab=payment-change')?.id, 'payroll')
+  assert.equal(staffNavigation[0].to, '/portal')
+  assert.equal(requestedStaffGroup('/portal/payroll', '?tab=payment-change')?.id, 'payroll')
+})
+
+test('friendly admin URLs and legacy permission matchers resolve to the same access entry', () => {
+  const friendly = requestedAdminRoute('/workspace/schedule', '?tab=monthly-attendance')
+  const legacy = requestedAdminRoute('/admin/schedule', '?tab=monthly-attendance')
+  assert.equal(friendly, legacy)
+  assert.equal(adminTargetMatches('/workspace/schedule?tab=monthly-attendance', '/admin/schedule', '?tab=monthly-attendance'), true)
+  assert.ok(adminNavigation.flatMap(entry => entry.children || [entry]).every(entry => entry.to.startsWith('/workspace')))
 })
 
 test('planning routes use independent page permissions and are part of the guarded route registry', () => {
@@ -173,7 +183,7 @@ test('backend manual is the final account page and requires its independent view
   const accountItems=group('account_usage').children
   assert.deepEqual(accountItems.at(-1), {
     label:'后台功能用途手册',
-    to:'/admin/manual',
+    to:'/workspace/manual',
     pagePermission:'manual',
     permissions:['account.manual.view'],
   })
@@ -183,14 +193,14 @@ test('backend manual is the final account page and requires its independent view
   assert.equal(requestedAdminRoute('/admin/manual','?tab=anything'),null)
   assert.match(appSource,/path="manual"[\s\S]{0,180}<AdminManualPage/)
   assert.match(topbarSource,/canManual\s*=\s*Boolean\([\s\S]{0,180}ACCOUNT_MANUAL_VIEW/)
-  assert.match(topbarSource,/\{canManual && <Link className="admin-topbar-help" to="\/admin\/manual"/)
+  assert.match(topbarSource,/publicPortalTarget\('admin','manual'\)/)
 })
 
 test('centralized backend activity log sits between roles and the manual with an independent permission',()=>{
   const accountItems=group('account_usage').children
   const roleIndex=accountItems.findIndex(item=>item.label==='后台角色权限')
   assert.deepEqual(accountItems[roleIndex+1],{
-    label:'后台操作日志',to:'/admin/activity-log',pagePermission:'activity_log',permissions:['account.activity_log.view'],
+    label:'后台操作日志',to:'/workspace/activity-log',pagePermission:'activity_log',permissions:['account.activity_log.view'],
   })
   assert.equal(accountItems[roleIndex+2]?.label,'后台功能用途手册')
   const route=requestedAdminRoute('/admin/activity-log','')
@@ -203,7 +213,7 @@ test('centralized backend activity log sits between roles and the manual with an
 test('personnel reconciliation has a dedicated guarded page and permission',()=>{
   const item=group('workforce').children.find(entry=>entry.label==='人员对账表')
   assert.deepEqual(item,{
-    label:'人员对账表',to:'/admin/reconciliation',pagePermission:'personnel_reconciliation',permissions:['employee.reconciliation.view'],
+    label:'人员对账表',to:'/workspace/reconciliation',pagePermission:'personnel_reconciliation',permissions:['employee.reconciliation.view'],
   })
   const route=requestedAdminRoute('/admin/reconciliation','')
   assert.equal(route?.groupId,'workforce')

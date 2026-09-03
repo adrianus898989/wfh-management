@@ -1,9 +1,15 @@
 # WFH Management V4
 
-- 后台登录：/admin/login
-- 员工登录：/staff/login
-- 员工注册：/staff/register
-- GitHub Pages base：/wfh-management/
+- 后台登录：/workspace/login
+- 员工登录：/portal/login
+- 员工注册：/portal/register
+- 旧 `/admin` 与 `/staff` 链接只保留为一次性兼容重定向
+- GitHub Pages base：/wfh-management/（默认构建保持不变）
+- Cloudflare Pages build command：`npm run build:cloudflare`
+- Cloudflare Pages output directory：`dist`
+- Cloudflare Pages 使用根路径 `/`，构建不会输出顶层 `404.html`，由 Pages 原生提供 SPA 深层链接回退
+- Cloudflare Pages 生产分支：`main`；构建环境需配置 `VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY` 和 `NODE_VERSION=24`
+- 创建 Cloudflare Pages 项目后，必须把精确 origin（例如 `https://wfh-workspace.pages.dev`，不含路径或通配符）加入 Supabase Edge Functions secret `APP_ALLOWED_ORIGINS`
 - 后台账号不能自行注册
 - 普通员工仍使用激活码注册并绑定 Employee ID
 - 下一步：后台创建账号 / 重置密码 / 停用 / 删除 / 权限勾选

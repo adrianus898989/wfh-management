@@ -5,8 +5,7 @@ import {
   jwtUserId,
   trustedClientIp,
 } from '../_shared/adminIp.ts'
-
-const allowedOrigin = 'https://adrianus898989.github.io'
+import { corsGate, corsHeaders } from '../_shared/corsOrigin.ts'
 const DEPENDENCY_TIMEOUT_MS = 8_000
 
 function timedFetch(timeoutMs: number) {
@@ -27,20 +26,11 @@ function timedFetch(timeoutMs: number) {
   }
 }
 
-function cors(origin: string | null) {
-  return {
-    'Access-Control-Allow-Origin': origin === allowedOrigin ? origin : allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Vary': 'Origin',
-  }
-}
-
 function json(req: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
-      ...cors(req.headers.get('origin')),
+      ...corsHeaders(req),
       'Content-Type': 'application/json',
       'Cache-Control': 'no-store',
     },
@@ -56,9 +46,8 @@ function safeMeta(error: any) {
 }
 
 export async function handleRequest(req: Request) {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: cors(req.headers.get('origin')) })
-  }
+  const corsResponse = corsGate(req)
+  if (corsResponse) return corsResponse
   if (req.method !== 'POST') return json(req, { ok: false, reason: 'method_not_allowed' }, 405)
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')

@@ -1,5 +1,6 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>居家员工管理系统</title><script>
 (function(){
+  var appBase='%BASE_URL%';
   var redirect=sessionStorage.getItem('spa_redirect');
   if(redirect){sessionStorage.removeItem('spa_redirect');history.replaceState(null,'',redirect)}
   var recoveryKey='wfh_asset_recovery_at';
@@ -14,7 +15,7 @@
     if(now-last<60000){showFailure(message);return}
     sessionStorage.setItem(recoveryKey,String(now));
     sessionStorage.setItem('spa_redirect',location.pathname+location.search+location.hash);
-    location.replace('/wfh-management/?__asset_reload='+now)
+    location.replace(appBase+'?__asset_reload='+now)
   }
   window.__wfhRecoverAsset=recover;
   addEventListener('error',function(event){var target=event.target;if(target&&(target.tagName==='SCRIPT'||target.tagName==='LINK'))recover('asset-load-error')},true);

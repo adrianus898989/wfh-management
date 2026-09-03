@@ -1,7 +1,7 @@
 import React from 'react'
+import { APP_BASE_URL } from '../lib/appBasePath'
 
 const RECOVERY_KEY = 'wfh_runtime_recovery_at'
-const BASE_PATH = '/wfh-management/'
 
 const errorText = error => String(error?.message || error || '')
 const recoverableAssetError = error => /chunkloaderror|loading chunk|failed to fetch dynamically imported module|importing a module script failed|preload/i.test(errorText(error))
@@ -12,7 +12,7 @@ const reloadWithFreshEntry = ({ force = false } = {}) => {
   if (!force && now - last < 60_000) return false
   sessionStorage.setItem(RECOVERY_KEY, String(now))
   sessionStorage.setItem('spa_redirect', `${location.pathname}${location.search}${location.hash}`)
-  location.replace(`${BASE_PATH}?__recover=${now}`)
+  location.replace(`${APP_BASE_URL}?__recover=${now}`)
   return true
 }
 

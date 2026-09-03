@@ -4,24 +4,15 @@ import {
   normalizeDeleteRequest,
   normalizeProofPaths,
 } from './protocol.js'
+import { corsGate, corsHeaders } from '../_shared/corsOrigin.ts'
 
-const allowedOrigin = 'https://adrianus898989.github.io'
 const PROOF_BUCKET = 'payment-change-proof'
-
-function cors(origin: string | null) {
-  return {
-    'Access-Control-Allow-Origin': origin === allowedOrigin ? origin : allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    Vary: 'Origin',
-  }
-}
 
 function json(req: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
-      ...cors(req.headers.get('origin')),
+      ...corsHeaders(req),
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
     },
@@ -51,7 +42,8 @@ function envJson(name: string) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors(req.headers.get('origin')) })
+  const corsResponse = corsGate(req)
+  if (corsResponse) return corsResponse
   if (req.method !== 'POST') return json(req, { error: 'Method not allowed', code: 'method_not_allowed', retryable: false }, 405)
 
   try {

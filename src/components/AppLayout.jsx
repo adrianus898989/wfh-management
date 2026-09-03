@@ -8,6 +8,7 @@ import { AdminAccessProvider } from '../lib/adminAccess'
 import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
 import AdminNavIcon from './AdminNavIcon'
 import AdminTopbar from './AdminTopbar'
+import { internalPortalPath, publicPortalTarget } from '../lib/appBasePath'
 
 const navKey = item => item.id || item.to
 const navUrl = to => new URL(to, 'https://wfh.local')
@@ -87,12 +88,12 @@ export default function AppLayout({ mode, children }) {
   const requestedAdminAllowed=Boolean(requestedAdminItem&&navAllowed(requestedAdminItem))
   const firstAllowedAdminTarget=visibleAdminNav.reduce((target,item)=>target||(item.children?.[0]?.to||item.to),'')
   const requestedAdminGroup=adminNavigation.find(item=>item.children&&item.id===requestedAdminItem?.groupId)
-  const samePageCandidates=adminRouteAccess.filter(item=>navUrl(item.to).pathname===location.pathname&&item!==requestedAdminItem&&navAllowed(item))
+  const samePageCandidates=adminRouteAccess.filter(item=>navUrl(item.to).pathname===internalPortalPath(location.pathname)&&item!==requestedAdminItem&&navAllowed(item))
   const samePageFallback=(requestedAdminItem
     ? samePageCandidates.find(item=>navUrl(item.to).searchParams.has('tab'))
     : samePageCandidates.find(item=>!navUrl(item.to).searchParams.has('tab'))
   )||samePageCandidates[0]
-  const routeFallbackTarget=samePageFallback?.to||requestedAdminGroup?.children?.find(navAllowed)?.to||firstAllowedAdminTarget
+  const routeFallbackTarget=publicPortalTarget(samePageFallback?.to||requestedAdminGroup?.children?.find(navAllowed)?.to||firstAllowedAdminTarget)
 
   const pathGroup = requestedAdminGroup?.id || null
   const [openGroup,setOpenGroup] = useState(pathGroup)
@@ -118,7 +119,7 @@ export default function AppLayout({ mode, children }) {
   const logout = async()=>{
     await signOutAppSession()
     if (mode === 'staff') resetLocale()
-    navigate(mode==='admin'?'/admin/login':'/staff/login')
+    navigate(publicPortalTarget(mode,'login'))
   }
 
   const clickParent = item=>{

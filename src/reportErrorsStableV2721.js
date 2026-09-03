@@ -1,4 +1,5 @@
 import { supabase } from './lib/supabase'
+import { appPathFromBrowserPath, internalPortalPath } from './lib/appBasePath'
 
 const nativeInvoke=supabase.functions.invoke.bind(supabase.functions)
 const text=v=>String(v??'').trim()
@@ -151,7 +152,7 @@ async function openEmployeeDrawer(employeeNo){
   }catch(err){const empty=drawer.querySelector('.empty-state')||document.createElement('div');empty.className='empty-state';empty.textContent=err?.message||'员工档案读取失败';if(!empty.parentElement)drawer.appendChild(empty)}
 }
 function captureId(e){
-  if(!/\/admin\/reports\/?$/.test(window.location.pathname))return
+  if(internalPortalPath(appPathFromBrowserPath(window.location.pathname))!=='/admin/reports')return
   const btn=e.target?.closest?.('.rp-errors-table tbody td:first-child button.rp-link');if(!btn)return
   e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();openEmployeeDrawer(btn.textContent)
 }
@@ -162,7 +163,7 @@ function patchChartHoverText(){
   const team=document.querySelector('.wfh-original-team-chart');if(team){const source=[...(team.closest('.rp-card')?.querySelectorAll('.rp-bars button')||[])].map(b=>({name:text(b.querySelector('span')?.textContent),count:text(b.querySelector('strong')?.textContent)}));team.querySelectorAll('rect[data-i]').forEach(el=>{const x=source[Number(el.dataset.i)];if(!x)return;let t=el.querySelector('title');if(!t){t=document.createElementNS('http://www.w3.org/2000/svg','title');el.appendChild(t)}t.textContent=`${x.name} · 人数：${x.count}`})}
 }
 
-async function run(){if(stopped)return;scheduled=false;if(!/\/admin\/reports\/?$/.test(window.location.pathname))return;ensureFilters();fixCountLoading();patchChartHoverText();await decorateGrades()}
+async function run(){if(stopped)return;scheduled=false;if(internalPortalPath(appPathFromBrowserPath(window.location.pathname))!=='/admin/reports')return;ensureFilters();fixCountLoading();patchChartHoverText();await decorateGrades()}
 function schedule(){if(stopped||scheduled)return;scheduled=true;setTimeout(run,120)}
 export function startReportErrorsStableV2721(){
   if(window.__WFH_REPORT_ERRORS_STABLE_V2721__)return

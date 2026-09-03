@@ -1,0 +1,40 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  X-Frame-Options: DENY
+
+# Cloudflare normalizes /index.html to /.  Apply the entry-document policy to
+# every real portal entry and legacy redirect path as well as the root.
+/
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/workspace
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/workspace/*
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/portal
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/portal/*
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/admin
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/admin/*
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/staff
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/staff/*
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/release.json
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

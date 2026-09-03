@@ -1,5 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.4'
 import { trustedClientIp } from '../_shared/adminIp.ts'
+import { corsGate, corsHeaders } from '../_shared/corsOrigin.ts'
 import {
   publicPreflightPayload,
   unavailablePreflight,
@@ -8,8 +9,8 @@ import {
 // Deployment contract: this pre-authentication endpoint must use
 // verify_jwt=false. It authenticates its database dependency with the Edge-only
 // service role and accepts no client-supplied IP value.
-const ALLOWED_ORIGIN = 'https://adrianus898989.github.io'
 const DEPENDENCY_TIMEOUT_MS = 8_000
+const corsOptions = { maxAgeSeconds: 600 }
 
 function timedFetch(timeoutMs: number) {
   return async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -33,20 +34,9 @@ function timedFetch(timeoutMs: number) {
   }
 }
 
-function corsHeaders(origin: string | null) {
-  const headers: Record<string, string> = {
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Max-Age': '600',
-    'Vary': 'Origin',
-  }
-  if (origin === ALLOWED_ORIGIN) headers['Access-Control-Allow-Origin'] = ALLOWED_ORIGIN
-  return headers
-}
-
 function responseHeaders(req: Request) {
   return {
-    ...corsHeaders(req.headers.get('origin')),
+    ...corsHeaders(req, corsOptions),
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store, private, max-age=0',
     'Pragma': 'no-cache',
@@ -80,21 +70,8 @@ function serviceRoleKey() {
 }
 
 export async function handleRequest(req: Request) {
-  const origin = req.headers.get('origin')
-  if (origin && origin !== ALLOWED_ORIGIN) {
-    return json(req, unavailablePreflight('origin_not_allowed'), 403)
-  }
-
-  if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        ...corsHeaders(origin),
-        'Cache-Control': 'no-store, private, max-age=0',
-        'Vary': 'Origin',
-      },
-    })
-  }
+  const corsResponse = corsGate(req, corsOptions)
+  if (corsResponse) return corsResponse
   if (req.method !== 'POST') {
     return json(req, unavailablePreflight('method_not_allowed'), 405)
   }

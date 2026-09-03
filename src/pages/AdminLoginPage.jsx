@@ -10,6 +10,7 @@ import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 import { requestAdminIpPreflight } from '../lib/adminIpPreflight'
 import { registerCurrentAppRelease } from '../lib/releaseSession'
+import { appPathname, publicPortalTarget } from '../lib/appBasePath'
 
 function withTimeout(promise, ms = 25000) {
   let timer
@@ -127,12 +128,12 @@ export default function AdminLoginPage() {
       registerCurrentAppRelease('admin')
       if (responseData.mfa_required) {
         touchSessionActivity(true)
-        window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}admin/mfa`)
+        window.location.replace(appPathname(publicPortalTarget('admin','mfa')))
         return
       }
 
       touchSessionActivity(true)
-      window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}admin`)
+      window.location.replace(appPathname(publicPortalTarget('admin')))
     } catch (requestError) {
       setError(requestError?.message === 'TIMEOUT'
         ? '登录服务响应超时，请稍后重试'

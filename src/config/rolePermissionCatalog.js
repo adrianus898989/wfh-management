@@ -1,5 +1,6 @@
 import { adminNavigation, adminTabSlug, canonicalAdminTab } from './navigation.js'
 import { adminPagePermissionCodes } from './adminPagePermissions.js'
+import { internalPortalPath } from '../lib/appBasePath.js'
 
 const unique = values => [...new Set(values.filter(Boolean))]
 
@@ -24,10 +25,11 @@ const LEGACY_IMPLEMENTATION_CODES = new Set([
 
 const targetKey = to => {
   const url = new URL(to, 'https://wfh.local')
+  const pathname = internalPortalPath(url.pathname)
   const routeTab = url.searchParams.get('tab')
-  if (!routeTab) return url.pathname
-  const canonicalTab = canonicalAdminTab(url.pathname, routeTab)
-  return `${url.pathname}?tab=${adminTabSlug(url.pathname, canonicalTab)}`
+  if (!routeTab) return pathname
+  const canonicalTab = canonicalAdminTab(pathname, routeTab)
+  return `${pathname}?tab=${adminTabSlug(pathname, canonicalTab)}`
 }
 
 const permissionCodesFromAccess = item => unique([

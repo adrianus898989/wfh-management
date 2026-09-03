@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { portalModeFromBrowserPath } from './appBasePath.js'
 
 const STORAGE_KEY = 'wfh_admin_locale'
 
@@ -1130,7 +1131,6 @@ function initialLocale() {
   return window.localStorage.getItem(STORAGE_KEY) === 'en' ? 'en' : 'zh'
 }
 
-const ADMIN_PATH_RE = /\/admin(?:\/|$)/
 const BLOCKED_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'CODE', 'PRE'])
 const FALLBACK_ATTRIBUTES = ['placeholder', 'title', 'aria-label']
 const DYNAMIC_CONTEXT_RE = /(?:employee|staff|person|trainer)[-_]?(?:name|identity)|(?:^|[-_\s])(?:identity|note|remark|memo|comment|reason-value|reason-text|report-content|work-content|answer|response|feedback|source-value|detail-value|rp-wrap|rp-cell-clamp|ot-meta)(?:$|[-_\s])/i
@@ -1172,7 +1172,7 @@ const prefixEnglish = {
 }
 
 function isAdminPath() {
-  return typeof window !== 'undefined' && ADMIN_PATH_RE.test(window.location.pathname)
+  return typeof window !== 'undefined' && portalModeFromBrowserPath(window.location.pathname) === 'admin'
 }
 
 function translateAdminCore(source) {

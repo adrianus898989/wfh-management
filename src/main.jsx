@@ -21,6 +21,7 @@ import './styles-admin-ip-allowlist.css'
 import './styles-admin-root-layout.css'
 import './styles-management-risk.css'
 import { configured } from './lib/supabase'
+import { APP_ROUTER_BASENAME, portalModeFromBrowserPath } from './lib/appBasePath'
 
 for (const old of document.querySelectorAll('style[data-wfh-inline-styles],style[data-wfh-pro-styles],style[data-wfh-reports-styles],style[data-wfh-employee-v27-styles]')) old.remove()
 const base = document.createElement('style'); base.setAttribute('data-wfh-inline-styles', 'true'); base.textContent = appStyles; document.head.appendChild(base)
@@ -32,20 +33,13 @@ window.addEventListener('vite:preloadError', event => {
   event.preventDefault()
   recoverStaleAsset(event.payload || event)
 })
-ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><AppCrashBoundary><BrowserRouter basename="/wfh-management"><App /></BrowserRouter></AppCrashBoundary></React.StrictMode>)
+ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><AppCrashBoundary><BrowserRouter basename={APP_ROUTER_BASENAME}><App /></BrowserRouter></AppCrashBoundary></React.StrictMode>)
 
 // Keep only legacy layers that still provide UI not owned by the React pages.
 // They are DOM driven; native report/employee pages own workload and grade data.
 // A missing environment configuration should still render the normal setup
 // screen instead of crashing while a legacy enhancer patches Supabase.
-const runtimeBasePath = String(import.meta.env.BASE_URL || '/').replace(/\/+$/, '')
-const runtimeBrowserPath = window.location.pathname
-const runtimeAppPath = runtimeBasePath && (
-  runtimeBrowserPath === runtimeBasePath || runtimeBrowserPath.startsWith(`${runtimeBasePath}/`)
-)
-  ? runtimeBrowserPath.slice(runtimeBasePath.length) || '/'
-  : runtimeBrowserPath
-const isAdminRuntime = runtimeAppPath === '/admin' || runtimeAppPath.startsWith('/admin/')
+const isAdminRuntime = portalModeFromBrowserPath(window.location.pathname) === 'admin'
 
 // These compatibility layers inspect and patch admin-only tables.  Loading them
 // for staff used five extra chunks and five document-wide MutationObservers on

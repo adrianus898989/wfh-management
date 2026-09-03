@@ -9,8 +9,8 @@ const topbar = await readFile(new URL('../components/AdminTopbar.jsx', import.me
 test('admin and staff navigation retain one protected portal shell', () => {
   assert.match(app, /import \{ Navigate, Outlet, Route, Routes, useLocation \}/)
   assert.match(app, /function PortalShell\(\{ mode \}\)[\s\S]*<Protected mode=\{mode\}>[\s\S]*<AppLayout mode=\{mode\}><Outlet \/><\/AppLayout>/)
-  assert.match(app, /<Route path="\/admin" element=\{<PortalShell mode="admin" \/>\}>[\s\S]*<Route path="employees" element=\{<AdminEmployeesPage \/>\}/)
-  assert.match(app, /<Route path="\/staff" element=\{<PortalShell mode="staff" \/>\}>[\s\S]*<Route path="rewards" element=\{<StaffHome mode="rewards" \/>\}/)
+  assert.match(app, /<Route path="\/workspace" element=\{<PortalShell mode="admin" \/>\}>[\s\S]*<Route path="employees" element=\{<AdminEmployeesPage \/>\}/)
+  assert.match(app, /<Route path="\/portal" element=\{<PortalShell mode="staff" \/>\}>[\s\S]*<Route path="rewards" element=\{<StaffHome mode="rewards" \/>\}/)
   assert.doesNotMatch(app, /path="\/admin\/employees" element=\{<Protected/)
   assert.doesNotMatch(app, /path="\/staff\/rewards" element=\{<Protected/)
 })
@@ -42,7 +42,7 @@ test('nested admin route fallback uses an in-content skeleton instead of a viewp
 })
 
 test('admin-only legacy enhancers never load for staff paths', () => {
-  assert.match(main, /const isAdminRuntime = runtimeAppPath === '\/admin' \|\| runtimeAppPath\.startsWith\('\/admin\/'\)/)
+  assert.match(main, /portalModeFromBrowserPath\(window\.location\.pathname\) === 'admin'/)
   assert.match(main, /if \(configured && isAdminRuntime\) \{[\s\S]+import\('\.\/uiV2714Enhancer'\)/)
 })
 

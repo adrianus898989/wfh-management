@@ -6,24 +6,14 @@ import {
   validateAssignedScopeBoundary,
 } from './scope.ts'
 import { loadEffectiveEmployeeScope } from '../_shared/employeeScope.ts'
-
-const allowedOrigin = 'https://adrianus898989.github.io'
+import { corsGate, corsHeaders } from '../_shared/corsOrigin.ts'
 const PRESENCE_DETAIL_TIMEOUT_MS = 4_000
-
-function cors(origin: string | null) {
-  return {
-    'Access-Control-Allow-Origin': origin === allowedOrigin ? origin : allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Vary': 'Origin',
-  }
-}
 
 function json(req: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
-      ...cors(req.headers.get('origin')),
+      ...corsHeaders(req),
       'Content-Type': 'application/json',
       'Cache-Control': 'no-store',
     },
@@ -94,9 +84,8 @@ async function sha256(text: string) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: cors(req.headers.get('origin')) })
-  }
+  const corsResponse = corsGate(req)
+  if (corsResponse) return corsResponse
   if (req.method !== 'POST') return json(req, { error: 'Method not allowed' }, 405)
 
   try {

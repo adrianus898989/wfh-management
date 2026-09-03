@@ -30,6 +30,11 @@ import {
   markAppSessionVerified,
   runCoalescedAppSessionWake,
 } from './lib/appSessionHeartbeatPressure'
+import {
+  appPathname,
+  portalModeFromAppPath,
+  publicPortalTarget,
+} from './lib/appBasePath'
 
 // Keep each route behind its own Suspense boundary.  The wrapper is the route
 // component, so a lazy child never unmounts the long-lived Protected/AppLayout
@@ -124,9 +129,7 @@ const AUTH_CHECK_DEBOUNCE_MS = 2000
 
 function ReleaseSessionBoundary({ children }) {
   const location = useLocation()
-  const portal = location.pathname === '/admin' || location.pathname.startsWith('/admin/')
-    ? 'admin'
-    : 'staff'
+  const portal = portalModeFromAppPath(location.pathname) || 'staff'
   const [ready, setReady] = useState(false)
   const terminating = useRef(false)
 
@@ -141,8 +144,7 @@ function ReleaseSessionBoundary({ children }) {
 
     setReady(false)
     const replaceWithLogin = () => {
-      const base = new URL(import.meta.env.BASE_URL || '/', window.location.origin)
-      window.location.replace(new URL(`${portal}/login`, base).href)
+      window.location.replace(appPathname(publicPortalTarget(portal, 'login')))
     }
     const terminateForRelease = async () => {
       if (terminating.current) return
@@ -245,8 +247,7 @@ function Protected({ children, mode }) {
     const replaceWithLogin = () => {
       if (redirectingToLogin.current || typeof window === 'undefined') return
       redirectingToLogin.current = true
-      const base = new URL(import.meta.env.BASE_URL || '/', window.location.origin)
-      window.location.replace(new URL(`${mode}/login`, base).href)
+      window.location.replace(appPathname(publicPortalTarget(mode, 'login')))
     }
     const localSignOut = ({ release=true, notice='', redirect=false } = {}) => {
       if (notice) setAppSessionNotice(notice, mode)
@@ -561,11 +562,11 @@ function Protected({ children, mode }) {
 
   if (state.loading) return <div className="center-screen">{mode==='staff'?t('common.loading','读取中…'):'Loading...'}</div>
   if (state.error) return <div className="center-screen auth-retry"><div><strong>{mode==='staff'?t('auth.connectionUnstable','连接暂时不稳定'):'连接暂时不稳定'}</strong><p>{state.error}</p><button onClick={() => { setState(s => ({...s,loading:true,error:''})); setRetryKey(x=>x+1) }}>{mode==='staff'?t('common.retry','重新验证'):'重新验证'}</button></div></div>
-  const login = mode === 'admin' ? '/admin/login' : '/staff/login'
+  const login = publicPortalTarget(mode, 'login')
   if (!state.session || !state.access?.active) return <Navigate to={login} replace />
-  if (mode === 'admin' && !state.access.backend_enabled) return <Navigate to="/admin/login" replace />
-  if (mode === 'staff' && !state.access.employee_portal_enabled) return <Navigate to="/staff/login" replace />
-  if (mode === 'admin' && state.access.otp_required && state.aal !== 'aal2' && location.pathname !== '/admin/mfa') return <Navigate to="/admin/mfa" replace />
+  if (mode === 'admin' && !state.access.backend_enabled) return <Navigate to={publicPortalTarget('admin','login')} replace />
+  if (mode === 'staff' && !state.access.employee_portal_enabled) return <Navigate to={publicPortalTarget('staff','login')} replace />
+  if (mode === 'admin' && state.access.otp_required && state.aal !== 'aal2' && location.pathname !== publicPortalTarget('admin','mfa')) return <Navigate to={publicPortalTarget('admin','mfa')} replace />
   return children
 }
 
@@ -583,17 +584,28 @@ function PortalShell({ mode }) {
   </Protected>
 }
 
+function LegacyPortalRedirect() {
+  const location = useLocation()
+  return <Navigate
+    to={publicPortalTarget(`${location.pathname}${location.search}${location.hash}`)}
+    replace
+  />
+}
+
 function AppRoutes() {
   const location = useLocation()
   const { t } = useStaffLocale()
-  if (!configured) return <div className="center-screen">{location.pathname.startsWith('/staff')?t('auth.unavailable','暂时无法连接'):'暂时无法连接'}</div>
+  if (publicPortalTarget(location.pathname) !== location.pathname) return <LegacyPortalRedirect />
+  if (!configured) return <div className="center-screen">{portalModeFromAppPath(location.pathname)==='staff'?t('auth.unavailable','暂时无法连接'):'暂时无法连接'}</div>
   return <Routes>
-    <Route path="/" element={<Navigate to="/staff/login" replace />} />
-    <Route path="/admin/login" element={<AdminLoginPage />} />
-    <Route path="/staff/login" element={<StaffIpPreflightGate><StaffLoginPage /></StaffIpPreflightGate>} />
-    <Route path="/staff/register" element={<StaffIpPreflightGate><StaffRegisterPage /></StaffIpPreflightGate>} />
-    <Route path="/admin/mfa" element={<Protected mode="admin"><MfaPage /></Protected>} />
-    <Route path="/admin" element={<PortalShell mode="admin" />}>
+    <Route path="/" element={<Navigate to={publicPortalTarget('staff','login')} replace />} />
+    <Route path="/admin/*" element={<LegacyPortalRedirect />} />
+    <Route path="/staff/*" element={<LegacyPortalRedirect />} />
+    <Route path="/workspace/login" element={<AdminLoginPage />} />
+    <Route path="/portal/login" element={<StaffIpPreflightGate><StaffLoginPage /></StaffIpPreflightGate>} />
+    <Route path="/portal/register" element={<StaffIpPreflightGate><StaffRegisterPage /></StaffIpPreflightGate>} />
+    <Route path="/workspace/mfa" element={<Protected mode="admin"><MfaPage /></Protected>} />
+    <Route path="/workspace" element={<PortalShell mode="admin" />}>
       <Route index element={<AdminHome />} />
       <Route path="employees" element={<AdminEmployeesPage />} />
       <Route path="schedule" element={<AdminAttendancePage />} />
@@ -608,8 +620,9 @@ function AppRoutes() {
       <Route path="activity-log" element={<AdminActivityLogPage />} />
       <Route path="reconciliation" element={<AdminReconciliationPage />} />
       <Route path="manual" element={<AdminManualPage />} />
+      <Route path="*" element={<Navigate to={publicPortalTarget('admin')} replace />} />
     </Route>
-    <Route path="/staff" element={<PortalShell mode="staff" />}>
+    <Route path="/portal" element={<PortalShell mode="staff" />}>
       <Route index element={<StaffHome />} />
       <Route path="rewards" element={<StaffHome mode="rewards" />} />
       <Route path="schedule" element={<ComingSoon title={t('nav.schedule','我的排班')} />} />
@@ -617,8 +630,9 @@ function AppRoutes() {
       <Route path="payroll" element={<StaffPayrollPage />} />
       <Route path="exams" element={<StaffExamPage />} />
       <Route path="requests" element={<ComingSoon title={t('nav.requests','我的申请')} />} />
+      <Route path="*" element={<Navigate to={publicPortalTarget('staff')} replace />} />
     </Route>
-    <Route path="*" element={<Navigate to="/staff/login" replace />} />
+    <Route path="*" element={<Navigate to={publicPortalTarget('staff','login')} replace />} />
   </Routes>
 }
 

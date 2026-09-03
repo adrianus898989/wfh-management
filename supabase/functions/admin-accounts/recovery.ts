@@ -8,8 +8,8 @@ import {
   buildRecoveryProvisioningFingerprint,
   recoveryIdentityDisposition,
 } from '../_shared/recoveryProvisioningFingerprint.js'
+import { corsGate, corsHeaders } from '../_shared/corsOrigin.ts'
 
-const ALLOWED_ORIGIN = 'https://adrianus898989.github.io'
 const DEPENDENCY_TIMEOUT_MS = 8_000
 const AUTH_VERIFICATION_RETRY_DELAY_MS = 250
 const PRESENCE_DETAIL_TIMEOUT_MS = 4_000
@@ -44,18 +44,9 @@ const RECOVERY_ACCOUNT_ACTION_PERMISSION: Record<string, string> = {
 const RECOVERY_ACTIVATION_ACTIONS = ['generate_activation_code']
 const RECOVERY_STAFF_ACCOUNT_ACTIONS = ['delete_staff_account']
 
-function cors(origin: string | null) {
-  return {
-    'Access-Control-Allow-Origin': origin === ALLOWED_ORIGIN ? origin : ALLOWED_ORIGIN,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Vary': 'Origin',
-  }
-}
-
 function json(req: Request, body: unknown, status = 200, retryAfter = '') {
   const headers: Record<string, string> = {
-    ...cors(req.headers.get('origin')),
+    ...corsHeaders(req),
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
@@ -167,7 +158,8 @@ async function verifyRequestUser(userClient: any, context: { action:string; requ
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors(req.headers.get('origin')) })
+  const corsResponse = corsGate(req)
+  if (corsResponse) return corsResponse
   if (req.method !== 'POST') return json(req, { ok:false, error:'Method not allowed' }, 405)
 
   try {
