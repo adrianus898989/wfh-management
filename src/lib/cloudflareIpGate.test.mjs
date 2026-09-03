@@ -35,6 +35,8 @@ test('Cloudflare worker gates entry documents before static assets', async () =>
   assert.doesNotMatch(worker, /service[_-]?role/i)
   assert.doesNotMatch(worker, /request\.json\(\).*portal/s)
   assert.match(build, /cloudflare\/edge-gate-worker\.js/)
+  assert.match(build, /Cloudflare builds require \$\{name\}/)
+  assert.match(build, /'VITE_SUPABASE_URL', 'VITE_SUPABASE_PUBLISHABLE_KEY'/)
   assert.match(build, /replaceAll\('__WFH_PORTAL_MODE__', portalMode\)/)
   assert.match(build, /dist\/_worker\.js/)
 })

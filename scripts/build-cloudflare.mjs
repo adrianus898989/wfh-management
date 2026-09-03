@@ -17,6 +17,11 @@ const gitCommit = () => {
 // independent deployment jobs.
 process.env.VITE_APP_BASE_PATH = '/'
 process.env.VITE_APP_DEPLOY_TARGET = 'cloudflare-pages'
+for (const name of ['VITE_SUPABASE_URL', 'VITE_SUPABASE_PUBLISHABLE_KEY']) {
+  const value = String(process.env[name] || '').trim()
+  if (!value) throw new Error(`Cloudflare builds require ${name}`)
+  process.env[name] = value
+}
 const portalMode = String(process.env.VITE_APP_PORTAL_MODE || '').trim().toLowerCase()
 if (!['admin', 'staff'].includes(portalMode)) {
   throw new Error('Cloudflare builds require VITE_APP_PORTAL_MODE=admin or staff')
