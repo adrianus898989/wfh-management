@@ -29,7 +29,7 @@ test('Cloudflare worker gates entry documents before static assets', async () =>
   assert.match(worker, /redirect: 'manual'/)
   assert.doesNotMatch(worker, /redirect: 'error'/)
   assert.match(worker, /payload\?\.allowed === false && payload\?\.reason === 'ip_not_allowed'/)
-  assert.match(worker, /return blocked\(403, 'Access denied'\)/)
+  assert.match(worker, /return accessDenied\(\)/)
   assert.match(worker, /return blocked\(503, 'Service temporarily unavailable'/)
   assert.match(worker, /env\.ASSETS\.fetch\(request\)/)
   assert.doesNotMatch(worker, /service[_-]?role/i)
@@ -110,7 +110,12 @@ test('edge gate denies a non-allowlisted IP and fails closed on missing trust ma
     { headers: { 'CF-Connecting-IP': '198.51.100.9' } },
   ), env)
   assert.equal(denied.status, 403)
-  assert.equal(await denied.text(), 'Access denied')
+  assert.equal(denied.headers.get('content-type'), 'text/html; charset=utf-8')
+  const deniedBody = await denied.text()
+  assert.match(deniedBody, /当前网络未获授权/)
+  assert.match(deniedBody, /Access restricted/)
+  assert.match(deniedBody, /重新检测/)
+  assert.doesNotMatch(deniedBody, /198\.51\.100\.9|supabase|whitelist|allowlist/i)
   assert.equal(assetCalls, 0)
 
   const unavailable = await module.default.fetch(new Request(
