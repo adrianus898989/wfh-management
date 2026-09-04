@@ -71,7 +71,9 @@ Deno.serve(async req => {
 
     const { data: employee } = await admin.from('employees').select('id,employee_no,full_name,status').eq('id', activation.employee_id).maybeSingle()
     if (!employee) return json({ error: '找不到对应员工资料' }, 400)
-    if (employee.status !== 'active') return json({ error: '只有在职员工可以注册账号' }, 400)
+    if (!['active', 'probation'].includes(String(employee.status || '').trim().toLowerCase())) {
+      return json({ error: '只有在职或试用期员工可以注册账号' }, 400)
+    }
 
     const [{ data: existingEmployee }, { data: existingEmail }, { data: employeeRole }] = await Promise.all([
       admin.from('user_access').select('auth_user_id').eq('employee_id', employee.id).eq('employee_portal_enabled', true).maybeSingle(),

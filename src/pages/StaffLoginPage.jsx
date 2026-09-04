@@ -30,6 +30,7 @@ export default function StaffLoginPage() {
   const submitInFlight = useRef(false)
   const navigate = useNavigate()
   const { t, resetLocale } = useStaffLocale()
+  const passwordChangedNotice = sessionNotice === 'password_changed'
   const loginErrorMessage = response => ({
     INVALID_REQUEST: t('auth.invalidRequest','Invalid request format'),
     INVALID_EMAIL: t('auth.invalidEmail','Invalid email format'),
@@ -152,7 +153,11 @@ export default function StaffLoginPage() {
             </div>
           </label>
 
-          {(error || sessionNotice) && <div className="login-error" role="alert">{error || (
+          {(error || sessionNotice) && <div
+            className="login-error"
+            role={passwordChangedNotice ? 'status' : 'alert'}
+            style={passwordChangedNotice ? {borderColor:'#b9e4cc',background:'#effaf4',color:'#26714c'} : undefined}
+          >{error || (
             sessionNotice === 'active_elsewhere'
               ? t('auth.sessionEndedElsewhere','Your session ended because this account is active in another browser.')
               : sessionNotice === 'system_updated'
@@ -163,6 +168,12 @@ export default function StaffLoginPage() {
                 ? t('auth.networkNotAllowed','This network is not allowed to access the staff portal. Please contact an administrator.')
               : sessionNotice === 'account_locked'
                 ? t('auth.accountLockedWithoutCount','This account is locked after too many incorrect password attempts. Contact an administrator to unlock it.')
+              : sessionNotice === 'password_changed'
+                ? t('passwordChange.success','Password changed. Sign in again with your new password.')
+              : sessionNotice === 'password_changed_finalize_pending'
+                ? t('passwordChange.finalizePending','Your password changed, but session cleanup is still finishing. Try the new password shortly or contact an administrator.')
+              : sessionNotice === 'password_change_outcome_unknown'
+                ? t('passwordChange.outcomeUnknown','The result could not be confirmed. Try your new password first; if it does not work, try the old one or contact an administrator.')
               : t('auth.sessionEnded','This sign-in session has ended. Please sign in again.')
           )}</div>}
 
@@ -170,7 +181,8 @@ export default function StaffLoginPage() {
             {loading ? t('auth.signingIn','登录中...') : t('auth.signIn','登录')}
           </button>
           <div className="login-foot">
-            {t('auth.firstTime','首次使用？')} <Link to={publicPortalTarget('staff','register')}>{t('auth.activate','激活账号')}</Link>
+            <div>{t('auth.firstTime','首次使用？')} <Link to={publicPortalTarget('staff','register')}>{t('auth.activate','激活账号')}</Link></div>
+            <div style={{marginTop:8}}>{t('auth.forgotPasswordContactAdmin','Forgot your password? Contact an administrator to reset it.')}</div>
           </div>
         </form>
       </main>

@@ -100,6 +100,7 @@ const targets = [
   '../../supabase/functions/admin-ip-allowlist/index.ts',
   '../../supabase/functions/admin-accounts/index.ts',
   '../../supabase/functions/admin-accounts/recovery.ts',
+  '../../supabase/functions/staff-change-password/index.ts',
   '../../supabase/functions/admin-payout-change/index.ts',
 ]
 

@@ -1595,8 +1595,11 @@ Deno.serve(async (req) => {
       if (!can('user.activation.generate')) return json(req, { error: '无生成激活码权限' }, 403)
       const employeeNo = cleanString(body.employee_no).toUpperCase()
       const hours = Math.max(1, Math.min(Number(body.valid_hours) || 72, 168))
-      const employees = await getScopedEmployees()
-      const employee = employees.find((x: any) => cleanString(x.employee_no).toUpperCase() === employeeNo)
+      const employees = await getScopedEmployees(false)
+      const employee = employees.find((x: any) =>
+        cleanString(x.employee_no).toUpperCase() === employeeNo &&
+        ['active', 'probation'].includes(cleanString(x.status).toLowerCase())
+      )
       if (!employee) return json(req, { error: '找不到可管理的在职员工，或该员工已经离职' }, 404)
 
       const { data: linked } = await admin.from('user_access')
@@ -1796,6 +1799,17 @@ Deno.serve(async (req) => {
         current = await getTargetAccount(target)
       } catch (error) {
         return json(req, { error: error instanceof Error ? error.message : '无账号操作权限' }, 403)
+      }
+      // Any portal-only identity must use the recovery endpoint. Do not let a
+      // stale/misconfigured role label fall through to the legacy hard delete.
+      const pureStaffAccount = !current.backend_enabled &&
+        current.employee_portal_enabled === true
+      if (pureStaffAccount) {
+        return json(req, {
+          error:'员工前端账号必须通过“保留历史记录的安全删除”流程处理，请刷新后使用员工账号页的删除按钮',
+          code:'staff_delete_requires_recovery',
+          retryable:false,
+        }, 409)
       }
       const requiredPermission = current.backend_enabled ? 'account.delete' : 'user.account.delete'
       if (!can(requiredPermission)) return json(req, { error: '无删除该类账号的权限' }, 403)

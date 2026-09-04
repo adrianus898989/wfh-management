@@ -99,6 +99,14 @@ function scopeLabel(scope) {
   return '自己团队'
 }
 
+const passwordRuleState = password => ({
+  length: String(password || '').length >= 10,
+  uppercase: /[A-Z]/.test(String(password || '')),
+  lowercase: /[a-z]/.test(String(password || '')),
+  number: /[0-9]/.test(String(password || '')),
+  symbol: /[^A-Za-z0-9]/.test(String(password || '')),
+})
+
 export default function AdminUsersPage() {
   const sharedAccess = useAdminAccess()
   const { t: adminT } = useAdminI18n()
@@ -111,6 +119,7 @@ export default function AdminUsersPage() {
   const [error, setError] = useState('')
   const [accountModal, setAccountModal] = useState(null)
   const [staffModal, setStaffModal] = useState(null)
+  const [passwordResetModal, setPasswordResetModal] = useState(null)
   const [roleModal, setRoleModal] = useState(null)
   const [newRoleName, setNewRoleName] = useState('')
   const [creatingRole, setCreatingRole] = useState(false)
@@ -425,11 +434,10 @@ export default function AdminUsersPage() {
   const canManageScope = callerCan('scope.manage')
   const canCreateStaff = !recoveryStaffAccountMode && callerCan('user.account.create')
   const canToggleStaff = !recoveryStaffAccountMode && callerCan('user.account.disable')
-  const canDeleteStaff = (!recoveryStaffAccountMode && callerCan('user.account.delete')) ||
-    recoveryStaffCan('delete_staff_account')
+  const canDeleteStaff = recoveryStaffCan('delete_staff_account')
   const canUnlockStaff = (!recoveryStaffAccountMode && callerCan('staff_account.unlock')) ||
     recoveryStaffCan('unlock_staff_login')
-  const canResetStaffPassword = !recoveryStaffAccountMode && callerCan('user.password.reset')
+  const canResetStaffPassword = recoveryStaffCan('reset_staff_password')
   const backend = data?.backend_accounts || []
   const staff = data?.employee_accounts || []
   const employees = data?.employees || []
@@ -1130,26 +1138,92 @@ export default function AdminUsersPage() {
     finally { setMutatingAccountId('') }
   }
 
-  const resetPassword = async (a) => {
-    const password = window.prompt('输入新的临时密码')
-    if (!password) return
-    if (!a?.auth_user_id || mutatingAccountId) return
-    setMutatingAccountId(a.auth_user_id)
+  const openPasswordReset = (account, accountKind) => {
+    if (!account?.auth_user_id || mutatingAccountId) return
+    if (accountKind === 'staff' && !recoveryStaffCan('reset_staff_password')) return
+    setPasswordResetModal({
+      account,
+      accountKind,
+      password:'',
+      passwordConfirmation:'',
+      passwordVisible:false,
+      saving:false,
+      error:'',
+    })
+  }
+
+  const closePasswordReset = () => {
+    if (passwordResetModal?.saving) return
+    setPasswordResetModal(null)
+  }
+
+  const resetPassword = async (event) => {
+    event?.preventDefault?.()
+    const modal = passwordResetModal
+    const account = modal?.account
+    const password = String(modal?.password || '')
+    const passwordConfirmation = String(modal?.passwordConfirmation || '')
+    if (!account?.auth_user_id || mutatingAccountId || modal?.saving) return
+    const rules = passwordRuleState(password)
+    if (!Object.values(rules).every(Boolean)) {
+      setPasswordResetModal(current => current ? ({ ...current, error:'新密码需至少 10 位，并同时包含大写字母、小写字母、数字和符号。' }) : current)
+      return
+    }
+    if (password !== passwordConfirmation) {
+      setPasswordResetModal(current => current ? ({ ...current, error:'两次输入的新密码不一致，请重新确认。' }) : current)
+      return
+    }
+    const staffAccount = modal.accountKind === 'staff'
+    if (staffAccount && !recoveryStaffCan('reset_staff_password')) {
+      setPasswordResetModal(current => current ? ({ ...current, error:'当前模式或权限不支持重置员工登录密码，请刷新页面后重试。' }) : current)
+      return
+    }
+    const recoveryStaffReset = staffAccount
+    const expectedLoginEmail = String(account.login_email || '').trim().toLowerCase()
+    const expectedEmployeeNo = String(account.employee?.employee_no || '').trim()
+    if (recoveryStaffReset && (!expectedLoginEmail || !expectedEmployeeNo)) {
+      setPasswordResetModal(current => current ? ({ ...current, error:'员工账号资料不完整，请刷新列表后重试。' }) : current)
+      return
+    }
+    setPasswordResetModal(current => current ? ({ ...current, saving:true, error:'' }) : current)
+    setMutatingAccountId(account.auth_user_id)
     setError('')
     try {
-      await call({ action: 'reset_password', auth_user_id: a.auth_user_id, password })
+      await call(recoveryStaffReset ? {
+        action:'reset_staff_password',
+        auth_user_id:account.auth_user_id,
+        password,
+        expected_login_email:expectedLoginEmail,
+        expected_employee_no:expectedEmployeeNo,
+      } : {
+        action:'reset_password',
+        auth_user_id:account.auth_user_id,
+        password,
+      })
+      const accountLabel = account.login_username || account.login_email || account.employee?.employee_no || '账号'
       notify(writeSuccessToast({
-        module:'后台账号',operation:'重置密码',reason:`${a.login_username || a.login_email || '账号'} 的密码已重置。`,
-        dedupeKey:`accounts:password:${a.auth_user_id}:success`,
+        module:staffAccount?'员工账号':'后台账号',operation:staffAccount?'重置员工登录密码':'重置密码',reason:staffAccount
+          ? `${accountLabel} 的登录密码已重置，旧会话已撤销。员工可使用新密码登录，并可在员工门户自行修改密码。`
+          : `${accountLabel} 的登录密码已重置。`,
+        dedupeKey:`accounts:password:${account.auth_user_id}:success`,
       }))
+      setPasswordResetModal(null)
     } catch (e) {
       setError(e.message)
+      setPasswordResetModal(current => current?.account?.auth_user_id === account.auth_user_id
+        ? ({ ...current, saving:false, error:e.message })
+        : current)
       notify(writeFailureToast({
-        module:'后台账号',operation:'重置密码',error:e,reason:`密码重置失败：${e.message}`,
-        dedupeKey:`accounts:password:${a.auth_user_id}:error`,
+        module:staffAccount?'员工账号':'后台账号',operation:staffAccount?'重置员工登录密码':'重置密码',error:e,reason:`密码重置失败：${e.message}`,
+        dedupeKey:`accounts:password:${account.auth_user_id}:error`,
       }))
     }
-    finally { setMutatingAccountId('') }
+    finally {
+      setMutatingAccountId('')
+      setPasswordResetModal(current => current?.account?.auth_user_id === account.auth_user_id
+        ? ({ ...current, saving:false })
+        : current)
+    }
   }
 
   const unlockLogin = async (a, accountKind) => {
@@ -1246,14 +1320,16 @@ export default function AdminUsersPage() {
 
   const deleteAccount = async (a, accountKind) => {
     if (!a?.auth_user_id || deletingAccountId) return
-    const recoveryStaffDelete = accountKind === 'staff' && recoveryStaffAccountMode
+    const staffAccount = accountKind === 'staff'
+    if (staffAccount && !recoveryStaffCan('delete_staff_account')) return
+    const recoveryStaffDelete = staffAccount
     if (recoveryStaffDelete) {
       const employeeNo = String(a?.employee?.employee_no || '').trim()
       if (!employeeNo) {
         setError('该账号缺少员工ID，已停止删除，请刷新列表后重试。')
         return
       }
-      const typed = window.prompt(`只删除员工登录账号，员工资料会保留。\n请输入员工ID ${employeeNo} 确认：`)
+      const typed = window.prompt(`此操作只会永久删除该员工的登录账号，并结束该账号的当前登录会话。\n员工档案、考试成绩与答案（含上传图片）、考勤记录及日报历史都会保留。\n删除后，如需再次登录，必须生成新的激活码并由员工重新注册。\n\n请输入员工ID ${employeeNo} 以确认删除：`)
       if (String(typed || '').trim().toUpperCase() !== employeeNo.toUpperCase()) return
     } else if (!window.confirm('只删除登录账号，员工资料会保留。确认继续？')) return
     setDeletingAccountId(a.auth_user_id)
@@ -1274,7 +1350,9 @@ export default function AdminUsersPage() {
           total:Math.max(0, Number(current.staff_account_pagination.total || 0) - 1),
         } : current.staff_account_pagination,
       }) : current)
-      const reason=accountKind === 'staff' ? '员工登录账号已删除，员工档案已保留。' : '后台账号已删除，员工档案已保留。'
+      const reason=accountKind === 'staff'
+        ? '员工登录账号已删除并已退出登录；员工档案、考试成绩与答案（含图片）、考勤及日报历史均已保留。之后重新开户需生成新的激活码并由员工重新注册。'
+        : '后台账号已删除，员工档案已保留。'
       notify(writeSuccessToast({
         module:accountKind==='staff'?'员工账号':'后台账号',operation:'删除登录账号',reason,
         dedupeKey:`accounts:delete:${a.auth_user_id}:success`,
@@ -1501,6 +1579,10 @@ export default function AdminUsersPage() {
     return name || actionLabels[permission.actionKey] || permission.actionKey
   }
 
+  const passwordResetRules = passwordRuleState(passwordResetModal?.password)
+  const passwordResetReady = Object.values(passwordResetRules).every(Boolean) &&
+    passwordResetModal?.password === passwordResetModal?.passwordConfirmation
+
   return (
     <div className="content-page access-page">
       <style>{`
@@ -1537,10 +1619,11 @@ export default function AdminUsersPage() {
         .permission-page-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px}.permission-page{overflow:hidden;border:1px solid #e1e7ef;border-radius:11px;background:#fbfcfe}.permission-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #e8edf3;background:#fff}.permission-page-title{display:flex;align-items:flex-start;gap:9px;min-width:0}.permission-page-title>input{margin-top:2px}.permission-page-title strong,.permission-page-title small{display:block}.permission-page-title strong{color:#334b67;font-size:12px}.permission-page-title small{margin-top:3px;color:#8996a7;font-size:10px;line-height:1.45}.permission-page-head>span{flex:0 0 auto;color:#7c8ca0;font-size:10px}.permission-options{display:grid;grid-template-columns:1fr;gap:6px;padding:9px}.permission-option{display:flex;align-items:flex-start;gap:9px;min-width:0;padding:9px 10px;border:1px solid #e4e9f0;border-radius:8px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.permission-option:hover{border-color:#c8d6e9;background:#f9fbff}.permission-option.selected{border-color:#bfd0f4;background:#f2f6ff}.permission-option.locked{cursor:default}.permission-option.pending{border-style:dashed;border-color:#e5d4b5;background:#fffaf1;cursor:not-allowed}.permission-option.pending:hover{border-color:#e5d4b5;background:#fffaf1}.permission-option.pending.selected{border-color:#dcc18f;background:#fff7e7}.permission-option.pending>input{accent-color:#b68434}.permission-option>input{margin-top:2px}.permission-option-copy{min-width:0;flex:1}.permission-option-copy strong,.permission-option-copy small{display:block}.permission-option-copy strong{color:#3c5069;font-size:12px;line-height:1.4}.permission-option-copy small{overflow:hidden;margin-top:3px;color:#96a1b0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;white-space:nowrap;text-overflow:ellipsis}.permission-option-badges{display:flex;flex:0 0 auto;gap:4px}.permission-action-badge,.sensitive-badge,.permission-pending-badge{flex:0 0 auto;padding:3px 5px;border-radius:5px;font-size:9px;font-style:normal;font-weight:850}.permission-action-badge{background:#eaf1ff;color:#3564c8}.permission-pending-badge{background:#f8e8c9;color:#8b6328}.sensitive-badge{background:#fff0db;color:#a76520}.permission-empty-state{padding:35px 18px;border:1px dashed #ccd7e5;border-radius:12px;background:#fff;color:#7d8da2;text-align:center}.permission-empty-state strong,.permission-empty-state span{display:block}.permission-empty-state strong{margin-bottom:5px;color:#465d78;font-size:13px}.permission-empty-state span{font-size:11px}
         .permission-page-pending{padding:9px 10px;border:1px dashed #e5d4b5;border-radius:8px;background:#fffaf1;color:#8a6733;font-size:10px;line-height:1.5}
         .role-modal>.modal-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;margin:0;padding:12px 18px;border-top:1px solid #dde5ef;background:#fff}.role-modal-actions-note{color:#8291a4;font-size:11px}.role-modal-actions-buttons{display:flex;gap:8px}.role-modal>.modal-actions button{height:39px}.role-modal>.modal-actions button:disabled{opacity:.55;cursor:not-allowed}
+        .password-reset-mask{z-index:130}.password-reset-modal{width:min(510px,calc(100vw - 24px));max-height:min(680px,calc(100dvh - 24px));overflow:auto;padding:0}.password-reset-modal .modal-head{align-items:flex-start;gap:14px;margin:0;padding:18px 19px 15px;border-bottom:1px solid #e5ebf3;background:#fbfcff}.password-reset-modal .modal-head h2{margin:0 0 4px}.password-reset-modal .modal-head small{display:block;color:#72839a;font-size:11px;line-height:1.5}.password-reset-modal .modal-head>button{flex:0 0 auto;cursor:pointer}.password-reset-body{padding:15px 19px 17px}.password-reset-account{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}.password-reset-account div{min-width:0;padding:9px 10px;border:1px solid #e0e7f0;border-radius:9px;background:#f7f9fc}.password-reset-account span,.password-reset-account strong{display:block}.password-reset-account span{margin-bottom:3px;color:#8593a5;font-size:9px;font-weight:800}.password-reset-account strong{overflow:hidden;color:#2a405d;font-size:11px;white-space:nowrap;text-overflow:ellipsis}.password-reset-guidance{margin:0 0 13px;padding:9px 11px;border:1px solid #d8e4f5;border-radius:9px;background:#f4f8ff;color:#55708f;font-size:10px;line-height:1.55}.password-reset-guidance strong{color:#315fc8}.password-reset-fields{display:grid;gap:11px}.password-reset-field>label{display:block;margin-bottom:5px;color:#60748d;font-size:10px;font-weight:850}.password-input-wrap{display:grid;grid-template-columns:minmax(0,1fr) auto;overflow:hidden;border:1px solid #d5dfeb;border-radius:9px;background:#fff;transition:.15s}.password-input-wrap:focus-within{border-color:#4b78d9;box-shadow:0 0 0 3px rgba(75,120,217,.08)}.password-input-wrap input{min-width:0;height:40px;border:0;background:transparent;padding:0 11px;color:#27384f;outline:0}.password-input-wrap button{min-width:54px;border:0;border-left:1px solid #e4e9f0;background:#f7f9fc;color:#536b87;font-size:10px;font-weight:800;cursor:pointer}.password-rule-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:11px 0 0;padding:0;list-style:none}.password-rule-list li{display:flex;align-items:center;gap:6px;color:#8a97a8;font-size:10px}.password-rule-list li:before{content:'•';display:grid;width:17px;height:17px;flex:0 0 auto;place-items:center;border-radius:50%;background:#f0f3f7;color:#94a0af;font-size:13px}.password-rule-list li.met{color:#22734f}.password-rule-list li.met:before{content:'✓';background:#e8f7ef;color:#228058;font-size:10px;font-weight:900}.password-reset-error{margin:12px 0 0;padding:9px 10px;border:1px solid #efc7c7;border-radius:9px;background:#fff5f5;color:#ae4141;font-size:10px;line-height:1.5}.password-reset-modal>.modal-actions{margin:0;padding:12px 19px;border-top:1px solid #e5ebf3;background:#fbfcfe}.password-reset-modal>.modal-actions button{min-width:92px;height:38px}.password-reset-modal>.modal-actions button:disabled{opacity:.52;cursor:not-allowed}
         .employee-search-results{grid-column:1/-1;max-height:235px;overflow:auto;border:1px solid #dce5ef;border-radius:10px;background:#fff;padding:5px}.employee-search-option{width:100%;display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;border:0;border-bottom:1px solid #edf1f5;background:#fff;padding:10px;text-align:left;cursor:pointer}.employee-search-option:hover{background:#f3f7ff}.employee-search-option:last-child{border-bottom:0}.employee-search-option strong{color:#24415f}.employee-search-option small{color:#738198}.employee-search-option span{font-size:11px;color:#376ac5}.linked-employee{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #bfe6d0;background:#f0fbf5;border-radius:9px;color:#18784a;font-size:12px}.linked-employee button{border:0;background:transparent;color:#b34b4b;cursor:pointer}
         .account-batch-builder{margin:13px 0 3px;padding:12px;border:1px solid #dce5f0;border-radius:12px;background:#f7f9fc}.account-batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.account-batch-toolbar strong,.account-batch-toolbar small{display:block}.account-batch-toolbar strong{color:#29425f;font-size:13px}.account-batch-toolbar small{margin-top:3px;color:#7f8da0;font-size:10px}.account-batch-toolbar button{height:36px;white-space:nowrap}.account-batch-empty{margin-top:10px;padding:12px;border:1px dashed #d5dfeb;border-radius:9px;background:#fff;color:#8a97a9;font-size:11px;text-align:center}.account-batch-list{display:flex;max-height:210px;flex-direction:column;gap:6px;margin-top:10px;overflow:auto}.account-batch-row{display:grid;grid-template-columns:25px minmax(0,1fr) auto;align-items:center;gap:9px;padding:9px 10px;border:1px solid #e0e7f0;border-radius:9px;background:#fff}.account-batch-row>span{display:grid;width:23px;height:23px;place-items:center;border-radius:7px;background:#edf3ff;color:#3567d1;font-size:10px;font-weight:900}.account-batch-row strong,.account-batch-row small,.account-batch-row em{display:block}.account-batch-row strong{color:#2e4561;font-size:12px}.account-batch-row small{overflow:hidden;margin-top:3px;color:#7e8b9d;font-size:10px;white-space:nowrap;text-overflow:ellipsis}.account-batch-row em{margin-top:3px;color:#bd4343;font-size:10px;font-style:normal}.account-batch-row>button{border:0;background:transparent;color:#b64a4a;font-size:10px;cursor:pointer}.account-batch-row.failed{border-color:#efc4c4;background:#fff8f8}
         @media(max-width:1100px){.role-list{grid-template-columns:repeat(2,minmax(0,1fr))}.roles-toolbar{align-items:stretch;flex-direction:column}.role-search{max-width:none}.create-role-row{min-width:0}.permission-page-grid{grid-template-columns:1fr}}
-        @media(max-width:700px){.roles-overview{align-items:flex-start;flex-direction:column}.roles-overview-stats{width:100%}.roles-overview-stats div{min-width:0;flex:1}.role-list{grid-template-columns:1fr}.role-search,.create-role-row{min-width:0;width:100%}.create-role-row{flex-direction:column}.permissions-modal-mask{padding:6px}.role-modal{width:calc(100vw - 12px);height:calc(100dvh - 12px);border-radius:13px}.role-identity-panel{grid-template-columns:1fr}.role-selection-summary div{flex:1}.permission-toolbar{align-items:stretch;flex-direction:column}.permission-search{min-width:0;width:100%}.permission-toolbar-actions{display:grid;grid-template-columns:1fr 1fr}.role-modal>.modal-actions{align-items:stretch;flex-direction:column}.role-modal-actions-buttons{display:grid;grid-template-columns:1fr 1fr}.scope-columns{grid-template-columns:1fr}.scope-column-tools{grid-template-columns:minmax(0,1fr) auto}.scope-clear-button{grid-column:2}.access-searchbar{grid-template-columns:1fr 1fr}.access-searchbar input{grid-column:1/-1}.employee-search-option{grid-template-columns:95px 1fr}.account-batch-toolbar{align-items:stretch;flex-direction:column}.account-batch-row{grid-template-columns:23px minmax(0,1fr) auto}}
+        @media(max-width:700px){.roles-overview{align-items:flex-start;flex-direction:column}.roles-overview-stats{width:100%}.roles-overview-stats div{min-width:0;flex:1}.role-list{grid-template-columns:1fr}.role-search,.create-role-row{min-width:0;width:100%}.create-role-row{flex-direction:column}.permissions-modal-mask{padding:6px}.role-modal{width:calc(100vw - 12px);height:calc(100dvh - 12px);border-radius:13px}.role-identity-panel{grid-template-columns:1fr}.role-selection-summary div{flex:1}.permission-toolbar{align-items:stretch;flex-direction:column}.permission-search{min-width:0;width:100%}.permission-toolbar-actions{display:grid;grid-template-columns:1fr 1fr}.role-modal>.modal-actions{align-items:stretch;flex-direction:column}.role-modal-actions-buttons{display:grid;grid-template-columns:1fr 1fr}.scope-columns{grid-template-columns:1fr}.scope-column-tools{grid-template-columns:minmax(0,1fr) auto}.scope-clear-button{grid-column:2}.access-searchbar{grid-template-columns:1fr 1fr}.access-searchbar input{grid-column:1/-1}.employee-search-option{grid-template-columns:95px 1fr}.account-batch-toolbar{align-items:stretch;flex-direction:column}.account-batch-row{grid-template-columns:23px minmax(0,1fr) auto}.password-reset-mask{padding:8px}.password-reset-modal{width:calc(100vw - 16px);max-height:calc(100dvh - 16px)}.password-reset-account,.password-rule-list{grid-template-columns:1fr}.password-reset-modal>.modal-actions button{flex:1}}
       `}</style>
 
       <div className="page-toolbar">
@@ -1614,7 +1697,7 @@ export default function AdminUsersPage() {
                       <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                       <td><div className="access-grid-actions">
                         {!founder && canEditBackend && <button disabled={deleting || mutating} onClick={() => openEdit(a)}>{adminT('编辑')}</button>}
-                        {!founder && canResetBackendPassword && <button disabled={deleting || mutating} onClick={() => resetPassword(a)}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
+                        {!founder && canResetBackendPassword && <button disabled={deleting || mutating} onClick={() => openPasswordReset(a, 'backend')}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
                         {!founder && canResetBackendMfa && <button disabled={deleting || mutating} onClick={() => resetMfa(a)}>{adminT(mutating ? '处理中…' : '重置OTP')}</button>}
                         {!founder && canToggleBackend && <button disabled={deleting || mutating} onClick={() => toggleActive(a)}>{adminT(mutating ? '处理中…' : a.active ? '停用' : '启用')}</button>}
                         {a.login_locked && canUnlockBackend && <button disabled={deleting || mutating} onClick={() => unlockLogin(a, 'backend')}>{adminT(mutating ? '处理中…' : '解锁')}</button>}
@@ -1662,7 +1745,7 @@ export default function AdminUsersPage() {
                     : <span className={`status-chip ${a.active ? '' : 'off'}`}>{adminT(a.active ? '正常' : '停用')}</span>}</td>
                   <td style={{whiteSpace:'nowrap'}}>{accountDateTime(a.created_at)}</td>
                   <td><div className="access-grid-actions">
-                    {canResetStaffPassword && <button disabled={deleting || mutating} onClick={() => resetPassword(a)}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
+                    {canResetStaffPassword && <button disabled={deleting || mutating} onClick={() => openPasswordReset(a, 'staff')}>{adminT(mutating ? '处理中…' : '重置密码')}</button>}
                     {canResetStaffMfa && <button disabled={deleting || mutating} onClick={() => resetMfa(a)}>{adminT(mutating ? '处理中…' : '重置OTP')}</button>}
                     {canToggleStaff && <button disabled={deleting || mutating} onClick={() => toggleActive(a)}>{adminT(mutating ? '处理中…' : a.active ? '停用' : '启用')}</button>}
                     {a.login_locked && canUnlockStaff && <button disabled={deleting || mutating} onClick={() => unlockLogin(a, 'staff')}>{adminT(mutating ? '处理中…' : '解锁')}</button>}
@@ -1673,7 +1756,7 @@ export default function AdminUsersPage() {
               </div>
               {recoveryStaffAccountMode && <>
                 <div className="recovery-account-note">
-                  <span><strong>稳定恢复模式</strong>：员工前端账号支持受权限分页查看、搜索，以及逐个删除登录账号；新增、改密和停用仍保持关闭。删除只移除登录身份，员工档案会保留，重新注册需生成新的激活码。</span>
+                  <span><strong>稳定恢复模式</strong>：员工前端账号支持受权限分页查看、搜索、重置员工登录密码，以及逐个删除登录账号；新增和停用仍保持关闭。重置只影响员工登录账号并立即撤销旧会话；员工可用新密码登录，之后也可在员工门户自行修改。删除只移除登录身份，员工档案会保留。</span>
                 </div>
                 <Pagination
                   page={staffAccountPage}
@@ -1978,6 +2061,57 @@ export default function AdminUsersPage() {
               <button className="primary-action" disabled={staffModal.saving} onClick={saveStaffAccount}>{staffModal.saving?'创建中…':'创建账号'}</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {passwordResetModal && (
+        <div className="modal-mask password-reset-mask" onMouseDown={closePasswordReset}>
+          <form className="modal-card password-reset-modal" role="dialog" aria-modal="true" aria-labelledby="password-reset-title" aria-describedby="password-reset-description" onMouseDown={event => event.stopPropagation()} onSubmit={resetPassword}>
+            <div className="modal-head">
+              <div>
+                <h2 id="password-reset-title">{adminT(passwordResetModal.accountKind === 'staff' ? '重置员工登录密码' : '重置后台登录密码', passwordResetModal.accountKind === 'staff' ? 'Reset staff login password' : 'Reset admin login password')}</h2>
+                <small id="password-reset-description">{adminT(passwordResetModal.accountKind === 'staff' ? '只重置员工登录账号；旧会话会立即撤销。员工可使用新密码登录，之后也可在员工门户自行修改密码；员工档案不受影响。' : '只重置该后台账号的登录密码。', passwordResetModal.accountKind === 'staff' ? 'Only the staff login account is reset and its old sessions are revoked immediately. The employee can sign in with the new password and change it later in the staff portal; the employee record is unchanged.' : 'Only this admin account login password is affected.')}</small>
+              </div>
+              <button type="button" aria-label={adminT('关闭', 'Close')} disabled={passwordResetModal.saving} onClick={closePasswordReset}>×</button>
+            </div>
+            <div className="password-reset-body">
+              <div className="password-reset-account" aria-label={adminT('账号资料', 'Account details')}>
+                <div><span>{adminT(passwordResetModal.accountKind === 'staff' ? '员工' : '后台用户', passwordResetModal.accountKind === 'staff' ? 'Employee' : 'Admin user')}</span><strong>{passwordResetModal.accountKind === 'staff'
+                  ? [passwordResetModal.account.employee?.employee_no, passwordResetModal.account.employee?.full_name].filter(Boolean).join(' · ') || '—'
+                  : passwordResetModal.account.login_username || '—'}</strong></div>
+                <div><span>{adminT('登录邮箱', 'Login email')}</span><strong>{passwordResetModal.account.login_email || '—'}</strong></div>
+              </div>
+              <p className="password-reset-guidance"><strong>{adminT('请注意：', 'Please note: ')}</strong>{adminT(passwordResetModal.accountKind === 'staff' ? '保存后新密码立即生效，旧会话会被撤销；请通过安全方式告知员工。' : '保存后新密码立即生效，请通过安全方式告知账号本人。', passwordResetModal.accountKind === 'staff' ? 'The new password takes effect immediately and old sessions are revoked. Share it with the employee through a secure channel.' : 'The new password takes effect immediately. Share it with the account owner through a secure channel.')}</p>
+              <div className="password-reset-fields">
+                <div className="password-reset-field">
+                  <label htmlFor="password-reset-new">{adminT('新密码', 'New password')}</label>
+                  <div className="password-input-wrap">
+                    <input id="password-reset-new" autoFocus autoComplete="new-password" type={passwordResetModal.passwordVisible ? 'text' : 'password'} value={passwordResetModal.password} aria-invalid={passwordResetModal.error ? 'true' : undefined} onChange={event => setPasswordResetModal(current => ({ ...current, password:event.target.value, error:'' }))} />
+                    <button type="button" aria-pressed={passwordResetModal.passwordVisible} onClick={() => setPasswordResetModal(current => ({ ...current, passwordVisible:!current.passwordVisible }))}>{adminT(passwordResetModal.passwordVisible ? '隐藏' : '显示', passwordResetModal.passwordVisible ? 'Hide' : 'Show')}</button>
+                  </div>
+                </div>
+                <div className="password-reset-field">
+                  <label htmlFor="password-reset-confirm">{adminT('再次输入新密码', 'Confirm new password')}</label>
+                  <div className="password-input-wrap">
+                    <input id="password-reset-confirm" autoComplete="new-password" type={passwordResetModal.passwordVisible ? 'text' : 'password'} value={passwordResetModal.passwordConfirmation} aria-invalid={passwordResetModal.passwordConfirmation && passwordResetModal.password !== passwordResetModal.passwordConfirmation ? 'true' : undefined} onChange={event => setPasswordResetModal(current => ({ ...current, passwordConfirmation:event.target.value, error:'' }))} />
+                  </div>
+                </div>
+              </div>
+              <ul className="password-rule-list" aria-label={adminT('密码规则', 'Password requirements')}>
+                <li className={passwordResetRules.length ? 'met' : ''}>{adminT('至少 10 位', 'At least 10 characters')}</li>
+                <li className={passwordResetRules.uppercase ? 'met' : ''}>{adminT('包含大写字母', 'Contains an uppercase letter')}</li>
+                <li className={passwordResetRules.lowercase ? 'met' : ''}>{adminT('包含小写字母', 'Contains a lowercase letter')}</li>
+                <li className={passwordResetRules.number ? 'met' : ''}>{adminT('包含数字', 'Contains a number')}</li>
+                <li className={passwordResetRules.symbol ? 'met' : ''}>{adminT('包含符号', 'Contains a symbol')}</li>
+              </ul>
+              {passwordResetModal.passwordConfirmation && passwordResetModal.password !== passwordResetModal.passwordConfirmation && <div className="password-reset-error" role="alert">{adminT('两次输入的新密码不一致。', 'The passwords do not match.')}</div>}
+              {passwordResetModal.error && <div className="password-reset-error" role="alert">{passwordResetModal.error}</div>}
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="secondary-action" disabled={passwordResetModal.saving} onClick={closePasswordReset}>{adminT('取消', 'Cancel')}</button>
+              <button type="submit" className="primary-action" disabled={passwordResetModal.saving || !passwordResetReady}>{adminT(passwordResetModal.saving ? '重置中…' : '确认重置密码', passwordResetModal.saving ? 'Resetting…' : 'Reset password')}</button>
+            </div>
+          </form>
         </div>
       )}
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { signOutAppSession, supabase } from '../lib/supabase'
+import { discardLocalAppSession, setAppSessionNotice, signOutAppSession, supabase } from '../lib/supabase'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 import { adminNavigation, adminRouteAccess, adminTargetMatches, requestedAdminRoute, requestedStaffGroup, staffNavigation, staffTargetMatches } from '../config/navigation'
@@ -9,6 +9,7 @@ import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
 import AdminNavIcon from './AdminNavIcon'
 import AdminTopbar from './AdminTopbar'
 import { internalPortalPath, publicPortalTarget } from '../lib/appBasePath'
+import StaffChangePasswordDialog from './StaffChangePasswordDialog'
 
 const navKey = item => item.id || item.to
 const navUrl = to => new URL(to, 'https://wfh.local')
@@ -21,6 +22,7 @@ export default function AppLayout({ mode, children }) {
   const [adminAccess,setAdminAccess] = useState({loading:mode==='admin',founder:false,permissions:[],error:''})
   const [accessRetryKey,setAccessRetryKey] = useState(0)
   const [staffIdentity,setStaffIdentity] = useState('')
+  const [staffPasswordDialogOpen,setStaffPasswordDialogOpen] = useState(false)
 
   useEffect(()=>{
     if(mode!=='staff')return undefined
@@ -122,6 +124,27 @@ export default function AppLayout({ mode, children }) {
     navigate(publicPortalTarget(mode,'login'))
   }
 
+  const finishStaffPasswordChange = async result=>{
+    setStaffPasswordDialogOpen(false)
+    const notice = result?.code === 'PASSWORD_CHANGED_ACCOUNT_LOCKED' || result?.code === 'ACCOUNT_LOCKED'
+      ? 'account_locked'
+      : result?.code === 'ACCOUNT_UNAVAILABLE'
+        ? 'account_not_found'
+        : result?.code === 'STAFF_IP_NOT_ALLOWED'
+          ? 'ip_not_allowed'
+      : result?.password_change_outcome_unknown
+        ? 'password_change_outcome_unknown'
+        : result?.code === 'PASSWORD_CHANGED_FINALIZE_PENDING'
+          ? 'password_changed_finalize_pending'
+          : result?.password_changed
+            ? 'password_changed'
+            : 'session_ended'
+    setAppSessionNotice(notice,'staff')
+    await discardLocalAppSession()
+    resetLocale()
+    navigate(publicPortalTarget('staff','login'),{replace:true})
+  }
+
   const clickParent = item=>{
     const key=navKey(item)
     setOpenGroup(current=>current===key ? null : key)
@@ -201,6 +224,15 @@ export default function AppLayout({ mode, children }) {
             <span className="staff-sidebar-account-avatar" aria-hidden="true">{staffIdentity.slice(0,1).toUpperCase()}</span>
             <strong>{staffIdentity}</strong>
           </div>}
+          <button
+            type="button"
+            className="sidebar-logout"
+            style={{marginTop:0}}
+            aria-haspopup="dialog"
+            onClick={()=>setStaffPasswordDialogOpen(true)}
+          >
+            {t('passwordChange.open','修改密码')}
+          </button>
           <StaffLanguageSwitcher className="sidebar-language-switcher" />
         </div>}
         {mode==='admin'&&<AdminLanguageSwitcher className="sidebar-language-switcher" />}
@@ -212,6 +244,11 @@ export default function AppLayout({ mode, children }) {
         {mode === 'admin' && <AdminTopbar access={adminAccess} />}
         {mode === 'admin' ? adminMain : children}
       </main>
+      {mode==='staff'&&<StaffChangePasswordDialog
+        open={staffPasswordDialogOpen}
+        onClose={()=>setStaffPasswordDialogOpen(false)}
+        onPasswordChanged={finishStaffPasswordChange}
+      />}
     </div>
   )
 }
