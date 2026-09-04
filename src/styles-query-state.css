@@ -1,0 +1,20 @@
+.query-state-notice{display:flex;align-items:center;gap:10px;min-height:42px;box-sizing:border-box;padding:8px 11px;border:1px solid #d7e4f4;border-radius:10px;background:#f5f8fd;color:#405e81;font-size:11px}
+.query-state-notice-mark{display:grid;flex:0 0 24px;width:24px;height:24px;place-items:center;border-radius:999px;background:#e8f0fc;color:#346bc5;font-size:12px;font-weight:900}
+.query-state-notice-mark i{display:block;width:12px;height:12px;box-sizing:border-box;border:2px solid #b9cdec;border-top-color:#2f69d9;border-radius:50%;animation:query-state-spin .72s linear infinite}
+.query-state-notice-copy{display:flex;min-width:0;flex:1 1 auto;flex-direction:column;gap:2px}
+.query-state-notice-copy strong{color:#274b77;font-size:11px}
+.query-state-notice-copy small{overflow:hidden;color:#687f9b;font-size:10px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}
+.query-state-notice.warning{border-color:#ecd8a9;background:#fffaf0;color:#85611c}
+.query-state-notice.warning .query-state-notice-mark{background:#fff0cb;color:#956819}
+.query-state-notice.warning .query-state-notice-copy strong{color:#795819}
+.query-state-notice.warning .query-state-notice-copy small{color:#8a7449}
+.query-state-notice.error{border-color:#efc1c4;background:#fff5f5;color:#a73942}
+.query-state-notice.error .query-state-notice-mark{background:#fbe3e5;color:#b63741}
+.query-state-notice.error .query-state-notice-copy strong{color:#9d3039}
+.query-state-notice.error .query-state-notice-copy small{color:#9b5e64}
+.query-state-notice>button{flex:0 0 auto;min-height:30px;padding:0 10px;border:1px solid #bdd0ec;border-radius:8px;background:#fff;color:#2e62ad;font:inherit;font-weight:850;cursor:pointer;white-space:nowrap}
+.query-state-notice.warning>button{border-color:#dfc682;color:#80601f}
+.query-state-notice.error>button{border-color:#e1afb3;color:#a3333c}
+@keyframes query-state-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.query-state-notice-mark i{animation:none;border-color:#2f69d9}}
+@media(max-width:680px){.query-state-notice{align-items:flex-start}.query-state-notice-copy small{white-space:normal}.query-state-notice>button{align-self:center}}

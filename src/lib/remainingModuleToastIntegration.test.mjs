@@ -24,7 +24,7 @@ test('remaining admin reads announce only explicit operations', () => {
 
 test('remaining write failures never replay mutations', () => {
   assert.match(connectivity, /operation:editor==='edit'\?'保存修改':'新增记录'/)
-  assert.match(connectivity, /refresh:\(\)=>load\(page,pageSize,applied,'刷新记录列表'\)/)
+  assert.match(connectivity, /refresh:\(\)=>\{const current=activeQueryRef\.current;return load\(current\.page,current\.pageSize,current\.applied,'刷新记录列表'\)\}/)
   assert.doesNotMatch(connectivity, /refresh:\(\)=>save/)
   assert.doesNotMatch(connectivity, /refresh:\(\)=>confirmDelete/)
 })
@@ -44,5 +44,5 @@ test('explicit report and connectivity reads preserve inline errors and offer re
   assert.match(reports, /refresh:\(\)=>load\(\{nextRange,nextFilters,nextSort,nextPage,nextSize,announceOperation\}\)/)
   assert.match(connectivity, /setFormError\(reason\)/)
   assert.match(connectivity, /setDeleteError\(reason\)/)
-  assert.match(connectivity, /load\(1,pageSize,next,'查询记录'\)/)
+  assert.match(connectivity, /activateAndLoad\(1,pageSize,next,'查询记录'\)/)
 })

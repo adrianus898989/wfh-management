@@ -8,10 +8,11 @@ import { PERMISSIONS } from '../config/permissions'
 import { useAdminAccess } from '../lib/adminAccess'
 import { EmployeeDrawer } from './AdminEmployeesPage'
 import { ExamImageGallery } from '../components/ExamImageGallery'
-import { edgeFunctionErrorMessage } from '../lib/edgeFunctionError'
+import { edgeFunctionErrorMessage, publicRequestErrorMessage } from '../lib/edgeFunctionError'
 import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments.js'
 import { businessTodayIso } from '../lib/adminQueryDefaults'
-import { isCurrentLiveRequest, staleSnapshotNotice } from '../lib/requestConsistency'
+import { isCurrentLiveRequest, isSnapshotForRequest, staleSnapshotNotice } from '../lib/requestConsistency'
+import QueryStateNotice from '../components/QueryStateNotice'
 
 const TABS=['考试概览','考试记录','题库','人工批改']
 const TRAINING_TOAST_MODULE='考试管理'
@@ -40,9 +41,32 @@ const retryableOverviewAnalyticsFailure=value=>{
 }
 const todaySessionFilters=()=>{const day=businessTodayIso();return {...blankSessionFilters,dateFrom:day,dateTo:day}}
 const message=e=>e?.message||String(e||'操作失败')
+const publicMessage=(error,fallback='考试数据服务暂时繁忙，请稍后重试。')=>publicRequestErrorMessage(error,fallback)
 const labelValue=value=>String(value||'').trim()||'全部'
+const questionRequestKey=(filters,page,pageSize)=>JSON.stringify({
+  search:filters.search,
+  team:filters.team,
+  position:filters.position,
+  page,
+  page_size:pageSize,
+})
 const questionRequestLabel=(filters,page,pageSize)=>`题库：搜索 ${labelValue(filters.search)}，团队 ${labelValue(filters.team)}，岗位 ${labelValue(filters.position)}，第 ${page} 页 / ${pageSize} 条`
-const sessionRequestLabel=(tab,filters,page,pageSize)=>`${tab}：员工 ${labelValue(filters.employeeNo||filters.employeeName)}，团队 ${labelValue(filters.team)}，岗位 ${labelValue(filters.position)}，日期 ${labelValue(filters.dateFrom)} 至 ${labelValue(filters.dateTo)}，第 ${page} 页 / ${pageSize} 条`
+const sessionRequestKey=(tab,filters,page,pageSize)=>JSON.stringify({
+  tab,
+  employee_no:filters.employeeNo,
+  employee_name:filters.employeeName,
+  exam:filters.exam,
+  source:filters.source,
+  team:filters.team,
+  position:filters.position,
+  grader:filters.grader,
+  status:tab==='人工批改'?'pending':filters.status,
+  date_from:filters.dateFrom,
+  date_to:filters.dateTo,
+  page,
+  page_size:pageSize,
+})
+const sessionRequestLabel=(tab,filters,page,pageSize)=>`${tab}：员工ID ${labelValue(filters.employeeNo)}，姓名 ${labelValue(filters.employeeName)}，考试 ${labelValue(filters.exam)}，来源 ${labelValue(filters.source)}，团队 ${labelValue(filters.team)}，岗位 ${labelValue(filters.position)}，评分人 ${labelValue(filters.grader)}，状态 ${tab==='人工批改'?'待批改':labelValue(filters.status)}，日期 ${labelValue(filters.dateFrom)} 至 ${labelValue(filters.dateTo)}，第 ${page} 页 / ${pageSize} 条`
 const fmt=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—'
 const score=v=>v==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:2})
 const examAnswerImageLabels={
@@ -95,11 +119,14 @@ export default function AdminTrainingPage(){
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(30)
   const [questionSearchVersion,setQuestionSearchVersion]=useState(0)
-  const [questionSnapshot,setQuestionSnapshot]=useState({scopeKey:'',label:'',hasData:false,data:null})
+  const [questionSnapshot,setQuestionSnapshot]=useState({scopeKey:'',key:'',label:'',hasData:false,data:null})
+  const [questionLoadError,setQuestionLoadError]=useState('')
   const [authIdentity,setAuthIdentity]=useState(null)
   const [overviewSnapshot,setOverviewSnapshot]=useState({scopeKey:'',hasData:false,data:null})
+  const [overviewSearchVersion,setOverviewSearchVersion]=useState(0)
   const [loading,setLoading]=useState(true)
   const [overviewLoading,setOverviewLoading]=useState(false)
+  const [overviewLoadError,setOverviewLoadError]=useState({scopeKey:'',message:''})
   const [error,setError]=useState('')
   const [questionStaleNotice,setQuestionStaleNotice]=useState('')
   const [overviewStaleNotice,setOverviewStaleNotice]=useState('')
@@ -113,8 +140,11 @@ export default function AdminTrainingPage(){
   const [sessionPage,setSessionPage]=useState(1)
   const [sessionPageSize,setSessionPageSize]=useState(30)
   const [sessionSearchVersion,setSessionSearchVersion]=useState(0)
-  const [sessionSnapshot,setSessionSnapshot]=useState({scopeKey:'',label:'',hasData:false,data:{rows:[],total:0}})
-  const [sessionLoading,setSessionLoading]=useState(false)
+  const [sessionSnapshot,setSessionSnapshot]=useState({scopeKey:'',key:'',label:'',hasData:false,data:{rows:[],total:0}})
+  const initialSessionTab=['考试记录','人工批改'].includes(requestedTab)?requestedTab:''
+  const [sessionStateTab,setSessionStateTab]=useState(initialSessionTab)
+  const [sessionLoading,setSessionLoading]=useState(Boolean(initialSessionTab))
+  const [sessionLoadError,setSessionLoadError]=useState('')
   const [sessionStaleNotice,setSessionStaleNotice]=useState('')
   const [employeeDetail,setEmployeeDetail]=useState(null)
   const [employeeDetailLoading,setEmployeeDetailLoading]=useState(false)
@@ -130,6 +160,8 @@ export default function AdminTrainingPage(){
   const overviewRequestRef=useRef(0)
   const overviewAbortRef=useRef(null)
   const sessionRequestRef=useRef(0)
+  const pendingSessionNavigationRef=useRef(null)
+  const previousTabRef=useRef(tab)
   const questionReadIntentRef=useRef('')
   const overviewReadIntentRef=useRef('')
   const sessionReadIntentRef=useRef('')
@@ -148,17 +180,26 @@ export default function AdminTrainingPage(){
   overviewScopeKeyRef.current=overviewScopeKey
   const overviewHasSnapshot=overviewSnapshot.scopeKey===overviewScopeKey&&overviewSnapshot.hasData
   const overviewData=overviewHasSnapshot?overviewSnapshot.data:null
-  const questionHasSnapshot=questionSnapshot.scopeKey===overviewScopeKey&&questionSnapshot.hasData
+  const activeOverviewLoadError=overviewLoadError.scopeKey===overviewScopeKey?overviewLoadError.message:''
+  const currentQuestionKey=questionRequestKey(filters,page,pageSize)
+  const currentSessionKey=sessionRequestKey(tab,sessionFilters,sessionPage,sessionPageSize)
+  const questionActiveKeyRef=useRef(currentQuestionKey)
+  const sessionActiveKeyRef=useRef(currentSessionKey)
+  questionActiveKeyRef.current=currentQuestionKey
+  sessionActiveKeyRef.current=currentSessionKey
+  const questionHasSnapshot=isSnapshotForRequest(questionSnapshot,overviewScopeKey,currentQuestionKey)
   const data=questionHasSnapshot?questionSnapshot.data:null
-  const sessionHasSnapshot=sessionSnapshot.scopeKey===overviewScopeKey&&sessionSnapshot.hasData
+  const questionFilterData=questionSnapshot.scopeKey===overviewScopeKey&&questionSnapshot.hasData
+    ?{series:questionSnapshot.data?.series||[],teams:questionSnapshot.data?.teams||[],positions:questionSnapshot.data?.positions||[],last_sync:questionSnapshot.data?.last_sync}
+    :null
+  const sessionHasSnapshot=sessionStateTab===tab&&isSnapshotForRequest(sessionSnapshot,overviewScopeKey,currentSessionKey)
   const sessionData=sessionHasSnapshot?sessionSnapshot.data:{rows:[],total:0}
-  const currentQuestionLabel=questionRequestLabel(filters,page,pageSize)
-  const currentSessionLabel=sessionRequestLabel(tab,sessionFilters,sessionPage,sessionPageSize)
-  const questionDisplayNotice=questionHasSnapshot&&(questionStaleNotice||questionSnapshot.label!==currentQuestionLabel)
-    ?(questionStaleNotice||staleSnapshotNotice(questionSnapshot.label)):''
-  const sessionDisplayNotice=sessionHasSnapshot&&(sessionStaleNotice||sessionSnapshot.label!==currentSessionLabel)
-    ?(sessionStaleNotice||staleSnapshotNotice(sessionSnapshot.label)):''
-  const activeSnapshotNotice=tab==='考试概览'&&overviewHasSnapshot?overviewStaleNotice:tab==='题库'?questionDisplayNotice:['考试记录','人工批改'].includes(tab)?sessionDisplayNotice:''
+  const sessionFilterData=sessionSnapshot.scopeKey===overviewScopeKey&&sessionSnapshot.hasData
+    ?{teams:sessionSnapshot.data?.teams||[],positions:sessionSnapshot.data?.positions||[]}
+    :null
+  const questionDisplayNotice=questionHasSnapshot?questionStaleNotice:''
+  const sessionDisplayNotice=sessionHasSnapshot?sessionStaleNotice:''
+  const activeSnapshotNotice=tab==='考试概览'&&overviewHasSnapshot?overviewStaleNotice:''
 
   useEffect(()=>{
     aliveRef.current=true
@@ -185,9 +226,9 @@ export default function AdminTrainingPage(){
     overviewAbortRef.current?.abort();overviewAbortRef.current=null
     overviewFlight.current=null;setOverviewLoading(false)
     setOverviewSnapshot(current=>current.scopeKey===overviewScopeKey?current:{scopeKey:overviewScopeKey,hasData:false,data:null})
-    setQuestionSnapshot(current=>current.scopeKey===overviewScopeKey?current:{scopeKey:overviewScopeKey,label:'',hasData:false,data:null})
-    setSessionSnapshot(current=>current.scopeKey===overviewScopeKey?current:{scopeKey:overviewScopeKey,label:'',hasData:false,data:{rows:[],total:0}})
-    setOverviewStaleNotice('');setQuestionStaleNotice('');setSessionStaleNotice('')
+    setQuestionSnapshot(current=>current.scopeKey===overviewScopeKey?current:{scopeKey:overviewScopeKey,key:'',label:'',hasData:false,data:null})
+    setSessionSnapshot(current=>current.scopeKey===overviewScopeKey?current:{scopeKey:overviewScopeKey,key:'',label:'',hasData:false,data:{rows:[],total:0}})
+    setOverviewStaleNotice('');setOverviewLoadError({scopeKey:overviewScopeKey,message:''});setQuestionStaleNotice('');setQuestionLoadError('');setSessionStaleNotice('');setSessionLoadError('')
     setError('')
   },[overviewScopeKey])
   useEffect(()=>{
@@ -200,40 +241,40 @@ export default function AdminTrainingPage(){
   const loadQuestionBank=async()=>{
     const requestToken=++questionRequestRef.current
     const requestScopeKey=overviewScopeKey
+    const requestKey=questionRequestKey(filters,page,pageSize)
     const requestLabel=questionRequestLabel(filters,page,pageSize)
     const requestedOperation=questionReadIntentRef.current
     questionReadIntentRef.current=''
-    const prior=questionSnapshotRef.current
-    setLoading(true);setError('')
-    setQuestionStaleNotice(prior.scopeKey===requestScopeKey&&prior.hasData&&prior.label!==requestLabel?staleSnapshotNotice(prior.label):'')
+    setLoading(true);setQuestionLoadError('');setError('')
+    setQuestionStaleNotice('')
     try{
       const {data:result,error:e}=await supabase.rpc('admin_exam_question_bank_dashboard',{p_search:filters.search,p_team:filters.team,p_position:filters.position,p_page:page,p_page_size:pageSize})
-      if(!isCurrentLiveRequest(aliveRef.current,questionRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey)return
+      if(!isCurrentLiveRequest(aliveRef.current,questionRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey||questionActiveKeyRef.current!==requestKey)return
       if(e){
-        const reason=message(e)
-        if(tabRef.current==='题库')setError(reason)
+        const reason=publicMessage(e,'考试题库读取失败，请稍后重试。')
+        if(tabRef.current==='题库')setQuestionLoadError(reason)
         const snapshot=questionSnapshotRef.current
-        if(snapshot.scopeKey===requestScopeKey&&snapshot.hasData)setQuestionStaleNotice(staleSnapshotNotice(snapshot.label))
+        if(isSnapshotForRequest(snapshot,requestScopeKey,requestKey))setQuestionStaleNotice(staleSnapshotNotice(snapshot.label))
         else setQuestionStaleNotice('')
         if(requestedOperation)notify({
           type:'error',module:TRAINING_TOAST_MODULE,operation:requestedOperation,reason,
           dedupeKey:'training:question-bank:read:error',
-          retry:()=>{questionReadIntentRef.current='刷新考试题库';return loadQuestionBank()},retryLabel:'重试',
+          retry:()=>{questionReadIntentRef.current='刷新考试题库';setQuestionSearchVersion(version=>version+1)},retryLabel:'重试',
         })
       }else{
-        const snapshot={scopeKey:requestScopeKey,label:requestLabel,hasData:true,data:result||null}
-        questionSnapshotRef.current=snapshot;setQuestionSnapshot(snapshot);setQuestionStaleNotice('')
+        const snapshot={scopeKey:requestScopeKey,key:requestKey,label:requestLabel,hasData:true,data:result||null}
+        questionSnapshotRef.current=snapshot;setQuestionSnapshot(snapshot);setQuestionLoadError('');setQuestionStaleNotice('')
       }
     }catch(e){
-      if(isCurrentLiveRequest(aliveRef.current,questionRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey){
-        const reason=message(e)
-        if(tabRef.current==='题库')setError(reason)
+      if(isCurrentLiveRequest(aliveRef.current,questionRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey&&questionActiveKeyRef.current===requestKey){
+        const reason=publicMessage(e,'考试题库读取失败，请稍后重试。')
+        if(tabRef.current==='题库')setQuestionLoadError(reason)
         const snapshot=questionSnapshotRef.current
-        setQuestionStaleNotice(snapshot.scopeKey===requestScopeKey&&snapshot.hasData?staleSnapshotNotice(snapshot.label):'')
+        setQuestionStaleNotice(isSnapshotForRequest(snapshot,requestScopeKey,requestKey)?staleSnapshotNotice(snapshot.label):'')
         if(requestedOperation)notify({
           type:'error',module:TRAINING_TOAST_MODULE,operation:requestedOperation,reason,
           dedupeKey:'training:question-bank:read:error',
-          retry:()=>{questionReadIntentRef.current='刷新考试题库';return loadQuestionBank()},retryLabel:'重试',
+          retry:()=>{questionReadIntentRef.current='刷新考试题库';setQuestionSearchVersion(version=>version+1)},retryLabel:'重试',
         })
       }
     }finally{
@@ -253,10 +294,10 @@ export default function AdminTrainingPage(){
       notify({
         type:'error',module:TRAINING_TOAST_MODULE,operation:requestedOperation,reason,
         dedupeKey:'training:overview:read:error',
-        retry:()=>{overviewReadIntentRef.current='刷新考试概览';return loadOverview()},retryLabel:'重试',
+        retry:()=>{overviewReadIntentRef.current='刷新考试概览';setOverviewSearchVersion(version=>version+1)},retryLabel:'重试',
       })
     }
-    setOverviewLoading(true);setError('')
+    setOverviewLoading(true);setOverviewLoadError({scopeKey:overviewScopeKey,message:''});setError('')
     const requestScopeKey=overviewScopeKey
     const overviewRequestActive=()=>isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey&&tabRef.current==='考试概览'
     const invokeOverviewRpc=async rpcName=>{
@@ -295,12 +336,13 @@ export default function AdminTrainingPage(){
         if(!isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey||tabRef.current!=='考试概览')return
         if(e||!validOverviewHome(result)){
           const homeFailure=e||new Error('考试基础数据响应不完整')
-          const reason=message(homeFailure)
-          if(tabRef.current==='考试概览')setError(reason)
+          const reason=publicMessage(homeFailure)
           publishFailure(reason)
-          if(overviewAccessFailure(homeFailure)){invalidateOverview();return}
+          if(overviewAccessFailure(homeFailure)){setOverviewLoadError({scopeKey:requestScopeKey,message:reason});invalidateOverview();return}
           const snapshot=overviewSnapshotRef.current
-          setOverviewStaleNotice(snapshot.scopeKey===requestScopeKey&&snapshot.hasData?staleSnapshotNotice('当前账号与权限范围'):'')
+          if(snapshot.scopeKey===requestScopeKey&&snapshot.hasData){
+            setOverviewStaleNotice(staleSnapshotNotice('考试概览'))
+          }else setOverviewLoadError({scopeKey:requestScopeKey,message:reason})
           return
         }
 
@@ -323,7 +365,7 @@ export default function AdminTrainingPage(){
           return true
         }
         if(!publish())return
-        setOverviewStaleNotice(priorLoadedModules.length?'基础数据已更新；考试分析刷新中，暂显示上次成功结果。':'')
+        setOverviewStaleNotice(priorLoadedModules.length?'基础数据已更新；考试分析正在刷新，当前保留最近一次完整分析。':'')
 
         for(const [rpcName,moduleKey,moduleLabel,requiredKeys] of overviewAnalyticsRpcs){
           if(tabRef.current!=='考试概览')return
@@ -332,7 +374,7 @@ export default function AdminTrainingPage(){
             if(analyticsResponse?._cancelled||!overviewRequestActive())return
             const {data:analyticsPart,error:analyticsError}=analyticsResponse||{}
             if(analyticsError){
-              if(overviewAccessFailure(analyticsError)){const reason=message(analyticsError);setError(reason);publishFailure(reason);invalidateOverview();return}
+              if(overviewAccessFailure(analyticsError)){const reason=publicMessage(analyticsError);setOverviewLoadError({scopeKey:requestScopeKey,message:reason});publishFailure(reason);invalidateOverview();return}
               failedAnalyticsModules.set(moduleKey,moduleLabel)
               if(loadedAnalyticsModules.has(moduleKey))staleAnalyticsModules.add(moduleLabel)
               syncAnalyticsMeta();if(!publish())return
@@ -344,14 +386,14 @@ export default function AdminTrainingPage(){
               syncAnalyticsMeta();if(!publish())return
               continue
             }
-            if(analyticsPart._scope_key!==serverScopeKey){const reason='权限范围已变化，请刷新重试。';setError(reason);publishFailure(reason);invalidateOverview();return}
+            if(analyticsPart._scope_key!==serverScopeKey){const reason='权限范围已变化，请刷新重试。';setOverviewLoadError({scopeKey:requestScopeKey,message:reason});publishFailure(reason);invalidateOverview();return}
             const {_scope_key:_ignoredScopeKey,...analyticsPatch}=analyticsPart
             merged=withOverviewAnalytics(merged,analyticsPatch)
             loadedAnalyticsModules.add(moduleKey);failedAnalyticsModules.delete(moduleKey);staleAnalyticsModules.delete(moduleLabel);syncAnalyticsMeta()
             if(!publish())return
           }catch(analyticsError){
             if(!overviewRequestActive())return
-            if(overviewAccessFailure(analyticsError)){const reason=message(analyticsError);setError(reason);publishFailure(reason);invalidateOverview();return}
+            if(overviewAccessFailure(analyticsError)){const reason=publicMessage(analyticsError);setOverviewLoadError({scopeKey:requestScopeKey,message:reason});publishFailure(reason);invalidateOverview();return}
             failedAnalyticsModules.set(moduleKey,moduleLabel)
             if(loadedAnalyticsModules.has(moduleKey))staleAnalyticsModules.add(moduleLabel)
             syncAnalyticsMeta();if(!publish())return
@@ -363,12 +405,13 @@ export default function AdminTrainingPage(){
         setOverviewStaleNotice(failedModuleLabels.length?`暂时无法更新：${failedModuleLabels.join('、')}。系统已自动重试一次；其他成功分析正常显示。`:'')
       }catch(e){
         if(isCurrentLiveRequest(aliveRef.current,overviewRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey&&tabRef.current==='考试概览'){
-          const reason=message(e)
-          if(tabRef.current==='考试概览')setError(reason)
+          const reason=publicMessage(e)
           publishFailure(reason)
-          if(overviewAccessFailure(e)){invalidateOverview();return}
+          if(overviewAccessFailure(e)){setOverviewLoadError({scopeKey:requestScopeKey,message:reason});invalidateOverview();return}
           const snapshot=overviewSnapshotRef.current
-          setOverviewStaleNotice(snapshot.scopeKey===requestScopeKey&&snapshot.hasData?staleSnapshotNotice('当前账号与权限范围'):'')
+          if(snapshot.scopeKey===requestScopeKey&&snapshot.hasData){
+            setOverviewStaleNotice(staleSnapshotNotice('考试概览'))
+          }else setOverviewLoadError({scopeKey:requestScopeKey,message:reason})
         }
       }
     })()
@@ -380,54 +423,70 @@ export default function AdminTrainingPage(){
       }
     })
   }
-  const load=()=>tab==='题库'?loadQuestionBank():loadOverview()
-  useEffect(()=>{if(!access.loading&&['考试概览','题库'].includes(tab)&&(tab==='题库'||authIdentity))load()},[access.loading,overviewScopeKey,tab,filters,page,pageSize,questionSearchVersion])
+  useEffect(()=>{
+    if(!access.loading&&tab==='题库')loadQuestionBank()
+  },[access.loading,overviewScopeKey,tab,filters,page,pageSize,questionSearchVersion])
+  useEffect(()=>{
+    if(!access.loading&&tab==='考试概览'&&authIdentity)loadOverview()
+  },[access.loading,overviewScopeKey,tab,authIdentity,overviewSearchVersion])
+  useEffect(()=>{
+    const tabChanged=previousTabRef.current!==tab
+    previousTabRef.current=tab
+    if(!['考试记录','人工批改'].includes(tab)||(!tabChanged&&sessionStateTab===tab))return
+    sessionRequestRef.current+=1
+    const pending=pendingSessionNavigationRef.current
+    const next=pending?.tab===tab?pending.filters:(tab==='人工批改'?blankSessionFilters:todaySessionFilters())
+    pendingSessionNavigationRef.current=null
+    setSessionDraft({...next});setSessionFilters({...next});setSessionPage(1)
+    setSessionLoadError('');setSessionStaleNotice('');setSessionLoading(true)
+    setSessionStateTab(tab)
+  },[tab,sessionStateTab])
   const loadSessions=async()=>{
+    if(sessionStateTab!==tab){sessionRequestRef.current+=1;return}
     if(access.loading||!['考试记录','人工批改'].includes(tab)){sessionRequestRef.current+=1;setSessionLoading(false);return}
     const requestToken=++sessionRequestRef.current
     const requestedOperation=sessionReadIntentRef.current
     sessionReadIntentRef.current=''
     const requestScopeKey=overviewScopeKey
     const requestTab=tab
+    const requestKey=sessionRequestKey(requestTab,sessionFilters,sessionPage,sessionPageSize)
     const requestLabel=sessionRequestLabel(requestTab,sessionFilters,sessionPage,sessionPageSize)
-    const prior=sessionSnapshotRef.current
-    setSessionLoading(true);setError('')
-    setSessionStaleNotice(prior.scopeKey===requestScopeKey&&prior.hasData&&prior.label!==requestLabel?staleSnapshotNotice(prior.label):'')
+    setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setError('')
     const forcedStatus=tab==='人工批改'?'pending':sessionFilters.status
     try{
       const {data:result,error:e}=await supabase.rpc(requestTab==='人工批改'?'admin_exam_grading_search':'admin_exam_records_search',{p_employee_no:sessionFilters.employeeNo,p_employee_name:sessionFilters.employeeName,p_exam:sessionFilters.exam,p_team:sessionFilters.team,p_position:sessionFilters.position,p_status:forcedStatus,p_grader:sessionFilters.grader,p_source:sessionFilters.source,p_date_from:sessionFilters.dateFrom||null,p_date_to:sessionFilters.dateTo||null,p_page:sessionPage,p_page_size:sessionPageSize})
-      if(!isCurrentLiveRequest(aliveRef.current,sessionRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey)return
+      if(!isCurrentLiveRequest(aliveRef.current,sessionRequestRef.current,requestToken)||overviewScopeKeyRef.current!==requestScopeKey||tabRef.current!==requestTab||sessionActiveKeyRef.current!==requestKey)return
       if(e){
-        const reason=message(e)
-        if(tabRef.current===requestTab)setError(reason)
+        const reason=publicMessage(e,'考试记录读取失败，请稍后重试。')
+        setSessionLoadError(reason)
         const snapshot=sessionSnapshotRef.current
-        setSessionStaleNotice(snapshot.scopeKey===requestScopeKey&&snapshot.hasData?staleSnapshotNotice(snapshot.label):'')
+        setSessionStaleNotice(isSnapshotForRequest(snapshot,requestScopeKey,requestKey)?staleSnapshotNotice(snapshot.label):'')
         if(requestedOperation)notify({
           type:'error',module:TRAINING_TOAST_MODULE,operation:requestedOperation,reason,
           dedupeKey:'training:sessions:read:error',
-          retry:()=>{sessionReadIntentRef.current='刷新考试记录';return loadSessions()},retryLabel:'重试',
+          retry:()=>{sessionReadIntentRef.current='刷新考试记录';setSessionSearchVersion(version=>version+1)},retryLabel:'重试',
         })
       }else{
-        const snapshot={scopeKey:requestScopeKey,label:requestLabel,hasData:true,data:result||{rows:[],total:0}}
-        sessionSnapshotRef.current=snapshot;setSessionSnapshot(snapshot);setSessionStaleNotice('')
+        const snapshot={scopeKey:requestScopeKey,key:requestKey,label:requestLabel,hasData:true,data:result||{rows:[],total:0}}
+        sessionSnapshotRef.current=snapshot;setSessionSnapshot(snapshot);setSessionLoadError('');setSessionStaleNotice('')
       }
     }catch(e){
-      if(isCurrentLiveRequest(aliveRef.current,sessionRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey){
-        const reason=message(e)
-        if(tabRef.current===requestTab)setError(reason)
+      if(isCurrentLiveRequest(aliveRef.current,sessionRequestRef.current,requestToken)&&overviewScopeKeyRef.current===requestScopeKey&&tabRef.current===requestTab&&sessionActiveKeyRef.current===requestKey){
+        const reason=publicMessage(e,'考试记录读取失败，请稍后重试。')
+        setSessionLoadError(reason)
         const snapshot=sessionSnapshotRef.current
-        setSessionStaleNotice(snapshot.scopeKey===requestScopeKey&&snapshot.hasData?staleSnapshotNotice(snapshot.label):'')
+        setSessionStaleNotice(isSnapshotForRequest(snapshot,requestScopeKey,requestKey)?staleSnapshotNotice(snapshot.label):'')
         if(requestedOperation)notify({
           type:'error',module:TRAINING_TOAST_MODULE,operation:requestedOperation,reason,
           dedupeKey:'training:sessions:read:error',
-          retry:()=>{sessionReadIntentRef.current='刷新考试记录';return loadSessions()},retryLabel:'重试',
+          retry:()=>{sessionReadIntentRef.current='刷新考试记录';setSessionSearchVersion(version=>version+1)},retryLabel:'重试',
         })
       }
     }finally{
       if(isCurrentLiveRequest(aliveRef.current,sessionRequestRef.current,requestToken))setSessionLoading(false)
     }
   }
-  useEffect(()=>{loadSessions()},[access.loading,overviewScopeKey,tab,sessionFilters,sessionPage,sessionPageSize,sessionSearchVersion])
+  useEffect(()=>{loadSessions()},[access.loading,overviewScopeKey,tab,sessionStateTab,sessionFilters,sessionPage,sessionPageSize,sessionSearchVersion])
   useEffect(()=>{
     if(access.loading||!tab)return
     const desiredRouteTab=tab===TABS[0]?null:adminTabSlug('/admin/training',tab)
@@ -436,20 +495,22 @@ export default function AdminTrainingPage(){
   },[access.loading,access.founder,access.permissionKey,requestedRouteTab,tab,setParams])
   const setTab=x=>{
     if(!visibleTabs.includes(x))return
-    if(x==='考试记录'||x==='人工批改'){
-      const next=x==='人工批改'?blankSessionFilters:todaySessionFilters()
-      setSessionDraft(next);setSessionFilters(next);setSessionPage(1)
-    }
     setParams(x===TABS[0]?{}:adminTabParams('/admin/training',x))
   }
-  const apply=()=>{questionReadIntentRef.current='查询考试题库';setPage(1);setFilters({...draft});setQuestionSearchVersion(version=>version+1)}
-  const reset=()=>{questionReadIntentRef.current='重置题库查询';const x={search:'',team:'',position:''};setDraft(x);setFilters(x);setPage(1);setQuestionSearchVersion(version=>version+1)}
-  const applySessions=()=>{sessionReadIntentRef.current=`查询${tab}`;setSessionPage(1);setSessionFilters({...sessionDraft});setSessionSearchVersion(version=>version+1)}
-  const resetSessions=()=>{sessionReadIntentRef.current=`重置${tab}查询`;const next=tab==='人工批改'?blankSessionFilters:todaySessionFilters();setSessionDraft(next);setSessionFilters(next);setSessionPage(1);setSessionSearchVersion(version=>version+1)}
+  const apply=()=>{questionReadIntentRef.current='查询考试题库';setLoading(true);setQuestionLoadError('');setQuestionStaleNotice('');setPage(1);setFilters({...draft});setQuestionSearchVersion(version=>version+1)}
+  const reset=()=>{questionReadIntentRef.current='重置题库查询';setLoading(true);setQuestionLoadError('');setQuestionStaleNotice('');const x={search:'',team:'',position:''};setDraft(x);setFilters(x);setPage(1);setQuestionSearchVersion(version=>version+1)}
+  const applySessions=()=>{sessionReadIntentRef.current=`查询${tab}`;setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setSessionPage(1);setSessionFilters({...sessionDraft});setSessionSearchVersion(version=>version+1)}
+  const resetSessions=()=>{sessionReadIntentRef.current=`重置${tab}查询`;setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');const next=tab==='人工批改'?blankSessionFilters:todaySessionFilters();setSessionDraft(next);setSessionFilters(next);setSessionPage(1);setSessionSearchVersion(version=>version+1)}
   const showEmployeeRecords=s=>{
     const next={...blankSessionFilters,employeeNo:s.employee_no||''}
     sessionReadIntentRef.current='查询员工考试记录'
-    setTab('考试记录');setSessionDraft(next);setSessionFilters(next);setSessionPage(1);setSessionSearchVersion(version=>version+1)
+    if(tab==='考试记录'){
+      setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('')
+      setSessionDraft(next);setSessionFilters(next);setSessionPage(1);setSessionSearchVersion(version=>version+1)
+      return
+    }
+    pendingSessionNavigationRef.current={tab:'考试记录',filters:next}
+    setTab('考试记录')
   }
   const openEmployee=async s=>{
     if(!canViewEmployeeDirectory||!s.employee_id)return
@@ -460,7 +521,7 @@ export default function AdminTrainingPage(){
       if(e||detail?.error)throw new Error(await edgeFunctionErrorMessage({data:detail,error:e,fallback:'员工档案读取失败'}))
       setEmployeeDetail(detail)
     }catch(error){
-      const reason=message(error)
+      const reason=publicMessage(error,'员工档案读取失败，请稍后重试。')
       setError(reason);setEmployeeDetail(null)
       notify({
         type:'error',module:TRAINING_TOAST_MODULE,operation:'读取员工档案',reason,
@@ -479,37 +540,78 @@ export default function AdminTrainingPage(){
     if(tab==='题库'){questionReadIntentRef.current='刷新考试题库';return loadQuestionBank()}
     overviewReadIntentRef.current='刷新考试概览';return loadOverview()
   }
-  const refreshQuestionAfterMutation=(operation='刷新确认题库状态')=>{questionReadIntentRef.current=operation;return loadQuestionBank()}
-  const refreshSessionsAfterMutation=(operation='刷新确认考试记录')=>{sessionReadIntentRef.current=operation;return loadSessions()}
+  const refreshQuestionAfterMutation=(operation='刷新确认题库状态')=>{questionReadIntentRef.current=operation;setLoading(true);setQuestionLoadError('');setQuestionStaleNotice('');setQuestionSearchVersion(version=>version+1);return Promise.resolve()}
+  const refreshSessionsAfterMutation=(operation='刷新确认考试记录')=>{sessionReadIntentRef.current=operation;setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setSessionSearchVersion(version=>version+1);return Promise.resolve()}
+  const pageRefreshing=tab==='考试概览'?overviewLoading:tab==='题库'?loading:['考试记录','人工批改'].includes(tab)?sessionLoading:false
 
   return <div className="content-page exam-page">
-    <header className="exam-head"><div><small>ATTENDANCE · EXAMS · REWARDS</small><h1>{sectionTitle}</h1><p>{pageChrome.active.itemLabel||tab}</p></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {(tab==='题库'?data:overviewData)?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${legacySourcePaused?'':'success'}`} title={legacySync.last_success_at?`最后同步：${fmt(legacySync.last_success_at)}`:''}>{legacySyncLabel}</span><button onClick={refresh} disabled={tab==='考试概览'?overviewLoading:['考试记录','人工批改'].includes(tab)?sessionLoading:loading}>刷新</button></div></header>
-    {error&&<div className="exam-error">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {activeSnapshotNotice&&<div className="exam-error exam-snapshot-notice" role="status">{activeSnapshotNotice}</div>}
+    <header className="exam-head"><div><small>ATTENDANCE · EXAMS · REWARDS</small><h1>{sectionTitle}</h1><p>{pageChrome.active.itemLabel||tab}</p></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {(tab==='题库'?questionFilterData:overviewData)?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${legacySourcePaused?'':'success'}`} title={legacySync.last_success_at?`最后同步：${fmt(legacySync.last_success_at)}`:''}>{legacySyncLabel}</span><button onClick={refresh} disabled={pageRefreshing}>{pageRefreshing?'刷新中…':'刷新'}</button></div></header>
     <AdminModuleNav />
+    {error&&<QueryStateNotice tone="error" title="操作未完成" detail={error} onRetry={()=>setError('')} retryLabel="关闭"/>}
+    {activeSnapshotNotice&&<QueryStateNotice
+      tone={overviewLoading?'loading':'warning'}
+      title={overviewLoading?'正在更新考试概览':'考试概览暂未更新'}
+      detail={activeSnapshotNotice}
+      onRetry={overviewLoading?undefined:()=>{overviewReadIntentRef.current='重试考试概览';return loadOverview()}}
+    />}
 
-    {access.loading&&<div className="exam-empty">正在读取页面权限…</div>}
-    {!access.loading&&!tab&&<div className="exam-error">当前账号没有考试管理页面权限。</div>}
+    {access.loading&&<div className="exam-result-state"><QueryStateNotice title="正在读取页面权限" detail="权限确认完成后会自动显示可用内容。"/></div>}
+    {!access.loading&&!tab&&<div className="exam-result-state"><QueryStateNotice tone="error" title="无法打开考试管理" detail="当前账号没有考试管理页面权限。"/></div>}
 
-    {tab==='考试概览'&&(overviewData
+    {!access.loading&&tab==='考试概览'&&(overviewData
       ?<Overview counts={counts} data={overviewData} onTab={setTab} visibleTabs={visibleTabs} onEmployee={showEmployeeRecords}/>
-      :<div className="exam-empty">{overviewLoading?'正在读取考试数据…':'考试数据暂时无法读取，请点击刷新重试。'}</div>
+      :overviewLoading||authIdentity===null||!activeOverviewLoadError
+        ?<OverviewSkeleton/>
+        :<div className="exam-result-state exam-overview-result-state"><QueryStateNotice tone="error" title="考试概览读取失败" detail={activeOverviewLoadError} onRetry={()=>{overviewReadIntentRef.current='重试考试概览';setOverviewSearchVersion(version=>version+1)}}/></div>
     )}
-    {tab==='题库'&&<>
-      <FilterBar draft={draft} setDraft={setDraft} data={data} onApply={apply} onReset={reset}/>
-      <section className="exam-panel"><div className="exam-section-title"><div><h2>考试题库</h2></div>{canManageQuestions&&<button className="primary" onClick={()=>setQuestion({...blankQuestion,team_name:draft.team,position_name:draft.position})}>＋ 新增题目</button>}</div>
-      <QuestionTable data={data} loading={loading} page={page} setPage={next=>{questionReadIntentRef.current='查询题库分页';setPage(next);setQuestionSearchVersion(version=>version+1)}} pageSize={pageSize} setPageSize={x=>{questionReadIntentRef.current='调整题库分页';setPage(1);setPageSize(x);setQuestionSearchVersion(version=>version+1)}} onView={setQuestionView} onEdit={canManageQuestions?setQuestion:null} canDelete={canDeleteQuestions} onChanged={()=>refreshQuestionAfterMutation('删除后刷新考试题库')} onRefreshConfirm={()=>refreshQuestionAfterMutation()} setError={setError}/></section>
+    {!access.loading&&tab==='题库'&&<>
+      <FilterBar draft={draft} setDraft={setDraft} data={questionFilterData} onApply={apply} onReset={reset} loading={loading}/>
+      <section className="exam-panel"><div className="exam-section-title"><div><h2>考试题库</h2></div>{canManageQuestions&&<button className="primary" disabled={!questionFilterData} onClick={()=>setQuestion({...blankQuestion,team_name:draft.team,position_name:draft.position})}>＋ 新增题目</button>}</div>
+      <QuestionTable data={data} hasData={questionHasSnapshot} error={questionLoadError} staleNotice={questionDisplayNotice} loading={loading} page={page} setPage={next=>{questionReadIntentRef.current='查询题库分页';setLoading(true);setQuestionLoadError('');setQuestionStaleNotice('');setPage(next);setQuestionSearchVersion(version=>version+1)}} pageSize={pageSize} setPageSize={x=>{questionReadIntentRef.current='调整题库分页';setLoading(true);setQuestionLoadError('');setQuestionStaleNotice('');setPage(1);setPageSize(x);setQuestionSearchVersion(version=>version+1)}} onView={setQuestionView} onEdit={canManageQuestions?setQuestion:null} canDelete={canDeleteQuestions} onChanged={()=>refreshQuestionAfterMutation('删除后刷新考试题库')} onRefreshConfirm={()=>refreshQuestionAfterMutation()} setError={setError}/></section>
     </>}
-    {['考试记录','人工批改'].includes(tab)&&<SessionFilterBar draft={sessionDraft} setDraft={setSessionDraft} data={sessionData} tab={tab} onApply={applySessions} onReset={resetSessions}/>}
-    {tab==='考试记录'&&<Sessions rows={sessionData.rows||[]} total={sessionData.total||0} page={sessionPage} pageSize={sessionPageSize} setPage={next=>{sessionReadIntentRef.current='查询考试记录分页';setSessionPage(next);setSessionSearchVersion(version=>version+1)}} setPageSize={x=>{sessionReadIntentRef.current='调整考试记录分页';setSessionPage(1);setSessionPageSize(x);setSessionSearchVersion(version=>version+1)}} loading={sessionLoading} onEmployee={showEmployeeRecords} onEmployeeArchive={canViewEmployeeDirectory?openEmployee:null} onOpen={open=>setGrading({session:open,detail:null})} canDelete={canDeleteSessions} onDelete={setDeleteSession}/>}
-    {tab==='人工批改'&&<Sessions rows={sessionData.rows||[]} total={sessionData.total||0} page={sessionPage} pageSize={sessionPageSize} setPage={next=>{sessionReadIntentRef.current='查询人工批改分页';setSessionPage(next);setSessionSearchVersion(version=>version+1)}} setPageSize={x=>{sessionReadIntentRef.current='调整人工批改分页';setSessionPage(1);setSessionPageSize(x);setSessionSearchVersion(version=>version+1)}} loading={sessionLoading} onEmployee={showEmployeeRecords} onEmployeeArchive={canViewEmployeeDirectory?openEmployee:null} onOpen={open=>setGrading({session:open,detail:null})} grading/>}
-    {question&&<QuestionModal value={question} series={data?.series||[]} teams={data?.teams||[]} positions={data?.positions||[]} onClose={()=>setQuestion(null)} onRefreshConfirm={()=>refreshQuestionAfterMutation()} onSaved={()=>{setQuestion(null);return refreshQuestionAfterMutation('保存后刷新考试题库')}}/>}
+    {!access.loading&&['考试记录','人工批改'].includes(tab)&&sessionStateTab===tab&&<SessionFilterBar
+      draft={sessionDraft}
+      setDraft={setSessionDraft}
+      data={sessionFilterData}
+      tab={tab}
+      onApply={applySessions}
+      onReset={resetSessions}
+      loading={sessionLoading}
+    />}
+    {!access.loading&&tab==='考试记录'&&<Sessions
+      rows={sessionData.rows||[]}
+      total={sessionData.total||0}
+      page={sessionPage}
+      pageSize={sessionPageSize}
+      setPage={next=>{sessionReadIntentRef.current='查询考试记录分页';setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setSessionPage(next);setSessionSearchVersion(version=>version+1)}}
+      setPageSize={x=>{sessionReadIntentRef.current='调整考试记录分页';setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setSessionPage(1);setSessionPageSize(x);setSessionSearchVersion(version=>version+1)}}
+      loading={sessionLoading||sessionStateTab!==tab}
+      hasData={sessionHasSnapshot}
+      error={sessionLoadError}
+      staleNotice={sessionDisplayNotice}
+      onRetry={()=>{sessionReadIntentRef.current='重试考试记录查询';return loadSessions()}}
+      onEmployee={showEmployeeRecords}
+      onEmployeeArchive={canViewEmployeeDirectory?openEmployee:null}
+      onOpen={open=>setGrading({session:open,detail:null})}
+      canDelete={canDeleteSessions}
+      onDelete={setDeleteSession}
+    />}
+    {!access.loading&&tab==='人工批改'&&<Sessions rows={sessionData.rows||[]} total={sessionData.total||0} page={sessionPage} pageSize={sessionPageSize} setPage={next=>{sessionReadIntentRef.current='查询人工批改分页';setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setSessionPage(next);setSessionSearchVersion(version=>version+1)}} setPageSize={x=>{sessionReadIntentRef.current='调整人工批改分页';setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setSessionPage(1);setSessionPageSize(x);setSessionSearchVersion(version=>version+1)}} loading={sessionLoading||sessionStateTab!==tab} hasData={sessionHasSnapshot} error={sessionLoadError} staleNotice={sessionDisplayNotice} onRetry={()=>{sessionReadIntentRef.current='重试人工批改查询';return loadSessions()}} onEmployee={showEmployeeRecords} onEmployeeArchive={canViewEmployeeDirectory?openEmployee:null} onOpen={open=>setGrading({session:open,detail:null})} grading/>}
+    {question&&<QuestionModal value={question} series={questionFilterData?.series||[]} teams={questionFilterData?.teams||[]} positions={questionFilterData?.positions||[]} onClose={()=>setQuestion(null)} onRefreshConfirm={()=>refreshQuestionAfterMutation()} onSaved={()=>{setQuestion(null);return refreshQuestionAfterMutation('保存后刷新考试题库')}}/>}
     {questionView&&<QuestionView value={questionView} onClose={()=>setQuestionView(null)} onEdit={canManageQuestions?()=>{setQuestion(questionView);setQuestionView(null)}:null}/>}
     {grading&&(
       <GradeModal session={grading.session} permissionPage={tab==='人工批改'?'grading':'records'} forceReadOnly={!canGrade} onClose={()=>setGrading(null)} onChanged={()=>refreshSessionsAfterMutation('评分后刷新考试记录')} onRefreshConfirm={()=>refreshSessionsAfterMutation('刷新确认评分状态')}/>
     )}
     {deleteSession&&<DeleteSessionModal session={deleteSession} onClose={()=>setDeleteSession(null)} onRefreshConfirm={()=>{setDeleteSession(null);return refreshSessionsAfterMutation('刷新确认删除结果')}} onDeleted={async()=>{setDeleteSession(null);await refreshSessionsAfterMutation('删除后刷新考试记录')}}/>}
     {employeeDetail&&<EmployeeDrawer key={employeeDetail?.employee?.id||employeeDetail?.employee?.employee_no||employeeDetail?.id||'exam-employee'} detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>setEmployeeDetail(null)}/>}
+  </div>
+}
+
+function OverviewSkeleton(){
+  return <div className="exam-overview-skeleton" role="status" aria-label="正在读取考试概览" aria-busy="true">
+    <div className="exam-table-skeleton-label"><span className="exam-loading-spinner" aria-hidden="true"/><strong>正在读取考试概览…</strong></div>
+    <div className="exam-overview-skeleton-cards" aria-hidden="true">{Array.from({length:7},(_,index)=><i key={index}/>)}</div>
+    <div className="exam-overview-skeleton-panels" aria-hidden="true">{Array.from({length:2},(_,panel)=><div className="exam-overview-skeleton-panel" key={panel}>{Array.from({length:4},(__,row)=><i key={row}/>)}</div>)}</div>
   </div>
 }
 
@@ -526,7 +628,7 @@ function Overview({counts,data,onTab,visibleTabs,onEmployee}){
     ['题库',counts.questions||0,'题库','题目'],['记录',counts.total_sessions||0,'考试记录','全部'],['待批改',counts.pending_grading||0,'人工批改','份'],['已完成',counts.completed||0,'考试记录','份'],
     ['本系统',current.total_sessions||0,null,'份'],['旧考试',old.total_sessions||0,null,`已评 ${old.completed||0} · 待评 ${old.pending_grading||0}`],['已匹配',old.matched||0,null,`未匹配 ${old.unmatched||0}`]
   ]
-  const analyticsMessage=failedModules.length?`暂时无法更新：${failedModules.join('、')}。${staleModules.length?'相关区域暂显示上次成功结果；':''}其他成功分析与基础计数不受影响。`:'正在读取考试分析…'
+  const analyticsMessage=failedModules.length?`暂时无法更新：${failedModules.join('、')}。${staleModules.length?'相关区域保留最近一次完整分析；':''}其他成功分析与基础计数不受影响。`:'正在读取考试分析…'
   return <><section className="exam-overview-strip">{cards.map(([label,value,target,note],index)=>{const allowed=target&&visibleTabs.includes(target);const content=<><span>{label}</span><strong>{value}</strong><small>{note}{allowed?' · 查看 →':''}</small></>;return allowed?<button key={label} onClick={()=>onTab(target)}>{content}</button>:<div key={label} className={index===5?'legacy':''}>{content}</div>})}</section><div className="exam-two exam-overview-lower"><section className="exam-panel exam-recent-panel"><div className="exam-section-title"><div><h2>最近考试</h2><p>近 7 天每日提交与最新记录</p></div>{visibleTabs.includes('考试记录')&&<button onClick={()=>onTab('考试记录')}>查看全部</button>}</div>{activityReady?<div className="exam-daily-strip">{daily.map((x,index)=><div key={x.activity_day} className={index===0?'today':''}><span>{index===0?'今日':String(x.activity_day).slice(5)}</span><strong>{x.submitted} 份</strong><small>本系统 {x.current_submitted} · 旧考试 {x.legacy_submitted}</small><small>已评 {x.graded} · 待评 {x.pending}</small></div>)}</div>:<div className="exam-empty compact">{failedModules.includes('近期考试与成绩趋势')?'近期考试与成绩趋势暂不可用，考试记录仍正常显示。':'正在读取近期考试趋势…'}</div>}<div className="exam-recent-scroll"><Sessions rows={(data?.sessions||[]).slice(0,12)} compact onEmployee={onEmployee}/></div></section><section className="exam-panel adaptive-rule-panel"><h2>考试规则</h2><div><b>仅匹配团队</b><span>员工自行选择岗位与盘口</span></div><div><b>14 题 · 100 分</b><span>10×5分＋3×10分＋1×20分</span></div><div><b>60 分钟</b><span>连续计时 · 自动保存</span></div></section></div>{analyticsReady?<ExamAnalytics analytics={analytics} loadedModules={[...loadedModules]} failedModules={failedModules} staleModules={staleModules} onEmployee={onEmployee}/>:<section className="exam-panel exam-analytics"><div className="exam-empty">{analyticsMessage}</div></section>}</>
 }
 
@@ -537,7 +639,7 @@ function ExamAnalytics({analytics,loadedModules=[],failedModules=[],staleModules
   const duration=Number(summary.avg_duration_seconds||0),durationText=duration?`${Math.floor(duration/60)}分${Math.round(duration%60)}秒`:'—'
   const facts=[['考试总次数',summary.total_attempts||0,'次'],['平均分',score(summary.avg_score),'分'],['平均用时',durationText,''],['通过率',score(summary.pass_rate),'%'],['已通过',summary.pass_count||0,'次'],['未通过',summary.fail_count||0,'次']]
   const graded=Number(summary.graded_attempts||0),bandRows=[['优秀 90–100',bands.excellent||0,'excellent'],['良好 80–89',bands.good||0,'good'],['及格 60–79',bands.pass||0,'pass'],['未通过 0–59',bands.fail||0,'fail']]
-  const partialMessage=failedModules.length?`暂时无法更新：${failedModules.join('、')}。系统已自动重试一次；${staleModules.length?'相关区域暂显示上次成功结果，':''}其余分析正常显示。`:''
+  const partialMessage=failedModules.length?`暂时无法更新：${failedModules.join('、')}。系统已自动重试一次；${staleModules.length?'相关区域保留最近一次完整分析，':''}其余分析正常显示。`:''
   return <section className="exam-panel exam-analytics">
     <div className="exam-analytics-title"><div><small>EXAM INTELLIGENCE</small><h2>考试数据分析中心</h2><p>成绩、团队表现与排行榜合并本系统及旧考试；逐题统计只采用已同步的真实答案。</p></div>{summaryReady&&<div className="exam-answer-block"><small>逐题真实结果</small><div className="exam-answer-source"><b>本系统</b><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.correct_count||0}</b></span><span className="partial">半对 <b>{summary.partial_count||0}</b></span><span className="wrong">错误 <b>{summary.wrong_count||0}</b></span><span className="pending">待评 <b>{summary.pending_count||0}</b></span></div></div><div className="exam-answer-source legacy"><b>旧考试</b><div className="exam-answer-totals"><span className="correct">正确 <b>{summary.legacy_correct_count||0}</b></span><span className="partial">半对 <b>{summary.legacy_partial_count||0}</b></span><span className="wrong">错误 <b>{summary.legacy_wrong_count||0}</b></span><span className="pending">待评 <b>{summary.legacy_answer_pending_count||0}</b></span></div></div></div>}</div>
     {partialMessage&&<div className="exam-analytics-partial-note"><b>部分分析刷新失败</b><span>{partialMessage}</span></div>}
@@ -575,14 +677,22 @@ function AnalyticsBars({title,rows}){
   return <div className="exam-bar-card"><header><h3>{title}</h3><span>{rows?.length||0} 类</span></header>{visible.length?<div className="exam-bars">{visible.map(row=><div key={row.name}><div><b title={row.name}>{row.name||'未分类'}</b><span>{score(row.average)} 分 · {row.attempts} 次</span></div><i><em style={{width:`${Math.max(0,Math.min(100,Number(row.average)||0))}%`}}/></i></div>)}</div>:<div className="exam-empty compact">暂无已完成考试数据</div>}{(rows?.length||0)>visible.length&&<small className="exam-chart-note">显示前 {visible.length} 类，共 {rows.length} 类</small>}</div>
 }
 
-function FilterBar({draft,setDraft,data,onApply,onReset}){return <section className="exam-filter"><label className="exam-search-field"><span>题目搜索</span><input value={draft.search} onChange={e=>setDraft({...draft,search:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="题目ID / 英文 / 中文 / 越南文"/></label><label><span>团队</span><select value={draft.team} onChange={e=>setDraft({...draft,team:e.target.value})}><option value="">全部团队</option>{(data?.teams||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>岗位</span><select value={draft.position} onChange={e=>setDraft({...draft,position:e.target.value})}><option value="">全部岗位</option>{(data?.positions||[]).map(x=><option key={x}>{x}</option>)}</select></label><div className="exam-filter-actions"><button className="primary" onClick={onApply}>查询</button><button onClick={onReset}>重置</button></div></section>}
+function FilterBar({draft,setDraft,data,onApply,onReset,loading=false}){return <section className="exam-filter"><label className="exam-search-field"><span>题目搜索</span><input value={draft.search} onChange={e=>setDraft({...draft,search:e.target.value})} onKeyDown={e=>e.key==='Enter'&&!loading&&onApply()} placeholder="题目ID / 英文 / 中文 / 越南文"/></label><label><span>团队</span><select value={draft.team} onChange={e=>setDraft({...draft,team:e.target.value})}><option value="">全部团队</option>{(data?.teams||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>岗位</span><select value={draft.position} onChange={e=>setDraft({...draft,position:e.target.value})}><option value="">全部岗位</option>{(data?.positions||[]).map(x=><option key={x}>{x}</option>)}</select></label><div className="exam-filter-actions"><button className="primary" onClick={onApply} disabled={loading}>{loading?'查询中…':'查询'}</button><button onClick={onReset} disabled={loading}>重置</button></div></section>}
 
-function SessionFilterBar({draft,setDraft,data,tab,onApply,onReset}){
+function SessionFilterBar({draft,setDraft,data,tab,onApply,onReset,loading=false}){
   const fixedStatus=tab==='人工批改'?'待批改':''
-  return <section className="exam-session-filter compact"><label><span>员工ID</span><input value={draft.employeeNo} onChange={e=>setDraft({...draft,employeeNo:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="输入员工ID"/></label><label><span>姓名</span><input value={draft.employeeName} onChange={e=>setDraft({...draft,employeeName:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="输入姓名"/></label><label className="wide"><span>考试名称</span><input value={draft.exam} onChange={e=>setDraft({...draft,exam:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onApply()} placeholder="输入考试名称"/></label><label><span>记录来源</span><select value={draft.source} onChange={e=>setDraft({...draft,source:e.target.value})}><option value="">全部来源</option><option value="current">本系统</option><option value="legacy">旧考试</option></select></label><label><span>团队</span><select value={draft.team} onChange={e=>setDraft({...draft,team:e.target.value})}><option value="">全部团队</option>{(data?.teams||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>岗位</span><select value={draft.position} onChange={e=>setDraft({...draft,position:e.target.value})}><option value="">全部岗位</option>{(data?.positions||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>评分人</span><input value={draft.grader} onChange={e=>setDraft({...draft,grader:e.target.value})} placeholder="用户名 / 邮箱"/></label><label><span>状态</span>{fixedStatus?<input value={fixedStatus} disabled/>:<select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option value="">全部状态</option><option value="in_progress">答题中</option><option value="pending">待批改</option><option value="graded">已完成</option><option value="expired">已过期</option></select>}</label><label><span>完成日期起</span><input type="date" value={draft.dateFrom} onChange={e=>setDraft({...draft,dateFrom:e.target.value})}/></label><label><span>完成日期止</span><input type="date" value={draft.dateTo} onChange={e=>setDraft({...draft,dateTo:e.target.value})}/></label><div className="exam-filter-actions"><button className="primary" onClick={onApply}>查询</button><button onClick={onReset}>重置</button></div></section>
+  return <section className="exam-session-filter compact"><label><span>员工ID</span><input value={draft.employeeNo} onChange={e=>setDraft({...draft,employeeNo:e.target.value})} onKeyDown={e=>e.key==='Enter'&&!loading&&onApply()} placeholder="输入员工ID"/></label><label><span>姓名</span><input value={draft.employeeName} onChange={e=>setDraft({...draft,employeeName:e.target.value})} onKeyDown={e=>e.key==='Enter'&&!loading&&onApply()} placeholder="输入姓名"/></label><label className="wide"><span>考试名称</span><input value={draft.exam} onChange={e=>setDraft({...draft,exam:e.target.value})} onKeyDown={e=>e.key==='Enter'&&!loading&&onApply()} placeholder="输入考试名称"/></label><label><span>记录来源</span><select value={draft.source} onChange={e=>setDraft({...draft,source:e.target.value})}><option value="">全部来源</option><option value="current">本系统</option><option value="legacy">旧考试</option></select></label><label><span>团队</span><select value={draft.team} onChange={e=>setDraft({...draft,team:e.target.value})}><option value="">全部团队</option>{(data?.teams||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>岗位</span><select value={draft.position} onChange={e=>setDraft({...draft,position:e.target.value})}><option value="">全部岗位</option>{(data?.positions||[]).map(x=><option key={x}>{x}</option>)}</select></label><label><span>评分人</span><input value={draft.grader} onChange={e=>setDraft({...draft,grader:e.target.value})} placeholder="用户名 / 邮箱"/></label><label><span>状态</span>{fixedStatus?<input value={fixedStatus} disabled/>:<select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option value="">全部状态</option><option value="in_progress">答题中</option><option value="pending">待批改</option><option value="graded">已完成</option><option value="expired">已过期</option></select>}</label><label><span>完成日期起</span><input type="date" value={draft.dateFrom} onChange={e=>setDraft({...draft,dateFrom:e.target.value})}/></label><label><span>完成日期止</span><input type="date" value={draft.dateTo} onChange={e=>setDraft({...draft,dateTo:e.target.value})}/></label><div className="exam-filter-actions"><button className="primary" onClick={onApply} disabled={loading}>{loading?'查询中…':'查询'}</button><button onClick={onReset} disabled={loading}>重置</button></div></section>
 }
 
-function QuestionTable({data,loading,page,setPage,pageSize,setPageSize,onView,onEdit,canDelete=false,onChanged,onRefreshConfirm,setError}){
+function ExamTableSkeleton({label='正在读取数据',rows=6,cells=8}){
+  return <div className="exam-table-skeleton" style={{'--exam-skeleton-cells':cells}} role="status" aria-label={label} aria-busy="true">
+    <div className="exam-table-skeleton-label"><span className="exam-loading-spinner" aria-hidden="true"/><strong>{label}</strong></div>
+    <div className="exam-table-skeleton-head" aria-hidden="true">{Array.from({length:cells},(_,index)=><i key={index}/>)}</div>
+    {Array.from({length:rows},(_,row)=><div className="exam-table-skeleton-row" key={row} aria-hidden="true">{Array.from({length:cells},(_,cell)=><i key={cell}/>)}</div>)}
+  </div>
+}
+
+function QuestionTable({data,hasData=false,error='',staleNotice='',loading,page,setPage,pageSize,setPageSize,onView,onEdit,canDelete=false,onChanged,onRefreshConfirm,setError}){
   const {notify}=useAppToast()
   const rows=data?.questions||[],pages=Math.max(1,Math.ceil((data?.total||0)/(data?.page_size||pageSize)))
   const deleteQuestion=async q=>{
@@ -596,7 +706,7 @@ function QuestionTable({data,loading,page,setPage,pageSize,setPageSize,onView,on
       })
       await onChanged()
     }catch(error){
-      const reason=message(error)
+      const reason=publicMessage(error,'考试题目删除失败，请稍后重试。')
       setError(reason)
       notify({
         type:'error',module:TRAINING_TOAST_MODULE,operation:'删除考试题目',reason,
@@ -604,7 +714,18 @@ function QuestionTable({data,loading,page,setPage,pageSize,setPageSize,onView,on
       })
     }
   }
-  return <>{loading?<div className="exam-empty">正在读取题库…</div>:!rows.length?<div className="exam-empty">没有符合条件的题目</div>:<div className="exam-table-wrap exam-question-wrap"><table className="exam-table exam-question-table"><thead><tr><th>题目ID</th><th>题库范围</th><th>三语题干</th><th>规格</th><th>同步</th><th>操作</th></tr></thead><tbody>{rows.map(q=><tr key={q.id}><td><button className="exam-id-link" onClick={()=>onView(q)}>{q.external_key}</button></td><td className="exam-question-scope"><strong title={q.team_name}>{q.team_name||'—'}</strong><span title={q.position_name}>{q.position_name||'—'}</span>{q.series_name&&<small title={q.series_name}>{q.series_name}</small>}</td><QuestionSummaryCell question={q} onOpen={()=>onView(q)}/><td className="exam-question-spec"><b>{q.points} 分</b><span>难度 {q.difficulty}</span>{(q.image_urls?.length||0)>0&&<small>{q.image_urls.length} 张图</small>}</td><td><span className={`sync-${q.sync_status}`}>{q.sync_status==='synced'?'已同步':'待回写'}</span></td><td><div className="exam-row-actions">{onEdit&&<button onClick={()=>onEdit(q)}>编辑</button>}{canDelete&&<button className="danger" onClick={()=>deleteQuestion(q)}>删除</button>}</div></td></tr>)}</tbody></table></div>}<ExamPagination page={page} pages={pages} total={data?.total||0} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize} noun="题"/></>
+  return <>
+    {loading&&hasData&&<QueryStateNotice className="exam-query-inline" title="正在更新题库" detail="当前结果保持可见，完成后会自动更新。"/>}
+    {!loading&&staleNotice&&<QueryStateNotice className="exam-query-inline" tone="warning" title="题库暂未更新" detail={staleNotice} onRetry={onRefreshConfirm}/>}
+    {loading&&!hasData
+      ?<ExamTableSkeleton label="正在查询题库…" cells={6}/>
+      :!hasData
+        ?<div className="exam-result-state"><QueryStateNotice tone="error" title="题库读取失败" detail={error||'暂时无法取得题库资料，请重新查询。'} onRetry={onRefreshConfirm}/></div>
+        :!rows.length
+          ?<div className="exam-empty exam-empty-guided"><strong>没有符合条件的题目</strong><span>可以调整搜索内容、团队或岗位后重新查询。</span></div>
+          :<div className="exam-table-wrap exam-question-wrap" aria-busy={loading}><table className="exam-table exam-question-table"><thead><tr><th>题目ID</th><th>题库范围</th><th>三语题干</th><th>规格</th><th>同步</th><th>操作</th></tr></thead><tbody>{rows.map(q=><tr key={q.id}><td><button className="exam-id-link" onClick={()=>onView(q)}>{q.external_key}</button></td><td className="exam-question-scope"><strong title={q.team_name}>{q.team_name||'—'}</strong><span title={q.position_name}>{q.position_name||'—'}</span>{q.series_name&&<small title={q.series_name}>{q.series_name}</small>}</td><QuestionSummaryCell question={q} onOpen={()=>onView(q)}/><td className="exam-question-spec"><b>{q.points} 分</b><span>难度 {q.difficulty}</span>{(q.image_urls?.length||0)>0&&<small>{q.image_urls.length} 张图</small>}</td><td><span className={`sync-${q.sync_status}`}>{q.sync_status==='synced'?'已同步':'待回写'}</span></td><td><div className="exam-row-actions">{onEdit&&<button onClick={()=>onEdit(q)}>编辑</button>}{canDelete&&<button className="danger" onClick={()=>deleteQuestion(q)}>删除</button>}</div></td></tr>)}</tbody></table></div>}
+    {hasData&&<ExamPagination page={page} pages={pages} total={data?.total||0} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize} noun="题"/>}
+  </>
 }
 
 const pageNumbers=(page,pages)=>{if(pages<=7)return Array.from({length:pages},(_,i)=>i+1);const out=[1],start=Math.max(2,page-1),end=Math.min(pages-1,page+1);if(start>2)out.push('…');for(let i=start;i<=end;i++)out.push(i);if(end<pages-1)out.push('…');out.push(pages);return out}
@@ -625,14 +746,25 @@ function QuestionView({value,onClose,onEdit}){return <Modal title={`${value.exte
 function LanguageBlock({tag,title,text}){return <section className="question-language-block"><span>{tag}</span><div><b>{title}</b><p>{text||'未填写'}</p></div></section>}
 
 function Assignments({data,onNew,onEdit,onPreview,onChanged,setError}){
-  const remove=async a=>{if(!confirm(`确认删除考试“${a.title}”？\n已有作答记录时将改为关闭，历史成绩不会丢失。`))return;const {error}=await supabase.rpc('admin_exam_delete_assignment',{p_assignment_id:a.id});if(error)return setError(message(error));onChanged()}
+  const remove=async a=>{if(!confirm(`确认删除考试“${a.title}”？\n已有作答记录时将改为关闭，历史成绩不会丢失。`))return;const {error}=await supabase.rpc('admin_exam_delete_assignment',{p_assignment_id:a.id});if(error)return setError(publicMessage(error));onChanged()}
   return <section className="exam-panel"><div className="exam-section-title"><div><h2>创建与分配考试</h2><p>先保存草稿并预览员工画面；确认后再发布给相同团队＋岗位或指定员工。</p></div><button className="primary" onClick={onNew}>＋ 创建考试</button></div><div className="exam-table-wrap"><table className="exam-table"><thead><tr><th>考试名称</th><th>分配范围</th><th>时长</th><th>及格分</th><th>次数</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead><tbody>{(data?.assignments||[]).map(a=><tr key={a.id}><td><strong>{a.title}</strong></td><td>{a.employee_no?<><b>{a.employee_no}</b><br/>{a.employee_name}</>:<>{a.team_name} · {a.position_name}</>}</td><td>{a.duration_minutes}分钟</td><td>{a.pass_score}%</td><td>{a.max_attempts}</td><td>{fmt(a.start_at)}<br/>{fmt(a.end_at)}</td><td><span className={`assignment-status ${a.status}`}>{({draft:'草稿',published:'已发布',closed:'已关闭'}[a.status]||a.status)}</span></td><td><div className="exam-row-actions"><button onClick={()=>onPreview(a)}>预览</button><button onClick={()=>onEdit({...a,start_at:a.start_at?new Date(a.start_at).toISOString().slice(0,16):'',end_at:a.end_at?new Date(a.end_at).toISOString().slice(0,16):'',question_rules:a.question_rules||{5:10,10:3,20:1}})}>编辑</button><button className="danger" onClick={()=>remove(a)}>删除</button></div></td></tr>)}</tbody></table>{!(data?.assignments||[]).length&&<div className="exam-empty compact">还没有考试，点击“创建考试”先保存草稿并预览。</div>}</div></section>
 }
 
-function Sessions({rows,onOpen,onEmployee,onEmployeeArchive,onDelete,canDelete=false,compact=false,grading=false,loading=false,total=0,page=1,pageSize=30,setPage,setPageSize}){
+function Sessions({rows,onOpen,onEmployee,onEmployeeArchive,onDelete,canDelete=false,compact=false,grading=false,loading=false,hasData=true,error='',staleNotice='',onRetry,total=0,page=1,pageSize=30,setPage,setPageSize}){
   if(compact)return rows.length?<>{rows.map(s=><button className="exam-line exam-recent-line" key={`${s.source_system||'current'}-${s.id}`} onClick={()=>onEmployee?.(s)}><div><strong>{s.employee_name} · {s.title} {s.source_system==='legacy'&&<em className="exam-source-badge legacy">旧考试</em>}</strong><small>第 {s.attempt_no} 次 · {fmt(s.submitted_at||s.started_at)}</small><small className="exam-recent-result">{s.status==='graded'?`${score(s.earned_score)}/${score(s.total_score)} · ${breakdown(s)}`:statusText(s.status)}</small></div><span>{s.status==='graded'?(s.passed?'通过':'未通过'):statusText(s.status)}</span></button>)}</>:<div className="exam-empty compact">暂时没有考试记录</div>
   const pages=Math.max(1,Math.ceil(total/pageSize))
-  return <section className="exam-panel"><div className="exam-section-title"><div><h2>{grading?'待人工批改':'员工考试记录与成绩'}</h2><p>本系统与旧考试统一查询；旧考试为只读记录。</p></div><span className="exam-total-pill">共 {total} 条</span></div>{loading?<div className="exam-empty">正在查询考试记录…</div>:!rows.length?<div className="exam-empty">{grading?'当前没有待批改考试':'没有符合条件的考试记录'}</div>:<div className="exam-table-wrap exam-session-wrap"><table className="exam-table exam-session-table"><thead><tr><th>来源</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>考试</th><th>次数</th><th>开始作答时间</th><th>完成作答时间</th><th>评分完成时间</th><th>得分</th><th>答题结果</th><th>评分人</th><th>状态</th><th>操作</th></tr></thead><tbody>{rows.map(s=><tr key={`${s.source_system||'current'}-${s.id}`}><td><span className={`exam-source-badge ${s.source_system==='legacy'?'legacy':'current'}`}>{s.source_label||'本系统'}</span></td><td>{s.employee_id&&onEmployeeArchive?<button className="exam-record-id" onClick={()=>onEmployeeArchive(s)}>{s.employee_no}</button>:<span>{s.employee_no}</span>}</td><td><CompactRecordName session={s} onFilter={onEmployee}/></td><td>{s.team_name||'—'}<br/><small>{s.position_name||'—'}</small></td><td className="exam-record-title" title={s.title}>{s.title}</td><td><b>第 {s.attempt_no} 次</b></td><td>{fmt(s.started_at)}</td><td>{fmt(s.submitted_at)}</td><td>{fmt(s.graded_at)}</td><td><b>{s.percentage==null?'—':`${score(s.earned_score)}/${score(s.total_score)}`}</b>{s.percentage!=null&&<small className="exam-record-percent">{score(s.percentage)}%</small>}</td><td><span className={`exam-record-breakdown ${s.answer_detail_available?'has-detail':'summary-only'}`}>{breakdown(s)}</span></td><td>{s.grader_name||'—'}</td><td><span className={`result-chip ${s.status==='graded'?(s.passed?'pass':'fail'):'pending'}`}>{statusText(s.status)}</span></td><td><div className="exam-row-actions">{onOpen&&<button onClick={()=>onOpen(s)}>{s.read_only?'查看详情':grading?'开始批改':'查看答卷'}</button>}{canDelete&&s.source_system!=='legacy'&&!s.read_only&&<button className="danger" onClick={()=>onDelete?.(s)}>删除本系统记录</button>}</div></td></tr>)}</tbody></table></div>}{setPage&&<ExamPagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize}/>}</section>
+  return <section className="exam-panel"><div className="exam-section-title"><div><h2>{grading?'待人工批改':'员工考试记录与成绩'}</h2><p>本系统与旧考试统一查询；旧考试为只读记录。</p></div>{(hasData||loading)&&<span className={`exam-total-pill ${!hasData?'loading':''}`}>{hasData?`共 ${total} 条`:'查询中…'}</span>}</div>
+    {loading&&hasData&&<QueryStateNotice className="exam-query-inline" title="正在更新查询结果" detail="当前列表保持可见，完成后会自动更新。"/>}
+    {!loading&&staleNotice&&<QueryStateNotice className="exam-query-inline" tone="warning" title="查询结果暂未更新" detail={staleNotice} onRetry={onRetry}/>}
+    {loading&&!hasData
+      ?<ExamTableSkeleton label={grading?'正在查询待批改考试…':'正在查询考试记录…'} cells={8}/>
+      :!hasData
+        ?<div className="exam-result-state"><QueryStateNotice tone="error" title="考试记录读取失败" detail={error||'暂时无法取得考试记录，请重新查询。'} onRetry={onRetry}/></div>
+        :!rows.length
+          ?<div className="exam-empty exam-empty-guided"><strong>{grading?'当前没有待批改考试':'没有符合条件的考试记录'}</strong><span>{grading?'已提交且需要人工评分的考试会显示在这里。':'可以调整员工、考试、团队、岗位或日期后重新查询。'}</span></div>
+          :<div className="exam-table-wrap exam-session-wrap" aria-busy={loading}><table className="exam-table exam-session-table"><thead><tr><th>来源</th><th>员工ID</th><th>姓名</th><th>团队 / 岗位</th><th>考试</th><th>次数</th><th>开始作答时间</th><th>完成作答时间</th><th>评分完成时间</th><th>得分</th><th>答题结果</th><th>评分人</th><th>状态</th><th>操作</th></tr></thead><tbody>{rows.map(s=><tr key={`${s.source_system||'current'}-${s.id}`}><td><span className={`exam-source-badge ${s.source_system==='legacy'?'legacy':'current'}`}>{s.source_label||'本系统'}</span></td><td>{s.employee_id&&onEmployeeArchive?<button className="exam-record-id" onClick={()=>onEmployeeArchive(s)}>{s.employee_no}</button>:<span>{s.employee_no}</span>}</td><td><CompactRecordName session={s} onFilter={onEmployee}/></td><td>{s.team_name||'—'}<br/><small>{s.position_name||'—'}</small></td><td className="exam-record-title" title={s.title}>{s.title}</td><td><b>第 {s.attempt_no} 次</b></td><td>{fmt(s.started_at)}</td><td>{fmt(s.submitted_at)}</td><td>{fmt(s.graded_at)}</td><td><b>{s.percentage==null?'—':`${score(s.earned_score)}/${score(s.total_score)}`}</b>{s.percentage!=null&&<small className="exam-record-percent">{score(s.percentage)}%</small>}</td><td><span className={`exam-record-breakdown ${s.answer_detail_available?'has-detail':'summary-only'}`}>{breakdown(s)}</span></td><td>{s.grader_name||'—'}</td><td><span className={`result-chip ${s.status==='graded'?(s.passed?'pass':'fail'):'pending'}`}>{statusText(s.status)}</span></td><td><div className="exam-row-actions">{onOpen&&<button onClick={()=>onOpen(s)}>{s.read_only?'查看详情':grading?'开始批改':'查看答卷'}</button>}{canDelete&&s.source_system!=='legacy'&&!s.read_only&&<button className="danger" onClick={()=>onDelete?.(s)}>删除本系统记录</button>}</div></td></tr>)}</tbody></table></div>}
+    {hasData&&setPage&&<ExamPagination page={page} pages={pages} total={total} pageSize={pageSize} loading={loading} onPage={setPage} onPageSize={setPageSize}/>}
+  </section>
 }
 
 function CompactRecordName({session,onFilter}){
@@ -660,7 +792,7 @@ function DeleteSessionModal({session,onClose,onDeleted,onRefreshConfirm}){
       setBusy(false)
       await onDeleted()
     }catch(error){
-      const reason=message(error)
+      const reason=publicMessage(error)
       setError(reason)
       notify({
         type:'error',module:TRAINING_TOAST_MODULE,operation:'删除考试记录',reason,
@@ -690,7 +822,7 @@ function QuestionModal({value,series,teams,positions,onClose,onSaved,onRefreshCo
       setBusy(false)
       await onSaved()
     }catch(saveError){
-      const reason=message(saveError)
+      const reason=publicMessage(saveError)
       setError(reason)
       notify({
         type:'error',module:TRAINING_TOAST_MODULE,operation:editing?'编辑考试题目':'新增考试题目',reason,
@@ -709,21 +841,21 @@ function QuestionModal({value,series,teams,positions,onClose,onSaved,onRefreshCo
 
 function AssignmentModal({value,teams,positions,onClose,onSaved}){
   const [v,setV]=useState({...value,question_rules:value.question_rules||{5:10,10:3,20:1}}),[busy,setBusy]=useState(false),[employeeSearch,setEmployeeSearch]=useState(''),[employees,setEmployees]=useState([]),[searching,setSearching]=useState(false),[formError,setFormError]=useState('')
-  const findEmployees=async()=>{setSearching(true);const {data,error}=await supabase.rpc('admin_exam_employee_options',{p_search:employeeSearch,p_limit:20});setSearching(false);if(error)return setFormError(message(error));setEmployees(data||[])}
-  const save=async()=>{setBusy(true);setFormError('');const {error}=await supabase.rpc('admin_exam_save_assignment',{p_data:v});setBusy(false);if(error)return setFormError(message(error));onSaved()}
+  const findEmployees=async()=>{setSearching(true);const {data,error}=await supabase.rpc('admin_exam_employee_options',{p_search:employeeSearch,p_limit:20});setSearching(false);if(error)return setFormError(publicMessage(error));setEmployees(data||[])}
+  const save=async()=>{setBusy(true);setFormError('');const {error}=await supabase.rpc('admin_exam_save_assignment',{p_data:v});setBusy(false);if(error)return setFormError(publicMessage(error));onSaved()}
   const setRule=(points,count)=>setV({...v,question_rules:{...v.question_rules,[points]:Math.max(0,Number(count)||0)}})
   return <Modal title={v.id?'编辑考试':'创建并分配考试'} onClose={onClose} wide><div className="exam-form grid">{formError&&<div className="exam-error full">{formError}</div>}<label className="full">考试名称<input value={v.title} onChange={e=>setV({...v,title:e.target.value})} placeholder="例如：AR印度出款月度考试"/></label><label>团队（盘口）<select value={v.team_name} onChange={e=>setV({...v,team_name:e.target.value,employee_id:''})}><option value="">请选择团队</option>{teams.map(x=><option key={x}>{x}</option>)}</select></label><label>岗位<select value={v.position_name} onChange={e=>setV({...v,position_name:e.target.value,employee_id:''})}><option value="">请选择岗位</option>{positions.map(x=><option key={x}>{x}</option>)}</select></label><div className="full assignment-target"><div><b>分配范围</b><p>不指定员工时，发布给相同团队＋岗位的全部在职员工。</p></div><div className="employee-picker"><input value={employeeSearch} onChange={e=>setEmployeeSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&findEmployees()} placeholder="可选：搜索员工ID或姓名"/><button type="button" onClick={findEmployees}>{searching?'查询中…':'查找员工'}</button></div>{employees.length>0&&<div className="employee-results"><button className={!v.employee_id?'picked':''} onClick={()=>setV({...v,employee_id:''})}>全部匹配员工</button>{employees.map(x=><button key={x.id} className={v.employee_id===x.id?'picked':''} onClick={()=>setV({...v,employee_id:x.id,team_name:x.team_name||'',position_name:x.position_name||''})}><b>{x.employee_no} · {x.full_name}</b><small>{x.team_name||'—'} · {x.position_name||'—'}</small></button>)}</div>}</div><div className="full question-rules"><b>抽题规则</b>{[5,10,20].map(points=><label key={points}>{points} 分题<input type="number" min="0" max="100" value={v.question_rules?.[points]??0} onChange={e=>setRule(points,e.target.value)}/><span>道</span></label>)}</div><div className="inline full"><label>时长（分钟）<input type="number" min="5" max="240" value={v.duration_minutes} onChange={e=>setV({...v,duration_minutes:Number(e.target.value)})}/></label><label>及格分（%）<input type="number" min="0" max="100" value={v.pass_score} onChange={e=>setV({...v,pass_score:Number(e.target.value)})}/></label><label>最多次数<input type="number" min="1" max="20" value={v.max_attempts} onChange={e=>setV({...v,max_attempts:Number(e.target.value)})}/></label></div><label>开始时间<input type="datetime-local" value={v.start_at} onChange={e=>setV({...v,start_at:e.target.value})}/></label><label>结束时间（可空）<input type="datetime-local" value={v.end_at} onChange={e=>setV({...v,end_at:e.target.value})}/></label><label className="full">保存状态<select value={v.status||'draft'} onChange={e=>setV({...v,status:e.target.value})}><option value="draft">草稿（员工看不到）</option><option value="published">发布（员工立即可见）</option><option value="closed">关闭</option></select></label><p className="exam-note full">员工开始后题目会固定为快照；以后修改或删除题库，不会改变已经作答的历史试卷。</p></div><footer><button onClick={onClose}>取消</button><button className="primary" disabled={busy||!v.title||!v.team_name||!v.position_name} onClick={save}>{busy?'保存中…':v.status==='published'?'保存并发布':'保存草稿'}</button></footer></Modal>
 }
 
 function ExamPreview({value,onClose}){
   const [rows,setRows]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState('')
-  useEffect(()=>{(async()=>{const {data,error:e}=await supabase.rpc('admin_exam_preview_questions',{p_team:value.team_name,p_position:value.position_name,p_rules:value.question_rules||{5:10,10:3,20:1}});if(e)setError(message(e));else setRows(data||[]);setLoading(false)})()},[value.id])
+  useEffect(()=>{(async()=>{const {data,error:e}=await supabase.rpc('admin_exam_preview_questions',{p_team:value.team_name,p_position:value.position_name,p_rules:value.question_rules||{5:10,10:3,20:1}});if(e)setError(publicMessage(e));else setRows(data||[]);setLoading(false)})()},[value.id])
   return <Modal title={`员工前端预览 · ${value.title}`} onClose={onClose} wide><div className="preview-exam"><div className="preview-summary"><span>{value.team_name} · {value.position_name}</span><span>{value.duration_minutes} 分钟</span><span>及格 {value.pass_score}%</span><span>{rows.length} 题</span></div>{error&&<div className="exam-error">{error}</div>}{loading?<div className="exam-empty">正在生成安全预览…</div>:rows.length?<><div className="question-head"><span>第 1 题 / 共 {rows.length} 题</span><b>{rows[0].points} 分 · 难度 {rows[0].difficulty}</b></div><div className="runner-languages">{rows[0].question_zh&&<div><span>中</span><p>{rows[0].question_zh}</p></div>}{rows[0].question_en&&<div><span>EN</span><p>{rows[0].question_en}</p></div>}{rows[0].question_vi&&<div><span>VI</span><p>{rows[0].question_vi}</p></div>}</div><label className="preview-answer">填写答案<textarea disabled placeholder="员工将在这里填写完整回答…"/></label></>:<div className="exam-empty">该团队与岗位没有符合抽题规则的题目。</div>}</div><footer><button className="primary" onClick={onClose}>关闭预览</button></footer></Modal>
 }
 
 function EmployeeExamHistory({employee,onClose,onOpen}){
   const [data,setData]=useState(null),[error,setError]=useState('')
-  useEffect(()=>{(async()=>{const {data:result,error:e}=await supabase.rpc('admin_employee_exam_history',{p_employee_id:employee.employee_id});if(e)setError(message(e));else setData(result)})()},[employee.employee_id])
+  useEffect(()=>{(async()=>{const {data:result,error:e}=await supabase.rpc('admin_employee_exam_history',{p_employee_id:employee.employee_id});if(e)setError(publicMessage(e));else setData(result)})()},[employee.employee_id])
   const person=data?.employee||employee,summary=data?.summary||{},rows=data?.history||[]
   return <Modal title={`${person.employee_no||''} · ${person.full_name||person.employee_name||''} · 全部考试记录`} onClose={onClose} wide>
     <div className="employee-exam-history">
@@ -764,7 +896,7 @@ function GradeModal({session,forceReadOnly=false,permissionPage='records',onClos
         return true
       }catch(loadError){
         if(!mountedRef.current)return false
-        const reason=message(loadError)
+        const reason=publicMessage(loadError,'考试答卷读取失败，请稍后重试。')
         setError(reason)
         notify({
           type:'error',module:TRAINING_TOAST_MODULE,operation,reason,
@@ -790,7 +922,7 @@ function GradeModal({session,forceReadOnly=false,permissionPage='records',onClos
       await load('评分后刷新答卷')
       await onChanged()
     }catch(gradeError){
-      const reason=message(gradeError)
+      const reason=publicMessage(gradeError,'考试评分保存失败，请稍后重试。')
       setError(reason)
       notify({
         type:'error',module:TRAINING_TOAST_MODULE,operation:'保存答卷评分',reason,

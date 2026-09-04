@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { edgeFunctionErrorMessage, readableErrorMessage } from './edgeFunctionError.js'
+import { edgeFunctionErrorMessage, publicRequestErrorMessage, readableErrorMessage } from './edgeFunctionError.js'
 
 test('uses an Edge Function response body instead of the generic SDK message', async () => {
   const context = new Response(JSON.stringify({ error:'分析查询暂时超时，请重试' }), {
@@ -62,4 +62,9 @@ test('hides internal Supabase transport addresses and long query URLs', async ()
     error:{ message:`request failed: ${raw}` },
     fallback:'查询失败，请稍后重试。',
   }), '查询失败，请稍后重试。')
+
+  assert.equal(publicRequestErrorMessage({ message:raw }, '考试记录读取失败，请重试。'), '考试记录读取失败，请重试。')
+  assert.equal(publicRequestErrorMessage({ message:'permission_denied' }, '考试记录读取失败，请重试。'), '当前账号没有执行此操作的权限。')
+  assert.equal(publicRequestErrorMessage({ message:'temporarily_paused_for_database_recovery' }, '考试记录读取失败，请重试。'), '考试记录读取失败，请重试。')
+  assert.equal(publicRequestErrorMessage({ message:'PGRST002: schema cache unavailable' }, '考试记录读取失败，请重试。'), '考试记录读取失败，请重试。')
 })

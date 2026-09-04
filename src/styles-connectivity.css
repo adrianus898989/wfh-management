@@ -65,3 +65,22 @@
 
 /* V27.27 — ongoing outage records can be completed after service resumes. */
 .connectivity-recovery-field>span{display:block;min-height:28px;color:#71849c;font-size:9px;font-weight:650;line-height:1.45}
+
+/* Shared query-state presentation: new filters get a clean skeleton, while a
+   same-query refresh keeps the table visible under a compact status row. */
+.connectivity-query-notice{margin:10px 12px 0}
+.connectivity-query-failure{display:grid;min-height:190px;place-items:center;padding:20px}
+.connectivity-query-failure .query-state-notice{width:min(640px,100%)}
+.connectivity-empty-guided{gap:5px;text-align:center}
+.connectivity-empty-guided strong{color:#405d7d;font-size:13px}
+.connectivity-empty-guided span{color:#8392a5;font-size:10px}
+.connectivity-table-skeleton{overflow:hidden;border-radius:14px;background:#fff}
+.connectivity-table-skeleton>div{display:flex;align-items:center;justify-content:center;gap:9px;min-height:42px;border-bottom:1px solid #e3eaf3;background:#f8faff;color:#607793;font-size:11px;font-weight:800}
+.connectivity-query-spinner{display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #c6d6ec;border-top-color:#2f69d9;border-radius:50%;animation:connectivity-query-spin .72s linear infinite}
+.connectivity-table-skeleton p{display:grid;grid-template-columns:110px 100px 100px minmax(130px,1fr) repeat(4,minmax(90px,1fr));gap:16px;align-items:center;min-width:980px;min-height:52px;margin:0;padding:0 13px;border-bottom:1px solid #edf1f6}
+.connectivity-table-skeleton p:last-child{border-bottom:0}
+.connectivity-table-skeleton i{display:block;height:9px;border-radius:999px;background:linear-gradient(100deg,#e5ebf3 20%,#f8faff 42%,#e5ebf3 64%);background-size:220% 100%;animation:connectivity-query-shimmer 1.15s ease-in-out infinite}
+.connectivity-table-skeleton p i:nth-child(4n){height:20px;border-radius:7px}
+@keyframes connectivity-query-spin{to{transform:rotate(360deg)}}
+@keyframes connectivity-query-shimmer{to{background-position:-220% 0}}
+@media(prefers-reduced-motion:reduce){.connectivity-query-spinner,.connectivity-table-skeleton i{animation:none}.connectivity-query-spinner{border-color:#2f69d9}}

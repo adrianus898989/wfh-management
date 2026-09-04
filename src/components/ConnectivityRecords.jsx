@@ -8,6 +8,8 @@ import { Pagination } from './DataPageControls'
 import { employeeMetricCountLabel, employeeRiskGradeFromTotal } from '../lib/employeeDrawerState'
 import { calculatedConnectivityDuration, normaliseConnectivityStatus } from '../lib/connectivityIncidentState'
 import { filterEmployeePayrollHistory } from '../lib/employeeRecordFilters'
+import { publicRequestErrorMessage } from '../lib/edgeFunctionError'
+import QueryStateNotice from './QueryStateNotice'
 
 const text=value=>String(value??'').trim()
 const EVIDENCE_BUCKET='connectivity-evidence'
@@ -17,6 +19,7 @@ const ALLOWED_EVIDENCE_TYPES=new Set(['image/jpeg','image/png','image/webp','ima
 const today=businessTodayIso
 const typeLabel=value=>({power_outage:'停电',internet_outage:'断网'}[value]||value||'—')
 const statusLabel=value=>({reported:'进行中',verified:'已核实',resolved:'已恢复',rejected:'不成立'}[value]||value||'—')
+const publicMessage=(error,fallback='停电 / 断网记录服务暂时繁忙，请稍后重试。')=>publicRequestErrorMessage(error,fallback)
 const durationLabel=value=>{
   const minutes=Number(value)
   if(!Number.isFinite(minutes)||minutes<0)return '—'
@@ -28,8 +31,21 @@ const initialFilters=()=>({employee_no:'',employee_name:'',team:'',position:'',i
 const initialRecord=()=>({id:null,employee_no:'',incident_date:today(),incident_type:'power_outage',started_at:'',ended_at:'',details:'',status:'reported'})
 const connectivityRequestLabel=(filters,page,pageSize)=>{
   const value=input=>text(input)||'全部'
-  return `日期 ${value(filters.date_from)} 至 ${value(filters.date_to)}；员工 ${value(filters.employee_no||filters.employee_name)}；团队 ${value(filters.team)}；岗位 ${value(filters.position)}；类型 ${value(typeLabel(filters.incident_type))}；第 ${page} 页 / ${pageSize} 条`
+  return `日期 ${value(filters.date_from)} 至 ${value(filters.date_to)}；员工ID ${value(filters.employee_no)}；姓名 ${value(filters.employee_name)}；团队 ${value(filters.team)}；岗位 ${value(filters.position)}；类型 ${value(filters.incident_type?typeLabel(filters.incident_type):'')}；国家 ${value(filters.country)}；状态 ${value(filters.status?statusLabel(filters.status):'')}；第 ${page} 页 / ${pageSize} 条`
 }
+const connectivityRequestKey=(filters,page,pageSize)=>JSON.stringify({
+  employee_no:filters.employee_no,
+  employee_name:filters.employee_name,
+  team:filters.team,
+  position:filters.position,
+  incident_type:filters.incident_type,
+  status:filters.status,
+  country:filters.country,
+  date_from:filters.date_from,
+  date_to:filters.date_to,
+  page,
+  page_size:pageSize,
+})
 const evidenceItems=row=>Array.isArray(row?.attachments)?row.attachments:[]
 const evidenceMime=file=>{
   if(file.type)return file.type.toLowerCase()
@@ -123,11 +139,19 @@ function EvidenceLinks({items=[],legacyUrl='',t}){
   return <><div className="connectivity-evidence-links">{items.map((item,index)=><button type="button" key={item.path||index} onClick={()=>open(item)} disabled={busy===item.path}>{busy===item.path?tr('connectivity.opening','打开中…'):`${tr(String(item.mime||'').startsWith('video/')?'connectivity.video':'connectivity.image',String(item.mime||'').startsWith('video/')?'视频':'图片')} ${index+1}`}</button>)}{legacyUrl&&<button type="button" onClick={openLegacy}>{tr('connectivity.legacyEvidence','旧证明')}</button>}</div>{preview&&<div className="connectivity-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onMouseDown={()=>setPreview(null)}><div onMouseDown={event=>event.stopPropagation()}><header><strong>{preview.name}</strong><button type="button" aria-label={tr('common.close','关闭')} onClick={()=>setPreview(null)}>×</button></header>{preview.loading?<div className="connectivity-preview-fallback" role="status"><strong>{tr('connectivity.opening','打开中…')}</strong></div>:preview.error||!preview.url?<div className="connectivity-preview-fallback" role="alert"><strong>{preview.message||tr('connectivity.previewFailed','图片访问失败，请重试。')}</strong><div>{preview.item&&<button type="button" onClick={()=>open(preview.item)}>{tr('connectivity.retry','重试预览')}</button>}</div></div>:<div className="connectivity-preview-media">{String(preview.mime).startsWith('video/')?<video src={preview.url} controls autoPlay onError={mediaFailed}/>:<img src={preview.url} alt={preview.name} onError={mediaFailed}/>} {preview.objectUrl&&<a href={preview.url} download={preview.name}>{tr('connectivity.openOriginal','下载文件')}</a>}</div>}</div></div>}</>
 }
 
+function ConnectivityTableSkeleton(){
+  return <div className="connectivity-table-skeleton" role="status" aria-label="正在读取停电与断网记录" aria-busy="true">
+    <div><span className="connectivity-query-spinner" aria-hidden="true"/>正在读取记录…</div>
+    {Array.from({length:6},(_,row)=><p key={row} aria-hidden="true">{Array.from({length:8},(_,cell)=><i key={cell}/>)}</p>)}
+  </div>
+}
+
 export function ConnectivityRecordsPage(){
   const {notify}=useAppToast()
   const [filters,setFilters]=useState(initialFilters)
   const [applied,setApplied]=useState(initialFilters)
-  const [state,setState]=useState({loading:true,error:'',data:null,snapshotLabel:'',staleNotice:''})
+  const [state,setState]=useState({loading:true,error:'',data:null,snapshotKey:'',snapshotLabel:'',staleNotice:''})
+  const [filterOptions,setFilterOptions]=useState({team_options:[],position_options:[],country_options:[]})
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(30)
   const [editor,setEditor]=useState('')
@@ -145,38 +169,59 @@ export function ConnectivityRecordsPage(){
   const [deleting,setDeleting]=useState(false)
   const aliveRef=useRef(true)
   const loadRequestRef=useRef(0)
+  const activeQueryRef=useRef({page,pageSize,applied})
+  activeQueryRef.current={page,pageSize,applied}
 
   const load=async(nextPage=page,nextSize=pageSize,nextFilters=applied,announceOperation='')=>{
     const requestToken=++loadRequestRef.current
+    const requestKey=connectivityRequestKey(nextFilters,nextPage,nextSize)
     const requestLabel=connectivityRequestLabel(nextFilters,nextPage,nextSize)
-    setState(current=>({...current,loading:true,error:'',staleNotice:current.data&&current.snapshotLabel!==requestLabel?staleSnapshotNotice(current.snapshotLabel):''}))
+    setState(current=>{
+      const compatible=Boolean(current.data)&&current.snapshotKey===requestKey
+      return {loading:true,error:'',data:compatible?current.data:null,snapshotKey:compatible?current.snapshotKey:'',snapshotLabel:compatible?current.snapshotLabel:'',staleNotice:''}
+    })
     try{
       const {data,error}=await supabase.rpc('admin_connectivity_home',{p_filters:{...nextFilters,page:nextPage,page_size:nextSize}})
-      if(!isCurrentLiveRequest(aliveRef.current,loadRequestRef.current,requestToken))return
+      const active=activeQueryRef.current
+      if(!isCurrentLiveRequest(aliveRef.current,loadRequestRef.current,requestToken)||connectivityRequestKey(active.applied,active.page,active.pageSize)!==requestKey)return
       if(error){
+        const reason=publicMessage(error,'记录读取失败，请稍后重试。')
         setState(current=>current.data
-          ?{...current,loading:false,error:error.message,staleNotice:staleSnapshotNotice(current.snapshotLabel)}
-          :{loading:false,error:error.message,data:null,snapshotLabel:'',staleNotice:''})
+          ?{...current,loading:false,error:reason,staleNotice:staleSnapshotNotice(current.snapshotLabel)}
+          :{loading:false,error:reason,data:null,snapshotKey:'',snapshotLabel:'',staleNotice:''})
         if(announceOperation)notify(writeFailureToast({
-          module:'停电 / 断网记录',operation:announceOperation,error,reason:error.message,
+          module:'停电 / 断网记录',operation:announceOperation,error,reason,
           dedupeKey:`connectivity:read:${announceOperation}:error`,
-          refresh:()=>load(nextPage,nextSize,nextFilters,announceOperation),
+          refresh:()=>{const current=activeQueryRef.current;return load(current.page,current.pageSize,current.applied,announceOperation)},
         }))
-      }else setState({loading:false,error:'',data:data||{},snapshotLabel:requestLabel,staleNotice:''})
+      }else{
+        const result=data||{}
+        setFilterOptions({
+          team_options:result.team_options||[],
+          position_options:result.position_options||[],
+          country_options:result.country_options||[],
+        })
+        setState({loading:false,error:'',data:result,snapshotKey:requestKey,snapshotLabel:requestLabel,staleNotice:''})
+      }
     }catch(error){
-      if(!isCurrentLiveRequest(aliveRef.current,loadRequestRef.current,requestToken))return
+      const active=activeQueryRef.current
+      if(!isCurrentLiveRequest(aliveRef.current,loadRequestRef.current,requestToken)||connectivityRequestKey(active.applied,active.page,active.pageSize)!==requestKey)return
+      const reason=publicMessage(error,'记录读取失败，请稍后重试。')
       setState(current=>current.data
-        ?{...current,loading:false,error:error?.message||'读取失败',staleNotice:staleSnapshotNotice(current.snapshotLabel)}
-        :{loading:false,error:error?.message||'读取失败',data:null,snapshotLabel:'',staleNotice:''})
+        ?{...current,loading:false,error:reason,staleNotice:staleSnapshotNotice(current.snapshotLabel)}
+        :{loading:false,error:reason,data:null,snapshotKey:'',snapshotLabel:'',staleNotice:''})
       if(announceOperation){
-        const reason=error?.message||'读取失败'
         notify(writeFailureToast({
           module:'停电 / 断网记录',operation:announceOperation,error,reason,
           dedupeKey:`connectivity:read:${announceOperation}:error`,
-          refresh:()=>load(nextPage,nextSize,nextFilters,announceOperation),
+          refresh:()=>{const current=activeQueryRef.current;return load(current.page,current.pageSize,current.applied,announceOperation)},
         }))
       }
     }
+  }
+  const activateAndLoad=(nextPage,nextSize,nextFilters,announceOperation='')=>{
+    activeQueryRef.current={page:nextPage,pageSize:nextSize,applied:nextFilters}
+    return load(nextPage,nextSize,nextFilters,announceOperation)
   }
   useEffect(()=>{
     aliveRef.current=true
@@ -192,8 +237,8 @@ export function ConnectivityRecordsPage(){
     return()=>{active=false}
   },[])
 
-  const query=()=>{const next={...filters};setApplied(next);setPage(1);load(1,pageSize,next,'查询记录')}
-  const reset=()=>{const next=initialFilters();setFilters(next);setApplied(next);setPage(1);load(1,pageSize,next,'重置记录查询')}
+  const query=()=>{const next={...filters};setApplied(next);setPage(1);activateAndLoad(1,pageSize,next,'查询记录')}
+  const reset=()=>{const next=initialFilters();setFilters(next);setApplied(next);setPage(1);activateAndLoad(1,pageSize,next,'重置记录查询')}
   const flash=value=>{setMessage(value);window.setTimeout(()=>setMessage(''),5000)}
   const resetEditor=()=>{setEditor('');setRecord(initialRecord());setExistingFiles([]);setOriginalFiles([]);setFiles([]);setFormError('');setEmployeeLookup({status:'idle',employee:null,message:''})}
   const openCreate=()=>{resetEditor();setEditor('create')}
@@ -276,20 +321,20 @@ export function ConnectivityRecordsPage(){
         }
         flash(cleanupWarning||`已更新 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}记录${record.ended_at?'，恢复时间已确认。':'，当前仍在进行中。'}`)
       }else flash(`已记录 ${data.employee_no}（${data.full_name}）的${typeLabel(record.incident_type)}情况${record.ended_at?'，恢复时间已确认。':'，当前仍在进行中，可稍后编辑补填恢复时间。'}`)
-      resetEditor();setPage(1);await load(1,pageSize,applied)
+      resetEditor();setPage(1);await activateAndLoad(1,pageSize,applied)
     }catch(error){
       let rollbackError=null
       if(uploaded.length){
         rollbackError=await removeEvidencePaths(uploaded.map(item=>item.path))
       }
       const cleanupNotice=rollbackError?'；新上传证明文件未能自动回滚，请联系管理员清理存储文件':''
-      const saveMessage=error.message==='employee_not_found'?'找不到这个员工ID，请核对后再保存。':`保存失败：${error.message}`
+      const saveMessage=error.message==='employee_not_found'?'找不到这个员工ID，请核对后再保存。':`保存失败：${publicMessage(error)}`
       const reason=`${saveMessage}${cleanupNotice}`
       setFormError(reason)
       notify(writeFailureToast({
         module:'停电 / 断网记录',operation:editor==='edit'?'保存修改':'新增记录',error,reason,
         dedupeKey:`connectivity:save:${record.id||record.employee_no||'new'}:error`,
-        refresh:()=>load(page,pageSize,applied,'刷新记录列表'),
+        refresh:()=>{const current=activeQueryRef.current;return load(current.page,current.pageSize,current.applied,'刷新记录列表')},
       }))
     }finally{setSaving(false)}
   }
@@ -307,8 +352,8 @@ export function ConnectivityRecordsPage(){
       }
       setDeleteTarget(null);flash(cleanupWarning||`已删除 ${deleteTarget.employee_no} 的 ${deleteTarget.incident_date} ${typeLabel(deleteTarget.incident_type)}记录。`)
       const nextPage=rows.length===1&&page>1?page-1:page
-      setPage(nextPage);await load(nextPage,pageSize,applied)
-    }catch(error){const reason=`删除失败：${error.message}`;setDeleteError(reason);notify(writeFailureToast({module:'停电 / 断网记录',operation:'删除记录',error,reason,dedupeKey:`connectivity:delete:${deleteTarget.id}:error`,refresh:()=>load(page,pageSize,applied,'刷新记录列表')}))}finally{setDeleting(false)}
+      setPage(nextPage);await activateAndLoad(nextPage,pageSize,applied)
+    }catch(error){const reason=`删除失败：${publicMessage(error)}`;setDeleteError(reason);notify(writeFailureToast({module:'停电 / 断网记录',operation:'删除记录',error,reason,dedupeKey:`connectivity:delete:${deleteTarget.id}:error`,refresh:()=>{const current=activeQueryRef.current;return load(current.page,current.pageSize,current.applied,'刷新记录列表')}}))}finally{setDeleting(false)}
   }
   const data=state.data||{},summary=data.summary||{},rows=data.rows||[],daily=data.daily_stats||[]
   const canCreate=Boolean(data.permissions?.create||capabilities.create)
@@ -332,24 +377,25 @@ export function ConnectivityRecordsPage(){
     </div><footer><button type="button" className="secondary-action" onClick={closeEditor} disabled={saving}>取消</button><button type="submit" className="primary-action" disabled={saving}>{saving?'正在上传并保存…':editor==='edit'?'保存修改':'保存记录'}</button></footer></form></div>}
     {deleteTarget&&<div className="connectivity-modal-backdrop" role="presentation" onMouseDown={()=>!deleting&&setDeleteTarget(null)}><div className="connectivity-delete-modal" role="dialog" aria-modal="true" onMouseDown={event=>event.stopPropagation()}><header><div><small>DELETE CONNECTIVITY RECORD</small><h3>删除停电 / 断网记录</h3></div><button type="button" onClick={()=>setDeleteTarget(null)} disabled={deleting}>×</button></header><div><strong>确认删除这条记录吗？</strong><p>{deleteTarget.incident_date} · {deleteTarget.employee_no} · {deleteTarget.full_name} · {typeLabel(deleteTarget.incident_type)}</p><span>记录会从后台和员工前端移除；此操作只对持有“删除停电/断网记录”权限的账号开放。</span>{deleteError&&<div className="connectivity-form-error">{deleteError}</div>}</div><footer><button type="button" className="secondary-action" onClick={()=>setDeleteTarget(null)} disabled={deleting}>取消</button><button type="button" className="connectivity-danger-action" onClick={confirmDelete} disabled={deleting}>{deleting?'正在删除…':'确认删除'}</button></footer></div></div>}
     <section className="connectivity-filter-card"><div className="connectivity-filter-grid">
-      <label>员工ID<input value={filters.employee_no} onChange={event=>setFilters({...filters,employee_no:event.target.value})} onKeyDown={event=>event.key==='Enter'&&query()} placeholder="输入员工ID"/></label>
-      <label>姓名<input value={filters.employee_name} onChange={event=>setFilters({...filters,employee_name:event.target.value})} onKeyDown={event=>event.key==='Enter'&&query()} placeholder="输入员工姓名"/></label>
-      <label>团队<select value={filters.team} onChange={event=>setFilters({...filters,team:event.target.value})}><option value="">全部团队</option>{(data.team_options||[]).map(value=><option key={value}>{value}</option>)}</select></label>
-      <label>岗位<select value={filters.position} onChange={event=>setFilters({...filters,position:event.target.value})}><option value="">全部岗位</option>{(data.position_options||[]).map(value=><option key={value}>{value}</option>)}</select></label>
+      <label>员工ID<input value={filters.employee_no} onChange={event=>setFilters({...filters,employee_no:event.target.value})} onKeyDown={event=>event.key==='Enter'&&!state.loading&&query()} placeholder="输入员工ID"/></label>
+      <label>姓名<input value={filters.employee_name} onChange={event=>setFilters({...filters,employee_name:event.target.value})} onKeyDown={event=>event.key==='Enter'&&!state.loading&&query()} placeholder="输入员工姓名"/></label>
+      <label>团队<select value={filters.team} onChange={event=>setFilters({...filters,team:event.target.value})}><option value="">全部团队</option>{filterOptions.team_options.map(value=><option key={value}>{value}</option>)}</select></label>
+      <label>岗位<select value={filters.position} onChange={event=>setFilters({...filters,position:event.target.value})}><option value="">全部岗位</option>{filterOptions.position_options.map(value=><option key={value}>{value}</option>)}</select></label>
       <label>问题类型<select value={filters.incident_type} onChange={event=>setFilters({...filters,incident_type:event.target.value})}><option value="">全部类型</option><option value="power_outage">停电</option><option value="internet_outage">断网</option></select></label>
-      <label>员工国家<select value={filters.country} onChange={event=>setFilters({...filters,country:event.target.value})}><option value="">全部国家</option>{(data.country_options||[]).map(country=><option key={country}>{country}</option>)}</select></label>
+      <label>员工国家<select value={filters.country} onChange={event=>setFilters({...filters,country:event.target.value})}><option value="">全部国家</option>{filterOptions.country_options.map(country=><option key={country}>{country}</option>)}</select></label>
       <label>状态<select value={filters.status} onChange={event=>setFilters({...filters,status:event.target.value})}><option value="">全部状态</option><option value="reported">进行中</option><option value="verified">已核实</option><option value="resolved">已恢复</option><option value="rejected">不成立</option></select></label>
       <label>日期起<input type="date" value={filters.date_from} onChange={event=>setFilters({...filters,date_from:event.target.value})}/></label>
       <label>日期止<input type="date" value={filters.date_to} onChange={event=>setFilters({...filters,date_to:event.target.value})}/></label>
-      <div className="connectivity-filter-actions"><button className="primary-action" onClick={query} disabled={state.loading}>{state.loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={reset}>重置</button></div>
+      <div className="connectivity-filter-actions"><button className="primary-action" onClick={query} disabled={state.loading}>{state.loading?'查询中…':'查询'}</button><button className="secondary-action" onClick={reset} disabled={state.loading}>重置</button></div>
     </div></section>
-    {state.error&&<div className="connectivity-message error" role="alert">读取失败：{state.error}</div>}
-    {state.staleNotice&&<div className="connectivity-message connectivity-snapshot-notice" role="status">{state.staleNotice}</div>}
     {state.data&&<><div className="connectivity-summary"><div><span>记录总数</span><strong>{summary.total||0}</strong></div><div><span>涉及员工</span><strong>{summary.affected_employees||0}</strong></div><div><span>停电</span><strong>{summary.power||0}</strong></div><div><span>断网</span><strong>{summary.internet||0}</strong></div></div>
     <section className="connectivity-daily-card"><header><div><h3>每日情况统计</h3></div><span>显示最近 {daily.length} 个有记录的日期</span></header>{daily.length?<div className="connectivity-daily-list">{daily.map(day=><article key={day.incident_date}><strong>{day.incident_date}</strong><span><b>{day.affected_employees}</b> 人</span><span>{day.total_records} 条记录</span><span className="power">停电 {day.power}</span><span className="internet">断网 {day.internet}</span><div>{(day.countries||[]).map(country=><em key={country.name}>{country.name} {country.employees}人</em>)}</div></article>)}</div>:<div className="connectivity-empty compact">暂无每日统计</div>}</section></>}
     <section className="connectivity-table-card">
-      {state.loading&&!state.data?<div className="connectivity-empty">正在读取记录…</div>:!state.data?<div className="connectivity-empty error">本次读取失败，未显示记录。</div>:rows.length?<div className="connectivity-table-wrap"><table><thead><tr><th>日期</th><th>入职日期</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>岗位</th><th>类型</th><th>开始 / 恢复</th><th>持续</th><th>状态</th><th>情况说明</th><th>证明</th><th>录入人</th>{showActions&&<th>操作</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.incident_date}</strong></td><td>{row.hire_date||'—'}</td><td><b>{row.employee_no}</b></td><td>{row.full_name}</td><td>{row.employee_country||'—'}</td><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td><td><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></td><td>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'进行中'}</td><td>{row.ended_at?durationLabel(row.duration_minutes):'进行中'}</td><td><span className={`connectivity-status ${row.status}`}>{statusLabel(row.status)}</span></td><td className="connectivity-details">{row.details||'—'}</td><td className="connectivity-proof"><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?'—':null}</td><td>{row.recorded_by_name||'后台账号'}</td>{showActions&&<td><div className="connectivity-row-actions">{canEdit&&<button type="button" onClick={()=>openEdit(row)}>编辑</button>}{canDelete&&<button type="button" className="danger" onClick={()=>{setDeleteError('');setDeleteTarget(row)}}>删除</button>}</div></td>}</tr>)}</tbody></table></div>:<div className="connectivity-empty">暂无符合条件的记录</div>}
-      {state.data&&<Pagination page={Number(data.page||page)} pages={Number(data.pages||1)} total={Number(data.total||0)} pageSize={pageSize} loading={state.loading} onPage={next=>{setPage(next);load(next,pageSize,applied,'切换记录分页')}} onPageSize={next=>{setPageSize(next);setPage(1);load(1,next,applied,'调整记录每页条数')}}/>}
+      {state.loading&&state.data&&<QueryStateNotice className="connectivity-query-notice" title="正在更新查询结果" detail="当前列表保持可见，完成后会自动更新。"/>}
+      {!state.loading&&state.error&&state.data&&<QueryStateNotice className="connectivity-query-notice" tone="warning" title="查询结果暂未更新" detail={state.staleNotice} onRetry={()=>load(page,pageSize,applied,'重试记录查询')}/>}
+      {!state.loading&&state.error&&!state.data&&<div className="connectivity-query-failure"><QueryStateNotice tone="error" title="记录读取失败" detail={state.error} onRetry={()=>load(page,pageSize,applied,'重试记录查询')}/></div>}
+      {state.loading&&!state.data?<ConnectivityTableSkeleton/>:!state.data?null:rows.length?<div className="connectivity-table-wrap" aria-busy={state.loading}><table><thead><tr><th>日期</th><th>入职日期</th><th>员工ID</th><th>姓名</th><th>员工国家</th><th>团队</th><th>岗位</th><th>类型</th><th>开始 / 恢复</th><th>持续</th><th>状态</th><th>情况说明</th><th>证明</th><th>录入人</th>{showActions&&<th>操作</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.incident_date}</strong></td><td>{row.hire_date||'—'}</td><td><b>{row.employee_no}</b></td><td>{row.full_name}</td><td>{row.employee_country||'—'}</td><td>{row.team_name||'—'}</td><td>{row.position_name||'—'}</td><td><span className={`connectivity-type ${row.incident_type}`}>{typeLabel(row.incident_type)}</span></td><td>{text(row.started_at).slice(0,5)||'—'} → {text(row.ended_at).slice(0,5)||'进行中'}</td><td>{row.ended_at?durationLabel(row.duration_minutes):'进行中'}</td><td><span className={`connectivity-status ${row.status}`}>{statusLabel(row.status)}</span></td><td className="connectivity-details">{row.details||'—'}</td><td className="connectivity-proof"><EvidenceLinks items={evidenceItems(row)} legacyUrl={row.evidence_url}/>{!evidenceItems(row).length&&!row.evidence_url?'—':null}</td><td>{row.recorded_by_name||'后台账号'}</td>{showActions&&<td><div className="connectivity-row-actions">{canEdit&&<button type="button" onClick={()=>openEdit(row)}>编辑</button>}{canDelete&&<button type="button" className="danger" onClick={()=>{setDeleteError('');setDeleteTarget(row)}}>删除</button>}</div></td>}</tr>)}</tbody></table></div>:<div className="connectivity-empty connectivity-empty-guided"><strong>暂无符合条件的记录</strong><span>可以调整员工、团队、类型、状态或日期后重新查询。</span></div>}
+      {state.data&&<Pagination page={Number(data.page||page)} pages={Number(data.pages||1)} total={Number(data.total||0)} pageSize={pageSize} loading={state.loading} onPage={next=>{setPage(next);activateAndLoad(next,pageSize,applied,'切换记录分页')}} onPageSize={next=>{setPageSize(next);setPage(1);activateAndLoad(1,next,applied,'调整记录每页条数')}}/>}
     </section>
   </div>
 }

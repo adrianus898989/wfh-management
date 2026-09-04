@@ -20,6 +20,7 @@ import './styles-attendance.css'
 import './styles-admin-ip-allowlist.css'
 import './styles-admin-root-layout.css'
 import './styles-management-risk.css'
+import './styles-query-state.css'
 import { configured } from './lib/supabase'
 import { APP_ROUTER_BASENAME, shouldLoadAdminEnhancers } from './lib/appBasePath'
 

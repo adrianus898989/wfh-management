@@ -34,7 +34,9 @@ test('high-volume attendance detail views are bounded while the employee archive
   assert.match(onlineTrainingPage,/const defaultFilters=\(\)=>\{const range=businessTodayRange\(\);return\{\.\.\.EMPTY_FILTERS,from:range\.date_from,to:range\.date_to\}\}/)
   assert.match(trainingPage,/const todaySessionFilters=\(\)=>\{const day=businessTodayIso\(\);return \{\.\.\.blankSessionFilters,dateFrom:day,dateTo:day\}\}/)
   assert.match(trainingPage,/requestedTab==='人工批改'\?blankSessionFilters:todaySessionFilters\(\)/)
-  assert.match(trainingPage,/x==='人工批改'\?blankSessionFilters:todaySessionFilters\(\)/)
+  assert.match(trainingPage,/tab==='人工批改'\?blankSessionFilters:todaySessionFilters\(\)/)
+  assert.match(trainingPage,/const tabChanged=previousTabRef\.current!==tab/)
+  assert.match(trainingPage,/pending\?\.tab===tab\?pending\.filters/)
 })
 
 test('resignation records default and reset to today without overwriting selected filters',()=>{
