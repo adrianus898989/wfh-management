@@ -9,9 +9,10 @@ import {
 } from './onlineTrainingFilters.js'
 
 test('normalizes online-training multi filters as stable trimmed arrays',()=>{
-  const input={team:[' AR印度 ','AR巴西','AR印度'],group:' 客服组 ',employee_no:' CS001 '}
+  const input={trainer_names:[' Alice ','Bob','Alice'],team:[' AR印度 ','AR巴西','AR印度'],group:' 客服组 ',employee_no:' CS001 '}
   const normalized=normalizeOnlineTrainingFilters(input)
 
+  assert.deepEqual(normalized.trainer_names,['Alice','Bob'])
   assert.deepEqual(normalized.team,['AR印度','AR巴西'])
   assert.deepEqual(normalized.group,['客服组'])
   assert.deepEqual(normalized.position,[])
@@ -21,9 +22,11 @@ test('normalizes online-training multi filters as stable trimmed arrays',()=>{
 
 test('encodes multiple values with the ASCII unit separator while keeping scalar RPC fields',()=>{
   const encoded=encodeOnlineTrainingFilterPayload({
-    team:['AR印度','AR巴西'],shift:['白班'],from:' 2026-09-01 ',keyword:' 质检 ',
+    trainer:' 手动关键字 ',trainer_names:['Alice','Bob'],team:['AR印度','AR巴西'],shift:['白班'],from:' 2026-09-01 ',keyword:' 质检 ',
   })
 
+  assert.equal(encoded.trainer,'手动关键字')
+  assert.equal(encoded.trainer_names,`Alice${ONLINE_TRAINING_MULTI_VALUE_SEPARATOR}Bob`)
   assert.equal(encoded.team,`AR印度${ONLINE_TRAINING_MULTI_VALUE_SEPARATOR}AR巴西`)
   assert.equal(encoded.shift,'白班')
   assert.equal(encoded.position,'')
@@ -40,7 +43,10 @@ test('accepts an encoded value when rebuilding UI filter state',()=>{
 test('counts active dimensions, not the number of selected options',()=>{
   assert.equal(countActiveOnlineTrainingFilters({
     team:['AR印度','AR巴西'],group:[],position:[],shift:['夜班'],platform:[],
-    employee_no:'',employee_name:' Alice ',trainer:'',keyword:'',attendance:'',from:'2026-09-01',to:'',
-  }),4)
-  assert.equal(countActiveOnlineTrainingFilters({team:[],group:[],position:[],shift:[],platform:[]}),0)
+    employee_no:'',employee_name:' Alice ',trainer:' submitter ',trainer_names:['Trainer A','Trainer B'],keyword:'',attendance:'',from:'2026-09-01',to:'',
+  }),5)
+  assert.equal(countActiveOnlineTrainingFilters({trainer:'',trainer_names:['Trainer A'],team:[],group:[],position:[],shift:[],platform:[]}),1)
+  assert.equal(countActiveOnlineTrainingFilters({trainer:'submitter',trainer_names:[],team:[],group:[],position:[],shift:[],platform:[]}),1)
+  assert.equal(countActiveOnlineTrainingFilters({trainer:'submitter',trainer_names:['Trainer A'],team:[],group:[],position:[],shift:[],platform:[]}),1)
+  assert.equal(countActiveOnlineTrainingFilters({trainer:'',trainer_names:[],team:[],group:[],position:[],shift:[],platform:[]}),0)
 })

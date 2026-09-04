@@ -55,7 +55,7 @@ const removeStoredPaths=async paths=>{
 }
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
-const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:[],group:[],position:[],shift:[],platform:[],attendance:'',from:'',to:''}
+const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',trainer_names:[],keyword:'',team:[],group:[],position:[],shift:[],platform:[],attendance:'',from:'',to:''}
 const defaultFilters=()=>{const range=businessTodayRange();return{...EMPTY_FILTERS,from:range.date_from,to:range.date_to}}
 const isTransientError=error=>/failed to fetch|networkerror|network request failed|load failed|connection|timeout/i.test(text(error?.message||error))
 const isStatementTimeout=error=>text(error?.code)==='57014'||/statement timeout|canceling statement due to statement timeout/i.test(text(error?.message||error))
@@ -749,7 +749,7 @@ export default function OnlineTrainingPage(){
     const requestId=++trainerHistoryRequestRef.current
     setTrainerHistory({trainer,loading:true,rows:[],error:''})
     try{
-      const trainerFilters=encodeOnlineTrainingFilterPayload({...filters,trainer:trainer.trainer_name})
+      const trainerFilters=encodeOnlineTrainingFilterPayload({...filters,trainer:trainer.trainer_name,trainer_names:[]})
       const first=await readCall('online_training_search_reports',{p_filters:trainerFilters,p_page:1,p_page_size:RPC_PAGE_SIZE})
       const rows=[...(first?.rows||[])]
       const pages=Math.max(1,Number(first?.pages||1))
@@ -854,7 +854,7 @@ export default function OnlineTrainingPage(){
       <div className="ot-filter-row primary-row">
         <label><span>员工ID</span><input value={draftFilters.employee_no} onChange={event=>setDraftFilter('employee_no',event.target.value)} placeholder="输入员工ID"/></label>
         <label><span>员工姓名</span><input value={draftFilters.employee_name} onChange={event=>setDraftFilter('employee_name',event.target.value)} placeholder="输入姓名"/></label>
-        <label><span>提交人 / 线上培训</span><input value={draftFilters.trainer} onChange={event=>setDraftFilter('trainer',event.target.value)} placeholder="输入提交人或培训"/></label>
+        <div className="ot-filter-field ot-trainer-filter-field"><span>提交人 / 线上培训</span><div className="ot-trainer-combined"><input aria-label="手动输入提交人或线上培训" value={draftFilters.trainer} onChange={event=>setDraftFilter('trainer',event.target.value)} placeholder="输入提交人或培训"/><SearchableMultiSelect className="ot-trainer-picker" value={draftFilters.trainer_names} options={filterOptions.trainer} onChange={value=>setDraftFilter('trainer_names',value)} placeholder="选择" ariaLabel="培训人员筛选" compactSummary copy={{searchPlaceholder:'输入培训人员姓名搜索'}}/></div></div>
         <label className="keyword"><span>报告内容</span><input value={draftFilters.keyword} onChange={event=>setDraftFilter('keyword',event.target.value)} placeholder="搜索平台、报告、评语或问题"/></label>
         <label><span>日期起</span><input type="date" value={draftFilters.from} onChange={event=>setDraftFilter('from',event.target.value)}/></label>
         <label><span>日期止</span><input type="date" value={draftFilters.to} onChange={event=>setDraftFilter('to',event.target.value)}/></label>

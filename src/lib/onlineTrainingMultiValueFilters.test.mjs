@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises'
 import test from 'node:test'
 
 const sql=await readFile(new URL(
-  '../../supabase/migrations/20260904094000_online_training_multivalue_filters.sql',
+  '../../supabase/migrations/20260904054810_online_training_multivalue_filters.sql',
   import.meta.url,
 ),'utf8')
 

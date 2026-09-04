@@ -22,3 +22,9 @@ test('searchable multi-select includes bulk, clear, done and dismiss interaction
   assert.match(source,/document\.addEventListener\('mousedown',onPointerDown\)/)
   assert.match(source,/event\.key!=='Escape'/)
 })
+
+test('searchable multi-select supports a compact count summary for embedded triggers',()=>{
+  assert.match(source,/compactSummary=false/)
+  assert.match(source,/compactSummary[\s\S]*?`\$\{copy\.selectedLabel\} \$\{selected\.length\}`/)
+  assert.match(source,/title=\{selected\.join\('、'\)\|\|placeholder\}/)
+})

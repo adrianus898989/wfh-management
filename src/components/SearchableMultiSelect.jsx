@@ -26,6 +26,7 @@ export default function SearchableMultiSelect({
   disabled=false,
   maxVisible=100,
   className='',
+  compactSummary=false,
   copy:copyOverrides={},
 }){
   const copy={...DEFAULT_COPY,...copyOverrides}
@@ -88,7 +89,9 @@ export default function SearchableMultiSelect({
 
   const summary=!selected.length
     ?placeholder
-    :selected.length===1
+    :compactSummary
+      ?`${copy.selectedLabel} ${selected.length}`
+      :selected.length===1
       ?selected[0]
       :`${copy.selectedLabel} ${selected.length} 项`
 

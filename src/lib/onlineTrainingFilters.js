@@ -2,7 +2,7 @@ import {normalizeStringSelection} from '../components/searchableMultiSelectModel
 
 export const ONLINE_TRAINING_MULTI_VALUE_SEPARATOR='\u001f'
 export const ONLINE_TRAINING_MULTI_FILTER_KEYS=Object.freeze([
-  'team','group','position','shift','platform',
+  'trainer_names','team','group','position','shift','platform',
 ])
 
 const MULTI_FILTER_KEY_SET=new Set(ONLINE_TRAINING_MULTI_FILTER_KEYS)
@@ -43,7 +43,9 @@ export function encodeOnlineTrainingFilterPayload(filters={}){
 
 export function countActiveOnlineTrainingFilters(filters={}){
   const normalized=normalizeOnlineTrainingFilters(filters)
-  return Object.values(normalized).reduce((count,value)=>
-    count+(Array.isArray(value)?Number(value.length>0):Number(Boolean(value))),0
-  )
+  const trainerActive=Boolean(normalized.trainer)||Boolean(normalized.trainer_names?.length)
+  return Object.entries(normalized).reduce((count,[key,value])=>{
+    if(key==='trainer'||key==='trainer_names')return count
+    return count+(Array.isArray(value)?Number(value.length>0):Number(Boolean(value)))
+  },Number(trainerActive))
 }
