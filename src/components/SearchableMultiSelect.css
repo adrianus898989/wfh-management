@@ -1,0 +1,41 @@
+.searchable-multi-select{position:relative;width:100%;min-width:0;color:#304762;font:inherit}
+.searchable-multi-select.is-open{z-index:200}
+.searchable-multi-select .sms-trigger{display:flex;width:100%;height:39px;min-width:0;align-items:center;justify-content:space-between;gap:8px;padding:0 9px 0 10px;border:1px solid #d3deeb;border-radius:9px;background:#fff;color:#304762;box-shadow:none;outline:none;cursor:pointer}
+.searchable-multi-select .sms-trigger:focus-visible,.searchable-multi-select.is-open .sms-trigger{border-color:#4b76e4;box-shadow:0 0 0 3px rgba(75,118,228,.1)}
+.searchable-multi-select .sms-trigger>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:10px;font-weight:600}
+.searchable-multi-select .sms-trigger>span.sms-placeholder{color:#6f8096;font-weight:500}
+.searchable-multi-select .sms-trigger>em{display:grid;width:20px;height:20px;flex:0 0 auto;place-items:center;color:#778aa1;font-size:13px;font-style:normal;transition:transform .15s ease}
+.searchable-multi-select.is-open .sms-trigger>em{transform:rotate(180deg)}
+.searchable-multi-select.is-disabled{opacity:.6}
+.searchable-multi-select .sms-popover{position:absolute;z-index:180;top:calc(100% + 6px);left:0;width:max(100%,280px);overflow:hidden;border:1px solid #d8e2ee;border-radius:11px;background:#fff;box-shadow:0 18px 42px rgba(25,48,78,.18)}
+.searchable-multi-select .sms-search-row{display:flex;align-items:center;gap:7px;margin:7px;padding:0 9px;border:1px solid #d7e1ec;border-radius:8px;background:#fbfcfe}
+.searchable-multi-select .sms-search-row:focus-within{border-color:#6d92eb;box-shadow:0 0 0 3px rgba(75,118,228,.09)}
+.searchable-multi-select .sms-search-row>span{color:#8a99aa;font-size:15px}
+.searchable-multi-select .sms-search-row>input{width:100%;height:33px;min-width:0;padding:0;border:0;background:transparent;color:#304762;box-shadow:none;outline:none;font-size:10px}
+.searchable-multi-select .sms-search-row>input::-webkit-search-cancel-button{cursor:pointer}
+.searchable-multi-select .sms-selected{display:flex;max-height:64px;gap:5px;flex-wrap:wrap;overflow:auto;margin:0 7px 7px;padding:6px;border:1px solid #e4eaf2;border-radius:8px;background:#f7f9fc}
+.searchable-multi-select .sms-selected>span{display:flex;min-width:0;max-width:100%;align-items:center;gap:3px;padding:3px 4px 3px 7px;border:1px solid #d6e1ef;border-radius:999px;background:#fff;color:#3b5878}
+.searchable-multi-select .sms-selected b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:8px;font-weight:750}
+.searchable-multi-select .sms-selected button{display:grid;width:17px;height:17px;min-width:17px;padding:0;place-items:center;border:0;border-radius:50%;background:#eef2f7;color:#718198;font-size:12px;line-height:1;cursor:pointer}
+.searchable-multi-select .sms-selected button:hover{background:#fdecec;color:#b64c4c}
+.searchable-multi-select .sms-bulk-actions{display:flex;min-height:31px;align-items:center;justify-content:space-between;gap:8px;padding:4px 9px;border-width:1px 0;border-style:solid;border-color:#edf1f5;background:#fbfcfe}
+.searchable-multi-select .sms-bulk-actions button{height:auto;min-width:0;padding:3px 0;border:0;background:transparent;color:#2f63ce;font-size:8px;font-weight:800;cursor:pointer}
+.searchable-multi-select .sms-bulk-actions button:disabled{color:#a5b0be;cursor:not-allowed}
+.searchable-multi-select .sms-bulk-actions small{color:#8a98aa;font-size:8px;white-space:nowrap}
+.searchable-multi-select .sms-options{max-height:218px;overflow:auto;padding:5px;overscroll-behavior:contain}
+.searchable-multi-select .sms-options>button{display:grid;width:100%;min-height:32px;grid-template-columns:17px minmax(0,1fr);align-items:center;gap:7px;padding:5px 7px;border:0;border-radius:7px;background:#fff;color:#405671;text-align:left;box-shadow:none;cursor:pointer}
+.searchable-multi-select .sms-options>button:hover,.searchable-multi-select .sms-options>button:focus-visible{background:#f2f6fc;outline:none}
+.searchable-multi-select .sms-options>button.is-selected{background:#edf4ff;color:#285fc8}
+.searchable-multi-select .sms-options>button>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;font-weight:650}
+.searchable-multi-select .sms-checkbox{display:grid;width:16px;height:16px;place-items:center;border:1px solid #c8d4e2;border-radius:4px;background:#fff;color:#fff;font-size:10px;font-style:normal;font-weight:900}
+.searchable-multi-select .sms-options>button.is-selected .sms-checkbox{border-color:#3c6ddd;background:#3c6ddd}
+.searchable-multi-select .sms-empty{padding:22px 10px;color:#8a98aa;font-size:9px;text-align:center}
+.searchable-multi-select .sms-footer{display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:7px;border-top:1px solid #e8edf3;background:#fbfcfe}
+.searchable-multi-select .sms-footer>button{height:30px;min-width:57px;padding:0 10px;border:1px solid #d3deeb;border-radius:7px;background:#fff;color:#5b6f87;font-size:9px;font-weight:800;cursor:pointer}
+.searchable-multi-select .sms-footer>button:disabled{opacity:.45;cursor:not-allowed}
+.searchable-multi-select .sms-footer>button.sms-done{border-color:#3568de;background:#3568de;color:#fff}
+
+@media(max-width:650px){
+  .searchable-multi-select .sms-popover{right:0;left:auto;width:min(320px,calc(100vw - 34px))}
+  .searchable-multi-select .sms-options{max-height:190px}
+}

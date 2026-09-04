@@ -495,10 +495,22 @@ const english = {
   '输入后台账号': 'Enter admin account',
   '更多筛选': 'More filters',
   '全部团队 / 输入搜索': 'All teams / type to search',
+  '全部组别 / 输入搜索': 'All groups / type to search',
   '全部岗位 / 输入搜索': 'All positions / type to search',
   '全部员工国家 / 输入搜索': 'All countries / type to search',
   '全部班次 / 输入搜索': 'All shifts / type to search',
+  '全部盘口 / 输入搜索': 'All platforms / type to search',
   '全部负责人 / 输入搜索': 'All supervisors / type to search',
+  '输入关键字搜索': 'Type to search',
+  '输入团队名称搜索': 'Search team',
+  '输入组别名称搜索': 'Search group',
+  '输入岗位名称搜索': 'Search position',
+  '输入班次名称搜索': 'Search shift',
+  '输入盘口名称搜索': 'Search platform',
+  '没有匹配项': 'No matching options',
+  '全选当前结果': 'Select visible',
+  '取消当前结果': 'Clear visible',
+  '清空': 'Clear',
   '综合搜索': 'Search',
   '搜索标题、提交人、盘口、员工或工作内容': 'Search title, submitter, platform, employee or work content',
   '全部提交人': 'All submitters',
@@ -1195,8 +1207,10 @@ function translateAdminCore(source) {
   if (match) return `${match[1]} filters applied · ${match[2]} records`
   match = source.match(/^近\s*(\d+)\s*天(入职|离职)$/)
   if (match) return `${match[2] === '入职' ? 'Hired' : 'Resigned'} in ${match[1]} days`
-  match = source.match(/^已选\s*([\d,]+)$/)
+  match = source.match(/^已选\s*([\d,]+)\s*项?$/)
   if (match) return `${match[1]} selected`
+  match = source.match(/^([\d,]+)\s*项(?:\s*·\s*显示前\s*([\d,]+)\s*项)?$/)
+  if (match) return match[2] ? `${match[1]} options · showing first ${match[2]}` : `${match[1]} options`
   match = source.match(/^([\d,]+)\s*(人|名员工|名组员|名培训员工|份日报|份报告|个记录日|条记录|条|张|行|个批次|个团队|个岗位|天|笔|次|分)$/)
   if (match) {
     const units = {

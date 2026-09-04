@@ -15,9 +15,15 @@ import {PERMISSIONS} from '../config/permissions'
 import {useAdminAccess} from '../lib/adminAccess'
 import {Pagination} from '../components/DataPageControls'
 import AdminModuleNav from '../components/AdminModuleNav'
+import SearchableMultiSelect from '../components/SearchableMultiSelect'
 import {useAppToast} from '../components/AppToastProvider'
 import {EmployeeDrawer} from './AdminEmployeesPage'
 import {edgeFunctionErrorMessage} from '../lib/edgeFunctionError'
+import {
+  countActiveOnlineTrainingFilters,
+  encodeOnlineTrainingFilterPayload,
+  normalizeOnlineTrainingFilters,
+} from '../lib/onlineTrainingFilters'
 import '../styles-online-training.css'
 
 const BUCKET='online-training'
@@ -49,7 +55,7 @@ const removeStoredPaths=async paths=>{
 }
 const uniq=values=>[...new Set((values||[]).map(text).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'))
 const rosterValue=(rows,key)=>uniq((rows||[]).map(row=>row?.[key])).join(' / ')
-const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:'',group:'',position:'',shift:'',platform:'',attendance:'',from:'',to:''}
+const EMPTY_FILTERS={employee_no:'',employee_name:'',trainer:'',keyword:'',team:[],group:[],position:[],shift:[],platform:[],attendance:'',from:'',to:''}
 const defaultFilters=()=>{const range=businessTodayRange();return{...EMPTY_FILTERS,from:range.date_from,to:range.date_to}}
 const isTransientError=error=>/failed to fetch|networkerror|network request failed|load failed|connection|timeout/i.test(text(error?.message||error))
 const isStatementTimeout=error=>text(error?.code)==='57014'||/statement timeout|canceling statement due to statement timeout/i.test(text(error?.message||error))
@@ -316,7 +322,7 @@ export default function OnlineTrainingPage(){
     try{
       const data=await readCall(
         requestedMode==='reports'?'online_training_search_trainers':'online_training_search_people',{
-          p_filters:filters,p_page:nextPage,p_page_size:pageSize,
+          p_filters:encodeOnlineTrainingFilterPayload(filters),p_page:nextPage,p_page_size:pageSize,
         },
         controller.signal,
       )
@@ -743,7 +749,7 @@ export default function OnlineTrainingPage(){
     const requestId=++trainerHistoryRequestRef.current
     setTrainerHistory({trainer,loading:true,rows:[],error:''})
     try{
-      const trainerFilters={...filters,trainer:trainer.trainer_name}
+      const trainerFilters=encodeOnlineTrainingFilterPayload({...filters,trainer:trainer.trainer_name})
       const first=await readCall('online_training_search_reports',{p_filters:trainerFilters,p_page:1,p_page_size:RPC_PAGE_SIZE})
       const rows=[...(first?.rows||[])]
       const pages=Math.max(1,Number(first?.pages||1))
@@ -808,14 +814,14 @@ export default function OnlineTrainingPage(){
   const setDraftFilter=(key,value)=>setDraftFilters(current=>({...current,[key]:value}))
   const queryFilters=()=>{
     if(draftFilters.from&&draftFilters.to&&draftFilters.from>draftFilters.to){setError('日期起不能晚于日期止');return}
-    const next=Object.fromEntries(Object.entries(draftFilters).map(([key,value])=>[key,text(value)]))
+    const next=normalizeOnlineTrainingFilters(draftFilters)
     listIntentRef.current='查询线上培训记录'
     setFilters(next);setPage(1);setSearchVersion(version=>version+1)
   }
   const clearFilters=()=>{const next=defaultFilters();listIntentRef.current='重置线上培训查询';setDraftFilters(next);setFilters(next);setPage(1);setSearchVersion(version=>version+1)}
   const refreshPage=()=>{listIntentRef.current='刷新线上培训记录';return loadBootstrap({announceFailure:true})}
   const filterDirty=JSON.stringify(draftFilters)!==JSON.stringify(filters)
-  const activeFilterCount=Object.values(filters).filter(Boolean).length
+  const activeFilterCount=countActiveOnlineTrainingFilters(filters)
   const pagePresentation=adminPagePresentation('/admin/daily','线上培训报告')
 
   return <div className="content-page ot-page">
@@ -854,11 +860,11 @@ export default function OnlineTrainingPage(){
         <label><span>日期止</span><input type="date" value={draftFilters.to} onChange={event=>setDraftFilter('to',event.target.value)}/></label>
       </div>
       <div className="ot-filter-row secondary-row">
-        <label><span>团队</span><select value={draftFilters.team} onChange={event=>setDraftFilter('team',event.target.value)}><option value="">全部团队</option>{filterOptions.team.map(value=><option key={value}>{value}</option>)}</select></label>
-        <label><span>组别</span><select value={draftFilters.group} onChange={event=>setDraftFilter('group',event.target.value)}><option value="">全部组别</option>{filterOptions.group.map(value=><option key={value}>{value}</option>)}</select></label>
-        <label><span>岗位</span><select value={draftFilters.position} onChange={event=>setDraftFilter('position',event.target.value)}><option value="">全部岗位</option>{filterOptions.position.map(value=><option key={value}>{value}</option>)}</select></label>
-        <label><span>班次</span><select value={draftFilters.shift} onChange={event=>setDraftFilter('shift',event.target.value)}><option value="">全部班次</option>{filterOptions.shift.map(value=><option key={value}>{value}</option>)}</select></label>
-        <label><span>盘口</span><select value={draftFilters.platform} onChange={event=>setDraftFilter('platform',event.target.value)}><option value="">全部盘口</option>{filterOptions.platform.map(value=><option key={value}>{value}</option>)}</select></label>
+        <div className="ot-filter-field"><span>团队</span><SearchableMultiSelect value={draftFilters.team} options={filterOptions.team} onChange={value=>setDraftFilter('team',value)} placeholder="全部团队 / 输入搜索" ariaLabel="团队筛选" copy={{searchPlaceholder:'输入团队名称搜索'}}/></div>
+        <div className="ot-filter-field"><span>组别</span><SearchableMultiSelect value={draftFilters.group} options={filterOptions.group} onChange={value=>setDraftFilter('group',value)} placeholder="全部组别 / 输入搜索" ariaLabel="组别筛选" copy={{searchPlaceholder:'输入组别名称搜索'}}/></div>
+        <div className="ot-filter-field"><span>岗位</span><SearchableMultiSelect value={draftFilters.position} options={filterOptions.position} onChange={value=>setDraftFilter('position',value)} placeholder="全部岗位 / 输入搜索" ariaLabel="岗位筛选" copy={{searchPlaceholder:'输入岗位名称搜索'}}/></div>
+        <div className="ot-filter-field"><span>班次</span><SearchableMultiSelect value={draftFilters.shift} options={filterOptions.shift} onChange={value=>setDraftFilter('shift',value)} placeholder="全部班次 / 输入搜索" ariaLabel="班次筛选" copy={{searchPlaceholder:'输入班次名称搜索'}}/></div>
+        <div className="ot-filter-field"><span>盘口</span><SearchableMultiSelect value={draftFilters.platform} options={filterOptions.platform} onChange={value=>setDraftFilter('platform',value)} placeholder="全部盘口 / 输入搜索" ariaLabel="盘口筛选" copy={{searchPlaceholder:'输入盘口名称搜索'}}/></div>
         <label><span>当日状态</span><select value={draftFilters.attendance} onChange={event=>setDraftFilter('attendance',event.target.value)}><option value="">全部状态</option>{ATTENDANCE_OPTIONS.map(([value,item])=><option value={value} key={value}>{item.label}</option>)}</select></label>
         <div className="ot-filter-actions"><button type="submit" className="query" disabled={searching}>{searching?'查询中…':filterDirty?'查询新条件':'查询'}</button><button type="button" onClick={clearFilters} disabled={searching}>重置</button></div>
       </div>
