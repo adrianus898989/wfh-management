@@ -24,7 +24,7 @@ test('employee directory uses the current online training teacher instead of the
   assert.match(edge, /trainers:sorted\(sets\.online_trainer\)/)
   assert.match(edge, /currentRosterEmployeeIdsForOrganizationFilters/)
   assert.match(edge, /text\(f\.teacher \|\| f\.leader\)/)
-  assert.match(edge, /organizationEmployeeIds[\s\S]+q\.in\("id",organizationEmployeeIds\)/)
+  assert.match(edge, /const constrainedEmployeeIds=organizationEmployeeIds[\s\S]+readEmployeeRowsInBatches\([\s\S]+\.in\("id",batch\)/)
   assert.doesNotMatch(edge, /online_trainer\.ilike/)
   assert.doesNotMatch(edge, /trainer_name\.ilike/)
   assert.doesNotMatch(edge, /if \(teamIds\.length\) q = q\.in\("team_id",teamIds\)/)

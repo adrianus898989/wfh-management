@@ -31,7 +31,7 @@ test('employee list endpoints derive opened state from portal mapping, not activ
     assert.match(source, /account_opened:/)
     assert.match(source, /account_active:/)
   }
-  assert.match(sources[0], /if \(accountRowsError\) throw accountRowsError/)
+  assert.match(sources[0], /readRelatedRowsInBatches\(service,"user_access","employee_id,employee_portal_enabled,active"/)
   const riskAccountQuery = sources[1].slice(
     sources[1].indexOf('loadRowsByValues(employeeIds'),
     sources[1].indexOf('const summaryMap'),

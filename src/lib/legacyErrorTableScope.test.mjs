@@ -70,6 +70,6 @@ test('员工档案原生表头与数据行列数一致，等级只渲染一次',
   assert.match(listNormalizeSource, /risk_level:riskKeyFromCount\(totalErrorCount\)/)
 
   const endpointSource = await readFile(new URL('../../supabase/functions/admin-employees/index.ts', import.meta.url), 'utf8')
-  assert.match(endpointSource, /from\("employee_error_summary"\)/)
+  assert.match(endpointSource, /readRelatedRowsInBatches\(service,"employee_error_summary"/)
   assert.match(endpointSource, /risk_level:employeeRiskKey\(totalErrorCount\)/)
 })

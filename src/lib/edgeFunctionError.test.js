@@ -49,3 +49,17 @@ test('extracts nested object errors without ever exposing [object Object]', asyn
     fallback:'员工档案读取失败，请稍后重试。',
   }), '员工档案读取失败，请稍后重试。')
 })
+
+test('hides internal Supabase transport addresses and long query URLs', async () => {
+  const raw = 'TypeError: error sending request from 10.32.5.131:54130 for https://project-ref.supabase.co/rest/v1/employee_payment_profiles?select=*&employee_id=in.%28many-identifiers%29'
+
+  assert.equal(await edgeFunctionErrorMessage({
+    data:{ error:raw },
+    fallback:'员工资料服务暂时繁忙，请稍后重试。',
+  }), '员工资料服务暂时繁忙，请稍后重试。')
+
+  assert.equal(await edgeFunctionErrorMessage({
+    error:{ message:`request failed: ${raw}` },
+    fallback:'查询失败，请稍后重试。',
+  }), '查询失败，请稍后重试。')
+})

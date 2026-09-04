@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { loadEffectiveEmployeeScope } from "../_shared/employeeScope.ts";
+import { isRetryableReadFailure, readRowsInBatches } from "../_shared/batchedRead.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,10 +44,87 @@ function isRetryableBackendFailure(value:any){
   const status=errorStatus(value);
   const code=errorCode(value).toUpperCase();
   const message=text(value?.message||value?.error||value).toLowerCase();
-  return status>=500
+  if((status>=400&&status<500&&status!==408&&status!==429)
+    || code==="42501"
+    || code==="23505") return false;
+  return status===408
+    || status===429
+    || status>=500
     || code==="57014"
     || code.startsWith("PGRST")&&status>=500
-    || /statement timeout|canceling statement|connection|connection reset|connection refused|fetch failed|network|timed? ?out|timeout|upstream|gateway|socket|econn/.test(message);
+    || /statement timeout|canceling statement|connection|connection reset|connection refused|error sending request|failed to send request|fetch failed|network|timed? ?out|timeout|upstream|gateway|socket|econn/.test(message);
+}
+
+// PostgREST serializes `.in(...)` filters into the URL. Keep every related
+// lookup comfortably below proxy URL/header limits and retry only idempotent
+// reads when the transport fails transiently.
+const RELATED_READ_BATCH_SIZE=40;
+const RELATED_READ_RETRY_DELAYS_MS=[140,360];
+
+async function readEmployeeRowsInBatches(
+  rawValues:any[],
+  table:string,
+  makeQuery:(batch:string[])=>PromiseLike<any>,
+){
+  try{
+    return await readRowsInBatches({
+      values:rawValues,
+      batchSize:RELATED_READ_BATCH_SIZE,
+      retryDelays:RELATED_READ_RETRY_DELAYS_MS,
+      queryBatch:makeQuery,
+      onRetry:({batch,attempt,error}:any)=>console.warn(JSON.stringify({
+        function:"admin-employees",
+        event:"related_read_retry",
+        table,
+        batch_size:batch.length,
+        attempt,
+        code:errorCode(error)||"transport_error",
+      })),
+    });
+  }catch(error){
+    if(isRetryableReadFailure(error)){
+      throw new HttpError(
+        503,"related_read_temporarily_unavailable",
+        "员工资料服务暂时繁忙，请稍后重试。",true,
+      );
+    }
+    throw error;
+  }
+}
+
+async function readRelatedRowsInBatches(
+  service:any,
+  table:string,
+  columns:string,
+  filterColumn:string,
+  rawValues:any[],
+){
+  return await readEmployeeRowsInBatches(
+    rawValues,
+    table,
+    batch=>service.from(table).select(columns).in(filterColumn,batch),
+  );
+}
+
+async function readPagedEmployeeRows(
+  table:string,
+  makeQuery:(from:number,to:number)=>PromiseLike<any>,
+  pageSize=1000,
+){
+  const rows:any[]=[];
+  let offset=0;
+  while(true){
+    const pageRows=await readEmployeeRowsInBatches(
+      [`page-${offset}`],table,()=>makeQuery(offset,offset+pageSize-1),
+    );
+    if(!pageRows.length) break;
+    rows.push(...pageRows);
+    // Advance by what the API actually returned. Supabase's project-level Max
+    // Rows may be lower than our requested range, so a short non-empty page is
+    // not sufficient evidence that the scan reached EOF.
+    offset+=pageRows.length;
+  }
+  return rows;
 }
 
 function responseFailure(value:any){
@@ -928,14 +1006,18 @@ async function loadEmployeeOperatorAccounts(service:any,employees:any[]){
 
   let joinResult:any,auditResult:any;
   try{
-    [joinResult,auditResult]=await Promise.all([
-      service.from("employee_lifecycle_events")
+    const [joinRows,auditRows]=await Promise.all([
+      readEmployeeRowsInBatches(ids,"employee_lifecycle_events",batch=>service.from("employee_lifecycle_events")
         .select("employee_id,created_by,snapshot,source,source_sheet,created_at")
-        .in("employee_id",ids).eq("event_type","join").order("created_at",{ascending:true}).limit(joinLimit),
-      service.from("employee_audit_logs")
+        .in("employee_id",batch).eq("event_type","join").order("created_at",{ascending:true})
+        .limit(Math.min(Math.max(batch.length*4,20),joinLimit))),
+      readEmployeeRowsInBatches(ids,"employee_audit_logs",batch=>service.from("employee_audit_logs")
         .select("employee_id,actor_username,action,created_at")
-        .in("employee_id",ids).order("created_at",{ascending:false}).limit(auditLimit),
+        .in("employee_id",batch).order("created_at",{ascending:false})
+        .limit(Math.min(Math.max(batch.length*10,50),auditLimit))),
     ]);
+    joinResult={data:joinRows,error:null};
+    auditResult={data:auditRows,error:null};
   }catch(error){
     console.error(JSON.stringify({function:"admin-employees",event:"operator_enrichment_skipped",code:errorCode(error)||"fetch_failed"}));
     return fallback;
@@ -951,13 +1033,10 @@ async function loadEmployeeOperatorAccounts(service:any,employees:any[]){
   let userMap=new Map<string,string>();
   if(creatorIds.length){
     try{
-      const {data,error}=await service.from("user_access")
-        .select("auth_user_id,login_username").in("auth_user_id",creatorIds.slice(0,500));
-      if(error){
-        console.error(JSON.stringify({function:"admin-employees",event:"operator_actor_lookup_skipped",code:errorCode(error)||"query_failed"}));
-      }else{
-        userMap=new Map((data||[]).map((row:any)=>[text(row.auth_user_id),text(row.login_username)]));
-      }
+      const data=await readRelatedRowsInBatches(
+        service,"user_access","auth_user_id,login_username","auth_user_id",creatorIds,
+      );
+      userMap=new Map((data||[]).map((row:any)=>[text(row.auth_user_id),text(row.login_username)]));
     }catch(error){
       console.error(JSON.stringify({function:"admin-employees",event:"operator_actor_lookup_skipped",code:errorCode(error)||"fetch_failed"}));
     }
@@ -996,33 +1075,18 @@ async function loadEmployeeOperatorAccounts(service:any,employees:any[]){
   return result;
 }
 
-async function buildEmployeeList(service:any,caller:any,scope:any,body:any){
-  const canViewEmployeeSensitive=caller.roleCode==="founder"
-    || await permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view");
-  const page=Math.max(1,Number(body.page||1));
-  const allowed=[20,30,50,100,500];
-  const requested=Number(body.page_size||20);
-  const pageSize=allowed.includes(requested)?requested:20;
-  const from=(page-1)*pageSize;
-  const to=from+pageSize-1;
-  const f=body.filters||{};
-  const organizationEmployeeIds=currentRosterEmployeeIdsForOrganizationFilters(
-    scope,text(f.team),text(f.position),text(f.teacher || f.leader),
-  );
-  if(organizationEmployeeIds&&organizationEmployeeIds.length===0){
-    return {rows:[],total:0,page,page_size:pageSize,pages:1};
-  }
+const EMPLOYEE_LIST_SELECT = `
+  id,employee_no,full_name,country,nationality,employment_type,status,
+  team_id,position_id,shift_name,group_name,platform_scope,work_content,
+  work_tg,backend_accounts,hire_date,resign_date,leader_name,trainer_name,online_trainer,
+  profile_status,official_id_pending,source_type,source_sheet,created_at,
+  teams:team_id(id,name,country,status),
+  positions:position_id(id,name,code,status)
+`;
 
-  let q=service.from("employees").select(`
-    id,employee_no,full_name,country,nationality,employment_type,status,
-    team_id,position_id,shift_name,group_name,platform_scope,work_content,
-    work_tg,backend_accounts,hire_date,resign_date,leader_name,trainer_name,online_trainer,
-    profile_status,official_id_pending,source_type,source_sheet,created_at,
-    teams:team_id(id,name,country,status),
-    positions:position_id(id,name,code,status)
-  `,{count:"exact"});
-
-  q=organizationEmployeeIds?q.in("id",organizationEmployeeIds):applyScope(q,scope);
+function applyEmployeeListFilters(query:any,filters:any,canViewEmployeeSensitive:boolean){
+  let q=query;
+  const f=filters||{};
   if(text(f.employee_no)) q=q.ilike("employee_no",`%${text(f.employee_no)}%`);
   if(text(f.full_name)) q=q.ilike("full_name",`%${text(f.full_name)}%`);
   if(canViewEmployeeSensitive&&text(f.work_tg)) q=q.ilike("work_tg",`%${text(f.work_tg)}%`);
@@ -1044,32 +1108,94 @@ async function buildEmployeeList(service:any,caller:any,scope:any,body:any){
   if(text(f.profile_status)) q=q.eq("profile_status",f.profile_status);
   if(text(f.hire_from)) q=q.gte("hire_date",f.hire_from);
   if(text(f.hire_to)) q=q.lte("hire_date",f.hire_to);
+  return q;
+}
 
-  const {data:rawRows,count,error}=await q.order("employee_no").range(from,to);
+async function fetchEmployeeListPage(
+  service:any,scope:any,filters:any,canViewEmployeeSensitive:boolean,
+  organizationEmployeeIds:string[]|null,from:number,to:number,
+){
+  // A constrained employee set can be hundreds of UUIDs. Scan a lightweight,
+  // database-sorted ID index, intersect it with the authorised set, then fetch
+  // only the requested page in small batches. The full scope never enters one
+  // PostgREST request URL.
+  const constrainedEmployeeIds=organizationEmployeeIds
+    ?? (scope.mode==="all"?null:scope.employeeIds);
+  if(constrainedEmployeeIds!==null){
+    if(!constrainedEmployeeIds.length) return {rawRows:[],total:0};
+    const allowedIds=new Set(constrainedEmployeeIds.map(text).filter(Boolean));
+    const indexRows=await readPagedEmployeeRows(
+      "employees_scope_index",
+      (offset,to)=>applyEmployeeListFilters(
+          service.from("employees").select("id,employee_no"),
+          filters,canViewEmployeeSensitive,
+        ).order("employee_no",{ascending:true,nullsFirst:false})
+          .order("id",{ascending:true})
+          .range(offset,to),
+    );
+    const matchingIds=indexRows.map((row:any)=>text(row.id)).filter(id=>allowedIds.has(id));
+    const pageIds=matchingIds.slice(from,to+1);
+    const pageRows=pageIds.length
+      ? await readEmployeeRowsInBatches(
+        pageIds,"employees",
+        batch=>service.from("employees").select(EMPLOYEE_LIST_SELECT).in("id",batch),
+      )
+      : [];
+    const rowById=new Map(pageRows.map((row:any)=>[text(row.id),row]));
+    return {
+      rawRows:pageIds.map(id=>rowById.get(id)).filter(Boolean),
+      total:matchingIds.length,
+    };
+  }
+
+  const query=applyEmployeeListFilters(
+    service.from("employees").select(EMPLOYEE_LIST_SELECT,{count:"exact"}),
+    filters,canViewEmployeeSensitive,
+  );
+  const {data,error,count}=await query
+    .order("employee_no",{ascending:true,nullsFirst:false})
+    .order("id",{ascending:true})
+    .range(from,to);
   if(error) throw error;
+  return {rawRows:data||[],total:count||0};
+}
+
+async function buildEmployeeList(service:any,caller:any,scope:any,body:any){
+  const canViewEmployeeSensitive=caller.roleCode==="founder"
+    || await permissionAllowed(service,caller.access,caller.userId,"sensitive.employee.view");
+  const page=Math.max(1,Number(body.page||1));
+  const allowed=[20,30,50,100,500];
+  const requested=Number(body.page_size||20);
+  const pageSize=allowed.includes(requested)?requested:20;
+  const from=(page-1)*pageSize;
+  const to=from+pageSize-1;
+  const f=body.filters||{};
+  const organizationEmployeeIds=currentRosterEmployeeIdsForOrganizationFilters(
+    scope,text(f.team),text(f.position),text(f.teacher || f.leader),
+  );
+  if(organizationEmployeeIds&&organizationEmployeeIds.length===0){
+    return {rows:[],total:0,page,page_size:pageSize,pages:1};
+  }
+
+  const {rawRows,total}=await fetchEmployeeListPage(
+    service,scope,f,canViewEmployeeSensitive,organizationEmployeeIds,from,to,
+  );
   const rows=(rawRows||[]).map((row:any)=>overlayCurrentOrganization(row,scope));
   const ids=rows.map((row:any)=>row.id);
   const employeeNos=rows.map((row:any)=>employeeNoKey(row.employee_no)).filter(Boolean);
-  const emptyRelated={data:[],error:null};
-  const [
-    {data:pays,error:paysError},
-    {data:contacts,error:contactsError},
-    {data:accountRows,error:accountRowsError},
-    {data:errorSummaries,error:errorSummaryError},
-    operatorMap,
-  ]=ids.length?await Promise.all([
-    service.from("employee_payment_profiles").select("*").in("employee_id",ids),
-    service.from("employee_contact_profiles").select("employee_id,telegram_username").in("employee_id",ids),
-    service.from("user_access").select("employee_id,employee_portal_enabled,active").in("employee_id",ids),
+  const [pays,contacts,accountRows,errorSummaries,operatorMap]=ids.length?await Promise.all([
+    readRelatedRowsInBatches(
+      service,"employee_payment_profiles",
+      "employee_id,payment_mode,transfer_using,gcash_account,gcash_name,usdt_address",
+      "employee_id",ids,
+    ),
+    readRelatedRowsInBatches(service,"employee_contact_profiles","employee_id,telegram_username","employee_id",ids),
+    readRelatedRowsInBatches(service,"user_access","employee_id,employee_portal_enabled,active","employee_id",ids),
     employeeNos.length
-      ? service.from("employee_error_summary").select("employee_no,month_error_count,total_error_count").in("employee_no",employeeNos)
-      : Promise.resolve(emptyRelated),
+      ? readRelatedRowsInBatches(service,"employee_error_summary","employee_no,month_error_count,total_error_count","employee_no",employeeNos)
+      : Promise.resolve([]),
     loadEmployeeOperatorAccounts(service,rows),
-  ]):[emptyRelated,emptyRelated,emptyRelated,emptyRelated,new Map<string,string>()];
-  if(paysError) throw paysError;
-  if(contactsError) throw contactsError;
-  if (accountRowsError) throw accountRowsError;
-  if(errorSummaryError) throw errorSummaryError;
+  ]):[[],[],[],[],new Map<string,string>()];
 
   const payMap=new Map((pays||[]).map((row:any)=>[row.employee_id,row]));
   const contactMap=new Map((contacts||[]).map((row:any)=>[row.employee_id,row]));
@@ -1093,7 +1219,7 @@ async function buildEmployeeList(service:any,caller:any,scope:any,body:any){
       operator_account:operatorMap.get(text(row.id))||"",
     };
   });
-  return {rows:result,total:count||0,page,page_size:pageSize,pages:Math.max(1,Math.ceil((count||0)/pageSize))};
+  return {rows:result,total,page,page_size:pageSize,pages:Math.max(1,Math.ceil(total/pageSize))};
 }
 
 Deno.serve(async (req) => {

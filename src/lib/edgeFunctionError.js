@@ -1,6 +1,14 @@
 const text = value => String(value ?? '').trim()
 const GENERIC_EDGE_FUNCTION_ERROR = /^edge function returned a non-2xx status code$/i
 const OBJECT_STRING = /^\[object (?:Object|Array)\]$/i
+const INTERNAL_TRANSPORT_ERROR = /(?:typeerror:\s*)?(?:error|failed) sending request(?:\s+from\s+[\d.:a-f]+)?\s+for\s+https?:\/\/[^\s]+|https?:\/\/[a-z0-9-]+\.supabase\.co\/(?:rest|auth|storage|functions)\/v1\/|\b(?:econnreset|econnrefused|und_err_[a-z_]+)\b/i
+
+const publicErrorMessage = (message, fallback) => {
+  const value = text(message)
+  // Never expose internal Edge egress addresses, database URLs or long query
+  // strings in a user-facing toast. The full failure remains in server logs.
+  return value && !INTERNAL_TRANSPORT_ERROR.test(value) ? value : fallback
+}
 
 export function readableErrorMessage(value, seen = new Set()) {
   if (typeof value === 'string' || typeof value === 'number') {
@@ -56,11 +64,13 @@ async function responseBody(response) {
  */
 export async function edgeFunctionErrorMessage({ data, error, fallback = '请求失败' } = {}) {
   const direct = bodyMessage(data)
-  if (direct) return direct
+  if (direct) return publicErrorMessage(direct, fallback)
 
   const contextual = bodyMessage(await responseBody(error?.context))
-  if (contextual) return contextual
+  if (contextual) return publicErrorMessage(contextual, fallback)
 
   const sdkMessage = readableErrorMessage(error?.message)
-  return sdkMessage && !GENERIC_EDGE_FUNCTION_ERROR.test(sdkMessage) ? sdkMessage : fallback
+  return sdkMessage && !GENERIC_EDGE_FUNCTION_ERROR.test(sdkMessage)
+    ? publicErrorMessage(sdkMessage, fallback)
+    : fallback
 }
