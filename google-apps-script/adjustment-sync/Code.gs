@@ -501,7 +501,7 @@ function installAdjustmentSync() {
       .onEdit()
       .create();
   });
-  ScriptApp.newTrigger(ADJUSTMENT_SYNC_HANDLER).timeBased().everyMinutes(1).create();
+  ScriptApp.newTrigger(ADJUSTMENT_SYNC_HANDLER).timeBased().everyMinutes(5).create();
 }
 
 function removeAdjustmentSyncTriggers() {
@@ -512,7 +512,7 @@ function removeAdjustmentSyncTriggers() {
   });
 }
 
-/** 每分钟：先重试 Google→Supabase，再批量拉取 Supabase outbox，最后统一 ack。 */
+/** 每 5 分钟：先重试 Google→Supabase，再批量拉取 Supabase outbox，最后统一 ack。 */
 function adjustmentSyncEveryMinute() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) return;

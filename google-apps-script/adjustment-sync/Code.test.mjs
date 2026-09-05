@@ -23,6 +23,15 @@ vm.runInContext(source, context, { filename: 'Code.gs' });
 
 const evaluateJson = (expression) => JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, context));
 
+test('installs only the adjustment queue worker on a five-minute timer', () => {
+  const installer = source.slice(
+    source.indexOf('function installAdjustmentSync'),
+    source.indexOf('function removeAdjustmentSyncTriggers'),
+  );
+  assert.match(installer, /newTrigger\(ADJUSTMENT_SYNC_HANDLER\)\.timeBased\(\)\.everyMinutes\(5\)\.create\(\)/);
+  assert.doesNotMatch(installer, /everyMinutes\(1\)/);
+});
+
 test('keeps standard metadata unchanged and gives Philippines two managed slots per month', () => {
   const standard = evaluateJson(`ADJUSTMENT_MONTHS.map(function (month) {
     var route = adjustmentRoute_('onsite', month);
