@@ -76,12 +76,11 @@ test('员工档案与员工端同时展示独立类型和备注原因', async ()
 test('员工端刷新错误格式化对象信息并保留已经显示的数据', async () => {
   const source = await readFile(new URL('../pages/PortalPage.jsx', import.meta.url), 'utf8')
   assert.match(source, /const portalErrorMessage = \(error, fallback\)[\s\S]*readableErrorMessage\(error\)/)
-  assert.match(source, /setActivity\(current => activityError[\s\S]*\{ \.\.\.current, loading: false, error:/)
-  assert.match(source, /setSelfAttendance\(current => attendanceError[\s\S]*\{ \.\.\.current, loading: false, error:/)
+  assert.match(source, /setActivity\(current => loadError[\s\S]*\{ \.\.\.current, loading:false, error:/)
+  assert.match(source, /setSelfAttendance\(current => loadError[\s\S]*\{ \.\.\.current, loading:false, error:/)
   assert.match(source, /setAdjustmentHistory\(current => loadError[\s\S]*\{ \.\.\.current, loading:false, error:/)
   assert.match(source, /if \(loading && !data\)/)
-  assert.doesNotMatch(source, /activityError\.message \|\|/)
-  assert.doesNotMatch(source, /attendanceError\.message \|\|/)
+  assert.match(source, /portalErrorMessage\(loadError, t\('portal\.activityLoadFailed'/)
 })
 
 test('forward SQL correction preserves revision checks and requires category for the PH nine-column layout', async () => {

@@ -13,6 +13,7 @@ import { publicPortalTarget } from '../lib/appBasePath'
 import { ATTENDANCE_AUTO_REFRESH_MS, attendanceVisibleRefreshDue } from '../lib/attendanceSyncState'
 import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments'
 import { hydrateExamFeedbackAnswers } from '../lib/examFeedbackAttachments'
+import { isMissingRpcSignature } from '../lib/rpcCompatibility'
 import { useVisibleDataRefresh } from '../lib/visibleDataRefresh'
 
 const activeStatuses = ['active', 'probation', '在职', '试用']
@@ -443,18 +444,51 @@ const staffMonthValue = () => {
 }
 const localeCode = locale => ({ zh: 'zh-CN', en: 'en-US', vi: 'vi-VN', id: 'id-ID' }[locale] || 'en-US')
 const staffDateTime = (value, locale) => value ? new Date(value).toLocaleString(localeCode(locale), { hour12: false }) : '—'
+const withStaffPayloadDetail = (response, detailLevel) => {
+  if (response?.error || !response?.data || typeof response.data !== 'object') return response
+  return { ...response, data: { ...response.data, detail_level: detailLevel } }
+}
+const compactStaffPortalHome = async includeExamHistory => {
+  const compact = await supabase.rpc('staff_portal_home', { p_include_exam_history:includeExamHistory })
+  if (!compact.error) return compact
+  // During a rolling deploy only a genuinely missing overload may use the
+  // legacy payload. Authentication and current-session failures fail closed.
+  if (!isMissingRpcSignature(compact.error, 'staff_portal_home')) return compact
+  const legacy = await supabase.rpc('staff_portal_home')
+  if (legacy.error || !legacy.data || typeof legacy.data !== 'object') return legacy
+  return {
+    ...legacy,
+    data: {
+      ...legacy.data,
+      payload_scope: { recent_errors:true, exam_history:true },
+    },
+  }
+}
 const compactStaffActivityHome = async () => {
   const compact = await supabase.rpc('staff_activity_home', { p_include_attendance:false })
   if (!compact.error) return compact
-  const code = String(compact.error?.code || '')
-  const message = String(compact.error?.message || '')
   // Keep Pages compatible while the new overload reaches PostgREST's schema
   // cache.  Only a missing-signature error may use the old heavier endpoint;
   // permission/session failures must remain failures and must never be retried.
-  if (['PGRST202', '42883'].includes(code) || /function[^\n]+staff_activity_home[^\n]+not found|schema cache/i.test(message)) {
+  if (isMissingRpcSignature(compact.error, 'staff_activity_home')) {
     return supabase.rpc('staff_activity_home')
   }
   return compact
+}
+const fullStaffActivityHome = async () => withStaffPayloadDetail(await compactStaffActivityHome(), 'full')
+const compactStaffActivitySummary = async () => {
+  const summary = await supabase.rpc('staff_activity_summary')
+  if (!summary.error || !isMissingRpcSignature(summary.error, 'staff_activity_summary')) return summary
+  return fullStaffActivityHome()
+}
+const fullStaffAttendanceHome = async month => withStaffPayloadDetail(
+  await supabase.rpc('staff_attendance_home', { p_month:month }),
+  'full',
+)
+const compactStaffAttendanceSummary = async month => {
+  const summary = await supabase.rpc('staff_attendance_summary', { p_month:month })
+  if (!summary.error || !isMissingRpcSignature(summary.error, 'staff_attendance_summary')) return summary
+  return fullStaffAttendanceHome(month)
 }
 const staffExamBreakdown = (row, t) => {
   if (row?.source_system === 'legacy' && !row?.answer_detail_available) {
@@ -497,76 +531,195 @@ export const StaffHome = ({ mode = 'profile' }) => {
   const [examDetailLoading, setExamDetailLoading] = useState(false)
   const [examDetailError, setExamDetailError] = useState('')
   const staffHomeMountedRef = useRef(false)
-  const staffHomeFlightRef = useRef(null)
+  const staffPortalFlightRef = useRef(null)
+  const staffPortalHistoryFlightRef = useRef(false)
+  const staffActivityFlightRef = useRef(null)
+  const staffActivityDetailFlightRef = useRef(false)
+  const staffAttendanceFlightRef = useRef(null)
+  const staffAttendanceDetailFlightRef = useRef(false)
   const staffHomeLastCompletedRef = useRef(0)
 
-  const load = (announce=false, { background=false, includeAttendance=true }={}) => {
-    if (staffHomeFlightRef.current) return staffHomeFlightRef.current
+  const loadPortal = ({ background=false, includeExamHistory=false }={}) => {
+    if (staffPortalFlightRef.current) {
+      if (!includeExamHistory || staffPortalHistoryFlightRef.current) return staffPortalFlightRef.current
+      if (!background) setLoading(true)
+      return staffPortalFlightRef.current.then(response => {
+        if (!staffHomeMountedRef.current || response?.error || response?.data?.payload_scope?.exam_history) return response
+        return loadPortal({ background, includeExamHistory:true })
+      })
+    }
     if (!background) {
       setLoading(true)
       setError('')
-      setActivity(current => ({ ...current, loading:true, error:'' }))
-      if (includeAttendance) setSelfAttendance(current => ({ ...current, loading:true, error:'' }))
     }
     const request = (async () => {
-      const [
-        { data:result, error:loadError },
-        { data:activityResult, error:activityError },
-        attendanceResponse,
-      ] = await Promise.all([
-        supabase.rpc('staff_portal_home'),
-        compactStaffActivityHome(),
-        includeAttendance
-          ? supabase.rpc('staff_attendance_home', { p_month:staffMonthValue() })
-          : Promise.resolve({ data:null, error:null }),
-      ])
-      if (!staffHomeMountedRef.current) return
-      const { data:attendanceResult, error:attendanceError } = attendanceResponse
+      const { data:result, error:loadError } = await compactStaffPortalHome(includeExamHistory)
+      if (!staffHomeMountedRef.current) return { data:result, error:loadError }
       if (loadError) setError(portalErrorMessage(loadError, t('portal.profileLoadFailed', 'Failed to load profile')))
       else { setData(result); setError('') }
-      setActivity(current => activityError
-        ? { ...current, loading: false, error: portalErrorMessage(activityError, t('portal.activityLoadFailed', 'Failed to load attendance and connectivity records')) }
-        : { loading: false, error: '', data: activityResult || null })
-      if (includeAttendance) setSelfAttendance(current => attendanceError
-        ? { ...current, loading: false, error: portalErrorMessage(attendanceError, t('portal.activityLoadFailed', 'Failed to load attendance records')) }
-        : { loading: false, error: '', data: attendanceResult || null })
-      const refreshError=loadError||activityError||attendanceError
-      if (!refreshError) staffHomeLastCompletedRef.current=Date.now()
-      if (announce && refreshError) {
-        const reason=portalErrorMessage(refreshError, t('portal.profileLoadFailed', 'Failed to refresh profile'))
-        notify(writeFailureToast({
-          module:t('portal.myHome', 'My workspace'),operation:t('portal.refresh', 'Refresh'),error:refreshError,reason,
-          dedupeKey:'staff-portal:refresh:error',refresh:()=>load(true),
-        }))
-      }
+      return { data:result, error:loadError }
     })().catch(loadFailure => {
-      if (!staffHomeMountedRef.current) return
+      if (!staffHomeMountedRef.current) return { data:null, error:loadFailure }
       const reason=portalErrorMessage(loadFailure, t('portal.profileLoadFailed', 'Failed to refresh profile'))
       setError(reason)
-      setActivity(current => ({ ...current, loading: false, error: current.error || reason }))
-      if (includeAttendance) setSelfAttendance(current => ({ ...current, loading: false, error: current.error || reason }))
-      if (announce) notify(writeFailureToast({
-        module:t('portal.myHome', 'My workspace'),operation:t('portal.refresh', 'Refresh'),error:loadFailure,reason,
-        dedupeKey:'staff-portal:refresh:error',refresh:()=>load(true),
-      }))
+      return { data:null, error:loadFailure }
     }).finally(() => {
-      if (staffHomeFlightRef.current === request) staffHomeFlightRef.current=null
+      if (staffPortalFlightRef.current === request) {
+        staffPortalFlightRef.current=null
+        staffPortalHistoryFlightRef.current=false
+      }
       if (staffHomeMountedRef.current && !background) setLoading(false)
     })
-    staffHomeFlightRef.current=request
+    staffPortalFlightRef.current=request
+    staffPortalHistoryFlightRef.current=includeExamHistory
     return request
+  }
+
+  const loadActivity = ({ background=false, includeDetail=false }={}) => {
+    if (staffActivityFlightRef.current) {
+      if (!includeDetail || staffActivityDetailFlightRef.current) return staffActivityFlightRef.current
+      if (!background) setActivity(current => ({ ...current, loading:true, error:'' }))
+      return staffActivityFlightRef.current.then(response => {
+        if (!staffHomeMountedRef.current || response?.error || response?.data?.detail_level === 'full') return response
+        return loadActivity({ background, includeDetail:true })
+      })
+    }
+    if (!background) setActivity(current => ({ ...current, loading:true, error:'' }))
+    const request = (async () => {
+      const { data:result, error:loadError } = includeDetail
+        ? await fullStaffActivityHome()
+        : await compactStaffActivitySummary()
+      if (!staffHomeMountedRef.current) return { data:result, error:loadError }
+      setActivity(current => loadError
+        ? { ...current, loading:false, error:portalErrorMessage(loadError, t('portal.activityLoadFailed', 'Failed to load power and internet records')) }
+        : { loading:false, error:'', data:result || null })
+      return { data:result, error:loadError }
+    })().catch(loadFailure => {
+      if (staffHomeMountedRef.current) setActivity(current => ({
+        ...current,
+        loading:false,
+        error:portalErrorMessage(loadFailure, t('portal.activityLoadFailed', 'Failed to load power and internet records')),
+      }))
+      return { data:null, error:loadFailure }
+    }).finally(() => {
+      if (staffActivityFlightRef.current === request) {
+        staffActivityFlightRef.current=null
+        staffActivityDetailFlightRef.current=false
+      }
+    })
+    staffActivityFlightRef.current=request
+    staffActivityDetailFlightRef.current=includeDetail
+    return request
+  }
+
+  const loadAttendance = ({ background=false, includeDetail=false }={}) => {
+    if (staffAttendanceFlightRef.current) {
+      if (!includeDetail || staffAttendanceDetailFlightRef.current) return staffAttendanceFlightRef.current
+      if (!background) setSelfAttendance(current => ({ ...current, loading:true, error:'' }))
+      return staffAttendanceFlightRef.current.then(response => {
+        if (!staffHomeMountedRef.current || response?.error || response?.data?.detail_level === 'full') return response
+        return loadAttendance({ background, includeDetail:true })
+      })
+    }
+    if (!background) setSelfAttendance(current => ({ ...current, loading:true, error:'' }))
+    const request = (async () => {
+      const month=staffMonthValue()
+      const { data:result, error:loadError } = includeDetail
+        ? await fullStaffAttendanceHome(month)
+        : await compactStaffAttendanceSummary(month)
+      if (!staffHomeMountedRef.current) return { data:result, error:loadError }
+      setSelfAttendance(current => loadError
+        ? { ...current, loading:false, error:portalErrorMessage(loadError, t('portal.activityLoadFailed', 'Failed to load attendance records')) }
+        : { loading:false, error:'', data:result || null })
+      return { data:result, error:loadError }
+    })().catch(loadFailure => {
+      if (staffHomeMountedRef.current) setSelfAttendance(current => ({
+        ...current,
+        loading:false,
+        error:portalErrorMessage(loadFailure, t('portal.activityLoadFailed', 'Failed to load attendance records')),
+      }))
+      return { data:null, error:loadFailure }
+    }).finally(() => {
+      if (staffAttendanceFlightRef.current === request) {
+        staffAttendanceFlightRef.current=null
+        staffAttendanceDetailFlightRef.current=false
+      }
+    })
+    staffAttendanceFlightRef.current=request
+    staffAttendanceDetailFlightRef.current=includeDetail
+    return request
+  }
+
+  const load = async (announce=false, { background=false, includeAttendance=true }={}) => {
+    const responses = await Promise.all([
+      loadPortal({ background, includeExamHistory:activeSection === 'exams' }),
+      loadActivity({ background, includeDetail:activeSection === 'connectivity' }),
+      includeAttendance
+        ? loadAttendance({ background, includeDetail:activeSection === 'attendance' })
+        : Promise.resolve({ data:null, error:null }),
+    ])
+    if (!staffHomeMountedRef.current) return responses
+    const refreshError=responses.find(response => response?.error)?.error
+    if (!refreshError) staffHomeLastCompletedRef.current=Date.now()
+    if (announce && refreshError) {
+      const reason=portalErrorMessage(refreshError, t('portal.profileLoadFailed', 'Failed to refresh profile'))
+      notify(writeFailureToast({
+        module:t('portal.myHome', 'My workspace'),operation:t('portal.refresh', 'Refresh'),error:refreshError,reason,
+        dedupeKey:'staff-portal:refresh:error',refresh:()=>load(true),
+      }))
+    }
+    return responses
+  }
+
+  const loadInitial = async () => {
+    const directActivity = activeSection === 'connectivity'
+    const directAttendance = activeSection === 'attendance'
+    const portalRequest = loadPortal({ includeExamHistory:activeSection === 'exams' })
+    // A directly requested detail panel may load beside the profile. All
+    // dashboard-only summaries wait until the compact profile has settled, so
+    // a login peak does not immediately fan every staff session out to 3 RPCs.
+    const activityDetailRequest = directActivity ? loadActivity({ includeDetail:true }) : null
+    const attendanceDetailRequest = directAttendance ? loadAttendance({ includeDetail:true }) : null
+    const portalResponse = await portalRequest
+    if (!staffHomeMountedRef.current) return [portalResponse]
+    if (portalResponse?.error) {
+      if (!directActivity) setActivity(current => ({ ...current, loading:false }))
+      if (!directAttendance) setSelfAttendance(current => ({ ...current, loading:false }))
+      return [portalResponse]
+    }
+    const responses = await Promise.all([
+      Promise.resolve(portalResponse),
+      activityDetailRequest || loadActivity({ background:true }),
+      attendanceDetailRequest || loadAttendance({ background:true }),
+    ])
+    if (staffHomeMountedRef.current && !responses.some(response => response?.error)) {
+      staffHomeLastCompletedRef.current=Date.now()
+    }
+    return responses
   }
 
   useEffect(() => {
     staffHomeMountedRef.current=true
-    void load()
+    void loadInitial()
     return () => { staffHomeMountedRef.current=false }
   }, [])
   useVisibleDataRefresh({
     refresh:() => load(false, { background:true, includeAttendance:activeSection !== 'attendance' }),
-    pending:() => Boolean(staffHomeFlightRef.current),
+    pending:() => Boolean(staffPortalFlightRef.current || staffActivityFlightRef.current || staffAttendanceFlightRef.current),
     lastCompletedAt:() => staffHomeLastCompletedRef.current,
   })
+  useEffect(() => {
+    if (activeSection !== 'exams' || loading || !data || data?.payload_scope?.exam_history) return
+    void loadPortal({ includeExamHistory:true })
+  }, [activeSection, loading, data, data?.payload_scope?.exam_history])
+  useEffect(() => {
+    if (activeSection !== 'connectivity' || activity.loading || activity.error || activity.data?.detail_level === 'full') return
+    void loadActivity({ includeDetail:true })
+  }, [activeSection, activity.loading, activity.error, activity.data?.detail_level])
+  useEffect(() => {
+    if (activeSection !== 'attendance' || selfAttendance.loading || selfAttendance.error || selfAttendance.data?.detail_level === 'full') return
+    void loadAttendance({ includeDetail:true })
+  }, [activeSection, selfAttendance.loading, selfAttendance.error, selfAttendance.data?.detail_level])
   useEffect(() => {
     const country = data?.profile?.country || data?.profile?.nationality
     adoptCountry(country)
@@ -711,7 +864,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
     </div><section className="staff-quick-panel"><header><small>{t('decor.quick', 'QUICK ACCESS')}</small><h2>{t('quick.title', 'Quick access')}</h2></header><Link to={publicPortalTarget('staff','exams')}><b>{t('quick.takeExam', 'Take an exam')}</b><span>{t('quick.chooseExam', 'Choose an exam →')}</span></Link></section></div>}
     {activeSection === 'errors' && <section className="staff-own-errors"><header><div><small>{t('decor.errors', 'ERROR RECORDS')}</small><h2>{t('errors.title', 'Error records')}</h2></div><span>{t('common.totalItems', 'Total {count}', { count: errorHistory.total || 0 })}</span></header>{errorsLoading ? <div className="staff-history-empty">{t('errors.loading', 'Loading error records…')}</div> : errors.length ? <><div className="staff-error-list">{errors.map((row, index) => <article key={row.record_key || `${row.qc_date}-${index}`}><div className="staff-error-date"><b>{staffDate(row.qc_date)}</b><span>{row.error_type || t('errors.uncategorized', 'Uncategorized error')}</span></div><div><small>{t('errors.details', 'What happened')}</small><p>{row.error_note || '—'}</p></div><div><small>{t('errors.correctAction', 'Correct action')}</small><p>{row.correct_action || '—'}</p></div><span className="staff-error-score">{row.score ? t('common.points', '{count} points', { count: row.score }) : '—'}</span></article>)}</div><div className="staff-error-pager"><button disabled={errorPage <= 1} onClick={() => { errorHistoryIntentRef.current=t('common.previous', 'Previous');setErrorPage(value => Math.max(1, value - 1)) }}>{t('common.previous', 'Previous')}</button><span>{t('common.page', 'Page {page} / {pages}', { page: errorHistory.page || 1, pages: errorHistory.pages || 1 })}</span><button disabled={errorPage >= (errorHistory.pages || 1)} onClick={() => { errorHistoryIntentRef.current=t('common.next', 'Next');setErrorPage(value => value + 1) }}>{t('common.next', 'Next')}</button></div></> : <div className="staff-history-empty">{t('errors.none', 'No error records linked to your employee ID.')}</div>}</section>}
     {activeSection === 'adjustments' && <StaffAdjustmentPanel state={adjustmentHistory} t={t} locale={locale} />}
-    {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
+    {activeSection === 'exams' && <section className="staff-portal-exams"><header><div><small>{t('decor.exams', 'EXAM RESULTS')}</small><h2>{t('exams.title', 'Exam results')}</h2></div><span>{t('exams.sourceSummary', 'New system {current} · Legacy {legacy}', { current: exam.current || 0, legacy: exam.legacy || 0 })}</span></header>{loading && !data?.payload_scope?.exam_history ? <div className="staff-history-empty">{t('exams.loading', 'Loading exam records…')}</div> : examRows.length ? <div className="staff-portal-exam-list">{examRows.map(row => <article key={`${row.source_system}-${row.id}`}><div><span className={`exam-source-badge ${row.source_system === 'legacy' ? 'legacy' : 'current'}`}>{row.source_label || t('exams.current', 'New system')}</span><strong>{row.title}</strong><small>{t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: row.attempt_no, date: staffDateTime(row.submitted_at || row.started_at, locale) })}</small></div><div><b>{row.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(row.earned_score || 0).toLocaleString(localeCode(locale))}/${Number(row.total_score || 100).toLocaleString(localeCode(locale))} · ${Number(row.percentage).toFixed(1)}%`}</b><small>{staffExamBreakdown(row, t)}</small></div><button onClick={() => openExam(row)}>{t('exams.viewPaper', 'View answers')}</button></article>)}</div> : <div className="staff-history-empty">{t('exams.none', 'No exam records yet.')}</div>}</section>}
     {activeSection === 'attendance' && <StaffAttendancePanel data={attendance} loading={selfAttendance.loading} error={selfAttendance.error} profile={p} t={t} locale={locale} />}
     {activeSection === 'connectivity' && <EmployeeConnectivityPanel data={connectivity} loading={activity.loading} error={activity.error} t={t} />}
     {examDetail && <StaffPortalExamModal detail={examDetail} loading={examDetailLoading} error={examDetailError} onClose={() => setExamDetail(null)} t={t} locale={locale} />}

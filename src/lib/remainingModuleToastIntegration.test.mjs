@@ -30,8 +30,8 @@ test('remaining write failures never replay mutations', () => {
 })
 
 test('staff portal and payroll keep automatic loads quiet and expose safe read retries', () => {
-  assert.match(portal, /const load = \(announce=false, \{ background=false, includeAttendance=true \}=\{\}\) =>/)
-  assert.match(portal, /staffHomeMountedRef\.current=true\s+void load\(\)/)
+  assert.match(portal, /const load = async \(announce=false, \{ background=false, includeAttendance=true \}=\{\}\) =>/)
+  assert.match(portal, /staffHomeMountedRef\.current=true\s+void loadInitial\(\)/)
   assert.match(portal, /refresh:\(\) => load\(false, \{ background:true, includeAttendance:/)
   assert.match(portal, /onClick=\{\(\)=>load\(true\)\}/)
   assert.match(portal, /const readIntentRef=useRef\(''\)/)
