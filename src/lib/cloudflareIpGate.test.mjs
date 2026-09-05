@@ -26,6 +26,11 @@ test('Cloudflare worker gates entry documents before static assets', async () =>
   assert.match(worker, /X-Pages-IP-Gate-Timestamp/)
   assert.match(worker, /X-Pages-IP-Gate-Signature/)
   assert.match(worker, /crypto\.subtle\.sign/)
+  assert.match(worker, /globalThis\.caches\?\.default/)
+  assert.match(worker, /DECISION_CACHE_SECONDS = 45/)
+  assert.match(worker, /FAILURE_CIRCUIT_SECONDS = 5/)
+  assert.match(worker, /const gateFlights = new Map\(\)/)
+  assert.match(worker, /const decisionMemory = new Map\(\)/)
   assert.match(worker, /redirect: 'manual'/)
   assert.doesNotMatch(worker, /redirect: 'error'/)
   assert.match(worker, /payload\?\.allowed === false && payload\?\.reason === 'ip_not_allowed'/)
@@ -119,4 +124,73 @@ test('edge gate denies a non-allowlisted IP and fails closed on missing trust ma
   assert.equal(unavailable.status, 503)
   assert.equal(fetchCalls, 1)
   assert.equal(assetCalls, 0)
+})
+
+test('edge gate reuses a short IP-bound decision and opens a fail-closed outage circuit', async t => {
+  const entries = new Map()
+  const memoryCache = {
+    async match(request) {
+      const response = entries.get(request.url)
+      return response?.clone() || undefined
+    },
+    async put(request, response) {
+      entries.set(request.url, response.clone())
+    },
+  }
+  const originalCaches = globalThis.caches
+  const originalFetch = globalThis.fetch
+  Object.defineProperty(globalThis, 'caches', {
+    configurable: true,
+    value: { default: memoryCache },
+  })
+  t.after(() => {
+    globalThis.fetch = originalFetch
+    if (originalCaches === undefined) delete globalThis.caches
+    else Object.defineProperty(globalThis, 'caches', { configurable: true, value: originalCaches })
+  })
+
+  const module = await loadWorker('admin')
+  const env = {
+    IP_GATE_HMAC_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    ASSETS: { fetch: async () => new Response('app') },
+  }
+  let upstreamCalls = 0
+  globalThis.fetch = async () => {
+    upstreamCalls += 1
+    return new Response(JSON.stringify({ allowed: true, enforced: true, reason: 'matched' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  const allowedRequest = () => new Request(
+    'https://wfh-workspaceexpert.pages.dev/workspace/login',
+    { headers: { 'CF-Connecting-IP': '203.0.113.18' } },
+  )
+  const concurrent = await Promise.all([
+    module.default.fetch(allowedRequest(), env),
+    module.default.fetch(allowedRequest(), env),
+  ])
+  assert.deepEqual(concurrent.map(response => response.status), [200, 200])
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal((await module.default.fetch(allowedRequest(), env)).status, 200)
+  assert.equal(upstreamCalls, 1)
+
+  entries.clear()
+  globalThis.fetch = async () => {
+    upstreamCalls += 1
+    return new Response('busy', { status: 503 })
+  }
+  const firstFailure = await module.default.fetch(new Request(
+    'https://wfh-workspaceexpert.pages.dev/workspace/login',
+    { headers: { 'CF-Connecting-IP': '203.0.113.19' } },
+  ), env)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const circuitFailure = await module.default.fetch(new Request(
+    'https://wfh-workspaceexpert.pages.dev/workspace/login',
+    { headers: { 'CF-Connecting-IP': '203.0.113.20' } },
+  ), env)
+  assert.equal(firstFailure.status, 503)
+  assert.equal(circuitFailure.status, 503)
+  assert.equal(upstreamCalls, 2)
 })
