@@ -282,6 +282,7 @@ export default function OnlineTrainingPage(){
     const timeoutId=window.setTimeout(()=>{timedOut=true;controller.abort()},ONLINE_TRAINING_RPC_TIMEOUT_MS)
     setSearching(false)
     setLoading(true)
+    if(requestId===bootstrapRequestRef.current)setError('')
     try{
       const data=await readCall('online_training_context',{},controller.signal)
       if(requestId!==bootstrapRequestRef.current||controller.signal.aborted)return null
@@ -319,6 +320,7 @@ export default function OnlineTrainingPage(){
     const requestedOperation=operation||(announceFailure?'查询线上培训记录':listIntentRef.current)
     listIntentRef.current=''
     if(silent)setSearching(true);else setLoading(true)
+    if(requestId===listRequestRef.current)setError('')
     try{
       const data=await readCall(
         requestedMode==='reports'?'online_training_search_trainers':'online_training_search_people',{
@@ -836,7 +838,7 @@ export default function OnlineTrainingPage(){
 
     <AdminModuleNav />
 
-    {error&&<div className="ot-error"><span>{error}</span><div>{error.includes('重新读取')&&<button className="retry" onClick={refreshPage}>重新读取</button>}<button className="close" onClick={()=>setError('')}>×</button></div></div>}
+    {error&&<div className="ot-error"><span>{error}</span><div>{error.includes('重新读取')&&<button className="retry" onClick={refreshPage} disabled={loading||searching}>{loading||searching?'重新读取中…':'重新读取'}</button>}<button className="close" onClick={()=>setError('')}>×</button></div></div>}
 
     <section className="ot-kpis">
       <div><span>我负责的培训人员</span><strong>{myRoster.length||'—'}</strong><small>{myRoster.length?'按账号档案自动匹配':'主管账号仅查看或代填'}</small></div>

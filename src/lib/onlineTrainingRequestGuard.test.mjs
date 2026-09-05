@@ -40,3 +40,9 @@ test('canceled requests are cleaned up while explicit user retries remain availa
   assert.match(page,/retry:\(\)=>loadList\(\{silent:true,announceFailure:true,operation:'刷新线上培训记录'\}\)/)
   assert.doesNotMatch(page,/for\(let attempt=0;attempt<3/)
 })
+
+test('a fresh request removes the stale timeout banner and blocks duplicate retries',()=>{
+  assert.match(bootstrap,/setSearching\(false\)[\s\S]*setLoading\(true\)[\s\S]*if\(requestId===bootstrapRequestRef\.current\)setError\(''\)[\s\S]*readCall\('online_training_context'/)
+  assert.match(list,/if\(silent\)setSearching\(true\);else setLoading\(true\)[\s\S]*if\(requestId===listRequestRef\.current\)setError\(''\)[\s\S]*readCall\(/)
+  assert.match(page,/className="retry" onClick=\{refreshPage\} disabled=\{loading\|\|searching\}>\{loading\|\|searching\?'重新读取中…':'重新读取'\}<\/button>/)
+})
