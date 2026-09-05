@@ -27,13 +27,16 @@ const PUBLIC_ERROR_SOURCES = [
   },
 ] as const
 const EFF_ID = '1TEp-YzwjFKjorR4Xpmrb6UiKq2maMmawIW6oYQI75qM'
-const ORDER_SHEETS = ['工作表4', '填表']
+const FULL_ORDER_SHEET = '工作表4'
+const ROLLING_ORDER_SHEET = '填表'
 const ORDER_CHUNK_SIZE = 5_000
 const ERROR_CHUNK_SIZE = 500
 const FETCH_TIMEOUT_MS = 25_000
 const REPORT_SYNC_JOB = 'report-sheet-sync'
 const LEASE_TTL_SECONDS = 300
 const ORDER_CHUNK_RPC_TIMEOUT_MS = 9_000
+const ORDER_MONTH_RPC_TIMEOUT_MS = 9_000
+const ORDER_MARKERS_RPC_TIMEOUT_MS = 4_000
 const CACHE_BATCH_SIZE = 250
 const CACHE_BATCH_RPC_TIMEOUT_MS = 6_000
 const CACHE_MAX_BATCHES = 24
@@ -67,6 +70,13 @@ function manilaDateKey(value = new Date()) {
 function addIsoDays(value: string, days: number) {
   const date = new Date(`${value}T00:00:00Z`)
   date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+function monthEndDate(month: string) {
+  const date = new Date(`${month}-01T00:00:00Z`)
+  date.setUTCMonth(date.getUTCMonth() + 1)
+  date.setUTCDate(0)
   return date.toISOString().slice(0, 10)
 }
 
@@ -666,6 +676,7 @@ async function syncChangedSummaries(service: any, summaries: any[]) {
 
 function orderRowsFromCsv(raw: string) {
   const chunks = new Map<number, any[]>()
+  const rowsByMonth = new Map<string, any[]>()
   let sourceRows = 0
   let validRows = 0
   let latestDate = ''
@@ -678,19 +689,23 @@ function orderRowsFromCsv(raw: string) {
     const processed = Math.max(0, Math.trunc(scoreNumber(cells[2])))
     const rejected = Math.max(0, Math.trunc(scoreNumber(cells[3])))
     const chunkIndex = Math.floor((rowNumber - 2) / ORDER_CHUNK_SIZE)
-    if (!chunks.has(chunkIndex)) chunks.set(chunkIndex, [])
-    chunks.get(chunkIndex)!.push({
+    const normalizedRow = {
       source_row: rowNumber,
       work_date: workDate,
       account,
       processed,
       rejected,
       content_hash: hash32(`${workDate}|${account}|${processed}|${rejected}`),
-    })
+    }
+    if (!chunks.has(chunkIndex)) chunks.set(chunkIndex, [])
+    chunks.get(chunkIndex)!.push(normalizedRow)
+    const month = workDate.slice(0, 7)
+    if (!rowsByMonth.has(month)) rowsByMonth.set(month, [])
+    rowsByMonth.get(month)!.push(normalizedRow)
     validRows += 1
     if (!latestDate || workDate > latestDate) latestDate = workDate
   })
-  return { chunks, sourceRows, validRows, latestDate }
+  return { chunks, rowsByMonth, sourceRows, validRows, latestDate }
 }
 
 async function renewReportSyncLease(service: any, lease: SheetSyncLease) {
@@ -768,6 +783,243 @@ async function drainReportOrderCache(
   }
 }
 
+async function syncGuardedFullOrderSheet(
+  service: any,
+  existingRows: any[],
+  renewLease: () => Promise<void>,
+) {
+  await renewLease()
+  const sourceSheet = FULL_ORDER_SHEET
+  const existing = new Map((existingRows || []).map((row: any) => [
+    `${text(row.source_sheet)}|${Number(row.chunk_index)}`,
+    text(row.content_hash),
+  ]))
+  const baselineRows = (existingRows || []).reduce(
+    (total: number, row: any) => total + Math.max(0, Number(row.row_count) || 0),
+    0,
+  )
+  const parsed = orderRowsFromCsv(await fetchOrderCsv(sourceSheet))
+  const guard = assertOrderSnapshotSafe({
+    sourceSheet,
+    incomingRows: parsed.validRows,
+    baselineRows,
+  })
+  const chunkCount = Math.ceil(parsed.sourceRows / ORDER_CHUNK_SIZE)
+  const changes: Array<{ chunkIndex: number, hash: string, rows: any[] }> = []
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const rows = parsed.chunks.get(chunkIndex) || []
+    const hash = payloadHash(rows)
+    if (existing.get(`${sourceSheet}|${chunkIndex}`) !== hash) {
+      changes.push({ chunkIndex, hash, rows })
+    }
+  }
+  // If Google physically shrinks, chunks above the new end no longer appear
+  // in the CSV. Explicitly send an empty replacement once, otherwise their
+  // old report_order_rows (and account totals) would remain indefinitely.
+  for (const row of existingRows || []) {
+    const chunkIndex = Number(row.chunk_index)
+    if (!Number.isSafeInteger(chunkIndex) || chunkIndex < chunkCount) continue
+    const rows: any[] = []
+    const hash = payloadHash(rows)
+    if (existing.get(`${sourceSheet}|${chunkIndex}`) !== hash) {
+      changes.push({ chunkIndex, hash, rows })
+    }
+  }
+  changes.sort((left, right) => left.chunkIndex - right.chunkIndex)
+
+  // A single account can occur in several chunks. Process chunks in order;
+  // the whole-run Edge lease blocks overlapping scheduled invocations and the
+  // RPC keeps a fail-fast per-chunk lock for direct service-role callers.
+  for (const change of changes) {
+    await renewLease()
+    const { error } = await sheetSyncRpcWithDeadline(
+      service,
+      'sync_report_order_chunk',
+      {
+        p_source_sheet: sourceSheet,
+        p_chunk_index: change.chunkIndex,
+        p_chunk_size: ORDER_CHUNK_SIZE,
+        p_content_hash: change.hash,
+        p_rows: change.rows,
+      },
+      ORDER_CHUNK_RPC_TIMEOUT_MS,
+    )
+    if (error) {
+      throw new SheetSyncRpcError(`report_order_chunk_${sourceSheet}_${change.chunkIndex}`, error)
+    }
+  }
+
+  return {
+    source_sheet: sourceSheet,
+    strategy: 'guarded_full_chunks',
+    source_rows: parsed.sourceRows,
+    valid_rows: parsed.validRows,
+    chunks: chunkCount,
+    changed_chunks: changes.length,
+    latest_date: parsed.latestDate,
+    guard,
+  }
+}
+
+type RollingOrderMarker = {
+  month_key: string
+  content_hash: string
+  row_count: number
+  finalized_through: string
+}
+
+async function loadRollingOrderMarkers(
+  service: any,
+  renewLease: () => Promise<void>,
+) {
+  await renewLease()
+  const { data, error } = await sheetSyncRpcWithDeadline<unknown>(
+    service,
+    'report_order_rolling_month_markers',
+    {},
+    ORDER_MARKERS_RPC_TIMEOUT_MS,
+  )
+  if (error) throw new SheetSyncRpcError('report_order_month_markers', error)
+  if (!Array.isArray(data)) {
+    throw new SheetSyncRpcError('report_order_month_markers_invalid', null)
+  }
+
+  const markers = new Map<string, RollingOrderMarker>()
+  for (const value of data) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new SheetSyncRpcError('report_order_month_markers_invalid', null)
+    }
+    const row = value as Record<string, unknown>
+    const monthKey = text(row.month_key)
+    const contentHash = text(row.content_hash)
+    const rowCount = Number(row.row_count)
+    const finalizedThrough = text(row.finalized_through)
+    if (!/^\d{4}-\d{2}$/.test(monthKey) ||
+        !/^[a-f0-9]{64}$/.test(contentHash) ||
+        !Number.isSafeInteger(rowCount) || rowCount < 0 ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(finalizedThrough)) {
+      throw new SheetSyncRpcError('report_order_month_markers_invalid', null)
+    }
+    markers.set(monthKey, {
+      month_key: monthKey,
+      content_hash: contentHash,
+      row_count: rowCount,
+      finalized_through: finalizedThrough,
+    })
+  }
+  return markers
+}
+
+async function syncRollingOrderSheet(
+  service: any,
+  renewLease: () => Promise<void>,
+  finalizedThrough: string,
+) {
+  await renewLease()
+  const sourceSheet = ROLLING_ORDER_SHEET
+  const parsed = orderRowsFromCsv(await fetchOrderCsv(sourceSheet))
+  if (parsed.validRows === 0) {
+    throw new Error(`order_sheet_snapshot_empty:${sourceSheet}`)
+  }
+
+  const monthResults: Array<{
+    month: string
+    rows: number
+    content_hash: string
+    changed: boolean | null
+    write_skipped: boolean
+    database_result: unknown
+  }> = []
+  let skippedFinalizedRows = 0
+  const months = [...parsed.rowsByMonth.entries()]
+    .map(([month, rows]): [string, any[]] => {
+      const pendingRows = rows.filter((row) => row.work_date > finalizedThrough)
+      skippedFinalizedRows += rows.length - pendingRows.length
+      return [month, pendingRows]
+    })
+    // An explicit empty payload is a safe cleanup only for a month that still
+    // appears in Google and has been fully finalized by 工作表4. Missing months
+    // are never enumerated here, so source rotation cannot erase history.
+    .filter(([month, rows]) => rows.length > 0 || monthEndDate(month) <= finalizedThrough)
+    .sort(([left], [right]) => left.localeCompare(right))
+  const markers = await loadRollingOrderMarkers(service, renewLease)
+
+  // Only months present in the current rolling source are replaced. There is
+  // intentionally no finalize/delete-missing-months phase: older months that
+  // disappear from Google remain intact in Supabase.
+  for (const [month, rows] of months) {
+    const contentHash = await sha256(JSON.stringify(rows))
+    const marker = markers.get(month)
+    const markerMatches = Boolean(marker &&
+      marker.content_hash === contentHash &&
+      marker.row_count === rows.length &&
+      marker.finalized_through === finalizedThrough)
+    if (markerMatches) {
+      monthResults.push({
+        month,
+        rows: rows.length,
+        content_hash: contentHash,
+        changed: false,
+        write_skipped: true,
+        database_result: {
+          ok: true,
+          changed: false,
+          write_skipped: true,
+          reason: 'month_marker_unchanged',
+        },
+      })
+      continue
+    }
+
+    await renewLease()
+    const { data, error } = await sheetSyncRpcWithDeadline<unknown>(
+      service,
+      'sync_report_order_rolling_month',
+      {
+        p_month: month,
+        p_content_hash: contentHash,
+        p_rows: rows,
+      },
+      ORDER_MONTH_RPC_TIMEOUT_MS,
+    )
+    if (error) {
+      throw new SheetSyncRpcError(`report_order_month_${month}`, error)
+    }
+    const changed = data && typeof data === 'object' && !Array.isArray(data) &&
+        'changed' in data
+      ? (data as Record<string, unknown>).changed === true
+      : null
+    monthResults.push({
+      month,
+      rows: rows.length,
+      content_hash: contentHash,
+      changed,
+      write_skipped: false,
+      database_result: data ?? null,
+    })
+  }
+
+  return {
+    source_sheet: sourceSheet,
+    strategy: 'rolling_months',
+    source_rows: parsed.sourceRows,
+    valid_rows: parsed.validRows,
+    synced_rows: monthResults.reduce((total, result) => total + result.rows, 0),
+    skipped_finalized_rows: skippedFinalizedRows,
+    finalized_through: finalizedThrough,
+    months: monthResults.length,
+    processed_months: monthResults.length,
+    changed_months: monthResults.filter(result => result.changed === true).length,
+    unchanged_months: monthResults.filter(result => result.changed === false).length,
+    marker_skipped_months: monthResults.filter(result => result.write_skipped).length,
+    written_months: monthResults.filter(result => !result.write_skipped).length,
+    cleared_finalized_months: monthResults.filter(result => result.rows === 0).length,
+    latest_date: parsed.latestDate,
+    preserves_absent_months: true,
+    month_results: monthResults,
+  }
+}
+
 async function syncOrderSheets(
   service: any,
   renewLease: () => Promise<void>,
@@ -776,96 +1028,33 @@ async function syncOrderSheets(
   const { data: existingRows, error: existingError } = await service
     .from('report_order_sync_chunks')
     .select('source_sheet,chunk_index,content_hash,row_count')
+    .eq('source_sheet', FULL_ORDER_SHEET)
   if (existingError) throw new Error(`订单同步状态读取失败: ${existingError.message}`)
-  const existing = new Map((existingRows || []).map((row: any) => [
-    `${text(row.source_sheet)}|${Number(row.chunk_index)}`,
-    text(row.content_hash),
-  ]))
-  const baselineRows = new Map<string, number>()
-  for (const row of existingRows || []) {
-    const sourceSheet = text(row.source_sheet)
-    const previousRows = baselineRows.get(sourceSheet) || 0
-    baselineRows.set(sourceSheet, previousRows + Math.max(0, Number(row.row_count) || 0))
-  }
-  const results: any[] = []
-  let latestDate = ''
-  let totalRows = 0
-  let changedChunks = 0
 
-  for (const sourceSheet of ORDER_SHEETS) {
-    const parsed = orderRowsFromCsv(await fetchOrderCsv(sourceSheet))
-    const guard = assertOrderSnapshotSafe({
-      sourceSheet,
-      incomingRows: parsed.validRows,
-      baselineRows: baselineRows.get(sourceSheet) || 0,
-    })
-    latestDate = parsed.latestDate > latestDate ? parsed.latestDate : latestDate
-    totalRows += parsed.validRows
-    const chunkCount = Math.ceil(parsed.sourceRows / ORDER_CHUNK_SIZE)
-    const changes: Array<{ chunkIndex: number, hash: string, rows: any[] }> = []
-    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-      const rows = parsed.chunks.get(chunkIndex) || []
-      const hash = payloadHash(rows)
-      if (existing.get(`${sourceSheet}|${chunkIndex}`) !== hash) {
-        changes.push({ chunkIndex, hash, rows })
-      }
-    }
-    // If Google physically shrinks, chunks above the new end no longer appear
-    // in the CSV. Explicitly send an empty replacement once, otherwise their
-    // old report_order_rows (and account totals) would remain indefinitely.
-    for (const row of existingRows || []) {
-      if (text(row.source_sheet) !== sourceSheet) continue
-      const chunkIndex = Number(row.chunk_index)
-      if (!Number.isSafeInteger(chunkIndex) || chunkIndex < chunkCount) continue
-      const rows: any[] = []
-      const hash = payloadHash(rows)
-      if (existing.get(`${sourceSheet}|${chunkIndex}`) !== hash) {
-        changes.push({ chunkIndex, hash, rows })
-      }
-    }
-    changes.sort((left, right) => left.chunkIndex - right.chunkIndex)
+  const fullResult = await syncGuardedFullOrderSheet(
+    service,
+    existingRows || [],
+    renewLease,
+  )
+  const rollingResult = await syncRollingOrderSheet(
+    service,
+    renewLease,
+    fullResult.latest_date,
+  )
+  const results = [fullResult, rollingResult]
 
-    // A single account can occur in several chunks. Process chunks in order;
-    // the whole-run Edge lease blocks overlapping scheduled invocations and the
-    // RPC keeps a fail-fast per-chunk lock for direct service-role callers.
-    for (const change of changes) {
-      await renewLease()
-      const { error } = await sheetSyncRpcWithDeadline(
-        service,
-        'sync_report_order_chunk',
-        {
-          p_source_sheet: sourceSheet,
-          p_chunk_index: change.chunkIndex,
-          p_chunk_size: ORDER_CHUNK_SIZE,
-          p_content_hash: change.hash,
-          p_rows: change.rows,
-        },
-        ORDER_CHUNK_RPC_TIMEOUT_MS,
-      )
-      if (error) {
-        throw new SheetSyncRpcError(`report_order_chunk_${sourceSheet}_${change.chunkIndex}`, error)
-      }
-    }
-    changedChunks += changes.length
-    results.push({
-      source_sheet: sourceSheet,
-      source_rows: parsed.sourceRows,
-      valid_rows: parsed.validRows,
-      chunks: chunkCount,
-      changed_chunks: changes.length,
-      latest_date: parsed.latestDate,
-      guard,
-    })
-  }
-
-  // Drain even when no sheet chunk changed. If an earlier Edge isolate died
-  // after committing raw rows, its durable dirty queue is completed here.
+  // Drain even when no sheet chunk/month changed. If an earlier Edge isolate
+  // died after committing raw rows, its durable dirty queue is completed here.
   const cacheRefresh = await drainReportOrderCache(service, renewLease)
   return {
     sources: results,
-    rows: totalRows,
-    changed_chunks: changedChunks,
-    latest_date: latestDate,
+    rows: fullResult.valid_rows + rollingResult.synced_rows,
+    changed_chunks: fullResult.changed_chunks,
+    processed_months: rollingResult.processed_months,
+    changed_months: rollingResult.changed_months,
+    latest_date: fullResult.latest_date > rollingResult.latest_date
+      ? fullResult.latest_date
+      : rollingResult.latest_date,
     cache_refresh: cacheRefresh,
   }
 }
@@ -1006,12 +1195,12 @@ Deno.serve(async (request) => {
       [
         '效率表/网站数据状态',
         [{ latest_date: orderSyncResult.latest_date, rows: orderSyncResult.rows }],
-        '工作表4 + 填表已完整同步到 Supabase 订单明细',
+        '工作表4完整分块同步；填表按月份滚动同步，仅写入结算日后记录并清理来源中已完全结算月份',
       ],
       [
         '效率表/订单处理',
         orderSyncResult.sources,
-        `两张效率工作表分块增量同步；changed:${orderSyncResult.changed_chunks}`,
+        `工作表4分块增量同步；填表逐月同步且保留缺席月份；changed-chunks:${orderSyncResult.changed_chunks};changed-months:${orderSyncResult.changed_months}`,
         orderSyncResult.rows,
       ],
     ]

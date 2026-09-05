@@ -80,11 +80,23 @@ test('Edge invocation owns and renews one cross-isolate lease before fetching', 
 })
 
 test('order writes and cache drain are sequential, bounded, and resumable', () => {
+  const fullSync = between(
+    edge,
+    'async function syncGuardedFullOrderSheet(',
+    'async function syncRollingOrderSheet(',
+  )
+  const rollingSync = between(
+    edge,
+    'async function syncRollingOrderSheet(',
+    'async function syncOrderSheets(',
+  )
   const sync = between(edge, 'async function syncOrderSheets(', 'Deno.serve(')
   const drain = between(edge, 'async function drainReportOrderCache(', 'async function syncOrderSheets(')
 
-  assert.match(sync, /for \(const change of changes\)[\s\S]*await renewLease\(\)[\s\S]*sheetSyncRpcWithDeadline/)
-  assert.doesNotMatch(sync, /Promise\.all\(changes/)
+  assert.match(fullSync, /for \(const change of changes\)[\s\S]*await renewLease\(\)[\s\S]*sheetSyncRpcWithDeadline/)
+  assert.doesNotMatch(fullSync, /Promise\.all\(changes/)
+  assert.match(rollingSync, /for \(const \[month, rows\] of months\)[\s\S]*await renewLease\(\)[\s\S]*sheetSyncRpcWithDeadline/)
+  assert.doesNotMatch(rollingSync, /Promise\.all\(months/)
   assert.match(sync, /const cacheRefresh = await drainReportOrderCache\(service, renewLease\)/)
   assert.match(drain, /CACHE_MAX_BATCHES/)
   assert.match(drain, /CACHE_DRAIN_BUDGET_MS/)
