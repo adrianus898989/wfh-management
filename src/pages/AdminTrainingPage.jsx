@@ -24,6 +24,7 @@ import { deleteExamSessionWithStorageCleanup, drainPendingDeletedExamSessionStor
 import { examGradeResultCompletesSession, isExamGradingSessionCompleteError } from '../lib/examGradingCompletion.js'
 import { businessTodayIso } from '../lib/adminQueryDefaults'
 import { isCurrentLiveRequest, isSnapshotForRequest, staleSnapshotNotice } from '../lib/requestConsistency'
+import { useVisibleDataRefresh } from '../lib/visibleDataRefresh'
 import QueryStateNotice from '../components/QueryStateNotice'
 
 const TABS=['考试概览','考试记录','题库','人工批改']
@@ -206,6 +207,7 @@ export default function AdminTrainingPage(){
   const overviewReadIntentRef=useRef('')
   const sessionReadIntentRef=useRef('')
   const storageCleanupFlightRef=useRef(false)
+  const lastDataRefreshAtRef=useRef(0)
   const questionSnapshotRef=useRef(questionSnapshot)
   const overviewSnapshotRef=useRef(overviewSnapshot)
   const sessionSnapshotRef=useRef(sessionSnapshot)
@@ -295,6 +297,7 @@ export default function AdminTrainingPage(){
   },[tab])
 
   const loadQuestionBank=async()=>{
+    lastDataRefreshAtRef.current=Date.now()
     const requestToken=++questionRequestRef.current
     const requestScopeKey=overviewScopeKey
     const requestKey=questionRequestKey(filters,page,pageSize)
@@ -340,6 +343,7 @@ export default function AdminTrainingPage(){
   const loadOverview=()=>{
     if(!authIdentity)return Promise.resolve()
     if(overviewFlight.current?.scopeKey===overviewScopeKey)return overviewFlight.current.promise
+    lastDataRefreshAtRef.current=Date.now()
     const requestToken=++overviewRequestRef.current
     const requestedOperation=overviewReadIntentRef.current
     overviewReadIntentRef.current=''
@@ -500,6 +504,7 @@ export default function AdminTrainingPage(){
   const loadSessions=async()=>{
     if(sessionStateTab!==tab){sessionRequestRef.current+=1;return}
     if(access.loading||!['考试记录','人工批改'].includes(tab)){sessionRequestRef.current+=1;setSessionLoading(false);return}
+    lastDataRefreshAtRef.current=Date.now()
     const requestToken=++sessionRequestRef.current
     const requestedOperation=sessionReadIntentRef.current
     sessionReadIntentRef.current=''
@@ -600,6 +605,17 @@ export default function AdminTrainingPage(){
   const refreshQuestionAfterMutation=(operation='刷新确认题库状态')=>{questionReadIntentRef.current=operation;setLoading(true);setQuestionLoadError('');setQuestionStaleNotice('');setQuestionSearchVersion(version=>version+1);return Promise.resolve()}
   const refreshSessionsAfterMutation=(operation='刷新确认考试记录')=>{sessionReadIntentRef.current=operation;setSessionLoading(true);setSessionLoadError('');setSessionStaleNotice('');setSessionSearchVersion(version=>version+1);return Promise.resolve()}
   const pageRefreshing=tab==='考试概览'?overviewLoading:tab==='题库'?loading:['考试记录','人工批改'].includes(tab)?sessionLoading:false
+  useVisibleDataRefresh({
+    enabled:!access.loading&&Boolean(tab)&&!grading&&!question&&!deleteSession,
+    pending:pageRefreshing||Boolean(overviewFlight.current),
+    lastCompletedAt:()=>lastDataRefreshAtRef.current,
+    refresh:()=>{
+      if(['考试记录','人工批改'].includes(tab))return loadSessions()
+      if(tab==='题库')return loadQuestionBank()
+      if(tab==='考试概览')return loadOverview()
+      return undefined
+    },
+  })
 
   return <div className="content-page exam-page">
     <header className="exam-head"><div><small>ATTENDANCE · EXAMS · REWARDS</small><h1>{sectionTitle}</h1><p>{pageChrome.active.itemLabel||tab}</p></div><div className="exam-head-actions"><span className="exam-sync-pill">Google 题库 · {(tab==='题库'?questionFilterData:overviewData)?.last_sync?.status==='success'?'已同步':'等待同步'}</span><span className={`exam-sync-pill legacy ${legacySourcePaused?'':'success'}`} title={legacySync.last_success_at?`最后同步：${fmt(legacySync.last_success_at)}`:''}>{legacySyncLabel}</span><button onClick={refresh} disabled={pageRefreshing}>{pageRefreshing?'刷新中…':'刷新'}</button></div></header>

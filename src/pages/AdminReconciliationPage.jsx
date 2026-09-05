@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import AdminModuleNav from '../components/AdminModuleNav'
 import { Pagination } from '../components/DataPageControls'
 import { supabase } from '../lib/supabase'
+import { useVisibleDataRefresh } from '../lib/visibleDataRefresh'
 import {
   PERSONNEL_RECONCILIATION_VIEWS,
   emptyPersonnelReconciliationResult,
@@ -19,7 +20,6 @@ import {
 import '../styles-reconciliation.css'
 
 const REQUEST_TIMEOUT_MS = 8000
-const RECONCILIATION_REFRESH_MS = 5 * 60 * 1000
 const FRESHNESS_STALE_AFTER_MS = 36 * 60 * 60 * 1000
 const PAGE_SIZE_OPTIONS = [20, 30, 50]
 const text = value => String(value ?? '').trim()
@@ -264,22 +264,20 @@ export default function AdminReconciliationPage() {
     return () => window.clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    const refreshVisibleView = () => {
-      if (document.visibilityState !== 'visible') return
+  useVisibleDataRefresh({
+    pending:() => {
       const context = refreshContextRef.current
-      if (controllerRefs.current[context.view]) return
-      const lastCompletedAt = lastCompletedAtRef.current[context.view] || 0
-      if (Date.now() - lastCompletedAt < RECONCILIATION_REFRESH_MS) return
-      void loadRef.current?.(context)
-    }
-    const refreshTimer = window.setInterval(refreshVisibleView, RECONCILIATION_REFRESH_MS)
-    document.addEventListener('visibilitychange', refreshVisibleView)
-    return () => {
-      window.clearInterval(refreshTimer)
-      document.removeEventListener('visibilitychange', refreshVisibleView)
-    }
-  }, [])
+      return Boolean(controllerRefs.current[context.view])
+    },
+    lastCompletedAt:() => {
+      const context = refreshContextRef.current
+      return lastCompletedAtRef.current[context.view] || 0
+    },
+    refresh:() => {
+      const context = refreshContextRef.current
+      return loadRef.current?.(context)
+    },
+  })
 
   const current = views[activeView]
   const Rows = VIEW_ROWS[activeView]

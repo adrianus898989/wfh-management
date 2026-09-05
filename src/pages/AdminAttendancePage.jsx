@@ -12,6 +12,7 @@ import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentat
 import { useAdminAccess } from '../lib/adminAccess'
 import { businessMonthIso, businessTodayIso, businessTodayRange } from '../lib/adminQueryDefaults'
 import { supabase } from '../lib/supabase'
+import { useVisibleDataRefresh } from '../lib/visibleDataRefresh'
 import { EmployeeDrawer } from './AdminEmployeesPage'
 
 const TABS=['排班表','出勤表','今日考勤','考勤记录','请假审批','奖金 / 扣款']
@@ -852,8 +853,11 @@ function AttendanceMatrixPane(){
     }
   }
   useEffect(()=>{load()},[month,applied,page,pageSize,refreshKey])
-  useEffect(()=>{
-    const refreshWhenDue=()=>{
+  useVisibleDataRefresh({
+    intervalMs:ATTENDANCE_AUTO_REFRESH_MS,
+    pending:()=>loadingRef.current,
+    lastCompletedAt:()=>lastRefreshAttemptRef.current,
+    refresh:()=>{
       if(!attendanceVisibleRefreshDue({
         visibilityState:document.visibilityState,
         loading:loadingRef.current,
@@ -861,14 +865,8 @@ function AttendanceMatrixPane(){
       }))return
       lastRefreshAttemptRef.current=Date.now()
       setRefreshKey(value=>value+1)
-    }
-    const interval=window.setInterval(refreshWhenDue,ATTENDANCE_AUTO_REFRESH_MS)
-    document.addEventListener('visibilitychange',refreshWhenDue)
-    return()=>{
-      window.clearInterval(interval)
-      document.removeEventListener('visibilitychange',refreshWhenDue)
-    }
-  },[])
+    },
+  })
   const bounds=useMemo(()=>monthMeta(month),[month])
   const people=useMemo(()=>{
     if(state.serverPaged)return state.people

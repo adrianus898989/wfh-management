@@ -63,8 +63,9 @@ test('admin and staff attendance views refresh on a bounded timer and retain pri
     readFile(new URL('../pages/PortalPage.jsx',import.meta.url),'utf8'),
   ])
   for(const source of [admin,staff]){
-    assert.match(source,/setInterval\(refreshWhenDue,ATTENDANCE_AUTO_REFRESH_MS\)/)
-    assert.match(source,/addEventListener\('visibilitychange',refreshWhenDue\)/)
+    assert.match(source,/useVisibleDataRefresh/)
+    assert.match(source,/intervalMs:ATTENDANCE_AUTO_REFRESH_MS/)
+    assert.match(source,/lastCompletedAt:\(\)=>lastRefreshAttemptRef\.current/)
     assert.match(source,/attendanceVisibleRefreshDue/)
   }
   assert.match(admin,/AttendanceSyncNotice sync=\{state\.sync\}/)

@@ -93,13 +93,12 @@ test('dashboard current employee fallback excludes future hires without relabeli
 })
 
 test('dashboard refresh is visible-only, low-frequency and coalesced', () => {
-  assert.match(page, /DASHBOARD_REFRESH_MS = 5 \* 60 \* 1000/)
+  assert.match(page, /useVisibleDataRefresh/)
   assert.match(page, /if \(dashboardFlightRef\.current\) return dashboardFlightRef\.current/)
-  assert.match(page, /document\.visibilityState !== 'visible'/)
   assert.match(page, /if \(completedSuccessfully\) dashboardLastCompletedRef\.current = Date\.now\(\)/)
-  assert.match(page, /window\.setInterval\(refreshWhenDue, DASHBOARD_REFRESH_MS\)/)
-  assert.match(page, /window\.clearInterval\(interval\)/)
-  assert.match(page, /document\.removeEventListener\('visibilitychange', refreshWhenDue\)/)
+  assert.match(page, /refresh:\(\) => loadDashboard\(true\)/)
+  assert.match(page, /pending:\(\) => Boolean\(dashboardFlightRef\.current\)/)
+  assert.match(page, /lastCompletedAt:\(\) => dashboardLastCompletedRef\.current/)
 })
 
 test('movement legend stays inside the chart instead of overlapping the card header', () => {

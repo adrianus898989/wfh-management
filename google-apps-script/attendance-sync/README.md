@@ -75,10 +75,14 @@ The database still rejects automatic removals by default. Migration
 `20260831123000_attendance_count_preserving_date_corrections.sql` adds one narrow
 exception for correcting a date: at most five old keys may move, the complete
 snapshot may not shrink, and every employee/source-block/event-kind count must
-stay equal or increase. Removing a record, changing its employee/type, or a
-larger correction remains blocked for explicit review. Failed-run diagnostics
-retain the proposed record count and detected deletion count instead of showing
-misleading zeroes after the staging transaction rolls back.
+stay equal or increase. For `home_ph_annual_2026_09` only, migration
+`20260905130600_preserve_home_ph_missing_rows_during_sync.sql` additionally lets
+valid incoming inserts and updates commit while unreviewed omissions remain in
+canonical history. The response and source metadata record the protected count;
+it never converts an omitted row into an automatic delete. Other sources still
+block any larger or count-reducing removal for explicit review. Failed-run
+diagnostics retain proposed and detected counts instead of showing misleading
+zeroes after a staging rollback.
 
 ## Deployment preparation
 

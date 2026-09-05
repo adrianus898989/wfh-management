@@ -952,6 +952,38 @@ function clearTerminalAdjustmentInboundRetries() {
   return removed;
 }
 
+/**
+ * Re-arm only exhausted source-slot identity conflicts after the database
+ * identity repair is deployed. Unlike clearTerminalAdjustmentInboundRetries(),
+ * this preserves every durable payload and lets the normal worker prove that
+ * Supabase accepted it before the queue entry is removed.
+ */
+function retryTerminalAdjustmentIdentityConflictsNow() {
+  const properties = PropertiesService.getScriptProperties();
+  const queued = properties.getProperties();
+  let scheduled = 0;
+  Object.keys(queued).forEach(function (key) {
+    if (key.indexOf(ADJUSTMENT_QUEUE_PREFIX) !== 0) return;
+    let stored;
+    try {
+      stored = JSON.parse(queued[key]);
+    } catch (_error) {
+      return;
+    }
+    if (Number(stored && stored.attempt || 0) < 8 ||
+        String(stored && stored.last_error || '')
+          .indexOf('google_source_slot_identity_conflict') < 0 ||
+        !stored.payload) return;
+    stored.retry_at = 0;
+    properties.setProperty(key, JSON.stringify(stored));
+    scheduled += 1;
+  });
+  console.log(JSON.stringify({
+    status: 'terminal_adjustment_identity_retries_rearmed', scheduled: scheduled,
+  }));
+  return scheduled;
+}
+
 function scheduleAdjustmentInboundRetry_(properties, propertyKey, payload, previousState, error) {
   const previousAttempt = Number(previousState && previousState.attempt || 0);
   const attempt = Math.min(Math.max(previousAttempt, 0) + 1, 8);

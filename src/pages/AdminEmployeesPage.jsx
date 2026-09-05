@@ -25,6 +25,7 @@ import { employeeProfileMetricSeed, mergeEmployeeDetailRefresh, withEmployeeDeta
 import { filterEmployeeErrorHistory, filterEmployeeExamHistory } from '../lib/employeeRecordFilters'
 import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments.js'
 import { hydrateExamFeedbackAnswers } from '../lib/examFeedbackAttachments.js'
+import { useVisibleDataRefresh } from '../lib/visibleDataRefresh'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -1173,17 +1174,15 @@ export default function AdminEmployeesPage(){
   }
   refreshEmployeeDataRef.current=refreshEmployeeData
 
-  useEffect(()=>{
-    if(adminAccess.loading||(!canViewEmployees&&!canViewAnalytics&&!canViewResignations&&!canViewAudit))return undefined
-    const refreshIfStale=()=>{
-      if(document.hidden||Date.now()-lastAutoRefreshAtRef.current<300000)return
+  useVisibleDataRefresh({
+    enabled:!adminAccess.loading&&(canViewEmployees||canViewAnalytics||canViewResignations||canViewAudit),
+    pending:()=>Boolean(employeeBootstrapRef.current.inFlight||employeeDirectoryRequestRef.current.inFlight)||loading||refreshing,
+    lastCompletedAt:()=>lastAutoRefreshAtRef.current,
+    refresh:()=>{
       lastAutoRefreshAtRef.current=Date.now()
-      refreshEmployeeDataRef.current?.({silent:true}).catch(()=>{})
-    }
-    window.addEventListener('focus',refreshIfStale)
-    document.addEventListener('visibilitychange',refreshIfStale)
-    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
-  },[adminAccess.loading,canViewEmployees,canViewAnalytics,canViewResignations,canViewAudit])
+      return refreshEmployeeDataRef.current?.({silent:true})
+    },
+  })
   useEffect(()=>{
     const state=employeeBootstrapRef.current
     if(state.accessKey!==employeeAccessKey){

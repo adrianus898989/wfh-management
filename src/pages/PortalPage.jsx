@@ -13,9 +13,9 @@ import { publicPortalTarget } from '../lib/appBasePath'
 import { ATTENDANCE_AUTO_REFRESH_MS, attendanceVisibleRefreshDue } from '../lib/attendanceSyncState'
 import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments'
 import { hydrateExamFeedbackAnswers } from '../lib/examFeedbackAttachments'
+import { useVisibleDataRefresh } from '../lib/visibleDataRefresh'
 
 const activeStatuses = ['active', 'probation', '在职', '试用']
-const DASHBOARD_REFRESH_MS = 5 * 60 * 1000
 const EMPTY_STAFF_ATTENDANCE = Object.freeze({})
 const text = v => String(v ?? '').trim()
 const portalErrorMessage = (error, fallback) => {
@@ -111,19 +111,15 @@ export const AdminHome = () => {
   useEffect(() => {
     dashboardMountedRef.current = true
     void loadDashboard(false)
-    const refreshWhenDue = () => {
-      if (document.visibilityState !== 'visible') return
-      if (Date.now() - dashboardLastCompletedRef.current < DASHBOARD_REFRESH_MS) return
-      void loadDashboard(true)
-    }
-    const interval = window.setInterval(refreshWhenDue, DASHBOARD_REFRESH_MS)
-    document.addEventListener('visibilitychange', refreshWhenDue)
     return () => {
       dashboardMountedRef.current = false
-      window.clearInterval(interval)
-      document.removeEventListener('visibilitychange', refreshWhenDue)
     }
   }, [loadDashboard])
+  useVisibleDataRefresh({
+    refresh:() => loadDashboard(true),
+    pending:() => Boolean(dashboardFlightRef.current),
+    lastCompletedAt:() => dashboardLastCompletedRef.current,
+  })
 
   const view = useMemo(() => {
     const employees = data?.employees || []
@@ -500,41 +496,77 @@ export const StaffHome = ({ mode = 'profile' }) => {
   const [examDetail, setExamDetail] = useState(null)
   const [examDetailLoading, setExamDetailLoading] = useState(false)
   const [examDetailError, setExamDetailError] = useState('')
+  const staffHomeMountedRef = useRef(false)
+  const staffHomeFlightRef = useRef(null)
+  const staffHomeLastCompletedRef = useRef(0)
 
-  const load = async (announce=false) => {
-    setLoading(true)
-    setError('')
-    setActivity(current => ({ ...current, loading: true, error: '' }))
-    setSelfAttendance(current => ({ ...current, loading: true, error: '' }))
-    const [
-      { data: result, error: loadError },
-      { data: activityResult, error: activityError },
-      { data: attendanceResult, error: attendanceError },
-    ] = await Promise.all([
-      supabase.rpc('staff_portal_home'),
-      compactStaffActivityHome(),
-      supabase.rpc('staff_attendance_home', { p_month: staffMonthValue() }),
-    ])
-    if (loadError) setError(portalErrorMessage(loadError, t('portal.profileLoadFailed', 'Failed to load profile')))
-    else setData(result)
-    setActivity(current => activityError
-      ? { ...current, loading: false, error: portalErrorMessage(activityError, t('portal.activityLoadFailed', 'Failed to load attendance and connectivity records')) }
-      : { loading: false, error: '', data: activityResult || null })
-    setSelfAttendance(current => attendanceError
-      ? { ...current, loading: false, error: portalErrorMessage(attendanceError, t('portal.activityLoadFailed', 'Failed to load attendance records')) }
-      : { loading: false, error: '', data: attendanceResult || null })
-    const refreshError=loadError||activityError||attendanceError
-    if (announce && refreshError) {
-      const reason=portalErrorMessage(refreshError, t('portal.profileLoadFailed', 'Failed to refresh profile'))
-      notify(writeFailureToast({
-        module:t('portal.myHome', 'My workspace'),operation:t('portal.refresh', 'Refresh'),error:refreshError,reason,
+  const load = (announce=false, { background=false, includeAttendance=true }={}) => {
+    if (staffHomeFlightRef.current) return staffHomeFlightRef.current
+    if (!background) {
+      setLoading(true)
+      setError('')
+      setActivity(current => ({ ...current, loading:true, error:'' }))
+      if (includeAttendance) setSelfAttendance(current => ({ ...current, loading:true, error:'' }))
+    }
+    const request = (async () => {
+      const [
+        { data:result, error:loadError },
+        { data:activityResult, error:activityError },
+        attendanceResponse,
+      ] = await Promise.all([
+        supabase.rpc('staff_portal_home'),
+        compactStaffActivityHome(),
+        includeAttendance
+          ? supabase.rpc('staff_attendance_home', { p_month:staffMonthValue() })
+          : Promise.resolve({ data:null, error:null }),
+      ])
+      if (!staffHomeMountedRef.current) return
+      const { data:attendanceResult, error:attendanceError } = attendanceResponse
+      if (loadError) setError(portalErrorMessage(loadError, t('portal.profileLoadFailed', 'Failed to load profile')))
+      else { setData(result); setError('') }
+      setActivity(current => activityError
+        ? { ...current, loading: false, error: portalErrorMessage(activityError, t('portal.activityLoadFailed', 'Failed to load attendance and connectivity records')) }
+        : { loading: false, error: '', data: activityResult || null })
+      if (includeAttendance) setSelfAttendance(current => attendanceError
+        ? { ...current, loading: false, error: portalErrorMessage(attendanceError, t('portal.activityLoadFailed', 'Failed to load attendance records')) }
+        : { loading: false, error: '', data: attendanceResult || null })
+      const refreshError=loadError||activityError||attendanceError
+      if (!refreshError) staffHomeLastCompletedRef.current=Date.now()
+      if (announce && refreshError) {
+        const reason=portalErrorMessage(refreshError, t('portal.profileLoadFailed', 'Failed to refresh profile'))
+        notify(writeFailureToast({
+          module:t('portal.myHome', 'My workspace'),operation:t('portal.refresh', 'Refresh'),error:refreshError,reason,
+          dedupeKey:'staff-portal:refresh:error',refresh:()=>load(true),
+        }))
+      }
+    })().catch(loadFailure => {
+      if (!staffHomeMountedRef.current) return
+      const reason=portalErrorMessage(loadFailure, t('portal.profileLoadFailed', 'Failed to refresh profile'))
+      setError(reason)
+      setActivity(current => ({ ...current, loading: false, error: current.error || reason }))
+      if (includeAttendance) setSelfAttendance(current => ({ ...current, loading: false, error: current.error || reason }))
+      if (announce) notify(writeFailureToast({
+        module:t('portal.myHome', 'My workspace'),operation:t('portal.refresh', 'Refresh'),error:loadFailure,reason,
         dedupeKey:'staff-portal:refresh:error',refresh:()=>load(true),
       }))
-    }
-    setLoading(false)
+    }).finally(() => {
+      if (staffHomeFlightRef.current === request) staffHomeFlightRef.current=null
+      if (staffHomeMountedRef.current && !background) setLoading(false)
+    })
+    staffHomeFlightRef.current=request
+    return request
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    staffHomeMountedRef.current=true
+    void load()
+    return () => { staffHomeMountedRef.current=false }
+  }, [])
+  useVisibleDataRefresh({
+    refresh:() => load(false, { background:true, includeAttendance:activeSection !== 'attendance' }),
+    pending:() => Boolean(staffHomeFlightRef.current),
+    lastCompletedAt:() => staffHomeLastCompletedRef.current,
+  })
   useEffect(() => {
     const country = data?.profile?.country || data?.profile?.nationality
     adoptCountry(country)
@@ -778,8 +810,11 @@ function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
     })()
     return () => { alive = false }
   }, [month, data, loading, error, t, refreshKey])
-  useEffect(()=>{
-    const refreshWhenDue=()=>{
+  useVisibleDataRefresh({
+    intervalMs:ATTENDANCE_AUTO_REFRESH_MS,
+    pending:()=>loadingRef.current,
+    lastCompletedAt:()=>lastRefreshAttemptRef.current,
+    refresh:()=>{
       if(!attendanceVisibleRefreshDue({
         visibilityState:document.visibilityState,
         loading:loadingRef.current,
@@ -787,14 +822,8 @@ function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
       }))return
       lastRefreshAttemptRef.current=Date.now()
       setRefreshKey(value=>value+1)
-    }
-    const interval=window.setInterval(refreshWhenDue,ATTENDANCE_AUTO_REFRESH_MS)
-    document.addEventListener('visibilitychange',refreshWhenDue)
-    return()=>{
-      window.clearInterval(interval)
-      document.removeEventListener('visibilitychange',refreshWhenDue)
-    }
-  },[])
+    },
+  })
 
   const result = view.data || {}
   const employee = result.employee || {}

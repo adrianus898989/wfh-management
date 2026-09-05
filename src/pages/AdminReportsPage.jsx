@@ -11,6 +11,7 @@ import {PERMISSIONS} from '../config/permissions'
 import {rosterPersonKey,uniqueRosterCount} from '../lib/rosterIdentity'
 import {edgeFunctionErrorMessage,readableErrorMessage} from '../lib/edgeFunctionError'
 import {writeFailureToast} from '../lib/appMutationToast'
+import {useVisibleDataRefresh} from '../lib/visibleDataRefresh'
 
 const text=v=>String(v??'').trim()
 const OPS=['总汇','人员','排班表','盘口人数','统计','错误统计']
@@ -32,7 +33,6 @@ const SEARCH_PLACEHOLDERS={
   统计:'姓名 / ID / 岗位 / 盘口',
 }
 const uniq=arr=>[...new Set((arr||[]).map(text).filter(Boolean))]
-const STALE_REFRESH_MS=300000
 const ERROR_GRADE_CHOICES=[['','全部等级'],['excellent','优秀（0错误）'],['normal','正常（1–8）'],['attention','注意（9–15）'],['watch','重点（16–30）'],['high','高频（31+）']]
 const errorGradeKey=value=>{const count=Number(value||0);return count>=31?'high':count>=16?'watch':count>=9?'attention':count>=1?'normal':'excellent'}
 const errorGradeLabel=(value,locale='zh')=>{
@@ -186,14 +186,14 @@ export default function AdminReportsPage(){
   useEffect(()=>{
     if(tab==='错误统计'){setLoading(false);return undefined}
     load()
-    const refreshIfStale=()=>{
-      if(document.hidden||overviewPendingRef.current||Date.now()-overviewLoadedAtRef.current<STALE_REFRESH_MS)return
-      load(true)
-    }
-    window.addEventListener('focus',refreshIfStale)
-    document.addEventListener('visibilitychange',refreshIfStale)
-    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale);overviewRequestRef.current+=1;overviewPendingRef.current=false}
+    return()=>{overviewRequestRef.current+=1;overviewPendingRef.current=false}
   },[tab])
+  useVisibleDataRefresh({
+    enabled:tab!=='错误统计',
+    pending:()=>overviewPendingRef.current,
+    lastCompletedAt:()=>overviewLoadedAtRef.current,
+    refresh:()=>load(true),
+  })
   useEffect(()=>{
     const next=OPS.includes(requestedTab)?requestedTab:'总汇'
     setTabState(current=>current===next?current:next)
@@ -289,9 +289,9 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,notify,filterValue,o
   const [mistakes,setMistakes]=useState(null)
   const requestRef=useRef(0)
   const loadedAtRef=useRef(0)
-  const load=async(nextRange=appliedRange,{allHistory=false,scope=null,announceOperation=''}={})=>{
+  const load=async(nextRange=appliedRange,{allHistory=false,scope=null,announceOperation='',silent=false}={})=>{
     const requestId=++requestRef.current
-    setLoading(true)
+    if(!silent)setLoading(true)
     try{
       const scopedRows=scope||roster
       const employeeIds=uniq(scopedRows.map(row=>row.employee_id)).filter(Boolean)
@@ -310,16 +310,11 @@ function OrdersManualQuery({invoke,roster,allRoster,onError,notify,filterValue,o
     finally{if(requestId===requestRef.current)setLoading(false)}
   }
   useEffect(()=>{load(currentMonthRange())},[])
-  useEffect(()=>{
-    const refreshIfStale=()=>{
-      if(document.hidden||Date.now()-loadedAtRef.current<STALE_REFRESH_MS)return
-      loadedAtRef.current=Date.now()
-      load(appliedRange)
-    }
-    window.addEventListener('focus',refreshIfStale)
-    document.addEventListener('visibilitychange',refreshIfStale)
-    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
-  },[appliedRange.from,appliedRange.to,roster])
+  useVisibleDataRefresh({
+    pending:loading,
+    lastCompletedAt:()=>loadedAtRef.current,
+    refresh:()=>load(appliedRange,{silent:true}),
+  })
   const allowed=useMemo(()=>new Set(roster.map(r=>r.employee_id).filter(Boolean)),[roster])
   const rows=useMemo(()=>{
     let next=(data?.rows||[]).filter(r=>allowed.has(r.employee_id))
@@ -374,15 +369,11 @@ function Errors({onError,notify}){
     finally{if(requestId===requestRef.current){requestPendingRef.current=false;setLoading(false)}}
   }
   useEffect(()=>{load({nextRange:currentDayRange(),nextFilters:blankErrorFilters(),nextPage:1});return()=>{requestRef.current+=1;requestPendingRef.current=false}},[])
-  useEffect(()=>{
-    const refreshIfStale=()=>{
-      if(document.hidden||requestPendingRef.current||Date.now()-loadedAtRef.current<STALE_REFRESH_MS)return
-      load({silent:true})
-    }
-    window.addEventListener('focus',refreshIfStale)
-    document.addEventListener('visibilitychange',refreshIfStale)
-    return()=>{window.removeEventListener('focus',refreshIfStale);document.removeEventListener('visibilitychange',refreshIfStale)}
-  },[appliedRange,appliedFilters,sort,page,size])
+  useVisibleDataRefresh({
+    pending:()=>requestPendingRef.current,
+    lastCompletedAt:()=>loadedAtRef.current,
+    refresh:()=>load({silent:true}),
+  })
   const updateFilter=(key,value)=>setFilters(current=>({...current,[key]:value}))
   const query=()=>{const nextRange={...range},nextFilters={...filters};setAppliedRange(nextRange);setAppliedFilters(nextFilters);setPage(1);load({nextRange,nextFilters,nextPage:1,announceOperation:'查询错误统计'})}
   const quick=kind=>{const end=data?.available_to||isoToday();let next={from:'',to:''};if(kind==='7d')next={from:isoAdd(end,-6),to:end};if(kind==='month')next={from:`${end.slice(0,7)}-01`,to:end};setRange(next);setAppliedRange(next);setAppliedFilters({...filters});setPage(1);load({nextRange:next,nextFilters:{...filters},nextPage:1,announceOperation:'查询错误统计'})}

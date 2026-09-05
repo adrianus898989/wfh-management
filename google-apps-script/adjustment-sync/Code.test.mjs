@@ -501,3 +501,43 @@ test('operator cleanup removes only exhausted source-slot identity conflicts', (
     'ATTENDANCE_SYNC_TOKEN',
   ]);
 });
+
+test('operator recovery re-arms only exhausted identity conflicts without deleting payloads', () => {
+  const values = {
+    'ADJUSTMENT_INBOUND_terminal': JSON.stringify({
+      payload: { action: 'inbound', request_id: 'terminal' },
+      attempt: 8,
+      retry_at: Date.now() + 3_600_000,
+      last_error: 'sync_http_400:google_source_slot_identity_conflict',
+    }),
+    'ADJUSTMENT_INBOUND_transient': JSON.stringify({
+      payload: { action: 'inbound', request_id: 'transient' },
+      attempt: 8,
+      retry_at: Date.now() + 3_600_000,
+      last_error: 'sync_http_503:temporary_unavailable',
+    }),
+    'ADJUSTMENT_INBOUND_retrying': JSON.stringify({
+      payload: { action: 'inbound', request_id: 'retrying' },
+      attempt: 7,
+      retry_at: Date.now() + 3_600_000,
+      last_error: 'sync_http_400:google_source_slot_identity_conflict',
+    }),
+    ATTENDANCE_SYNC_TOKEN: 'untouched',
+  };
+  context.PropertiesService = {
+    getScriptProperties() {
+      return {
+        getProperties() { return { ...values }; },
+        setProperty(key, value) { values[key] = value; },
+      };
+    },
+  };
+
+  const scheduled = vm.runInContext('retryTerminalAdjustmentIdentityConflictsNow()', context);
+  assert.equal(scheduled, 1);
+  assert.equal(JSON.parse(values.ADJUSTMENT_INBOUND_terminal).retry_at, 0);
+  assert.notEqual(JSON.parse(values.ADJUSTMENT_INBOUND_transient).retry_at, 0);
+  assert.notEqual(JSON.parse(values.ADJUSTMENT_INBOUND_retrying).retry_at, 0);
+  assert.equal(JSON.parse(values.ADJUSTMENT_INBOUND_terminal).payload.request_id, 'terminal');
+  assert.equal(values.ATTENDANCE_SYNC_TOKEN, 'untouched');
+});
