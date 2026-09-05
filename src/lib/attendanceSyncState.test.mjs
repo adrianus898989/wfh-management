@@ -71,3 +71,26 @@ test('admin and staff attendance views refresh on a bounded timer and retain pri
   assert.match(admin,/AttendanceSyncNotice sync=\{state\.sync\}/)
   assert.match(staff,/setView\(current=>\(\{\.\.\.current,loading:false,error:reason\}\)\)/)
 })
+
+test('heavy background jobs retain their frequency but start at separate minutes',async()=>{
+  const migration=await readFile(
+    new URL('../../supabase/migrations/20260905194500_stagger_heavy_background_jobs.sql',import.meta.url),
+    'utf8',
+  )
+  assert.match(migration,/wfh-exam-sheet-sync-every-minute[\s\S]+2,7,12,17,22,27,32,37,42,47,52,57 \* \* \* \*/)
+  assert.match(migration,/admin-alert-refresh-attendance[\s\S]+4,14,24,34,44,54 \* \* \* \*/)
+  assert.match(migration,/select command[\s\S]+into exam_command/)
+  assert.match(migration,/select command[\s\S]+into attendance_command/)
+  assert.match(migration,/background_job_stagger_verification_failed/)
+})
+
+test('report fallback retains the promised five-minute cadence without colliding with exam sync',async()=>{
+  const migration=await readFile(
+    new URL('../../supabase/migrations/20260905195000_restore_five_minute_report_fallback.sql',import.meta.url),
+    'utf8',
+  )
+  assert.match(migration,/wfh-report-sheet-sync-every-minute/)
+  assert.match(migration,/0,5,10,15,20,25,30,35,40,45,50,55 \* \* \* \*/)
+  assert.match(migration,/cron\.alter_job/)
+  assert.match(migration,/report_sync_five_minute_cadence_verification_failed/)
+})

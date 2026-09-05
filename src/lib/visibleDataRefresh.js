@@ -1,6 +1,17 @@
 import { useEffect, useRef } from 'react'
 
 export const VISIBLE_DATA_REFRESH_MS = 2 * 60 * 1000
+export const VISIBLE_DATA_REFRESH_JITTER_MS = 30 * 1000
+
+export const visibleDataRefreshDelay = (
+  intervalMs = VISIBLE_DATA_REFRESH_MS,
+  random = Math.random,
+) => {
+  const base = Math.max(1, Number(intervalMs) || VISIBLE_DATA_REFRESH_MS)
+  const sampled = typeof random === 'function' ? Number(random()) : 0
+  const fraction = Number.isFinite(sampled) ? Math.max(0, Math.min(1, sampled)) : 0
+  return base + Math.floor(fraction * VISIBLE_DATA_REFRESH_JITTER_MS)
+}
 
 const valueOf = value => {
   if (typeof value === 'function') return value()
@@ -39,6 +50,7 @@ export const useVisibleDataRefresh = ({
   useEffect(() => {
     let active = true
     let ownedFlight = null
+    let timer = 0
 
     const attempt = reason => {
       const config = configRef.current || {}
@@ -69,20 +81,52 @@ export const useVisibleDataRefresh = ({
       return flight
     }
 
-    const onVisible = () => { if (document.visibilityState === 'visible') attempt('visible') }
-    const onFocus = () => { attempt('focus') }
-    const onOnline = () => { attempt('online') }
-    const timer = window.setInterval(() => attempt('interval'), Math.max(1, Number(intervalMs) || VISIBLE_DATA_REFRESH_MS))
-    document.addEventListener('visibilitychange', onVisible)
+    const clearTimer = () => {
+      window.clearTimeout(timer)
+      timer = 0
+    }
+    const schedule = () => {
+      clearTimer()
+      if (!active || document.visibilityState !== 'visible' || navigator.onLine === false) return
+      const config = configRef.current || {}
+      timer = window.setTimeout(() => {
+        timer = 0
+        // Schedule from dispatch time, not completion time. A slow request can
+        // never shift every following refresh into the same completion wave.
+        schedule()
+        attempt('interval')
+      }, visibleDataRefreshDelay(config.intervalMs))
+    }
+    const onVisibilityChanged = () => {
+      if (document.visibilityState !== 'visible') {
+        clearTimer()
+        return
+      }
+      attempt('visible')
+      schedule()
+    }
+    const onFocus = () => {
+      const flight = attempt('focus')
+      if (flight || !timer) schedule()
+    }
+    const onOnline = () => {
+      const flight = attempt('online')
+      if (flight || !timer) schedule()
+    }
+    const onOffline = () => clearTimer()
+    schedule()
+    document.addEventListener('visibilitychange', onVisibilityChanged)
     window.addEventListener('focus', onFocus)
     window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
 
     return () => {
       active = false
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisible)
+      clearTimer()
+      document.removeEventListener('visibilitychange', onVisibilityChanged)
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
     }
   }, [intervalMs])
 }

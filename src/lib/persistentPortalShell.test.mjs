@@ -42,7 +42,8 @@ test('nested admin route fallback uses an in-content skeleton instead of a viewp
 })
 
 test('admin-only legacy enhancers never load for staff paths', () => {
-  assert.match(main, /portalModeFromBrowserPath\(window\.location\.pathname\) === 'admin'/)
+  assert.match(main, /import \{ APP_ROUTER_BASENAME, shouldLoadAdminEnhancers \} from '\.\/lib\/appBasePath'/)
+  assert.match(main, /shouldLoadAdminEnhancers\(window\.location\.pathname\)/)
   assert.match(main, /if \(configured && isAdminRuntime\) \{[\s\S]+import\('\.\/uiV2714Enhancer'\)/)
 })
 

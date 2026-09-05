@@ -27,6 +27,7 @@ import {
   fetchPublishedAppReleaseId,
 } from './lib/releaseSession'
 import {
+  appSessionHeartbeatDelay,
   appSessionVerificationIsFresh,
   markAppSessionVerified,
   runCoalescedAppSessionWake,
@@ -504,7 +505,7 @@ function Protected({ children, mode }) {
         if (event === 'SIGNED_IN') touchSessionActivity(true)
         // TOKEN_REFRESHED is normal Supabase maintenance. Re-running access +
         // IP claim for every rotation multiplies Edge/Auth load across tabs;
-        // retain the freshly rotated token and let the two-minute heartbeat
+        // retain the freshly rotated token and let the staggered heartbeat
         // renew the existing five-minute lease. Actual login/initial-session
         // events still bootstrap when this shell has not been verified.
         if (event === 'TOKEN_REFRESHED') {
@@ -527,7 +528,7 @@ function Protected({ children, mode }) {
       })
     }
     const heartbeat = async () => {
-      if (!alive || !leaseEligible || !leaseOwned || !navigator.onLine) return
+      if (!alive || document.hidden || !leaseEligible || !leaseOwned || !navigator.onLine) return
       const result = await checkLease('heartbeat')
       if (!leaseEligible) return
       const accepted = await acceptLease(result)
@@ -536,9 +537,41 @@ function Protected({ children, mode }) {
         await markVerificationFailure(sessionCheckMessage)
       }
     }
-    const onVisible = () => { if (!document.hidden) recover({ skipIfFresh:true }) }
-    const onOnline = () => recover()
-    const onFocus = () => recover({ skipIfFresh:true })
+    let heartbeatTimer = 0
+    const clearHeartbeatTimer = () => {
+      window.clearTimeout(heartbeatTimer)
+      heartbeatTimer = 0
+    }
+    const scheduleHeartbeat = () => {
+      clearHeartbeatTimer()
+      if (!alive || document.hidden || !navigator.onLine) return
+      heartbeatTimer = window.setTimeout(() => {
+        heartbeatTimer = 0
+        if (!alive || document.hidden || !navigator.onLine) return
+        // Schedule from dispatch time. Even if one Edge request consumes its
+        // full timeout, two maximum 135-second cycles stay inside the
+        // five-minute lease and keep the existing cross-tab guard effective.
+        scheduleHeartbeat()
+        void heartbeat()
+      }, appSessionHeartbeatDelay(APP_SESSION_HEARTBEAT_MS))
+    }
+    const onVisibilityChanged = () => {
+      if (document.hidden) {
+        clearHeartbeatTimer()
+        return
+      }
+      recover({ skipIfFresh:true })
+      scheduleHeartbeat()
+    }
+    const onOnline = () => {
+      recover()
+      scheduleHeartbeat()
+    }
+    const onOffline = () => clearHeartbeatTimer()
+    const onFocus = () => {
+      recover({ skipIfFresh:true })
+      if (!heartbeatTimer) scheduleHeartbeat()
+    }
     const onActivity = () => touchSessionActivity()
     // Edge responses can arrive after a token refresh or a new login.  Never
     // let one late response destroy the newer valid browser session.  Re-read
@@ -558,10 +591,11 @@ function Protected({ children, mode }) {
       // reasons still force an immediate server recheck.
       recover({ skipIfFresh:event?.detail?.terminal !== true })
     }
-    const heartbeatTimer = window.setInterval(heartbeat, APP_SESSION_HEARTBEAT_MS)
     const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut({ release:true, redirect:true }) }, 60*1000)
-    document.addEventListener('visibilitychange', onVisible)
+    scheduleHeartbeat()
+    document.addEventListener('visibilitychange', onVisibilityChanged)
     window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
     window.addEventListener('focus', onFocus)
     ;['pointerdown','keydown','input','touchstart','scroll'].forEach(name=>window.addEventListener(name,onActivity,{passive:true}))
     window.addEventListener('wfh:auth-check-needed', onAuthCheck)
@@ -570,10 +604,11 @@ function Protected({ children, mode }) {
       window.clearTimeout(bootstrapTimer)
       window.clearTimeout(verificationTimer)
       authSubscription?.unsubscribe()
-      window.clearInterval(heartbeatTimer)
+      clearHeartbeatTimer()
       window.clearInterval(idleTimer)
-      document.removeEventListener('visibilitychange', onVisible)
+      document.removeEventListener('visibilitychange', onVisibilityChanged)
       window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
       window.removeEventListener('focus', onFocus)
       ;['pointerdown','keydown','input','touchstart','scroll'].forEach(name=>window.removeEventListener(name,onActivity))
       window.removeEventListener('wfh:auth-check-needed', onAuthCheck)

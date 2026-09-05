@@ -1,5 +1,23 @@
 export const APP_HEARTBEAT_CROSS_TAB_WINDOW_MS = 100 * 1000
 export const APP_SESSION_WAKE_FRESHNESS_MS = 90 * 1000
+export const APP_SESSION_HEARTBEAT_JITTER_MS = 30 * 1000
+
+/**
+ * Stagger recurring lease checks around the configured two-minute cadence.
+ * The 105-135 second range keeps every lone visible tab outside the 100-second
+ * cross-tab coalescing window while two worst-case cycles still leave a
+ * 30-second margin on the five-minute server lease.
+ */
+export const appSessionHeartbeatDelay = (
+  intervalMs = 2 * 60 * 1000,
+  random = Math.random,
+) => {
+  const base = Math.max(1, Number(intervalMs) || 2 * 60 * 1000)
+  const spread = Math.min(APP_SESSION_HEARTBEAT_JITTER_MS, Math.max(0, (base - 1) * 2))
+  const sampled = typeof random === 'function' ? Number(random()) : 0.5
+  const fraction = Number.isFinite(sampled) ? Math.max(0, Math.min(1, sampled)) : 0.5
+  return base - Math.floor(spread / 2) + Math.floor(fraction * spread)
+}
 
 const memoryHeartbeatAt = new Map()
 

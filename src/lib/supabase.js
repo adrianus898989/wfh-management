@@ -8,9 +8,9 @@ const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
 export const SESSION_IDLE_LIMIT_MS=24*60*60*1000
-// The IP attestation/lease is valid for five minutes. Two-minute renewals leave
-// a full three-minute safety margin while avoiding one Edge/Auth check per tab
-// every minute.
+// The IP attestation/lease is valid for five minutes. Visible pages renew on a
+// staggered 105-135 second cadence; the 135-second maximum keeps two cycles
+// inside the lease while avoiding one Edge/Auth check per tab every minute.
 export const APP_SESSION_HEARTBEAT_MS=2*60*1000
 export const APP_SESSION_RPC_TIMEOUT_MS=15*1000
 export const SESSION_SETUP_TIMEOUT_MS=25*1000

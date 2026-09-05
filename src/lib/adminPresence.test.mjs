@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import {
   APP_HEARTBEAT_CROSS_TAB_WINDOW_MS,
+  APP_SESSION_HEARTBEAT_JITTER_MS,
   APP_SESSION_WAKE_FRESHNESS_MS,
+  appSessionHeartbeatDelay,
   appSessionVerificationIsFresh,
   markAppSessionVerified,
   runCoalescedAppHeartbeat,
@@ -11,6 +13,7 @@ import {
 } from './appSessionHeartbeatPressure.js'
 
 const component = await readFile(new URL('../components/AdminTopbar.jsx', import.meta.url), 'utf8')
+const app = await readFile(new URL('../App.jsx', import.meta.url), 'utf8')
 const layout = await readFile(new URL('../components/AppLayout.jsx', import.meta.url), 'utf8')
 const baseStyles = await readFile(new URL('../styles.css', import.meta.url), 'utf8')
 const topbarStyles = await readFile(new URL('../styles-admin-topbar.css', import.meta.url), 'utf8')
@@ -171,6 +174,16 @@ test('recurring session heartbeats coalesce across tabs but remain portal isolat
   assert.equal(adminCalls, 2)
 })
 
+test('session heartbeat jitter preserves cross-tab spacing and five-minute lease safety', () => {
+  const base = 120_000
+  assert.equal(APP_SESSION_HEARTBEAT_JITTER_MS, 30_000)
+  assert.equal(appSessionHeartbeatDelay(base, () => 0), 105_000)
+  assert.equal(appSessionHeartbeatDelay(base, () => 0.5), 120_000)
+  assert.equal(appSessionHeartbeatDelay(base, () => 1), 135_000)
+  assert.ok(appSessionHeartbeatDelay(base, () => 0) > APP_HEARTBEAT_CROSS_TAB_WINDOW_MS)
+  assert.ok(appSessionHeartbeatDelay(base, () => 1) * 2 < 5 * 60 * 1000)
+})
+
 test('cross-tab lock serializes simultaneous heartbeat dispatches', async () => {
   const values = new Map()
   const storage = {
@@ -241,9 +254,15 @@ test('simultaneous tab wake recovery rechecks freshness inside one browser lock'
   assert.equal(results.filter(result => result.data.coalesced).length, 2)
 })
 
-test('protected session recovery skips fresh focus cascades and token refresh bootstrap', () => {
+test('protected session recovery skips fresh wake cascades and staggers visible heartbeats', () => {
   assert.match(supabaseClient, /APP_SESSION_HEARTBEAT_MS=2\*60\*1000/)
-  assert.match(supabaseClient, /five minutes[\s\S]{0,180}?Two-minute renewals/)
+  assert.match(supabaseClient, /five minutes[\s\S]{0,180}?105-135 second cadence/)
+  assert.match(app, /appSessionHeartbeatDelay\(APP_SESSION_HEARTBEAT_MS\)/)
+  assert.match(app, /window\.setTimeout\(\(\) => \{[\s\S]{0,420}?scheduleHeartbeat\(\)[\s\S]{0,80}?void heartbeat\(\)/)
+  assert.match(app, /if \(!alive \|\| document\.hidden \|\| !navigator\.onLine\) return/)
+  assert.match(app, /document\.addEventListener\('visibilitychange', onVisibilityChanged\)/)
+  assert.match(app, /window\.addEventListener\('offline', onOffline\)/)
+  assert.doesNotMatch(app, /setInterval\(heartbeat/)
 })
 
 test('admin presence controls remain visible while the page content scrolls', () => {
