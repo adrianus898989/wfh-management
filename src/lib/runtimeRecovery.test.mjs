@@ -25,6 +25,14 @@ test('root mount and static entry both recover instead of leaving a white page',
   assert.match(notFound, /__spa_reload=/)
 })
 
+test('browser translation cannot rewrite React-owned nodes during live mutations', async () => {
+  const index = await source('../../index.html')
+  assert.match(index, /<meta name="google" content="notranslate">/)
+  assert.match(index, /<html[^>]*translate="no"[^>]*class="notranslate"/)
+  assert.match(index, /<body[^>]*translate="no"[^>]*class="notranslate"/)
+  assert.match(index, /<div id="root"[^>]*translate="no"[^>]*class="notranslate"/)
+})
+
 test('admin sidebar switches route groups before the next route is painted', async () => {
   const layout = await source('../components/AppLayout.jsx')
   assert.match(layout, /useLayoutEffect\(\(\)=>\{\s*setOpenGroup\(pathGroup\)/)
