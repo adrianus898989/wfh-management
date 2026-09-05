@@ -24,6 +24,7 @@ import { withAbortTimeout } from '../lib/abortableRequest'
 import { employeeProfileMetricSeed, mergeEmployeeDetailRefresh, withEmployeeDetailTimeout } from '../lib/employeeDrawerState'
 import { filterEmployeeErrorHistory, filterEmployeeExamHistory } from '../lib/employeeRecordFilters'
 import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments.js'
+import { hydrateExamFeedbackAnswers } from '../lib/examFeedbackAttachments.js'
 
 const EMPLOYEE_TABS = ['员工档案','人员分析','停电 / 断网记录','预警记录','离职记录','操作日志']
 const EMPLOYEE_TAB_PERMISSIONS = {
@@ -45,6 +46,16 @@ function EmployeeExamAnswerImageGallery({attachments}){
   const urls=rows.map(item=>item?.url||'').filter(Boolean)
   if(!rows.length)return null
   return <section className="exam-answer-attachment-block" aria-label={`员工答题图片 · ${rows.length} 张`}><strong>员工答题图片 · {rows.length} 张</strong>{!!urls.length&&<ExamImageGallery urls={urls} labels={employeeExamAnswerImageLabels} className="exam-answer-media-grid"/>}{urls.length<rows.length&&<small className="exam-answer-attachment-unavailable">{rows.length-urls.length} 张图片暂时无法预览，请稍后重试。</small>}</section>
+}
+const employeeExamFeedbackImageLabels={
+  imageAlt:'老师回复图片',imageOpen:'点击放大',imageClose:'关闭图片',
+  imageFallback:'图片暂时无法预览',imageRetry:'重试预览',imageNumber:count=>`回复图片 ${count}`,
+}
+function EmployeeExamFeedbackImageGallery({attachments}){
+  const rows=Array.isArray(attachments)?attachments:[]
+  const urls=rows.map(item=>item?.url||'').filter(Boolean)
+  if(!rows.length)return null
+  return <section className="exam-feedback-image-block employee-record" aria-label={`老师回复图片 · ${rows.length} 张`}><strong>老师回复图片 · {rows.length} 张</strong>{!!urls.length&&<ExamImageGallery urls={urls} labels={employeeExamFeedbackImageLabels} className="exam-answer-media-grid exam-feedback-media-grid"/>}{urls.length<rows.length&&<small className="exam-answer-attachment-unavailable">{rows.length-urls.length} 张图片暂时无法预览，请稍后重试。</small>}</section>
 }
 const employeeRequestError = (error, fallback) => {
   const raw=readableErrorMessage(error)
@@ -3165,6 +3176,7 @@ function EmployeeExamPanel({data,loading,error}){
         const rawAnswers=Array.isArray(detail?.answers)?detail.answers:[]
         let answers=rawAnswers
         try{answers=await hydrateExamAnswersAttachments(supabase,rawAnswers,300)}catch{/* Attachment preview failure must not block the exam record. */}
+        try{answers=await hydrateExamFeedbackAnswers(supabase,answers,300)}catch{/* Teacher feedback image preview failure must not block the exam record. */}
         if(!isCurrent())return false
         setExamDetail(detail?{...detail,answers}:detail)
         return true
@@ -3202,7 +3214,7 @@ function EmployeeExamDetailModal({detail,loading,error,onClose}){
     <div className="modal-head"><div><span className="modal-kicker">EXAM RECORD</span><h2>{session.title||'考试详细记录'}</h2><p>{session.employee_no||''} · {session.source_label||'本系统'} · 第 {session.attempt_no||'—'} 次</p></div><button onClick={onClose}>×</button></div>
     {loading?<div className="employee-exam-empty">正在读取完整答卷...</div>:error?<div className="employee-exam-empty error">{error}</div>:<div className="employee-exam-detail-body">
       <div className="employee-exam-summary"><span><small>成绩</small><b>{session.percentage==null?'—':`${Number(session.percentage).toFixed(1)}%`}</b></span><span><small>得分</small><b>{session.earned_score==null?'—':`${session.earned_score}/${session.total_score}`}</b></span><span><small>状态</small><b>{session.status||'—'}</b></span><span><small>评分完成</small><b>{formatDateTime(session.graded_at)}</b></span></div>
-      <div className="employee-exam-answer-list">{answers.length?answers.map((a,index)=><article key={a.answer_id||a.question_id||index}><header><b>第 {a.ordinality||index+1} 题</b><span>{a.awarded_score==null?'待评分':`${a.awarded_score}/${a.points||0} 分`}</span></header><p>{a.question_zh||a.question_en||a.question_vi||'题目内容未保留'}</p><div><small>员工答案</small><strong>{a.answer_text||(Array.isArray(a.attachments)&&a.attachments.length?'仅提交图片':'未作答')}</strong></div><EmployeeExamAnswerImageGallery attachments={a.attachments}/>{a.grader_feedback&&<div><small>评分说明</small><strong>{a.grader_feedback}</strong></div>}</article>):<div className="employee-exam-empty">此记录没有可显示的逐题答卷</div>}</div>
+      <div className="employee-exam-answer-list">{answers.length?answers.map((a,index)=><article key={a.answer_id||a.question_id||index}><header><b>第 {a.ordinality||index+1} 题</b><span>{a.awarded_score==null?'待评分':`${a.awarded_score}/${a.points||0} 分`}</span></header><p>{a.question_zh||a.question_en||a.question_vi||'题目内容未保留'}</p><div><small>员工答案</small><strong>{a.answer_text||(Array.isArray(a.attachments)&&a.attachments.length?'仅提交图片':'未作答')}</strong></div><EmployeeExamAnswerImageGallery attachments={a.attachments}/>{(a.grader_feedback||(a.grader_feedback_attachments||[]).length>0)&&<div><small>评分说明</small><strong>{a.grader_feedback||'老师已附回复图片'}</strong></div>}<EmployeeExamFeedbackImageGallery attachments={a.grader_feedback_attachments}/></article>):<div className="employee-exam-empty">此记录没有可显示的逐题答卷</div>}</div>
     </div>}
   </div></div>
 }

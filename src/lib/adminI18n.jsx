@@ -407,6 +407,8 @@ const english = {
   '正在读取数据…': 'Loading data…',
   '保存修改': 'Save changes',
   '确认删除': 'Confirm deletion',
+  '请输入下方完整确认代码': 'Enter the full confirmation code below',
+  '确认代码': 'Confirmation code',
   '删除': 'Delete',
   '无编辑权限': 'No edit access',
   '操作失败': 'Action failed',

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { EmployeeConnectivityPanel } from '../components/ConnectivityRecords'
+import { ExamImageGallery } from '../components/ExamImageGallery'
 import { useAppToast } from '../components/AppToastProvider'
 import { useStaffLocale } from '../lib/staffI18n'
 import { useAdminI18n } from '../lib/adminI18n'
@@ -9,9 +10,13 @@ import { adjustmentReason, adjustmentTitle } from '../lib/adjustmentPresentation
 import { edgeFunctionErrorMessage, readableErrorMessage } from '../lib/edgeFunctionError'
 import { writeFailureToast } from '../lib/appMutationToast'
 import { publicPortalTarget } from '../lib/appBasePath'
+import { ATTENDANCE_AUTO_REFRESH_MS, attendanceVisibleRefreshDue } from '../lib/attendanceSyncState'
+import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments'
+import { hydrateExamFeedbackAnswers } from '../lib/examFeedbackAttachments'
 
 const activeStatuses = ['active', 'probation', '在职', '试用']
 const DASHBOARD_REFRESH_MS = 5 * 60 * 1000
+const EMPTY_STAFF_ATTENDANCE = Object.freeze({})
 const text = v => String(v ?? '').trim()
 const portalErrorMessage = (error, fallback) => {
   const message = readableErrorMessage(error)
@@ -578,7 +583,7 @@ export const StaffHome = ({ mode = 'profile' }) => {
   const summary = data?.error_summary || {}
   const exam = data?.exam_summary || {}
   const errors = errorHistory?.rows || []
-  const attendance = selfAttendance.data || {}
+  const attendance = selfAttendance.data || EMPTY_STAFF_ATTENDANCE
   const connectivity = activity.data?.connectivity || {}
   const shiftDisplay = currentStaffShift(p, data?.schedule || data?.current_schedule || {}, t('portal.shiftUnset', 'Shift not set'))
   const trainerId = staffTrainerId(p)
@@ -629,7 +634,12 @@ export const StaffHome = ({ mode = 'profile' }) => {
         dedupeKey:`staff-portal:exam:${row.id}:error`,refresh:()=>openExam(row),
       }))
     }
-    else setExamDetail(result)
+    else {
+      let answers=Array.isArray(result?.answers)?result.answers:[]
+      try{answers=await hydrateExamAnswersAttachments(supabase,answers,300)}catch{/* Keep stored metadata visible when answer image signing is temporarily unavailable. */}
+      try{answers=await hydrateExamFeedbackAnswers(supabase,answers)}catch{/* Keep feedback text and stored metadata visible when image signing is temporarily unavailable. */}
+      setExamDetail(result?{...result,answers}:result)
+    }
     setExamDetailLoading(false)
   }
 
@@ -727,30 +737,64 @@ function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
   const [selectedDay, setSelectedDay] = useState(null)
   const [refreshKey,setRefreshKey]=useState(0)
   const readIntentRef=useRef('')
+  const consumedRefreshRef=useRef(0)
+  const attendanceRequestRef=useRef(0)
+  const loadingRef=useRef(Boolean(loading))
+  const lastRefreshAttemptRef=useRef(0)
 
   useEffect(() => {
     let alive = true
     const requestedOperation=readIntentRef.current
     readIntentRef.current=''
-    if (data?.month === month) {
-      setView({ data, loading, error: error || '' })
+    const localRefreshRequested=refreshKey!==consumedRefreshRef.current
+    if(localRefreshRequested)consumedRefreshRef.current=refreshKey
+    if (!localRefreshRequested&&loading&&!data?.month) {
+      loadingRef.current=true
+      setView(current=>({...current,loading:true,error:error||''}))
       return () => { alive = false }
     }
+    if (!localRefreshRequested&&data?.month === month) {
+      loadingRef.current=Boolean(loading)
+      setView({ data, loading, error: error || '' })
+      if(!loading)lastRefreshAttemptRef.current=Date.now()
+      return () => { alive = false }
+    }
+    const sequence=++attendanceRequestRef.current
     ;(async () => {
+      loadingRef.current=true
       setView(current => ({ ...current, loading: true, error: '' }))
       const { data: result, error: loadError } = await supabase.rpc('staff_attendance_home', { p_month: month })
-      if (!alive) return
+      if (!alive||sequence!==attendanceRequestRef.current) return
       if(loadError){
         const reason=loadError.message || t('portal.activityLoadFailed', 'Failed to load attendance records')
-        setView({ data: null, loading: false, error:reason })
+        setView(current=>({...current,loading:false,error:reason}))
         if(requestedOperation)notify(writeFailureToast({
           module:t('attendance.selfTitle', 'My attendance'),operation:requestedOperation,error:loadError,reason,
           dedupeKey:`staff-portal:attendance:${month}:error`,refresh:()=>{readIntentRef.current=requestedOperation;setRefreshKey(value=>value+1)},
         }))
       }else setView({ data: result || null, loading: false, error: '' })
+      loadingRef.current=false
+      lastRefreshAttemptRef.current=Date.now()
     })()
     return () => { alive = false }
   }, [month, data, loading, error, t, refreshKey])
+  useEffect(()=>{
+    const refreshWhenDue=()=>{
+      if(!attendanceVisibleRefreshDue({
+        visibilityState:document.visibilityState,
+        loading:loadingRef.current,
+        lastAttemptAt:lastRefreshAttemptRef.current,
+      }))return
+      lastRefreshAttemptRef.current=Date.now()
+      setRefreshKey(value=>value+1)
+    }
+    const interval=window.setInterval(refreshWhenDue,ATTENDANCE_AUTO_REFRESH_MS)
+    document.addEventListener('visibilitychange',refreshWhenDue)
+    return()=>{
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange',refreshWhenDue)
+    }
+  },[])
 
   const result = view.data || {}
   const employee = result.employee || {}
@@ -766,7 +810,7 @@ function StaffAttendancePanel({ data, loading, error, profile, t, locale }) {
   const primaryRecord = records => Array.isArray(records) ? records.find(record => staffAttendanceKind(record?.event_kind)) : null
 
   return <section className="staff-activity-panel staff-self-attendance">
-    <header className="staff-self-attendance-head"><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>{t('attendance.selfTitle', 'My attendance')}</h2></div><label><span>{t('attendance.viewMonth', 'View month')}</span><input type="month" value={month} onChange={event => { readIntentRef.current=t('attendance.viewMonth', 'View month');setSelectedDay(null); setMonth(event.target.value || staffMonthValue()) }} /></label></header>
+    <header className="staff-self-attendance-head"><div><small>{t('decor.attendance', 'ATTENDANCE')}</small><h2>{t('attendance.selfTitle', 'My attendance')}</h2></div><div className="staff-self-attendance-actions"><label><span>{t('attendance.viewMonth', 'View month')}</span><input type="month" value={month} onChange={event => { readIntentRef.current=t('attendance.viewMonth', 'View month');setSelectedDay(null); setMonth(event.target.value || staffMonthValue()) }} /></label><button type="button" disabled={view.loading} onClick={()=>{readIntentRef.current=t('portal.refresh','Refresh');setRefreshKey(value=>value+1)}}>↻ {view.loading?t('attendance.updating','Updating attendance…'):t('portal.refresh','Refresh')}</button></div></header>
     <div className="staff-self-attendance-legend">{staffAttendanceKinds.map(([kind, codeKey, codeFallback, labelKey, labelFallback]) => <span className={kind} key={kind}><i>{t(codeKey, codeFallback)}</i>{t(labelKey, labelFallback)}</span>)}</div>
     {view.error && <div className="staff-self-attendance-error">{view.error}</div>}
     <div className="staff-self-summary-groups">
@@ -797,15 +841,56 @@ function StaffAttendanceDayModal({ day, employee, t, onClose }) {
   return <div className="modal-mask staff-self-day-mask" onMouseDown={onClose}><div className="staff-self-day-modal" role="dialog" aria-modal="true" aria-labelledby="staff-attendance-day-title" onMouseDown={event => event.stopPropagation()}><header><div><small>{t('attendance.detailKicker', 'MY ATTENDANCE DETAIL')}</small><h2 id="staff-attendance-day-title">{day.date} · {t('attendance.dayDetail', 'Attendance details')}</h2><p>{employee.employee_no} · {employee.full_name}</p></div><button type="button" aria-label={t('common.close', 'Close')} onClick={onClose}>×</button></header><div className="staff-self-day-records">{day.records.map((record, index) => { const meta = staffAttendanceKind(record.event_kind); const kind = meta?.[0]; const syntheticResignation = record.synthetic && kind === 'resignation'; return meta ? <article key={record.id || `${kind}-${index}`}><span className={kind}>{t(meta[3], meta[4])}</span><div><small>{t('attendance.reason', 'Reason')}</small><p>{syntheticResignation ? t('attendance.synthetic.resignation', 'Resigned') : record.reason || '—'}</p></div><div><small>{t('attendance.notes', 'Notes')}</small><p>{syntheticResignation ? t('attendance.synthetic.resignationFromDate', 'Automatically marked from the resignation date') : record.note || '—'}</p></div></article> : null })}</div><footer><button type="button" onClick={onClose}>{t('common.close', 'Close')}</button></footer></div></div>
 }
 
+function StaffPortalExamAttachments({ attachments = [], feedback = false, t }) {
+  const rows=Array.isArray(attachments)?attachments.filter(item=>item&&typeof item==='object'):[]
+  const urls=rows.map(item=>item.url).filter(Boolean)
+  if(!rows.length)return null
+  const label=feedback?t('exam.feedbackImages','Reviewer images'):t('exam.answerImages','Answer images')
+  return <section className="exam-answer-attachment-block" aria-label={`${label} · ${rows.length}`}>
+    <strong>{label} · {rows.length}</strong>
+    {!!urls.length&&<ExamImageGallery
+      urls={urls}
+      className="exam-answer-media-grid"
+      labels={{
+        imageAlt:label,
+        imageOpen:t('common.view','View'),
+        imageClose:t('common.close','Close'),
+        imageFallback:t('exam.imageUnavailable','Image preview temporarily unavailable'),
+        imageRetry:t('common.retry','Retry'),
+        imageNumber:count=>`${label} ${count}`,
+      }}
+    />}
+    {urls.length<rows.length&&<small className="exam-answer-attachment-unavailable">{rows.length-urls.length} · {t('exam.imageUnavailable','Image preview temporarily unavailable')}</small>}
+  </section>
+}
+
 function StaffPortalExamModal({ detail, loading, error, onClose, t, locale }) {
   const session = detail?.session || {}
-  const answers = detail?.answers || []
+  const answers = Array.isArray(detail?.answers) ? detail.answers : []
   const questionText = question => {
     if (locale === 'zh') return question.question_zh || question.question_en || question.question_vi
     if (locale === 'vi') return question.question_vi || question.question_en || question.question_zh
     return question.question_en || question.question_vi || question.question_zh
   }
-  return <div className="exam-modal-backdrop" onMouseDown={onClose}><div className="exam-modal wide staff-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>{t('exam.detailTitle', 'MY EXAM RESULT')}</small><h2>{session.title || t('exams.title', 'Exam results')}</h2><p>{session.source_label || t('exams.current', 'New system')} · {t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: session.attempt_no || '—', date: '' }).replace(/\s*·\s*$/, '')}</p></div><button type="button" className="exam-icon-close" aria-label={t('common.close', 'Close')} onClick={onClose}>×</button></header>{loading ? <div className="staff-history-empty">{t('exam.loadingDetail', 'Loading complete answers…')}</div> : error ? <div className="exam-error">{error}</div> : <><div className="staff-result-summary"><div><span>{t('exam.result', 'Result')}</span><strong>{session.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(session.percentage).toFixed(1)}%`}</strong></div><div><span>{t('exam.score', 'Score')}</span><strong>{session.earned_score == null ? '—' : `${session.earned_score}/${session.total_score}`}</strong></div><div><span>{t('exam.completedAt', 'Completed')}</span><strong>{staffDateTime(session.submitted_at, locale)}</strong></div><div><span>{t('exam.answerSummary', 'Answer summary')}</span><strong>{staffExamBreakdown(session, t)}</strong></div></div><div className="staff-result-list">{answers.length ? answers.map((answer, index) => { const question = answer.question || {}; return <article key={question.id || index}><header><b>{index + 1}</b><div><strong>{questionText(question) || t('exam.questionUnavailable', 'Question content unavailable')}</strong><small>{t('exam.questionPoints', 'This question: {count} points', { count: question.points || 0 })}</small></div><span className={`result-chip ${answer.grade_status === 'correct' ? 'pass' : answer.grade_status === 'partial' ? 'partial' : answer.grade_status === 'wrong' ? 'fail' : 'pending'}`}>{answer.awarded_score == null ? t('exams.pending', 'Pending grading') : `${answer.awarded_score}/${question.points || 0} ${t('common.points', '{count} points', { count: '' }).trim().replace(/^\s+/, '')}`}</span></header><div className="staff-result-answer"><b>{t('exam.myAnswer', 'My answer')}</b><p>{answer.answer_text || t('exam.unanswered', '(Unanswered)')}</p></div>{answer.grader_feedback && <div className="staff-result-feedback"><b>{t('exam.feedback', 'Feedback')}</b><p>{answer.grader_feedback}</p></div>}</article> }) : <div className="staff-history-empty">{t('exam.noAnswers', 'Only the final score is available; per-question answers have not been synced.')}</div>}</div></>}<footer><button type="button" className="exam-footer-close" onClick={onClose}>{t('common.close', 'Close')}</button></footer></div></div>
+  return <div className="exam-modal-backdrop" onMouseDown={onClose}><div className="exam-modal wide staff-result-modal" onMouseDown={event => event.stopPropagation()}>
+    <header><div><small>{t('exam.detailTitle', 'MY EXAM RESULT')}</small><h2>{session.title || t('exams.title', 'Exam results')}</h2><p>{session.source_label || t('exams.current', 'New system')} · {t('exams.attempt', 'Attempt {attempt} · {date}', { attempt: session.attempt_no || '—', date: '' }).replace(/\s*·\s*$/, '')}</p></div><button type="button" className="exam-icon-close" aria-label={t('common.close', 'Close')} onClick={onClose}>×</button></header>
+    {loading ? <div className="staff-history-empty">{t('exam.loadingDetail', 'Loading complete answers…')}</div> : error ? <div className="exam-error">{error}</div> : <>
+      <div className="staff-result-summary"><div><span>{t('exam.result', 'Result')}</span><strong>{session.percentage == null ? t('exams.pending', 'Pending grading') : `${Number(session.percentage).toFixed(1)}%`}</strong></div><div><span>{t('exam.score', 'Score')}</span><strong>{session.earned_score == null ? '—' : `${session.earned_score}/${session.total_score}`}</strong></div><div><span>{t('exam.completedAt', 'Completed')}</span><strong>{staffDateTime(session.submitted_at, locale)}</strong></div><div><span>{t('exam.answerSummary', 'Answer summary')}</span><strong>{staffExamBreakdown(session, t)}</strong></div></div>
+      <div className="staff-result-list">{answers.length ? answers.map((answer, index) => {
+        const question=answer.question||{}
+        const answerAttachments=Array.isArray(answer.attachments)?answer.attachments:[]
+        const feedbackAttachments=Array.isArray(answer.grader_feedback_attachments)?answer.grader_feedback_attachments:[]
+        const hasFeedback=Boolean(answer.grader_feedback)||feedbackAttachments.length>0
+        return <article key={question.id||index}>
+          <header><b>{index+1}</b><div><strong>{questionText(question)||t('exam.questionUnavailable','Question content unavailable')}</strong><small>{t('exam.questionPoints','This question: {count} points',{count:question.points||0})}</small></div><span className={`result-chip ${answer.grade_status==='correct'?'pass':answer.grade_status==='partial'?'partial':answer.grade_status==='wrong'?'fail':'pending'}`}>{answer.awarded_score==null?t('exams.pending','Pending grading'):`${answer.awarded_score}/${question.points||0} ${t('common.points','{count} points',{count:''}).trim().replace(/^\s+/,'')}`}</span></header>
+          <div className="staff-result-answer"><b>{t('exam.myAnswer','My answer')}</b><p>{answer.answer_text||(answerAttachments.length?t('exam.imageOnlyAnswer','(Images only)'):t('exam.unanswered','(Unanswered)'))}</p></div>
+          <StaffPortalExamAttachments attachments={answerAttachments} t={t}/>
+          {hasFeedback&&<div className="staff-result-feedback"><b>{t('exam.feedback','Feedback')}</b>{answer.grader_feedback&&<p>{answer.grader_feedback}</p>}<StaffPortalExamAttachments attachments={feedbackAttachments} feedback t={t}/></div>}
+        </article>
+      }) : <div className="staff-history-empty">{t('exam.noAnswers', 'Only the final score is available; per-question answers have not been synced.')}</div>}</div>
+    </>}
+    <footer><button type="button" className="exam-footer-close" onClick={onClose}>{t('common.close', 'Close')}</button></footer>
+  </div></div>
 }
 
 export const ComingSoon = ({ title }) => {

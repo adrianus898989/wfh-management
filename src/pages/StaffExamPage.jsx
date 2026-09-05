@@ -17,6 +17,7 @@ import {
   signExamAttachments,
   storedExamAttachments,
 } from '../lib/examAnswerAttachments'
+import { hydrateExamFeedbackAnswers } from '../lib/examFeedbackAttachments'
 
 const copy = {
   eyebrow: ['WFH · 学习中心', 'WFH · LEARNING CENTER', 'WFH · TRUNG TÂM HỌC TẬP', 'WFH · PUSAT BELAJAR'],
@@ -83,6 +84,7 @@ const copy = {
   unanswered: ['（未作答）', '(No answer)', '(Chưa trả lời)', '(Belum dijawab)'],
   imageOnlyAnswer: ['（仅提交图片）', '(Images only)', '(Chỉ gửi ảnh)', '(Hanya gambar)'],
   feedback: ['老师评语', 'Reviewer feedback', 'Nhận xét người chấm', 'Catatan penilai'],
+  feedbackImages: ['老师回复图片', 'Reviewer images', 'Ảnh phản hồi của người chấm', 'Gambar tanggapan penilai'],
   noFeedback: ['老师未填写评语', 'No feedback provided', 'Chưa có nhận xét', 'Tidak ada catatan'],
   noAnswerDetails: ['该场考试没有可显示的逐题明细。', 'No per-question details are available for this exam.', 'Không có chi tiết từng câu cho bài thi này.', 'Detail per soal tidak tersedia untuk ujian ini.'],
   resultLoading: ['正在读取逐题结果…', 'Loading result details…', 'Đang tải chi tiết kết quả…', 'Memuat detail hasil…'],
@@ -327,6 +329,15 @@ export default function StaffExamPage() {
           result = data
         }
       }
+      if (Array.isArray(result?.answers)) {
+        try {
+          const hydratedAnswers = await hydrateExamFeedbackAnswers(supabase, result.answers)
+          result = { ...result, answers:hydratedAnswers }
+        } catch {
+          // Keep the review text and stored metadata visible when feedback image
+          // preview URLs cannot be issued temporarily.
+        }
+      }
       if (requestId !== resultRequest.current) return
       setResultState({ loading: false, error: '', data: result, preview: item })
     } catch (cause) {
@@ -448,12 +459,14 @@ function ExamResult({ state, onClose, onRetry }) {
         {items.length ? <div className="staff-result-list">{items.map((item, index) => {
         const question = item.question || {}
         const gradeState = item.grade_status === 'correct' ? 'pass' : item.grade_status === 'partial' ? 'partial' : item.grade_status === 'wrong' ? 'fail' : 'pending'
+        const feedbackAttachments = Array.isArray(item.grader_feedback_attachments) ? item.grader_feedback_attachments : []
+        const showFeedback = item.awarded_score != null || Boolean(item.grader_feedback) || feedbackAttachments.length > 0
         return <article key={question.id || index}><header><b>{index + 1}</b><div><strong>{preferredQuestion(question, locale)}</strong><small>{tr('questionPoints', { count: score(question.points, locale) })}</small></div><span className={`result-chip ${gradeState}`}>{item.awarded_score == null ? tr('pending') : `${score(item.awarded_score, locale)}/${score(question.points, locale)}`}</span></header>
           <QuestionTranslations question={question} locale={locale} label={tr('showLanguages')} />
           <ExamMedia urls={question.image_urls} />
           <div className="staff-result-answer"><b>{tr('myAnswer')}</b><p>{item.answer_text || (storedExamAttachments(item.attachments).length ? tr('imageOnlyAnswer') : tr('unanswered'))}</p></div>
           {!!storedExamAttachments(item.attachments).length && <div className="staff-result-answer-attachments exam-answer-attachment-block"><strong>{tr('answerImages')}</strong><AnswerAttachmentMedia attachments={item.attachments} /></div>}
-          {item.awarded_score != null && <div className="staff-result-feedback"><b>{tr('feedback')}</b><p>{item.grader_feedback || tr('noFeedback')}</p><small>{tr('gradedAt')} · {fmt(item.graded_at || session.graded_at, locale)}</small></div>}
+          {showFeedback && <div className="staff-result-feedback"><b>{tr('feedback')}</b>{(item.grader_feedback || !feedbackAttachments.length) && <p>{item.grader_feedback || tr('noFeedback')}</p>}<FeedbackAttachmentMedia attachments={feedbackAttachments} /><small>{tr('gradedAt')} · {fmt(item.graded_at || session.graded_at, locale)}</small></div>}
         </article>
         })}</div> : <div className="staff-history-empty result-empty">{tr('noAnswerDetails')}</div>}
       </>}
@@ -773,6 +786,29 @@ function AnswerAttachmentMedia({ attachments = [], onRemove = null }) {
       }}
     />}
     {!!unavailableRows.length && <div className="exam-answer-attachment-fallbacks">{unavailableRows.map((item, index) => <div className="exam-answer-attachment-fallback" key={item.path}><span>{item.name}</span>{onRemove && <button type="button" onClick={() => onRemove(item.path, previewRows.length + index)}>{tr('answerImageRemove')}</button>}</div>)}</div>}
+  </div>
+}
+
+function FeedbackAttachmentMedia({ attachments = [] }) {
+  const { tr } = useExamText()
+  const rows = Array.isArray(attachments) ? attachments : []
+  const previewRows = rows.filter(item => item?.url)
+  if (!rows.length) return null
+  return <div className="staff-result-feedback-images">
+    <small>{tr('feedbackImages')} · {rows.length}</small>
+    {!!previewRows.length && <ExamImageGallery
+      urls={previewRows.map(item => item.url)}
+      className="exam-answer-media-grid"
+      labels={{
+        imageAlt:tr('feedbackImages'),
+        imageOpen:tr('imageOpen'),
+        imageClose:tr('imageClose'),
+        imageFallback:tr('answerImageUnavailable'),
+        imageRetry:tr('retry'),
+        imageNumber:count=>`${tr('feedbackImages')} ${count}`,
+      }}
+    />}
+    {previewRows.length < rows.length && <small className="exam-answer-attachment-unavailable">{rows.length - previewRows.length} · {tr('answerImageUnavailable')}</small>}
   </div>
 }
 

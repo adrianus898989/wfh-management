@@ -7,6 +7,7 @@ import { attendanceAmount, attendanceCurrencySummary, attendanceKindLabel, atten
 import { adminLocalPageTabs, adminTabParams, adminTabSlug, canonicalAdminTab } from '../config/navigation'
 import { PERMISSIONS } from '../config/permissions'
 import { withMonthlyAttendanceLockRetry } from '../lib/adminAttendanceLockRetry'
+import { ATTENDANCE_AUTO_REFRESH_MS, attendanceSyncMeta as syncMeta, attendanceVisibleRefreshDue } from '../lib/attendanceSyncState'
 import { adjustmentCategory, adjustmentReason } from '../lib/adjustmentPresentation'
 import { useAdminAccess } from '../lib/adminAccess'
 import { businessMonthIso, businessTodayIso, businessTodayRange } from '../lib/adminQueryDefaults'
@@ -98,19 +99,9 @@ const adjustmentSyncState=row=>{
   return {key:'pending',label:'Google 待同步'}
 }
 
-const syncMeta=payload=>{
-  const nested=[payload?.sync,payload?.sync_status,payload?.source_sync,payload?.sync_state,payload?.latest_sync].find(value=>value&&typeof value==='object'&&!Array.isArray(value))||{}
-  const sources=[payload?.sources,payload?.source_statuses,nested?.sources].find(Array.isArray)||[]
-  const sourceTimes=sources.map(source=>text(source.last_synced_at||source.synced_at||source.refreshed_at||source.last_success_at)).filter(Boolean).sort()
-  const sourceFailed=sources.some(source=>['failed','error'].includes(text(source.status||source.sync_status).toLowerCase()))
-  const status=text(nested.status||payload?.sync_status||payload?.status).toLowerCase()
-  const last=text(nested.last_synced_at||nested.synced_at||nested.refreshed_at||nested.last_success_at||payload?.last_synced_at||payload?.last_sync_at||payload?.latest_sync_at||payload?.synced_at||payload?.refreshed_at||sourceTimes.at(-1))
-  const failed=sourceFailed||['failed','error'].includes(status)
-  const label=failed?'同步异常':status==='syncing'?'同步中':last||status==='success'?'已同步':'等待同步状态'
-  return {status:failed?'error':status==='syncing'?'syncing':last||status==='success'?'success':'idle',label,last}
-}
-
-const SyncIndicator=({sync})=><div className={`attendance-sync-indicator ${sync?.status||'idle'}`} title={sync?.last?`Supabase 最近同步：${sync.last}`:'等待后端返回同步时间'}><i aria-hidden="true"/><span>{sync?.label||'等待同步状态'}</span>{sync?.last&&<time>{sync.last.replace('T',' ').slice(0,19)}</time>}</div>
+const syncTime=value=>text(value).replace('T',' ').slice(0,19)
+const SyncIndicator=({sync})=><div className={`attendance-sync-indicator ${sync?.status||'idle'}`} title={sync?.detail||'等待后端返回同步状态'}><i aria-hidden="true"/><span>{sync?.label||'等待同步状态'}</span>{sync?.last&&<time>{sync?.lastLabel?`${sync.lastLabel} · `:''}{syncTime(sync.last)}</time>}</div>
+const AttendanceSyncNotice=({sync})=>sync?.status==='protected'?<div className="attendance-sync-protected" role="status"><div><b>同步受保护，当前展示已保存数据</b><span>{sync.detail}</span></div>{sync.last&&<time>{sync.lastLabel||'保护触发'}：{syncTime(sync.last)}</time>}</div>:null
 
 export default function AdminAttendancePage(){
   const [params,setParams]=useSearchParams()
@@ -805,6 +796,8 @@ function AttendanceMatrixPane(){
   const [state,setState]=useState({loading:true,error:'',people:[],options:{},overview:null,sync:syncMeta({}),total:0,pages:1,serverPaged:false})
   const request=useRef(0)
   const readIntentRef=useRef('')
+  const loadingRef=useRef(true)
+  const lastRefreshAttemptRef=useRef(0)
   const load=async(force=false,announceOperation='')=>{
     const sequence=++request.current
     const requestedOperation=announceOperation||readIntentRef.current
@@ -812,6 +805,7 @@ function AttendanceMatrixPane(){
     // Keep the last successful page while the next page is loading. Clearing
     // `pages` to 1 here used to trigger the page-clamp effect immediately,
     // cancelling every request for page 2+ and sending users back to page 1.
+    loadingRef.current=true
     setState(current=>({...current,loading:true,error:''}))
     try{
       const payload=await fetchAttendanceMonth(month,{
@@ -850,9 +844,31 @@ function AttendanceMatrixPane(){
         type:'error',module:ATTENDANCE_TOAST_MODULE,operation:requestedOperation,reason,
         dedupeKey:'attendance:monthly:read:error',retry:()=>load(true,'刷新月度出勤'),retryLabel:'重试',
       })
+    }finally{
+      if(sequence===request.current){
+        loadingRef.current=false
+        lastRefreshAttemptRef.current=Date.now()
+      }
     }
   }
   useEffect(()=>{load()},[month,applied,page,pageSize,refreshKey])
+  useEffect(()=>{
+    const refreshWhenDue=()=>{
+      if(!attendanceVisibleRefreshDue({
+        visibilityState:document.visibilityState,
+        loading:loadingRef.current,
+        lastAttemptAt:lastRefreshAttemptRef.current,
+      }))return
+      lastRefreshAttemptRef.current=Date.now()
+      setRefreshKey(value=>value+1)
+    }
+    const interval=window.setInterval(refreshWhenDue,ATTENDANCE_AUTO_REFRESH_MS)
+    document.addEventListener('visibilitychange',refreshWhenDue)
+    return()=>{
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange',refreshWhenDue)
+    }
+  },[])
   const bounds=useMemo(()=>monthMeta(month),[month])
   const people=useMemo(()=>{
     if(state.serverPaged)return state.people
@@ -902,8 +918,9 @@ function AttendanceMatrixPane(){
         <label><span>盘口 / 平台</span><select value={draft.platform} onChange={event=>update('platform',event.target.value)}><option value="">全部盘口</option>{platforms.map(value=><option key={value}>{value}</option>)}</select></label>
         <label><span>负责人</span><input value={draft.manager} onChange={event=>update('manager',event.target.value)} onKeyDown={event=>event.key==='Enter'&&apply()} placeholder="负责人 / 培训 / 组长"/></label>
       </div>
-      <div className="attendance-filter-foot"><SyncIndicator sync={state.sync}/><span>出勤页面只查询 Supabase；Google 表格同步成功后，刷新结果即可看到最新数据。</span></div>
+      <div className="attendance-filter-foot"><SyncIndicator sync={state.sync}/><span>页面每 2 分钟轻量刷新，并在重新打开标签页时检查；手动刷新仍可立即读取。</span></div>
     </section>
+    <AttendanceSyncNotice sync={state.sync}/>
     {state.error&&<div className="attendance-error"><span>月度出勤读取失败：{state.error}</span><button type="button" onClick={()=>load(true,'重试月度出勤查询')}>重试</button></div>}
     {!state.loading&&people.length>0&&<AttendanceMatrixOverview overview={overview} month={month}/>}
     <section className="attendance-table-card attendance-matrix-card"><header><div><h2>{month.replace('-','年')}月出勤表</h2><p>左侧员工资料固定，右侧可横向查看 1–{bounds.days.length} 日；同日多种状态时，离职优先计入总计。</p></div><div className="matrix-legend"><span className="public_holiday">公 公休 / Rest day</span><span className="home_leave">回 回家 / Home leave</span><span className="leave">请 请假 / Leave</span><span className="half_day">半 半天 / Half day</span><span className="absence">缺 缺席 / Absent</span><span className="resignation">离 离职 / Resigned</span></div></header>

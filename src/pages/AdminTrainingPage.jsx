@@ -9,7 +9,19 @@ import { useAdminAccess } from '../lib/adminAccess'
 import { EmployeeDrawer } from './AdminEmployeesPage'
 import { ExamImageGallery } from '../components/ExamImageGallery'
 import { edgeFunctionErrorMessage, publicRequestErrorMessage } from '../lib/edgeFunctionError'
-import { hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments.js'
+import { ACCEPTED_EXAM_ANSWER_IMAGE_TYPES, MAX_EXAM_ANSWER_IMAGE_BYTES, hydrateExamAnswersAttachments } from '../lib/examAnswerAttachments.js'
+import {
+  EXAM_FEEDBACK_BUCKET,
+  MAX_EXAM_FEEDBACK_ATTACHMENTS,
+  feedbackImageExtension,
+  hydrateExamFeedbackAnswers,
+  optimiseExamFeedbackImage,
+  safeFeedbackImageName,
+  storedExamFeedbackAttachments,
+} from '../lib/examFeedbackAttachments.js'
+import { examDeleteCanonicalConfirmation, examDeleteConfirmationMatches, examDeleteConfirmationToken } from '../lib/examDeleteConfirmation.js'
+import { deleteExamSessionWithStorageCleanup, drainPendingDeletedExamSessionStorageCleanup, retryDeletedExamSessionStorageCleanup } from '../lib/examSessionStorageCleanup.js'
+import { examGradeResultCompletesSession, isExamGradingSessionCompleteError } from '../lib/examGradingCompletion.js'
 import { businessTodayIso } from '../lib/adminQueryDefaults'
 import { isCurrentLiveRequest, isSnapshotForRequest, staleSnapshotNotice } from '../lib/requestConsistency'
 import QueryStateNotice from '../components/QueryStateNotice'
@@ -79,6 +91,32 @@ function ExamAnswerImageGallery({attachments}){
   if(!rows.length)return null
   return <section className="exam-answer-attachment-block" aria-label={`员工答题图片 · ${rows.length} 张`}><strong>员工答题图片 · {rows.length} 张</strong>{!!urls.length&&<ExamImageGallery urls={urls} labels={examAnswerImageLabels} className="exam-answer-media-grid"/>}{urls.length<rows.length&&<small className="exam-answer-attachment-unavailable">{rows.length-urls.length} 张图片暂时无法预览，请稍后重试。</small>}</section>
 }
+const examFeedbackImageLabels={
+  imageAlt:'老师回复图片',imageOpen:'点击放大',imageClose:'关闭图片',
+  imageFallback:'图片暂时无法预览',imageRetry:'重试预览',imageNumber:count=>`回复图片 ${count}`,
+}
+function ExamFeedbackImageGallery({attachments,className='',onRemove=null}){
+  const rows=Array.isArray(attachments)?attachments:[]
+  const visible=rows.filter(item=>item?.url)
+  const unavailable=rows.filter(item=>!item?.url)
+  if(!rows.length)return null
+  return <section className={`exam-feedback-image-block ${className}`.trim()} aria-label={`老师回复图片 · ${rows.length} 张`}>
+    <ExamImageGallery urls={visible.map(item=>item.url)} labels={examFeedbackImageLabels} className="exam-answer-media-grid exam-feedback-media-grid" onRemove={onRemove?url=>onRemove(visible.find(item=>item.url===url)):null} removeLabel="移除回复图片"/>
+    {!!unavailable.length&&<div className="exam-feedback-unavailable-list">{unavailable.map((item,index)=><span key={item.path||item._id||index}>{item.name||`回复图片 ${index+1}`}<small>暂时无法预览</small>{onRemove&&<button type="button" onClick={()=>onRemove(item)}>移除</button>}</span>)}</div>}
+  </section>
+}
+function GradeFeedbackAttachmentEditor({draft,disabled,onChoose,onRemoveStored,onRemovePending}){
+  const stored=Array.isArray(draft?.feedbackAttachments)?draft.feedbackAttachments:[]
+  const pending=Array.isArray(draft?.pendingFiles)?draft.pendingFiles:[]
+  const rows=[...stored.map(item=>({...item,_kind:'stored'})),...pending.map(item=>({url:item.url,name:item.file?.name||'',_kind:'pending',_id:item.id}))]
+  const atLimit=rows.length>=MAX_EXAM_FEEDBACK_ATTACHMENTS
+  const remove=item=>item?._kind==='pending'?onRemovePending(item._id):onRemoveStored(item.path)
+  return <section className="exam-feedback-attachment-panel">
+    <div className="exam-feedback-attachment-head"><div><strong>回复图片</strong><small>可附正确示例或处理说明，员工会在本题评语下看到。</small></div><label className={`exam-feedback-upload ${disabled||atLimit?'disabled':''}`}><span>＋ 上传图片</span><input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple disabled={disabled||atLimit} onChange={onChoose}/></label></div>
+    {!!rows.length&&<ExamFeedbackImageGallery attachments={rows} className="editable" onRemove={disabled?null:remove}/>}
+    <small className="exam-feedback-attachment-hint">最多 {MAX_EXAM_FEEDBACK_ATTACHMENTS} 张，每张不超过 4 MB；点击本题评分按钮时一起保存。</small>
+  </section>
+}
 const breakdown=x=>{
   if(x.source_system==='legacy'&&!x.answer_detail_available)return x.percentage==null?'逐题明细未同步':'总成绩已保留 · 逐题明细未同步'
   const result=[`正确 ${x.correct_count||0}`]
@@ -140,6 +178,7 @@ export default function AdminTrainingPage(){
   const [sessionPage,setSessionPage]=useState(1)
   const [sessionPageSize,setSessionPageSize]=useState(30)
   const [sessionSearchVersion,setSessionSearchVersion]=useState(0)
+  const [storageCleanupVersion,setStorageCleanupVersion]=useState(0)
   const [sessionSnapshot,setSessionSnapshot]=useState({scopeKey:'',key:'',label:'',hasData:false,data:{rows:[],total:0}})
   const initialSessionTab=['考试记录','人工批改'].includes(requestedTab)?requestedTab:''
   const [sessionStateTab,setSessionStateTab]=useState(initialSessionTab)
@@ -151,6 +190,7 @@ export default function AdminTrainingPage(){
   const [deleteSession,setDeleteSession]=useState(null)
   const canDeleteSessions=access.hasPermission(PERMISSIONS.EXAM_RECORDS_DELETE)
   const canGrade=access.hasPermission(PERMISSIONS.EXAM_GRADING_GRADE)
+  const canDrainStorageCleanup=canDeleteSessions||canGrade
   const canManageQuestions=access.hasPermission(PERMISSIONS.EXAM_QUESTION_BANK_MANAGE)
   const canDeleteQuestions=access.hasPermission(PERMISSIONS.EXAM_QUESTION_BANK_DELETE)
   const canViewEmployeeDirectory=access.hasPermission(PERMISSIONS.EMPLOYEE_DIRECTORY_VIEW)
@@ -165,6 +205,7 @@ export default function AdminTrainingPage(){
   const questionReadIntentRef=useRef('')
   const overviewReadIntentRef=useRef('')
   const sessionReadIntentRef=useRef('')
+  const storageCleanupFlightRef=useRef(false)
   const questionSnapshotRef=useRef(questionSnapshot)
   const overviewSnapshotRef=useRef(overviewSnapshot)
   const sessionSnapshotRef=useRef(sessionSnapshot)
@@ -219,6 +260,21 @@ export default function AdminTrainingPage(){
     const {data:listener}=supabase.auth.onAuthStateChange((_event,session)=>apply(session))
     return()=>{active=false;listener?.subscription?.unsubscribe()}
   },[])
+  useEffect(()=>{
+    if(access.loading||!authIdentity||!canDrainStorageCleanup)return undefined
+    let active=true
+    const drain=async()=>{
+      if(!active||storageCleanupFlightRef.current)return
+      storageCleanupFlightRef.current=true
+      try{
+        await drainPendingDeletedExamSessionStorageCleanup(supabase)
+      }catch{/* Durable queue remains available for the next entry/refresh/timer pass. */}
+      finally{storageCleanupFlightRef.current=false}
+    }
+    void drain()
+    const timer=window.setInterval(()=>{void drain()},120000)
+    return()=>{active=false;window.clearInterval(timer)}
+  },[access.loading,authIdentity,canDrainStorageCleanup,overviewScopeKey,storageCleanupVersion])
   useEffect(()=>{
     questionRequestRef.current+=1
     overviewRequestRef.current+=1
@@ -536,6 +592,7 @@ export default function AdminTrainingPage(){
   const pageChrome=adminLocalPageTabs('/admin/training',visibleTabs,tab)
   const sectionTitle=pageChrome.active.sectionLabel||'考试管理'
   const refresh=()=>{
+    setStorageCleanupVersion(version=>version+1)
     if(['考试记录','人工批改'].includes(tab)){sessionReadIntentRef.current=`刷新${tab}`;return loadSessions()}
     if(tab==='题库'){questionReadIntentRef.current='刷新考试题库';return loadQuestionBank()}
     overviewReadIntentRef.current='刷新考试概览';return loadOverview()
@@ -600,9 +657,9 @@ export default function AdminTrainingPage(){
     {question&&<QuestionModal value={question} series={questionFilterData?.series||[]} teams={questionFilterData?.teams||[]} positions={questionFilterData?.positions||[]} onClose={()=>setQuestion(null)} onRefreshConfirm={()=>refreshQuestionAfterMutation()} onSaved={()=>{setQuestion(null);return refreshQuestionAfterMutation('保存后刷新考试题库')}}/>}
     {questionView&&<QuestionView value={questionView} onClose={()=>setQuestionView(null)} onEdit={canManageQuestions?()=>{setQuestion(questionView);setQuestionView(null)}:null}/>}
     {grading&&(
-      <GradeModal session={grading.session} permissionPage={tab==='人工批改'?'grading':'records'} forceReadOnly={!canGrade} onClose={()=>setGrading(null)} onChanged={()=>refreshSessionsAfterMutation('评分后刷新考试记录')} onRefreshConfirm={()=>refreshSessionsAfterMutation('刷新确认评分状态')}/>
+      <GradeModal session={grading.session} permissionPage={tab==='人工批改'?'grading':'records'} forceReadOnly={!canGrade} onClose={()=>setGrading(null)} onChanged={()=>{setStorageCleanupVersion(version=>version+1);return refreshSessionsAfterMutation('评分后刷新考试记录')}} onRefreshConfirm={()=>refreshSessionsAfterMutation('刷新确认评分状态')}/>
     )}
-    {deleteSession&&<DeleteSessionModal session={deleteSession} onClose={()=>setDeleteSession(null)} onRefreshConfirm={()=>{setDeleteSession(null);return refreshSessionsAfterMutation('刷新确认删除结果')}} onDeleted={async()=>{setDeleteSession(null);await refreshSessionsAfterMutation('删除后刷新考试记录')}}/>}
+    {deleteSession&&<DeleteSessionModal session={deleteSession} onClose={()=>setDeleteSession(null)} onRefreshConfirm={()=>{setDeleteSession(null);return refreshSessionsAfterMutation('刷新确认删除结果')}} onDeleted={async()=>{setDeleteSession(null);setStorageCleanupVersion(version=>version+1);await refreshSessionsAfterMutation('删除后刷新考试记录')}}/>}
     {employeeDetail&&<EmployeeDrawer key={employeeDetail?.employee?.id||employeeDetail?.employee?.employee_no||employeeDetail?.id||'exam-employee'} detail={employeeDetail} loading={employeeDetailLoading} readOnly onClose={()=>setEmployeeDetail(null)}/>}
   </div>
 }
@@ -779,18 +836,33 @@ function Modal({title,onClose,children,wide=false}){return <div className="exam-
 function DeleteSessionModal({session,onClose,onDeleted,onRefreshConfirm}){
   const {notify}=useAppToast()
   const [confirmation,setConfirmation]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('')
-  const expected=`删除 ${session.employee_no||''} ${String(session.id||'').slice(0,8)}`
+  const confirmationToken=examDeleteConfirmationToken(session)
+  const canonicalConfirmation=examDeleteCanonicalConfirmation(session)
+  const confirmationReady=examDeleteConfirmationMatches(confirmation,session)
+  const retryStorageCleanup=async()=>{
+    try{
+      const {cleanup}=await retryDeletedExamSessionStorageCleanup(supabase,session.id)
+      if(!cleanup.ok)throw new Error('exam_session_storage_cleanup_pending')
+      notify({
+        type:'success',module:TRAINING_TOAST_MODULE,operation:'清理考试附件',
+        reason:'已清理这场考试遗留的答题图片和老师回复图片。',dedupeKey:`training:session:cleanup:${session.id}:success`,
+      })
+    }catch(cleanupError){
+      notify({
+        type:'error',module:TRAINING_TOAST_MODULE,operation:'清理考试附件',
+        reason:'记录已删、附件清理待重试。',dedupeKey:`training:session:cleanup:${session.id}:error`,
+        retry:retryStorageCleanup,retryLabel:'重试清理',
+      })
+      throw cleanupError
+    }
+  }
   const remove=async()=>{
     setBusy(true);setError('')
+    let outcome
     try{
-      const {error:e}=await supabase.rpc('admin_exam_delete_current_session',{p_session_id:session.id,p_confirmation:confirmation})
-      if(e)throw e
-      notify({
-        type:'success',module:TRAINING_TOAST_MODULE,operation:'删除考试记录',
-        reason:'本系统考试记录及逐题答案已删除。',dedupeKey:'training:session:delete:success',
+      outcome=await deleteExamSessionWithStorageCleanup(supabase,{
+        sessionId:session.id,confirmation:canonicalConfirmation,
       })
-      setBusy(false)
-      await onDeleted()
     }catch(error){
       const reason=publicMessage(error)
       setError(reason)
@@ -799,9 +871,21 @@ function DeleteSessionModal({session,onClose,onDeleted,onRefreshConfirm}){
         dedupeKey:'training:session:delete:error',retry:onRefreshConfirm,retryLabel:'刷新确认',
       })
       setBusy(false)
+      return
     }
+    const cleanupPending=!outcome.cleanup.ok
+    notify({
+      type:'success',module:TRAINING_TOAST_MODULE,operation:'删除考试记录',
+      reason:cleanupPending
+        ?'记录已删、附件清理待重试。'
+        :`本系统考试记录、逐题答案${outcome.cleanup.attempted?'及附件':''}已删除。`,
+      dedupeKey:'training:session:delete:success',
+      retry:cleanupPending?retryStorageCleanup:null,retryLabel:'重试清理',
+    })
+    setBusy(false)
+    await onDeleted()
   }
-  return <Modal title="删除本系统考试记录" onClose={()=>!busy&&onClose()}><div className="exam-delete-confirm"><div className="exam-delete-warning"><b>此操作会删除本系统这场考试及其全部逐题答案。</b><span>仅持有敏感权限的账号可操作；旧考试记录不能通过此功能删除。</span></div><dl><div><dt>员工</dt><dd>{session.employee_no} · {session.employee_name}</dd></div><div><dt>考试</dt><dd>{session.title}</dd></div><div><dt>开始时间</dt><dd>{fmt(session.started_at)}</dd></div><div><dt>成绩</dt><dd>{score(session.earned_score)}/{score(session.total_score)} · {score(session.percentage)}%</dd></div></dl>{error&&<div className="exam-error">{error}</div>}<label>输入 <b>{expected}</b> 确认删除<input value={confirmation} onChange={e=>setConfirmation(e.target.value)} autoComplete="off" autoFocus/></label></div><footer><button disabled={busy} onClick={onClose}>取消</button><button className="danger" disabled={busy||confirmation!==expected} onClick={remove}>{busy?'删除中…':'永久删除记录'}</button></footer></Modal>
+  return <Modal title="删除本系统考试记录" onClose={()=>!busy&&onClose()}><div className="exam-delete-confirm"><div className="exam-delete-warning"><b>此操作会删除本系统这场考试及其全部逐题答案。</b><span>仅持有敏感权限的账号可操作；旧考试记录不能通过此功能删除。</span></div><dl><div><dt>员工</dt><dd>{session.employee_no} · {session.employee_name}</dd></div><div><dt>考试</dt><dd>{session.title}</dd></div><div><dt>开始时间</dt><dd>{fmt(session.started_at)}</dd></div><div><dt>成绩</dt><dd>{score(session.earned_score)}/{score(session.total_score)} · {score(session.percentage)}%</dd></div></dl>{error&&<div className="exam-error">{error}</div>}<label><span>请输入下方完整确认代码</span><code translate="no" data-admin-i18n-skip>{confirmationToken}</code><input value={confirmation} onChange={e=>setConfirmation(e.target.value)} placeholder={confirmationToken} aria-label="确认代码" autoComplete="off" autoFocus/></label></div><footer><button disabled={busy} onClick={onClose}>取消</button><button className="danger" disabled={busy||!confirmationReady} onClick={remove}>{busy?'删除中…':'永久删除记录'}</button></footer></Modal>
 }
 
 function QuestionModal({value,series,teams,positions,onClose,onSaved,onRefreshConfirm}){
@@ -873,9 +957,13 @@ function EmployeeExamHistory({employee,onClose,onOpen}){
 function GradeModal({session,forceReadOnly=false,permissionPage='records',onClose,onChanged,onRefreshConfirm}){
   const {notify}=useAppToast()
   const [detail,setDetail]=useState(null),[error,setError]=useState(''),[drafts,setDrafts]=useState({}),[busy,setBusy]=useState('')
-  const mountedRef=useRef(true),loadFlightRef=useRef(null)
+  const mountedRef=useRef(true),loadFlightRef=useRef(null),draftsRef=useRef({})
   const sourceReadOnly=session.source_system==='legacy'||session.read_only
   const readOnly=sourceReadOnly||forceReadOnly
+  const finishCompletedSession=async()=>{try{await onChanged()}finally{if(mountedRef.current)onClose()}}
+  const replaceDrafts=next=>{draftsRef.current=next;setDrafts(next)}
+  const updateDrafts=updater=>setDrafts(previous=>{const next=updater(previous);draftsRef.current=next;return next})
+  const revokePendingPreviews=value=>Object.values(value||{}).forEach(draft=>(draft?.pendingFiles||[]).forEach(item=>{if(item?.url)URL.revokeObjectURL(item.url)}))
   const load=async(operation='读取考试答卷')=>{
     if(!mountedRef.current)return false
     if(loadFlightRef.current)return loadFlightRef.current
@@ -889,13 +977,16 @@ function GradeModal({session,forceReadOnly=false,permissionPage='records',onClos
         const rawAnswers=Array.isArray(data?.answers)?data.answers:[]
         let answers=rawAnswers
         try{answers=await hydrateExamAnswersAttachments(supabase,rawAnswers,300)}catch{/* Attachment preview failure must not block review or grading. */}
+        try{answers=await hydrateExamFeedbackAnswers(supabase,answers,300)}catch{/* Teacher feedback image preview failure must not block review or grading. */}
         if(!mountedRef.current)return false
         const hydrated=data?{...data,answers}:data
         setDetail(hydrated)
-        setDrafts(Object.fromEntries(answers.map(a=>[a.answer_id,{score:a.awarded_score??'',feedback:a.grader_feedback||''}])))
+        revokePendingPreviews(draftsRef.current)
+        replaceDrafts(Object.fromEntries(answers.map(a=>[a.answer_id,{score:a.awarded_score??'',feedback:a.grader_feedback||'',feedbackAttachments:Array.isArray(a.grader_feedback_attachments)?a.grader_feedback_attachments:[],pendingFiles:[]}])))
         return true
       }catch(loadError){
         if(!mountedRef.current)return false
+        if(permissionPage==='grading'&&!sourceReadOnly&&isExamGradingSessionCompleteError(loadError))return 'completed'
         const reason=publicMessage(loadError,'考试答卷读取失败，请稍后重试。')
         setError(reason)
         notify({
@@ -908,31 +999,90 @@ function GradeModal({session,forceReadOnly=false,permissionPage='records',onClos
     loadFlightRef.current=request
     try{return await request}finally{if(loadFlightRef.current===request)loadFlightRef.current=null}
   }
-  useEffect(()=>{mountedRef.current=true;load();return()=>{mountedRef.current=false}},[])
+  useEffect(()=>{mountedRef.current=true;(async()=>{if(await load()==='completed')await finishCompletedSession()})();return()=>{mountedRef.current=false;revokePendingPreviews(draftsRef.current)}},[])
+  const chooseFeedbackImages=(answer,event)=>{
+    const input=event.currentTarget
+    const files=Array.from(input.files||[])
+    input.value=''
+    if(!files.length||busy)return
+    const draft=draftsRef.current[answer.answer_id]||{}
+    const used=(draft.feedbackAttachments||[]).length+(draft.pendingFiles||[]).length
+    if(used+files.length>MAX_EXAM_FEEDBACK_ATTACHMENTS){
+      setError(`每题最多上传 ${MAX_EXAM_FEEDBACK_ATTACHMENTS} 张老师回复图片。`)
+      return
+    }
+    const invalidType=files.find(file=>!ACCEPTED_EXAM_ANSWER_IMAGE_TYPES.includes(String(file?.type||'').toLowerCase()))
+    if(invalidType){setError(`“${invalidType.name}”不是支持的图片格式，请使用 JPG、PNG、WebP 或 GIF。`);return}
+    const pending=files.map(file=>({id:crypto.randomUUID(),file,url:URL.createObjectURL(file)}))
+    setError('')
+    updateDrafts(previous=>({...previous,[answer.answer_id]:{...previous[answer.answer_id],pendingFiles:[...(previous[answer.answer_id]?.pendingFiles||[]),...pending]}}))
+  }
+  const removeStoredFeedbackImage=(answer,path)=>updateDrafts(previous=>({...previous,[answer.answer_id]:{...previous[answer.answer_id],feedbackAttachments:(previous[answer.answer_id]?.feedbackAttachments||[]).filter(item=>item.path!==path)}}))
+  const removePendingFeedbackImage=(answer,id)=>updateDrafts(previous=>{
+    const pending=previous[answer.answer_id]?.pendingFiles||[]
+    const removed=pending.find(item=>item.id===id)
+    if(removed?.url)URL.revokeObjectURL(removed.url)
+    return {...previous,[answer.answer_id]:{...previous[answer.answer_id],pendingFiles:pending.filter(item=>item.id!==id)}}
+  })
+  const removeFeedbackObjects=async paths=>{
+    if(!paths.length)return null
+    try{const {error:removeError}=await supabase.storage.from(EXAM_FEEDBACK_BUCKET).remove(paths);return removeError||null}catch(removeError){return removeError}
+  }
   const grade=async(a,status,score)=>{
+    if(busy)return
     setBusy(a.answer_id);setError('')
-    const feedback=drafts[a.answer_id]?.feedback||''
+    const draft=draftsRef.current[a.answer_id]||{}
+    const feedback=draft.feedback||''
+    const uploaded=[]
+    let saved=false
     try{
-      const {error:e}=await supabase.rpc('admin_exam_grade_answer',{p_answer_id:a.answer_id,p_status:status,p_score:score,p_feedback:feedback})
+      const kept=storedExamFeedbackAttachments(draft.feedbackAttachments)
+      const pending=Array.isArray(draft.pendingFiles)?draft.pendingFiles:[]
+      const {data:authData,error:authError}=await supabase.auth.getUser()
+      if(authError)throw authError
+      const authUserId=authData?.user?.id
+      if(!authUserId)throw new Error('当前后台登录身份已失效，请重新登录。')
+      for(const item of pending){
+        const sourceFile=item.file
+        const file=await optimiseExamFeedbackImage(sourceFile)
+        const type=String(file?.type||'').toLowerCase()
+        if(!file||!ACCEPTED_EXAM_ANSWER_IMAGE_TYPES.includes(type))throw new Error(`“${sourceFile?.name||'图片'}”格式无法处理，请改用 JPG、PNG、WebP 或 GIF。`)
+        if(Number(file.size||0)>MAX_EXAM_ANSWER_IMAGE_BYTES)throw new Error(`“${sourceFile?.name||file.name}”超过 4 MB，请压缩后重新上传。`)
+        const extension=feedbackImageExtension(file)
+        if(!extension)throw new Error(`“${sourceFile?.name||file.name}”没有可识别的图片格式。`)
+        const path=`${authUserId}/${session.id}/${a.answer_id}/${crypto.randomUUID()}.${extension}`
+        const {error:uploadError}=await supabase.storage.from(EXAM_FEEDBACK_BUCKET).upload(path,file,{cacheControl:'3600',contentType:type,upsert:false})
+        if(uploadError)throw uploadError
+        uploaded.push({path,name:safeFeedbackImageName(file.name||sourceFile?.name),size:Number(file.size),type})
+      }
+      const feedbackImages=storedExamFeedbackAttachments([...kept,...uploaded])
+      const {data:gradeResult,error:e}=await supabase.rpc('admin_exam_grade_answer_with_feedback_images',{p_answer_id:a.answer_id,p_status:status,p_score:score,p_feedback:feedback,p_feedback_images:feedbackImages})
       if(e)throw e
+      saved=true
+      const keptPaths=new Set(feedbackImages.map(item=>item.path))
+      const removedPaths=storedExamFeedbackAttachments(a.grader_feedback_attachments).map(item=>item.path).filter(path=>!keptPaths.has(path))
+      const cleanupError=await removeFeedbackObjects(removedPaths)
       notify({
         type:'success',module:TRAINING_TOAST_MODULE,operation:'保存答卷评分',
-        reason:'本题评分与评语已保存。',dedupeKey:'training:answer:grade:success',
+        reason:cleanupError?'本题评分与回复图片已保存；已移除的旧图片暂未清理，但不影响员工查看本次结果。':`本题评分、评语${feedbackImages.length?`和 ${feedbackImages.length} 张回复图片`:''}已保存。`,dedupeKey:'training:answer:grade:success',
       })
-      await load('评分后刷新答卷')
+      if(permissionPage==='grading'&&examGradeResultCompletesSession(gradeResult)){await finishCompletedSession();return}
+      const refreshResult=await load('评分后刷新答卷')
+      if(refreshResult==='completed'){await finishCompletedSession();return}
       await onChanged()
     }catch(gradeError){
-      const reason=publicMessage(gradeError,'考试评分保存失败，请稍后重试。')
+      if(!saved&&uploaded.length)await removeFeedbackObjects(uploaded.map(item=>item.path))
+      const reason=saved?'评分已经保存，但页面刷新失败，请点击刷新确认。':publicMessage(gradeError,'考试评分保存失败，请稍后重试。')
       setError(reason)
       notify({
-        type:'error',module:TRAINING_TOAST_MODULE,operation:'保存答卷评分',reason,
+        type:'error',module:TRAINING_TOAST_MODULE,operation:saved?'刷新评分结果':'保存答卷评分',reason,
         dedupeKey:'training:answer:grade:error',retry:onRefreshConfirm,retryLabel:'刷新确认',
       })
-    }finally{setBusy('')}
+    }finally{if(mountedRef.current)setBusy('')}
   }
   const s=detail?.session||session,answers=detail?.answers||[]
   const hasDetail=s.source_system!=='legacy'||Boolean(s.answer_detail_available||answers.length)
-  return <Modal title={`考试答卷 · ${session.employee_name} · 第 ${session.attempt_no} 次`} onClose={onClose} wide>
+  return <Modal title={`考试答卷 · ${session.employee_name} · 第 ${session.attempt_no} 次`} onClose={busy?()=>{}:onClose} wide>
     <div className="grade-body">
       {error&&<div className="exam-error">{error}</div>}
       {readOnly&&<div className="legacy-readonly-note"><b>{s.source_system==='legacy'?'旧考试 · 只读记录':'只读记录'}</b><span>{hasDetail?'逐题题目、答案、得分与评语来自原记录。':'原系统只保留了本次总成绩，没有可核验的逐题答案。'}</span></div>}
@@ -940,8 +1090,8 @@ function GradeModal({session,forceReadOnly=false,permissionPage='records',onClos
         <div className="grade-summary"><span>{s.employee_no}</span><span>{s.team_name} · {s.position_name}</span><span>第 {s.attempt_no} 次</span><span>{statusText(s.status)}</span><span>{s.percentage==null?'待完成评分':`${score(s.earned_score)}/${score(s.total_score)} · ${score(s.percentage)}%`}</span></div>
         {hasDetail?<div className="grade-audit-grid"><span><small>已作答</small><b>{s.answer_detail_count||answers.length} / {s.total_question_count||s.answer_detail_count||answers.length} 题</b></span><span><small>未作答</small><b>{s.unanswered_count||0} 题</b></span><span><small>正确</small><b>{s.correct_count||0} 题</b></span><span><small>半对</small><b>{s.partial_count||0} 题</b></span><span><small>错误</small><b>{s.wrong_count||0} 题</b></span><span><small>待评分</small><b>{s.pending_count||0} 题</b></span><span><small>开始作答时间</small><b>{fmt(s.started_at)}</b></span><span><small>完成作答时间</small><b>{fmt(s.submitted_at)}</b></span><span><small>评分完成时间</small><b>{fmt(s.graded_at)}</b></span><span><small>评分人</small><b>{s.grader_name||'—'}</b></span></div>:<div className="exam-score-only-note"><b>总成绩已保留 · 逐题明细未同步</b><span>没有逐题答案，不能从总分可靠推算正确或错误题数。</span></div>}
       </>}
-      {!detail?<div className="exam-empty">读取答卷中…</div>:answers.length?answers.map((a,i)=><article className="grade-item" key={a.answer_id||a.question_id}><header><b>{i+1}</b><strong>{a.question_zh||a.question_en||a.question_vi}</strong><span className={`grade-score-pill ${a.grade_status||'pending'}`}>{a.awarded_score==null||a.grade_status==='pending'?'待评分':Number(a.points)>0?`${score(a.awarded_score)}/${score(a.points)} 分`:`旧系统得分 ${score(a.awarded_score)}`}</span></header>{(a.question_en||a.question_vi)&&<details className="grade-translations"><summary>查看英文 / 越南文题目</summary>{a.question_en&&<p><b>EN</b>{a.question_en}</p>}{a.question_vi&&<p><b>VI</b>{a.question_vi}</p>}</details>}<ExamImageGallery urls={a.image_urls}/><div className="answer-box"><small>员工答案</small><p>{a.answer_text||(Array.isArray(a.attachments)&&a.attachments.length?'仅提交图片':'未作答')}</p><ExamAnswerImageGallery attachments={a.attachments}/></div>{readOnly?<div className="legacy-answer-feedback"><small>旧系统评语</small><p>{a.grader_feedback||'无评语'}</p></div>:<><label className="grade-feedback">老师评语<textarea value={drafts[a.answer_id]?.feedback||''} onChange={e=>setDrafts({...drafts,[a.answer_id]:{...drafts[a.answer_id],feedback:e.target.value}})} placeholder="填写错误原因、正确处理方式或复训要求"/></label>{a.graded_at&&<div className="grade-item-audit">本题评分：{a.grader_name||'—'} · {fmt(a.graded_at)}</div>}<div className="grade-actions"><button className={a.grade_status==='wrong'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'wrong',0)}>错误 · 0/{score(a.points)}</button><button className={a.grade_status==='partial'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'partial',a.points/2)}>半对 · {score(a.points/2)}/{score(a.points)}</button><button className={a.grade_status==='correct'?'picked':''} disabled={busy===a.answer_id} onClick={()=>grade(a,'correct',a.points)}>正确 · {score(a.points)}/{score(a.points)}</button></div></>}</article>):hasDetail&&<div className="exam-empty compact">没有可显示的逐题答卷</div>}
+      {!detail?<div className="exam-empty">读取答卷中…</div>:answers.length?answers.map((a,i)=><article className="grade-item" key={a.answer_id||a.question_id}><header><b>{i+1}</b><strong>{a.question_zh||a.question_en||a.question_vi}</strong><span className={`grade-score-pill ${a.grade_status||'pending'}`}>{a.awarded_score==null||a.grade_status==='pending'?'待评分':Number(a.points)>0?`${score(a.awarded_score)}/${score(a.points)} 分`:`旧系统得分 ${score(a.awarded_score)}`}</span></header>{(a.question_en||a.question_vi)&&<details className="grade-translations"><summary>查看英文 / 越南文题目</summary>{a.question_en&&<p><b>EN</b>{a.question_en}</p>}{a.question_vi&&<p><b>VI</b>{a.question_vi}</p>}</details>}<ExamImageGallery urls={a.image_urls}/><div className="answer-box"><small>员工答案</small><p>{a.answer_text||(Array.isArray(a.attachments)&&a.attachments.length?'仅提交图片':'未作答')}</p><ExamAnswerImageGallery attachments={a.attachments}/></div>{readOnly?<div className="legacy-answer-feedback"><small>{s.source_system==='legacy'?'旧系统评语':'老师评语'}</small><p>{a.grader_feedback||'无评语'}</p><ExamFeedbackImageGallery attachments={a.grader_feedback_attachments}/></div>:<><label className="grade-feedback">老师评语<textarea value={drafts[a.answer_id]?.feedback||''} disabled={Boolean(busy)} onChange={e=>updateDrafts(previous=>({...previous,[a.answer_id]:{...previous[a.answer_id],feedback:e.target.value}}))} placeholder="填写错误原因、正确处理方式或复训要求"/></label><GradeFeedbackAttachmentEditor draft={drafts[a.answer_id]} disabled={Boolean(busy)} onChoose={event=>chooseFeedbackImages(a,event)} onRemoveStored={path=>removeStoredFeedbackImage(a,path)} onRemovePending={id=>removePendingFeedbackImage(a,id)}/>{busy===a.answer_id?<div className="grade-item-saving"><span className="exam-loading-spinner"/>正在上传回复图片并保存本题评分…</div>:a.graded_at&&<div className="grade-item-audit">本题评分：{a.grader_name||'—'} · {fmt(a.graded_at)}</div>}<div className="grade-actions"><button className={a.grade_status==='wrong'?'picked':''} disabled={Boolean(busy)} onClick={()=>grade(a,'wrong',0)}>错误 · 0/{score(a.points)}</button><button className={a.grade_status==='partial'?'picked':''} disabled={Boolean(busy)} onClick={()=>grade(a,'partial',a.points/2)}>半对 · {score(a.points/2)}/{score(a.points)}</button><button className={a.grade_status==='correct'?'picked':''} disabled={Boolean(busy)} onClick={()=>grade(a,'correct',a.points)}>正确 · {score(a.points)}/{score(a.points)}</button></div></>}</article>):hasDetail&&<div className="exam-empty compact">没有可显示的逐题答卷</div>}
     </div>
-    <footer><button className="primary" onClick={onClose}>{readOnly?'关闭':'完成并关闭'}</button></footer>
+    <footer><button className="primary" disabled={Boolean(busy)} onClick={onClose}>{busy?'正在保存图片与评分…':readOnly?'关闭':'完成并关闭'}</button></footer>
   </Modal>
 }

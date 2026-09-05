@@ -39,7 +39,7 @@
 @media(max-width:620px){.adaptive-exam-card{grid-template-columns:1fr}.adaptive-exam-facts{grid-template-columns:1fr 1fr}}
 
 /* Exam result audit, record search and grading details. */
-.exam-delete-confirm{padding:18px;display:grid;gap:14px}.exam-delete-warning{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #f1c7c3;border-radius:10px;background:#fff6f5;color:#9b3934}.exam-delete-confirm dl{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:0}.exam-delete-confirm dl div{padding:10px;border:1px solid #dce5f0;border-radius:9px;background:#fff}.exam-delete-confirm dt{margin-bottom:4px;color:#728399;font-size:11px}.exam-delete-confirm dd{margin:0;color:#244366;font-size:13px;font-weight:700;word-break:break-word}.exam-delete-confirm label{display:flex;flex-direction:column;gap:7px;font-weight:700}.exam-delete-confirm input{border:1px solid #c9d6e7;border-radius:9px;padding:10px;font:inherit}.exam-modal footer .danger{background:#c43838;border-color:#c43838;color:#fff}@media(max-width:650px){.exam-delete-confirm dl{grid-template-columns:1fr}}
+.exam-delete-confirm{padding:18px;display:grid;gap:14px}.exam-delete-warning{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #f1c7c3;border-radius:10px;background:#fff6f5;color:#9b3934}.exam-delete-confirm dl{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:0}.exam-delete-confirm dl div{padding:10px;border:1px solid #dce5f0;border-radius:9px;background:#fff}.exam-delete-confirm dt{margin-bottom:4px;color:#728399;font-size:11px}.exam-delete-confirm dd{margin:0;color:#244366;font-size:13px;font-weight:700;word-break:break-word}.exam-delete-confirm label{display:flex;flex-direction:column;gap:7px;font-weight:700}.exam-delete-confirm label code{width:max-content;max-width:100%;padding:5px 8px;border:1px solid #f0c5c1;border-radius:7px;background:#fff8f7;color:#9b3934;font-size:13px;user-select:all}.exam-delete-confirm input{border:1px solid #c9d6e7;border-radius:9px;padding:10px;font:inherit}.exam-modal footer .danger{background:#c43838;border-color:#c43838;color:#fff}@media(max-width:650px){.exam-delete-confirm dl{grid-template-columns:1fr}}
 .exam-session-filter{display:grid;grid-template-columns:minmax(300px,1.7fr) repeat(3,minmax(150px,1fr));gap:12px;padding:14px;margin-bottom:14px;border:1px solid #d9e3ef;border-radius:14px;background:#fff;align-items:end}.exam-session-filter label{display:flex;flex-direction:column;gap:6px;min-width:0}.exam-session-filter label>span{font-size:12px;font-weight:800;color:#637890}.exam-session-filter input,.exam-session-filter select{width:100%;height:40px;border:1px solid #c8d6e8;border-radius:9px;padding:0 11px;background:#fff;color:#203b5d}.exam-session-filter .wide{grid-column:span 2}.exam-session-table{min-width:1540px}.exam-record-person{display:flex!important;flex-direction:column;align-items:flex-start!important;gap:3px;padding:0!important;border:0!important;background:transparent!important;text-align:left}.exam-record-person b{color:#245dd8}.exam-record-person span{color:#203b5d}.exam-record-percent{display:block;margin-top:4px;color:#728399}.exam-record-breakdown{white-space:nowrap;font-size:12px}.exam-total-pill{padding:6px 10px;border-radius:999px;background:#edf3ff;color:#315fd4;font-size:12px;font-weight:800}
 .staff-history-table{min-width:1460px}.staff-history-breakdown{white-space:nowrap}.staff-result-summary{grid-template-columns:repeat(4,1fr)}.staff-result-audit,.grade-audit-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;padding:0 18px 15px}.staff-result-audit span,.grade-audit-grid span,.exam-history-summary span{display:flex;flex-direction:column;gap:5px;padding:11px;border:1px solid #dce5f0;border-radius:11px;background:#f8fbff}.staff-result-audit small,.grade-audit-grid small,.exam-history-summary small{color:#74859a}.staff-result-audit b,.grade-audit-grid b,.exam-history-summary b{font-size:13px;color:#203b5d}.result-chip.partial{background:#fff4df;color:#a86200}.staff-result-feedback small{display:block;margin-top:8px;color:#688098}.grade-audit-grid{padding:0;margin-bottom:14px}.grade-score-pill{white-space:nowrap;padding:6px 9px;border-radius:999px;background:#eef2f7;color:#64758a;font-size:12px}.grade-score-pill.correct{background:#e6faef;color:#14805a}.grade-score-pill.partial{background:#fff4df;color:#a86200}.grade-score-pill.wrong{background:#fff0f0;color:#c43d3d}.grade-item-audit{margin:8px 0;color:#73849a;font-size:12px}.employee-exam-history{padding:16px}.exam-history-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
 @media(max-width:1100px){.exam-session-filter{grid-template-columns:repeat(2,minmax(0,1fr))}.exam-session-filter .wide{grid-column:1/-1}.staff-result-summary,.staff-result-audit,.grade-audit-grid{grid-template-columns:repeat(2,1fr)}}
@@ -336,4 +336,36 @@
   .exam-answer-attachment-copy small{white-space:normal}
   .exam-media-grid.exam-answer-media-grid{display:flex!important;grid-template-columns:none!important}
   .exam-answer-media-grid .exam-media-thumb img{height:72px}
+}
+
+/* Per-question teacher reply images stay inside the existing feedback area so
+   grading buttons and result layouts keep their current width. */
+.exam-feedback-attachment-panel{margin:-2px 0 10px;padding:9px 10px;border:1px solid #d8e3f0;border-radius:9px;background:#f8fbff}
+.exam-feedback-attachment-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.exam-feedback-attachment-head>div{display:flex;min-width:0;flex-direction:column;gap:2px}
+.exam-feedback-attachment-head strong{color:#294968;font-size:11px}
+.exam-feedback-attachment-head small{overflow:hidden;color:#73869d;font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.exam-feedback-upload{position:relative;display:inline-flex;flex:0 0 auto;align-items:center;padding:6px 9px;border:1px solid #b9cbea;border-radius:8px;background:#fff;color:#285fd6;font-size:9px;font-weight:850;cursor:pointer}
+.exam-feedback-upload:hover{border-color:#7ea4ec;background:#eef4ff}
+.exam-feedback-upload.disabled{opacity:.48;cursor:not-allowed}
+.exam-feedback-upload input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.exam-feedback-attachment-hint{display:block;margin-top:6px;color:#73869d;font-size:9px}
+.grade-item-saving{display:flex;align-items:center;gap:7px;margin:7px 0;color:#46678d;font-size:10px;font-weight:750}
+.grade-item-saving .exam-loading-spinner{width:13px;height:13px}
+.exam-feedback-image-block{margin-top:7px}
+.exam-feedback-image-block>strong{display:block;margin-bottom:6px;color:#526d8c;font-size:10px}
+.exam-feedback-image-block>.exam-answer-attachment-unavailable{display:block;margin:6px 0 0;color:#a06419;font-size:9px}
+.exam-feedback-media-grid{margin-top:0!important}
+.exam-feedback-unavailable-list{display:flex;gap:6px;margin-top:6px;overflow-x:auto}
+.exam-feedback-unavailable-list>span{display:grid;grid-template-columns:minmax(0,1fr) auto;flex:0 0 220px;gap:2px 7px;align-items:center;padding:6px 7px;border:1px dashed #c3d2e4;border-radius:8px;background:#fff;color:#4f6885;font-size:9px}
+.exam-feedback-unavailable-list>span>small{overflow:hidden;color:#8a6a33;text-overflow:ellipsis;white-space:nowrap}
+.exam-feedback-unavailable-list button{grid-column:2;grid-row:1/3;padding:4px 6px!important;border-color:#efbaba!important;color:#bd3939!important;font-size:8px!important}
+.legacy-answer-feedback .exam-feedback-image-block,.staff-result-feedback .exam-feedback-image-block{margin:9px 0 0}
+.employee-exam-answer-list .exam-feedback-image-block{display:block!important;margin-top:8px;padding:9px 10px;border:1px solid #dce6f1;border-radius:9px;background:#f8fbff}
+
+@media(max-width:620px){
+  .exam-feedback-attachment-head{align-items:flex-start}
+  .exam-feedback-attachment-head small{white-space:normal}
+  .exam-feedback-upload{padding:6px 8px}
+  .exam-feedback-unavailable-list>span{flex-basis:190px}
 }

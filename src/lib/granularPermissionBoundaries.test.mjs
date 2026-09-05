@@ -25,6 +25,7 @@ const attendanceRecords = await readFile(new URL('../components/AttendanceRecord
 const permissionConfig = await readFile(new URL('../config/permissions.js', import.meta.url), 'utf8')
 const adminPagePermissions = await readFile(new URL('../config/adminPagePermissions.js', import.meta.url), 'utf8')
 const trainingPage = await readFile(new URL('../pages/AdminTrainingPage.jsx', import.meta.url), 'utf8')
+const examSessionStorageCleanup = await readFile(new URL('./examSessionStorageCleanup.js', import.meta.url), 'utf8')
 const onlineTrainingPage = await readFile(new URL('../pages/OnlineTrainingPage.jsx', import.meta.url), 'utf8')
 
 test('attendance and exam wrappers constrain filters, payloads and grading status', () => {
@@ -68,8 +69,8 @@ test('exam overview, question-bank and mutations enforce the current data scope'
     'admin_exam_overview_analytics_summary','admin_exam_overview_analytics_dimensions',
     'admin_exam_overview_analytics_activity','admin_exam_overview_analytics_leaderboard',
     'admin_exam_question_bank_dashboard','admin_exam_records_search','admin_exam_grading_search',
-    'admin_exam_save_question','admin_exam_delete_question','admin_exam_grade_answer','admin_exam_delete_current_session',
-  ]) assert.ok(trainingPage.includes(`'${rpc}'`), `AdminTrainingPage should keep using ${rpc}`)
+    'admin_exam_save_question','admin_exam_delete_question','admin_exam_grade_answer_with_feedback_images','admin_exam_delete_current_session',
+  ]) assert.ok(`${trainingPage}\n${examSessionStorageCleanup}`.includes(`'${rpc}'`), `AdminTrainingPage should keep using ${rpc}`)
 })
 
 test('attendance private helpers cannot bypass granular wrappers or employee drawer gates', () => {
