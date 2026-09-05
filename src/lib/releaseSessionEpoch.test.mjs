@@ -115,6 +115,11 @@ test('new pages reject an authenticated browser without the current local releas
   assert.match(staffLogin, /registerCurrentAppRelease\('staff'\)/)
 })
 
+test('release inspection cannot indefinitely block a public login screen', () => {
+  assert.match(app, /const RELEASE_SESSION_READ_TIMEOUT_MS = 4 \* 1000/)
+  assert.equal((app.match(/withPromiseTimeout\(\s*supabase\.auth\.getSession\(\),\s*RELEASE_SESSION_READ_TIMEOUT_MS/g) || []).length, 2)
+})
+
 test('open pages poll an uncached release manifest on a jittered two-minute cadence', async () => {
   assert.equal(APP_RELEASE_POLL_MS, 120_000)
   assert.equal(APP_RELEASE_POLL_JITTER_MS, 30_000)

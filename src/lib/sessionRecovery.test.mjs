@@ -8,11 +8,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const app = fs.readFileSync(path.join(root, 'src/App.jsx'), 'utf8')
 const supabaseClient = fs.readFileSync(path.join(root, 'src/lib/supabase.js'), 'utf8')
 const adminLogin = fs.readFileSync(path.join(root, 'src/pages/AdminLoginPage.jsx'), 'utf8')
+const staffLogin = fs.readFileSync(path.join(root, 'src/pages/StaffLoginPage.jsx'), 'utf8')
 const adminReports = fs.readFileSync(path.join(root, 'src/pages/AdminReportsPage.jsx'), 'utf8')
 
 test('a late protected request revalidates without forcing a token rotation', () => {
-  assert.match(app, /const onAuthCheck = \(\) => \{/)
-  assert.match(app, /const onAuthCheck = \(\) => \{[\s\S]{0,700}?AUTH_CHECK_DEBOUNCE_MS[\s\S]{0,160}?recover\(\)/)
+  assert.match(app, /const onAuthCheck = event => \{/)
+  assert.match(app, /const onAuthCheck = event => \{[\s\S]{0,900}?AUTH_CHECK_DEBOUNCE_MS[\s\S]{0,500}?recover\(\{ skipIfFresh:event\?\.detail\?\.terminal !== true \}\)/)
   assert.doesNotMatch(app, /const onAuthCheck = event =>[\s\S]{0,180}?localSignOut/)
   assert.doesNotMatch(app, /supabase\.auth\.refreshSession/)
   assert.match(app, /browser client already serializes refresh-token rotation/)
@@ -54,4 +55,22 @@ test('admin login synchronously rejects duplicate form submissions', () => {
   assert.match(adminLogin, /const submitInFlight = useRef\(false\)/)
   assert.match(adminLogin, /if \(submitInFlight\.current\) return/)
   assert.match(adminLogin, /finally \{\s*submitInFlight\.current = false/)
+})
+
+test('login and portal guard deadlines abort their underlying Edge requests', () => {
+  for (const login of [adminLogin, staffLogin]) {
+    assert.match(login, /withAbortableRequestTimeout\(/)
+    assert.match(login, /signal => supabase\.functions\.invoke\('admin-login'/)
+    assert.match(login, /mode: '(?:admin|staff)'[\s\S]{0,80}?signal/)
+  }
+  assert.match(supabaseClient, /withAbortableRequestTimeout\(/)
+  assert.match(supabaseClient, /signal=>supabase\.functions\.invoke\('admin-ip-guard'/)
+  assert.match(supabaseClient, /body:\{action,portal:normalizedPortal\},\s*signal,/)
+})
+
+test('successful admin login stays in the SPA and avoids a second gateway and bundle load', () => {
+  assert.match(adminLogin, /const navigate = useNavigate\(\)/)
+  assert.match(adminLogin, /navigate\(publicPortalTarget\('admin','mfa'\), \{ replace: true \}\)/)
+  assert.match(adminLogin, /navigate\(publicPortalTarget\('admin'\), \{ replace: true \}\)/)
+  assert.doesNotMatch(adminLogin, /window\.location\.replace/)
 })

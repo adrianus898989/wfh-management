@@ -11,14 +11,7 @@ import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { StaffLanguageSwitcher, useStaffLocale } from '../lib/staffI18n'
 import { registerCurrentAppRelease } from '../lib/releaseSession'
 import { publicPortalTarget } from '../lib/appBasePath'
-
-function withTimeout(promise, ms = 25000) {
-  let timer
-  const timeout = new Promise((_, reject) => {
-    timer = window.setTimeout(() => reject(new Error('TIMEOUT')), ms)
-  })
-  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer))
-}
+import { withAbortableRequestTimeout } from '../lib/abortableRequestTimeout'
 
 export default function StaffLoginPage() {
   const [email, setEmail] = useState('')
@@ -66,10 +59,12 @@ export default function StaffLoginPage() {
     setLoading(true)
 
     try {
-      const functionResult = await withTimeout(
-        supabase.functions.invoke('admin-login', {
+      const functionResult = await withAbortableRequestTimeout(
+        signal => supabase.functions.invoke('admin-login', {
           body: { email: email.trim().toLowerCase(), password, mode: 'staff' },
+          signal,
         }),
+        25_000,
       )
 
       const { error } = functionResult

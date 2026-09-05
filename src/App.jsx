@@ -12,6 +12,7 @@ import {
   signOutAppSession,
   supabase,
   touchSessionActivity,
+  withPromiseTimeout,
 } from './lib/supabase'
 import StaffIpPreflightGate from './components/StaffIpPreflightGate'
 import AppLayout from './components/AppLayout'
@@ -129,6 +130,7 @@ const SESSION_VERIFICATION_FAILURE_BACKOFF_CAP = 6
 const SESSION_VERIFICATION_RETRY_BASE_MS = 1500
 const SESSION_VERIFICATION_RETRY_MAX_MS = 60 * 1000
 const AUTH_CHECK_DEBOUNCE_MS = 2000
+const RELEASE_SESSION_READ_TIMEOUT_MS = 4 * 1000
 
 function ReleaseSessionBoundary({ children }) {
   const location = useLocation()
@@ -159,7 +161,11 @@ function ReleaseSessionBoundary({ children }) {
     }
     const verifyStoredRelease = async () => {
       try {
-        const { data, error } = await supabase.auth.getSession()
+        const { data, error } = await withPromiseTimeout(
+          supabase.auth.getSession(),
+          RELEASE_SESSION_READ_TIMEOUT_MS,
+          'RELEASE_SESSION_READ_TIMEOUT',
+        )
         if (!alive) return
         if (!error && data?.session && !currentAppReleaseIsRegistered(portal)) {
           await terminateForRelease()
@@ -179,7 +185,11 @@ function ReleaseSessionBoundary({ children }) {
         const publishedReleaseId = await fetchPublishedAppReleaseId()
         if (!alive || !publishedReleaseId || publishedReleaseId === APP_RELEASE_ID) return
         try {
-          const { data, error } = await supabase.auth.getSession()
+          const { data, error } = await withPromiseTimeout(
+            supabase.auth.getSession(),
+            RELEASE_SESSION_READ_TIMEOUT_MS,
+            'RELEASE_SESSION_READ_TIMEOUT',
+          )
           if (!error && data?.session) await terminateForRelease()
         } catch (_) {
           // Never convert a transient Auth/storage read into a destructive logout.
@@ -534,7 +544,7 @@ function Protected({ children, mode }) {
     // let one late response destroy the newer valid browser session.  Re-read
     // Auth and the current lease first; bootstrap performs the definitive
     // sign-out only when the current session is actually gone or disabled.
-    const onAuthCheck = () => {
+    const onAuthCheck = event => {
       // A retry timer already owns recovery after a transient verification
       // failure. Ignore the cascade of 401 responses from page requests until
       // that backoff fires instead of hammering bootstrap every two seconds.
@@ -542,7 +552,11 @@ function Protected({ children, mode }) {
       const now = Date.now()
       if (now - lastAuthCheckAt < AUTH_CHECK_DEBOUNCE_MS) return
       lastAuthCheckAt = now
-      recover()
+      // Generic/recoverable 401s may be a late response from an old request.
+      // Reuse a recent completed verification (and the cross-tab wake lock)
+      // instead of starting another full bootstrap. Explicit terminal Auth
+      // reasons still force an immediate server recheck.
+      recover({ skipIfFresh:event?.detail?.terminal !== true })
     }
     const heartbeatTimer = window.setInterval(heartbeat, APP_SESSION_HEARTBEAT_MS)
     const idleTimer = window.setInterval(() => { if (isSessionIdleExpired()) localSignOut({ release:true, redirect:true }) }, 60*1000)

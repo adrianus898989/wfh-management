@@ -58,8 +58,8 @@ test('login, MFA, logout and system-update redirects use friendly paths', async 
     read('src/pages/MfaPage.jsx'),
   ])
 
-  assert.match(adminLogin, /appPathname\(publicPortalTarget\('admin','mfa'\)\)/)
-  assert.match(adminLogin, /appPathname\(publicPortalTarget\('admin'\)\)/)
+  assert.match(adminLogin, /navigate\(publicPortalTarget\('admin','mfa'\), \{ replace: true \}\)/)
+  assert.match(adminLogin, /navigate\(publicPortalTarget\('admin'\), \{ replace: true \}\)/)
   assert.match(staffLogin, /navigate\(publicPortalTarget\('staff'\), \{ replace: true \}\)/)
   assert.match(layout, /navigate\(publicPortalTarget\(mode,'login'\)\)/)
   assert.match(mfa, /navigate\(publicPortalTarget\('admin'\), \{ replace: true \}\)/)

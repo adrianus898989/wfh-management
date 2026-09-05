@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   configured,
   consumeAppSessionNotice,
@@ -10,15 +11,8 @@ import { readFunctionResponsePayload } from '../lib/functionErrors'
 import { AdminLanguageSwitcher, useAdminI18n } from '../lib/adminI18n'
 import { requestAdminIpPreflight } from '../lib/adminIpPreflight'
 import { registerCurrentAppRelease } from '../lib/releaseSession'
-import { appPathname, publicPortalTarget } from '../lib/appBasePath'
-
-function withTimeout(promise, ms = 25000) {
-  let timer
-  const timeout = new Promise((_, reject) => {
-    timer = window.setTimeout(() => reject(new Error('TIMEOUT')), ms)
-  })
-  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer))
-}
+import { publicPortalTarget } from '../lib/appBasePath'
+import { withAbortableRequestTimeout } from '../lib/abortableRequestTimeout'
 
 const LOGIN_ERROR_MESSAGES = {
   INVALID_REQUEST: '请求格式不正确',
@@ -43,6 +37,7 @@ const loginErrorMessage = response => response?.code === 'ACCOUNT_LOCKED'
 
 export default function AdminLoginPage() {
   const { t: adminT } = useAdminI18n()
+  const navigate = useNavigate()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -101,14 +96,16 @@ export default function AdminLoginPage() {
 
     setLoading(true)
     try {
-      const functionResult = await withTimeout(
-        supabase.functions.invoke('admin-login', {
+      const functionResult = await withAbortableRequestTimeout(
+        signal => supabase.functions.invoke('admin-login', {
           body: {
             username: username.trim().toLowerCase(),
             password,
             mode: 'admin',
           },
-        })
+          signal,
+        }),
+        25_000,
       )
 
       const { error } = functionResult
@@ -132,12 +129,12 @@ export default function AdminLoginPage() {
       registerCurrentAppRelease('admin')
       if (responseData.mfa_required) {
         touchSessionActivity(true)
-        window.location.replace(appPathname(publicPortalTarget('admin','mfa')))
+        navigate(publicPortalTarget('admin','mfa'), { replace: true })
         return
       }
 
       touchSessionActivity(true)
-      window.location.replace(appPathname(publicPortalTarget('admin')))
+      navigate(publicPortalTarget('admin'), { replace: true })
     } catch (requestError) {
       setError(requestError?.message === 'TIMEOUT'
         ? '登录服务响应超时，请稍后重试'

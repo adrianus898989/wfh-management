@@ -3,6 +3,7 @@ import { classifySessionFailure } from './sessionFailure.js'
 import { readFunctionResponsePayload } from './functionErrors.js'
 import { runCoalescedAppHeartbeat } from './appSessionHeartbeatPressure.js'
 import { effectivePortalModeFromBrowserPath, portalAuthStorageKey } from './appBasePath.js'
+import { withAbortableRequestTimeout } from './abortableRequestTimeout.js'
 const url=import.meta.env.VITE_SUPABASE_URL
 const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const configured=Boolean(url&&key)
@@ -157,9 +158,10 @@ const invokePortalAppSessionGuard=(requestedPortal,action)=>{
   const flight=(async()=>{
   let result
   try{
-    result=await withPromiseTimeout(
-      supabase.functions.invoke('admin-ip-guard',{
+    result=await withAbortableRequestTimeout(
+      signal=>supabase.functions.invoke('admin-ip-guard',{
         body:{action,portal:normalizedPortal},
+        signal,
       }),
       APP_SESSION_RPC_TIMEOUT_MS,
       'APP_SESSION_TIMEOUT',
